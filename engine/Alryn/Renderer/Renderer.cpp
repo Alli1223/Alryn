@@ -12,10 +12,12 @@
 namespace alryn {
 
 namespace {
-// Must match the layout in shaders/mesh.vert.
+// Must match the push_constant block in the shaders (160 bytes).
 struct PushConstants {
     Mat4 mvp;
     Mat4 model;
+    Vec4 tint;   // rgb colour multiplier, a = alpha
+    Vec4 params; // x = time, yzw = camera position
 };
 } // namespace
 
@@ -52,22 +54,7 @@ bool Renderer::on_init(Engine& /*engine*/) {
     if (!swapchain_.create(device_, surface_, fb.x, fb.y, config_.vsync)) {
         return false;
     }
-    if (!create_depth()) {
-        return false;
-    }
-
-    vk::PipelineConfig pipeline_config;
-    pipeline_config.vertex_spv = shader_path("mesh.vert.spv").string();
-    pipeline_config.fragment_spv = shader_path("mesh.frag.spv").string();
-    pipeline_config.color_format = swapchain_.format();
-    pipeline_config.depth_format = kDepthFormat;
-    pipeline_config.push_constant_size = sizeof(PushConstants);
-    pipeline_config.cull_mode = VK_CULL_MODE_NONE; // winding not yet verified per-primitive
-    if (!pipeline_.create(device_, pipeline_config)) {
-        return false;
-    }
-
-    if (!create_sync_and_commands()) {
+    if (!create_depth() || !create_pipelines() || !create_sync_and_commands()) {
         return false;
     }
 
@@ -80,6 +67,37 @@ bool Renderer::create_depth() {
     depth_.destroy();
     return depth_.create(device_, extent.width, extent.height, kDepthFormat,
                          VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+}
+
+bool Renderer::create_pipelines() {
+    vk::PipelineConfig base;
+    base.vertex_spv = shader_path("mesh.vert.spv").string();
+    base.fragment_spv = shader_path("mesh.frag.spv").string();
+    base.color_format = swapchain_.format();
+    base.depth_format = kDepthFormat;
+    base.push_constant_size = sizeof(PushConstants);
+    base.cull_mode = VK_CULL_MODE_NONE;
+
+    vk::PipelineConfig opaque = base; // terrain, characters
+    opaque.blend = false;
+    opaque.depth_write = true;
+    if (!pipeline_opaque_.create(device_, opaque)) {
+        return false;
+    }
+
+    vk::PipelineConfig foliage = base; // alpha-blended tree leaves
+    foliage.blend = true;
+    foliage.depth_write = false;
+    if (!pipeline_foliage_.create(device_, foliage)) {
+        return false;
+    }
+
+    vk::PipelineConfig water = base; // animated transparent water
+    water.vertex_spv = shader_path("water.vert.spv").string();
+    water.fragment_spv = shader_path("water.frag.spv").string();
+    water.blend = true;
+    water.depth_write = false;
+    return pipeline_water_.create(device_, water);
 }
 
 bool Renderer::create_sync_and_commands() {
@@ -100,7 +118,7 @@ bool Renderer::create_sync_and_commands() {
     sem_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
     VkFenceCreateInfo fence_info{};
     fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-    fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT; // so the first wait returns immediately
+    fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
     for (FrameSync& frame : frames_) {
         ALRYN_VK_CHECK(vkAllocateCommandBuffers(device_.handle(), &alloc, &frame.cmd));
@@ -118,6 +136,7 @@ bool Renderer::create_sync_and_commands() {
 void Renderer::set_camera(const Camera& camera) {
     view_ = camera.view();
     projection_ = camera.projection();
+    camera_position_ = camera.position();
 }
 
 f32 Renderer::aspect() const {
@@ -128,7 +147,7 @@ f32 Renderer::aspect() const {
 void Renderer::recreate_swapchain() {
     const UVec2 fb = window_.framebuffer_size();
     if (fb.x == 0 || fb.y == 0) {
-        return; // minimised; try again next frame
+        return;
     }
     device_.wait_idle();
     if (!swapchain_.recreate(fb.x, fb.y)) {
@@ -215,25 +234,44 @@ bool Renderer::begin_frame() {
     const VkRect2D scissor{{0, 0}, extent};
     vkCmdSetViewport(frame.cmd, 0, 1, &viewport);
     vkCmdSetScissor(frame.cmd, 0, 1, &scissor);
-    pipeline_.bind(frame.cmd);
 
+    current_pipeline_ = VK_NULL_HANDLE; // pipelines are bound lazily per draw
     frame_active_ = true;
     return true;
 }
 
-void Renderer::draw(const Mesh& mesh, const Mat4& model) {
+void Renderer::submit(const vk::Pipeline& pipeline, const Mesh& mesh, const Mat4& model,
+                      const Vec4& tint) {
     if (!frame_active_) {
         return;
     }
     FrameSync& frame = frames_[frame_index_];
+    if (pipeline.handle() != current_pipeline_) {
+        pipeline.bind(frame.cmd);
+        current_pipeline_ = pipeline.handle();
+    }
     PushConstants push{};
-    push.model = model;
     push.mvp = projection_ * view_ * model;
-    vkCmdPushConstants(frame.cmd, pipeline_.layout(),
+    push.model = model;
+    push.tint = tint;
+    push.params = Vec4{time_, camera_position_.x, camera_position_.y, camera_position_.z};
+    vkCmdPushConstants(frame.cmd, pipeline.layout(),
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                        sizeof(PushConstants), &push);
     mesh.bind(frame.cmd);
     mesh.draw(frame.cmd);
+}
+
+void Renderer::draw(const Mesh& mesh, const Mat4& model, const Vec4& tint) {
+    submit(pipeline_opaque_, mesh, model, tint);
+}
+
+void Renderer::draw_transparent(const Mesh& mesh, const Mat4& model, const Vec4& tint) {
+    submit(pipeline_foliage_, mesh, model, tint);
+}
+
+void Renderer::draw_water(const Mesh& mesh, const Mat4& model) {
+    submit(pipeline_water_, mesh, model, Vec4{1.0f});
 }
 
 void Renderer::end_frame() {
@@ -252,16 +290,16 @@ void Renderer::end_frame() {
     VkSemaphore signal = render_finished_[image_index_];
     const VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 
-    VkSubmitInfo submit{};
-    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submit.waitSemaphoreCount = 1;
-    submit.pWaitSemaphores = &frame.image_available;
-    submit.pWaitDstStageMask = &wait_stage;
-    submit.commandBufferCount = 1;
-    submit.pCommandBuffers = &frame.cmd;
-    submit.signalSemaphoreCount = 1;
-    submit.pSignalSemaphores = &signal;
-    ALRYN_VK_CHECK(vkQueueSubmit(device_.graphics_queue(), 1, &submit, frame.in_flight));
+    VkSubmitInfo submit_info{};
+    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.waitSemaphoreCount = 1;
+    submit_info.pWaitSemaphores = &frame.image_available;
+    submit_info.pWaitDstStageMask = &wait_stage;
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers = &frame.cmd;
+    submit_info.signalSemaphoreCount = 1;
+    submit_info.pSignalSemaphores = &signal;
+    ALRYN_VK_CHECK(vkQueueSubmit(device_.graphics_queue(), 1, &submit_info, frame.in_flight));
 
     const VkResult present = swapchain_.present(device_.present_queue(), signal, image_index_);
     if (present == VK_ERROR_OUT_OF_DATE_KHR || present == VK_SUBOPTIMAL_KHR) {
@@ -295,7 +333,9 @@ void Renderer::on_shutdown() {
         vkDestroyCommandPool(device_.handle(), command_pool_, nullptr);
         command_pool_ = VK_NULL_HANDLE;
     }
-    pipeline_.destroy();
+    pipeline_opaque_.destroy();
+    pipeline_foliage_.destroy();
+    pipeline_water_.destroy();
     depth_.destroy();
     swapchain_.destroy();
     if (surface_ != VK_NULL_HANDLE) {

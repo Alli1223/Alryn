@@ -1,7 +1,5 @@
 #include <Alryn/Physics/CharacterController.h>
 
-#include <Alryn/Terrain/VoxelField.h>
-
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -16,7 +14,7 @@ void CharacterController::set_position(const Vec3& feet) {
     on_ground_ = false;
 }
 
-bool CharacterController::wall_at(const VoxelField& field, const Vec3& feet) const {
+bool CharacterController::wall_at(const DensitySampler& density, const Vec3& feet) const {
     const f32 r = config_.radius;
     const std::array<Vec2, 5> offsets = {Vec2{0.0f, 0.0f}, Vec2{r, 0.0f}, Vec2{-r, 0.0f},
                                          Vec2{0.0f, r}, Vec2{0.0f, -r}};
@@ -25,7 +23,7 @@ bool CharacterController::wall_at(const VoxelField& field, const Vec3& feet) con
                                         config_.height - 0.1f};
     for (const Vec2& o : offsets) {
         for (f32 h : heights) {
-            if (field.sample(feet + Vec3{o.x, h, o.y}) < 0.0f) {
+            if (density(feet + Vec3{o.x, h, o.y}) < 0.0f) {
                 return true;
             }
         }
@@ -33,17 +31,17 @@ bool CharacterController::wall_at(const VoxelField& field, const Vec3& feet) con
     return false;
 }
 
-std::optional<f32> CharacterController::ground_height(const VoxelField& field, f32 x, f32 z,
+std::optional<f32> CharacterController::ground_height(const DensitySampler& density, f32 x, f32 z,
                                                       f32 top_y) const {
-    const f32 max_dist = (top_y - field.origin().y) + 2.0f;
-    const auto hit = field.raycast(Vec3{x, top_y, z}, Vec3{0.0f, -1.0f, 0.0f}, max_dist);
+    const auto hit =
+        raycast_density(density, Vec3{x, top_y, z}, Vec3{0.0f, -1.0f, 0.0f}, top_y + 60.0f);
     if (hit) {
         return hit->y;
     }
     return std::nullopt;
 }
 
-void CharacterController::update(const VoxelField& field, const Vec3& move_dir, bool jump,
+void CharacterController::update(const DensitySampler& density, const Vec3& move_dir, bool jump,
                                  Timestep dt) {
     const f32 dts = dt.seconds;
     if (dts <= 0.0f) {
@@ -62,21 +60,21 @@ void CharacterController::update(const VoxelField& field, const Vec3& move_dir, 
     {
         Vec3 candidate = p;
         candidate.x += horizontal.x * config_.walk_speed * dts;
-        if (!wall_at(field, candidate)) {
+        if (!wall_at(density, candidate)) {
             p.x = candidate.x;
         }
     }
     {
         Vec3 candidate = p;
         candidate.z += horizontal.z * config_.walk_speed * dts;
-        if (!wall_at(field, candidate)) {
+        if (!wall_at(density, candidate)) {
             p.z = candidate.z;
         }
     }
 
     // Vertical: gravity/jump in the air, ground-following when grounded.
     const f32 top = p.y + config_.height + 2.0f;
-    const std::optional<f32> ground = ground_height(field, p.x, p.z, top);
+    const std::optional<f32> ground = ground_height(density, p.x, p.z, top);
 
     if (!on_ground_) {
         velocity_.y = std::max(velocity_.y - config_.gravity * dts, -config_.max_fall);

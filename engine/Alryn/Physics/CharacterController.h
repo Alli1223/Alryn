@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Alryn/Core/Density.h>
 #include <Alryn/Core/Math.h>
 #include <Alryn/Core/Time.h>
 #include <Alryn/Core/Types.h>
@@ -7,8 +8,6 @@
 #include <optional>
 
 namespace alryn {
-
-class VoxelField;
 
 struct CharacterConfig {
     f32 radius = 0.4f;
@@ -21,11 +20,10 @@ struct CharacterConfig {
     f32 step_height = 0.6f;  // max slope/step to climb without jumping
 };
 
-// A simple kinematic FPS controller that collides against a VoxelField:
-//   * walls (vertical obstacles taller than step_height) block horizontal motion,
-//   * the feet snap to the ground surface to walk slopes/steps,
-//   * gravity + jumping handle airtime.
-// Position is the feet; the camera sits at eye_position().
+// A simple kinematic FPS controller that collides against a DensitySampler
+// (so it works against the infinite, streamed world): walls block horizontal
+// motion, the feet snap to the surface to walk slopes/steps, and gravity +
+// jumping handle airtime. Position is the feet; camera sits at eye_position().
 class CharacterController {
 public:
     explicit CharacterController(CharacterConfig config = {});
@@ -38,11 +36,11 @@ public:
     const CharacterConfig& config() const { return config_; }
 
     // move_dir: desired world-space horizontal direction (xz; y ignored, length<=1).
-    void update(const VoxelField& field, const Vec3& move_dir, bool jump, Timestep dt);
+    void update(const DensitySampler& density, const Vec3& move_dir, bool jump, Timestep dt);
 
 private:
-    bool wall_at(const VoxelField& field, const Vec3& feet) const;
-    std::optional<f32> ground_height(const VoxelField& field, f32 x, f32 z, f32 top_y) const;
+    bool wall_at(const DensitySampler& density, const Vec3& feet) const;
+    std::optional<f32> ground_height(const DensitySampler& density, f32 x, f32 z, f32 top_y) const;
 
     CharacterConfig config_;
     Vec3 position_{0.0f};

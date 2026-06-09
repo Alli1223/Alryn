@@ -147,7 +147,9 @@ add_subdirectory(engine)
 # Compile GLSL -> SPIR-V (staged into build/bin/shaders next to the binaries).
 alryn_compile_shaders(alryn SHADERS
     ${CMAKE_SOURCE_DIR}/shaders/mesh.vert
-    ${CMAKE_SOURCE_DIR}/shaders/mesh.frag)
+    ${CMAKE_SOURCE_DIR}/shaders/mesh.frag
+    ${CMAKE_SOURCE_DIR}/shaders/water.vert
+    ${CMAKE_SOURCE_DIR}/shaders/water.frag)
 
 if(ALRYN_BUILD_GAME)
     add_subdirectory(game)

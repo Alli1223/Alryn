@@ -3,10 +3,15 @@
 #include <Alryn/Core/Noise.h>
 #include <Alryn/Renderer/Vulkan/VulkanDevice.h>
 #include <Alryn/Renderer/Vulkan/VulkanInstance.h>
+#include <Alryn/Renderer/MeshPrimitives.h>
 #include <Alryn/Terrain/MarchingTetra.h>
+#include <Alryn/Terrain/StreamingTerrain.h>
 #include <Alryn/Terrain/Terrain.h>
+#include <Alryn/Terrain/TreeScatter.h>
 #include <Alryn/Terrain/VoxelField.h>
+#include <Alryn/Terrain/WorldGen.h>
 
+#include <cmath>
 #include <map>
 #include <tuple>
 
@@ -166,4 +171,113 @@ TEST_CASE("Terrain: generate + rebuild meshes on a device (headless)") {
     CHECK(terrain.any_dirty());
     terrain.rebuild_dirty(device);
     CHECK_FALSE(terrain.any_dirty());
+}
+
+TEST_CASE("Worldgen: biomes give smooth heights with both land and water") {
+    const u32 seed = 1337u;
+    const f32 h0 = worldgen::height(50.0f, 30.0f, seed);
+    const f32 h1 = worldgen::height(50.2f, 30.0f, seed);
+    CHECK(std::abs(h1 - h0) < 1.5f); // continuous
+
+    bool has_land = false;
+    bool has_water = false;
+    for (int gz = 0; gz < 40; ++gz) {
+        for (int gx = 0; gx < 40; ++gx) {
+            const f32 x = static_cast<f32>(gx) * 18.0f - 360.0f;
+            const f32 z = static_cast<f32>(gz) * 18.0f - 360.0f;
+            const f32 h = worldgen::height(x, z, seed);
+            if (h > worldgen::water_level + 1.0f) has_land = true;
+            if (h < worldgen::water_level - 0.5f) has_water = true;
+        }
+    }
+    CHECK(has_land);
+    CHECK(has_water);
+
+    const Vec3 up{0.0f, 1.0f, 0.0f};
+    const Vec3 peak = worldgen::surface_color(Vec3{0.0f, 13.0f, 0.0f}, up, seed);
+    const Vec3 deep = worldgen::surface_color(Vec3{0.0f, -6.0f, 0.0f}, up, seed);
+    CHECK(peak.r > deep.r); // snow brighter than wet silt
+    for (const Vec3& c : {peak, deep}) {
+        CHECK(c.r >= 0.0f);
+        CHECK(c.r <= 1.0f);
+        CHECK(c.g >= 0.0f);
+        CHECK(c.g <= 1.0f);
+        CHECK(c.b >= 0.0f);
+        CHECK(c.b <= 1.0f);
+    }
+}
+
+TEST_CASE("Trees: low-poly meshes + deterministic, on-land scatter") {
+    const primitives::TreeMeshData pine = primitives::tree(0);
+    const primitives::TreeMeshData round = primitives::tree(1);
+    CHECK_FALSE(pine.trunk.indices.empty());
+    CHECK_FALSE(pine.foliage.indices.empty());
+    CHECK_FALSE(round.foliage.indices.empty());
+
+    const u32 seed = 1337u;
+    const auto a = scatter_trees(2, 3, 8.0f, seed);
+    const auto b = scatter_trees(2, 3, 8.0f, seed);
+    REQUIRE(a.size() == b.size());
+    for (usize i = 0; i < a.size(); ++i) {
+        CHECK(a[i].position.x == doctest::Approx(b[i].position.x));
+        CHECK(a[i].variant == b[i].variant);
+    }
+
+    int total = 0;
+    bool underwater = false;
+    for (int cz = -24; cz < 24; ++cz) {
+        for (int cx = -24; cx < 24; ++cx) {
+            for (const TreeInstance& t : scatter_trees(cx, cz, 8.0f, seed)) {
+                ++total;
+                if (t.position.y < worldgen::water_level) {
+                    underwater = true;
+                }
+                CHECK(t.scale > 0.5f);
+                CHECK((t.variant == 0 || t.variant == 1));
+            }
+        }
+    }
+    CHECK(total > 0);
+    CHECK_FALSE(underwater);
+}
+
+TEST_CASE("StreamingTerrain: streams + unloads chunks around a moving focus") {
+    vk::Instance instance;
+    vk::InstanceConfig instance_config;
+    instance_config.app_name = "alryn_streaming_test";
+    if (!instance.create(instance_config)) {
+        MESSAGE("No Vulkan instance - skipping streaming terrain test");
+        return;
+    }
+    vk::Device device;
+    if (!device.create(instance.handle())) {
+        MESSAGE("No Vulkan device - skipping streaming terrain test");
+        return;
+    }
+
+    StreamingTerrain terrain(123u, 0.5f, 16, 2); // view radius 2 -> up to 5x5 chunks
+
+    // Pump enough frames for the budgeted loader/mesher to fill in around origin.
+    for (int i = 0; i < 30; ++i) {
+        terrain.update(Vec3{0.0f, 0.0f, 0.0f}, device);
+    }
+    CHECK(terrain.loaded_chunk_count() >= 9);
+    int meshes = 0;
+    terrain.for_each_mesh([&](const Mesh&) { ++meshes; });
+    CHECK(meshes > 0); // the surface passes through every column chunk
+
+    // The world is infinite: raycast far from the origin still finds ground.
+    const auto far_hit = terrain.raycast(Vec3{800.0f, 30.0f, 800.0f}, Vec3{0.0f, -1.0f, 0.0f}, 60.0f);
+    CHECK(far_hit.has_value());
+
+    // Move the focus far away; old chunks unload, new ones load.
+    for (int i = 0; i < 60; ++i) {
+        terrain.update(Vec3{800.0f, 0.0f, 800.0f}, device);
+    }
+    CHECK(terrain.loaded_chunk_count() >= 9);
+    CHECK(terrain.loaded_chunk_count() <= 64); // bounded - origin chunks were evicted
+
+    int meshes_far = 0;
+    terrain.for_each_mesh([&](const Mesh&) { ++meshes_far; });
+    CHECK(meshes_far > 0);
 }

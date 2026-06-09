@@ -45,8 +45,16 @@ public:
     void on_shutdown() override;
 
     void set_camera(const Camera& camera);
+    void set_time(f32 seconds) { time_ = seconds; }
     bool begin_frame();
-    void draw(const Mesh& mesh, const Mat4& model);
+
+    // Opaque geometry (terrain, characters). tint multiplies the vertex colour.
+    void draw(const Mesh& mesh, const Mat4& model, const Vec4& tint = Vec4{1.0f});
+    // Alpha-blended geometry (foliage). tint.a is the opacity. Draw after opaque.
+    void draw_transparent(const Mesh& mesh, const Mat4& model, const Vec4& tint);
+    // Animated water surface (its own shader). Draw after opaque.
+    void draw_water(const Mesh& mesh, const Mat4& model);
+
     void end_frame();
 
     void request_resize() { needs_resize_ = true; }
@@ -66,8 +74,10 @@ private:
     static constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
 
     bool create_depth();
+    bool create_pipelines();
     bool create_sync_and_commands();
     void recreate_swapchain();
+    void submit(const vk::Pipeline& pipeline, const Mesh& mesh, const Mat4& model, const Vec4& tint);
 
     Window& window_;
     RendererConfig config_;
@@ -77,7 +87,10 @@ private:
     vk::Device device_;
     vk::Swapchain swapchain_;
     vk::Image depth_;
-    vk::Pipeline pipeline_;
+    vk::Pipeline pipeline_opaque_;
+    vk::Pipeline pipeline_foliage_;
+    vk::Pipeline pipeline_water_;
+    VkPipeline current_pipeline_ = VK_NULL_HANDLE; // avoids redundant binds within a frame
 
     VkCommandPool command_pool_ = VK_NULL_HANDLE;
     std::vector<FrameSync> frames_;
@@ -90,6 +103,8 @@ private:
 
     Mat4 view_{1.0f};
     Mat4 projection_{1.0f};
+    Vec3 camera_position_{0.0f};
+    f32 time_ = 0.0f;
 };
 
 } // namespace alryn

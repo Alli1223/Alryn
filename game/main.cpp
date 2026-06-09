@@ -1,8 +1,10 @@
 #include <Alryn/Alryn.h>
 
+#include <Alryn/Character/CharacterAnimator.h>
+#include <Alryn/Character/CharacterModel.h>
 #include <Alryn/Net/GameServer.h>
 #include <Alryn/Net/NetClient.h>
-#include <Alryn/Terrain/WorldGen.h>
+#include <Alryn/Terrain/StreamingTerrain.h>
 
 #include <chrono>
 #include <cmath>
@@ -10,6 +12,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <unordered_map>
 
 using namespace alryn;
 
@@ -19,8 +22,16 @@ constexpr KeyCode W = 87, A = 65, S = 83, D = 68, Space = 32, Escape = 256;
 
 constexpr u16 kPort = 24650;
 
+// Isometric-style third-person camera angle (fixed; the world rotates under it).
+namespace iso {
+constexpr f32 yaw_deg = 45.0f;    // compass direction we look from
+constexpr f32 pitch_deg = 48.0f;  // downward tilt (higher = more top-down)
+constexpr f32 distance = 15.0f;   // camera pull-back (smaller = closer/zoomed in)
+constexpr f32 fov_deg = 30.0f;    // low-ish fov -> flatter, more "iso" look
+} // namespace iso
+
 // --------------------------------------------------------------------------
-//  Dedicated server: headless, owns the authoritative GameServer, ticks ~60 Hz.
+//  Dedicated server (headless): owns the authoritative GameServer, ~60 Hz.
 // --------------------------------------------------------------------------
 class ServerApp : public Application {
 public:
@@ -37,7 +48,7 @@ protected:
     }
     void on_update(Timestep dt) override {
         server_.tick(dt);
-        std::this_thread::sleep_for(std::chrono::milliseconds(15)); // ~60 Hz tick
+        std::this_thread::sleep_for(std::chrono::milliseconds(15));
     }
     void on_shutdown() override { server_.stop(); }
 
@@ -53,7 +64,7 @@ private:
 };
 
 // --------------------------------------------------------------------------
-//  Windowed multiplayer client.
+//  Windowed multiplayer client (isometric third-person view).
 // --------------------------------------------------------------------------
 class ClientApp : public Application {
 public:
@@ -67,15 +78,24 @@ protected:
             return;
         }
         if (window() != nullptr) {
-            window()->set_cursor_captured(true);
+            window()->set_cursor_captured(false); // free cursor for click-to-dig
         }
-        avatar_.create(renderer_->device(),
-                       primitives::cube(1.0f, Vec3{0.95f, 0.55f, 0.15f})); // other players
         marker_.create(renderer_->device(), primitives::cube(1.0f, Vec3{1.0f, 0.85f, 0.2f}));
+        // A large wave grid that follows the player; the water shader animates it.
+        water_mesh_.create(renderer_->device(), primitives::grid(80, 2.0f, Vec3{0.1f, 0.3f, 0.4f}));
+        // Shared tree meshes (trunk opaque, foliage alpha-blendable); instances vary.
+        for (int v = 0; v < 2; ++v) {
+            const primitives::TreeMeshData td = primitives::tree(v);
+            TreeVisual tv;
+            tv.trunk.create(renderer_->device(), td.trunk);
+            tv.foliage.create(renderer_->device(), td.foliage);
+            tree_library_.push_back(std::move(tv));
+        }
+        // Shared white character shapes, tinted per bone with each player's palette.
+        shape_box_.create(renderer_->device(), primitives::cube(1.0f, Vec3{1.0f}));
+        shape_sphere_.create(renderer_->device(), primitives::sphere(10, 7, Vec3{1.0f}));
+        shape_cylinder_.create(renderer_->device(), primitives::cylinder(10, Vec3{1.0f}));
 
-        // Default: host an in-process listen server so a bare `make run` is
-        // immediately playable. Falls back to pure client if the port is taken
-        // (e.g. a dedicated --server is already running on this machine).
         if (host_local_) {
             if (local_server_.start(kPort, 1337u)) {
                 ALRYN_INFO("Hosting a local listen server on port {}", kPort);
@@ -87,20 +107,26 @@ protected:
         if (!client_.connect(host_, kPort)) {
             ALRYN_ERROR("Could not reach server at {}:{}", host_, kPort);
         }
-        ALRYN_INFO("Connecting to {}:{} ... WASD move, mouse look, SPACE jump, "
-                   "left-click dig, right-click add, ESC exit.",
+        ALRYN_INFO("Connecting to {}:{} ... WASD move, mouse to aim, left-click dig, "
+                   "right-click add, SPACE jump, ESC exit.",
                    host_, kPort);
     }
 
     void on_update(Timestep dt) override {
         if (host_local_ && local_server_.running()) {
-            local_server_.tick(dt); // we are the authoritative server too
+            local_server_.tick(dt);
         }
+        elapsed_ += dt.seconds;
+        if (renderer_ != nullptr) {
+            renderer_->set_time(elapsed_);
+        }
+
         for (const net::ClientEvent& e : client_.poll()) {
             switch (e.type) {
                 case net::ClientEventType::WelcomeReceived:
                     my_id_ = e.welcome.your_id;
-                    build_terrain(e.welcome.seed);
+                    terrain_ = std::make_unique<StreamingTerrain>(e.welcome.seed, 0.5f, 16, 4);
+                    ALRYN_INFO("Joined as player {} (world seed {})", my_id_, e.welcome.seed);
                     break;
                 case net::ClientEventType::SnapshotReceived:
                     snapshot_ = e.snapshot;
@@ -108,7 +134,7 @@ protected:
                     break;
                 case net::ClientEventType::DeformReceived:
                     if (terrain_ != nullptr) {
-                        terrain_->deform(e.deform.center, e.deform.radius, e.deform.amount);
+                        terrain_->apply_edit(e.deform.center, e.deform.radius, e.deform.amount);
                     }
                     break;
                 default:
@@ -116,43 +142,13 @@ protected:
             }
         }
 
-        if (Input* in = input()) {
-            const Vec2 look = in->mouse_delta();
-            yaw_ += look.x * sensitivity_;
-            pitch_ = glm::clamp(pitch_ - look.y * sensitivity_, radians(-89.0f), radians(89.0f));
-        }
-
+        update_camera();
         update_aim();
+        send_input();
+        update_visuals(dt);
 
-        if (client_.connected()) {
-            const Vec3 forward_flat{std::cos(yaw_), 0.0f, std::sin(yaw_)};
-            // right = forward x up (camera's +X / screen-right)
-            const Vec3 right_flat{-forward_flat.z, 0.0f, forward_flat.x};
-            Vec3 move{0.0f};
-            bool jump = false;
-            if (Input* in = input()) {
-                if (in->key_down(key::W)) move += forward_flat;
-                if (in->key_down(key::S)) move -= forward_flat;
-                if (in->key_down(key::D)) move += right_flat;
-                if (in->key_down(key::A)) move -= right_flat;
-                jump = in->key_down(key::Space);
-            }
-            net::PlayerInput packet;
-            packet.sequence = ++sequence_;
-            packet.move = move;
-            packet.yaw = yaw_;
-            packet.pitch = pitch_;
-            packet.jump = jump;
-            packet.dig = pending_dig_;
-            packet.add = pending_add_;
-            packet.aim = aim_;
-            client_.send_input(packet);
-            pending_dig_ = false;
-            pending_add_ = false;
-        }
-
-        if (terrain_ != nullptr && terrain_->any_dirty() && renderer_ != nullptr) {
-            terrain_->rebuild_dirty(renderer_->device());
+        if (terrain_ != nullptr && renderer_ != nullptr) {
+            terrain_->update(local_feet(), renderer_->device());
         }
     }
 
@@ -160,30 +156,44 @@ protected:
         if (renderer_ == nullptr || terrain_ == nullptr) {
             return;
         }
-        const Vec3 eye = local_eye();
-        const Vec3 look = look_direction();
-        camera_.set_perspective(radians(70.0f), renderer_->aspect(), 0.05f, 400.0f);
-        camera_.look_at(eye, eye + look);
         renderer_->set_camera(camera_);
 
         terrain_->for_each_mesh([&](const Mesh& mesh) { renderer_->draw(mesh, Mat4{1.0f}); });
 
         if (have_snapshot_) {
             for (const net::PlayerState& p : snapshot_.players) {
-                if (p.id == my_id_) {
-                    continue; // first person: don't draw ourselves
+                const auto it = visuals_.find(p.id);
+                if (it != visuals_.end()) {
+                    draw_character(it->second, p.position, p.yaw);
                 }
-                const Mat4 model = glm::translate(Mat4{1.0f}, p.position + Vec3{0.0f, 0.9f, 0.0f}) *
-                                   glm::rotate(Mat4{1.0f}, p.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
-                                   glm::scale(Mat4{1.0f}, Vec3{0.6f, 1.8f, 0.6f});
-                renderer_->draw(avatar_, model);
             }
         }
+
+        // Tree trunks (opaque).
+        terrain_->for_each_tree([&](const TreeInstance& t) {
+            renderer_->draw(tree_library_[tree_index(t)].trunk, tree_model(t));
+        });
 
         if (aim_valid_) {
             renderer_->draw(marker_, glm::translate(Mat4{1.0f}, aim_) *
                                          glm::scale(Mat4{1.0f}, Vec3{0.3f}));
         }
+
+        // Transparent water surface, drawn after opaque geometry. Depth-tested but
+        // not depth-written, so terrain above the waterline correctly hides it.
+        const Vec3 feet = local_feet();
+        renderer_->draw_water(water_mesh_, glm::translate(Mat4{1.0f}, Vec3{feet.x,
+                                                          worldgen::water_level, feet.z}));
+
+        // Tree foliage (transparent), drawn last. Fades out when the local player
+        // is under the canopy so you can see yourself and the ground beneath.
+        terrain_->for_each_tree([&](const TreeInstance& t) {
+            const f32 dxz = glm::length(Vec2{t.position.x - feet.x, t.position.z - feet.z});
+            const f32 canopy = 2.6f * t.scale;
+            const f32 alpha = dxz < canopy ? glm::mix(0.18f, 1.0f, dxz / canopy) : 1.0f;
+            renderer_->draw_transparent(tree_library_[tree_index(t)].foliage, tree_model(t),
+                                        Vec4{t.tint, alpha});
+        });
     }
 
     void on_event(Event& event) override {
@@ -205,24 +215,121 @@ protected:
     }
 
     void on_shutdown() override {
-        avatar_.destroy();
+        visuals_.clear();
+        shape_box_.destroy();
+        shape_sphere_.destroy();
+        shape_cylinder_.destroy();
+        for (auto& tv : tree_library_) {
+            tv.trunk.destroy();
+            tv.foliage.destroy();
+        }
+        tree_library_.clear();
         marker_.destroy();
+        water_mesh_.destroy();
         terrain_.reset();
         client_.disconnect();
         local_server_.stop();
     }
 
 private:
-    void build_terrain(u32 seed) {
-        terrain_ = std::make_unique<Terrain>(worldgen::dims, worldgen::voxel_size, 16, worldgen::origin);
-        terrain_->generate([seed](const Vec3& p) { return worldgen::density(p, seed); });
-        terrain_->rebuild_dirty(renderer_->device());
-        ALRYN_INFO("World ready (seed {}, {} chunks)", seed, terrain_->chunk_count());
+    struct PlayerVisual {
+        CharacterModel model;
+        CharacterAnimator animator;
+        Vec3 last_pos{0.0f};
+        f32 speed = 0.0f;
+        bool has_last = false;
+    };
+
+    PlayerVisual& ensure_visual(net::PlayerId id) {
+        const auto it = visuals_.find(id);
+        if (it != visuals_.end()) {
+            return it->second;
+        }
+        PlayerVisual v;
+        v.model = CharacterModel::generate(id);
+        return visuals_.emplace(id, std::move(v)).first->second;
     }
 
-    Vec3 look_direction() const {
-        return Vec3{std::cos(pitch_) * std::cos(yaw_), std::sin(pitch_),
-                    std::cos(pitch_) * std::sin(yaw_)};
+    void update_camera() {
+        const f32 cam_yaw = radians(iso::yaw_deg);
+        const f32 cam_pitch = radians(iso::pitch_deg);
+        const Vec3 dir_to_cam{std::cos(cam_pitch) * std::cos(cam_yaw), std::sin(cam_pitch),
+                              std::cos(cam_pitch) * std::sin(cam_yaw)};
+        const Vec3 target = local_feet() + Vec3{0.0f, 0.7f, 0.0f};
+        const Vec3 eye = target + dir_to_cam * iso::distance;
+        camera_.set_perspective(radians(iso::fov_deg), renderer_->aspect(), 0.5f, 400.0f);
+        camera_.look_at(eye, target);
+    }
+
+    void update_visuals(Timestep dt) {
+        if (!have_snapshot_) {
+            return;
+        }
+        for (const net::PlayerState& p : snapshot_.players) {
+            PlayerVisual& v = ensure_visual(p.id);
+            f32 measured = 0.0f;
+            if (v.has_last && dt.seconds > 0.0001f) {
+                Vec3 d = p.position - v.last_pos;
+                d.y = 0.0f;
+                measured = glm::length(d) / dt.seconds;
+            }
+            v.speed = glm::mix(v.speed, measured, 0.3f);
+            v.last_pos = p.position;
+            v.has_last = true;
+            v.animator.update(v.speed, dt);
+        }
+    }
+
+    void draw_character(PlayerVisual& v, const Vec3& feet, f32 yaw) {
+        const Mat4 root = glm::translate(Mat4{1.0f}, feet) *
+                          glm::rotate(Mat4{1.0f}, HalfPi - yaw, Vec3{0.0f, 1.0f, 0.0f});
+        const std::vector<Quat> pose = v.animator.pose(v.model);
+        const std::vector<Mat4> mats = v.model.bone_matrices(root, pose);
+        const std::vector<Bone>& bones = v.model.bones();
+        const CharacterPalette& pal = v.model.palette();
+        for (usize i = 0; i < bones.size(); ++i) {
+            const Vec3 color = bones[i].color == BoneColor::Skin    ? pal.skin
+                               : bones[i].color == BoneColor::Shirt ? pal.shirt
+                                                                    : pal.pants;
+            const Mesh& shape = bones[i].shape == BoneShape::Sphere     ? shape_sphere_
+                                : bones[i].shape == BoneShape::Cylinder ? shape_cylinder_
+                                                                        : shape_box_;
+            renderer_->draw(shape, mats[i], Vec4{color, 1.0f});
+        }
+    }
+
+    void send_input() {
+        if (!client_.connected()) {
+            return;
+        }
+        // Movement is relative to the fixed camera: W goes "into" the screen.
+        const f32 cam_yaw = radians(iso::yaw_deg);
+        const Vec3 cam_fwd{-std::cos(cam_yaw), 0.0f, -std::sin(cam_yaw)};
+        const Vec3 cam_right{-cam_fwd.z, 0.0f, cam_fwd.x};
+        Vec3 move{0.0f};
+        bool jump = false;
+        if (Input* in = input()) {
+            if (in->key_down(key::W)) move += cam_fwd;
+            if (in->key_down(key::S)) move -= cam_fwd;
+            if (in->key_down(key::D)) move += cam_right;
+            if (in->key_down(key::A)) move -= cam_right;
+            jump = in->key_down(key::Space);
+        }
+        if (glm::length(move) > 0.01f) {
+            face_yaw_ = std::atan2(move.z, move.x); // face the way we walk
+        }
+
+        net::PlayerInput packet;
+        packet.sequence = ++sequence_;
+        packet.move = move;
+        packet.yaw = face_yaw_;
+        packet.jump = jump;
+        packet.dig = pending_dig_;
+        packet.add = pending_add_;
+        packet.aim = aim_;
+        client_.send_input(packet);
+        pending_dig_ = false;
+        pending_add_ = false;
     }
 
     Vec3 local_feet() const {
@@ -236,17 +343,40 @@ private:
         return Vec3{0.0f, 5.0f, 0.0f};
     }
 
-    Vec3 local_eye() const { return local_feet() + Vec3{0.0f, 1.6f, 0.0f}; }
-
+    // Unproject the cursor through the iso camera onto the terrain (for digging).
     void update_aim() {
         aim_valid_ = false;
-        if (terrain_ == nullptr) {
+        if (terrain_ == nullptr || renderer_ == nullptr) {
             return;
         }
-        if (const auto hit = terrain_->raycast(local_eye(), look_direction(), 80.0f)) {
+        const VkExtent2D extent = renderer_->extent();
+        if (extent.width == 0 || extent.height == 0) {
+            return;
+        }
+        Vec2 cursor{static_cast<f32>(extent.width) * 0.5f, static_cast<f32>(extent.height) * 0.5f};
+        if (Input* in = input()) {
+            cursor = in->mouse_position();
+        }
+        const Vec2 ndc{2.0f * cursor.x / static_cast<f32>(extent.width) - 1.0f,
+                       2.0f * cursor.y / static_cast<f32>(extent.height) - 1.0f};
+        const Mat4 inv = glm::inverse(camera_.view_projection());
+        const Vec4 near_h = inv * Vec4{ndc.x, ndc.y, 0.0f, 1.0f};
+        const Vec4 far_h = inv * Vec4{ndc.x, ndc.y, 1.0f, 1.0f};
+        const Vec3 origin = Vec3{near_h} / near_h.w;
+        const Vec3 dir = glm::normalize(Vec3{far_h} / far_h.w - origin);
+        if (const auto hit = terrain_->raycast(origin, dir, 300.0f)) {
             aim_ = *hit;
             aim_valid_ = true;
         }
+    }
+
+    Mat4 tree_model(const TreeInstance& t) const {
+        return glm::translate(Mat4{1.0f}, t.position) *
+               glm::rotate(Mat4{1.0f}, t.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
+               glm::scale(Mat4{1.0f}, Vec3{t.scale});
+    }
+    usize tree_index(const TreeInstance& t) const {
+        return tree_library_.empty() ? 0 : static_cast<usize>(t.variant) % tree_library_.size();
     }
 
     static ApplicationConfig make_config(u64 max_frames) {
@@ -264,18 +394,27 @@ private:
     GameServer local_server_;
     Renderer* renderer_ = nullptr;
     net::NetClient client_;
-    std::unique_ptr<Terrain> terrain_;
-    Mesh avatar_;
+    std::unique_ptr<StreamingTerrain> terrain_;
+    struct TreeVisual {
+        Mesh trunk;
+        Mesh foliage;
+    };
+
+    std::unordered_map<net::PlayerId, PlayerVisual> visuals_;
+    std::vector<TreeVisual> tree_library_;
+    Mesh shape_box_;
+    Mesh shape_sphere_;
+    Mesh shape_cylinder_;
     Mesh marker_;
+    Mesh water_mesh_;
+    f32 elapsed_ = 0.0f;
     Camera camera_;
 
     net::PlayerId my_id_ = 0;
     net::Snapshot snapshot_;
     bool have_snapshot_ = false;
 
-    f32 yaw_ = 0.0f;
-    f32 pitch_ = 0.0f;
-    f32 sensitivity_ = 0.0025f;
+    f32 face_yaw_ = 0.0f;
     u32 sequence_ = 0;
     bool pending_dig_ = false;
     bool pending_add_ = false;
@@ -284,7 +423,7 @@ private:
 };
 
 // --------------------------------------------------------------------------
-//  Headless "bot": connects and walks in a circle so we can demo two players.
+//  Headless "bot": connects and walks so we can demo other players moving.
 // --------------------------------------------------------------------------
 static void run_bot(const std::string& host, f32 seconds) {
     Log::init(LogLevel::Info);
@@ -303,7 +442,6 @@ static void run_bot(const std::string& host, f32 seconds) {
         if (client.connected()) {
             net::PlayerInput packet;
             packet.sequence = ++sequence;
-            // Oscillate near the spawn so the bot stays in view of the client.
             packet.move = Vec3{std::sin(elapsed * 1.3f) * 0.8f, 0.0f, std::cos(elapsed * 0.9f) * 0.8f};
             packet.yaw = elapsed;
             client.send_input(packet);
@@ -316,7 +454,7 @@ static void run_bot(const std::string& host, f32 seconds) {
 int main(int argc, char** argv) {
     std::string mode = "client";
     std::string host = "127.0.0.1";
-    bool joining = false; // true once an explicit --host= asks us to join a server
+    bool joining = false;
     u64 frames = 0;
     f32 bot_seconds = 60.0f;
 

@@ -8,6 +8,7 @@ add_library(alryn STATIC
     Alryn/Core/UUID.cpp
     Alryn/Core/Paths.cpp
     Alryn/Core/Noise.cpp
+    Alryn/Core/Density.cpp
     # ---- Engine ------------------------------------------------------------
     Alryn/Engine/Engine.cpp
     Alryn/Engine/Application.cpp
@@ -21,6 +22,9 @@ add_library(alryn STATIC
     Alryn/Platform/Input.cpp
     # ---- Physics -----------------------------------------------------------
     Alryn/Physics/CharacterController.cpp
+    # ---- Character ---------------------------------------------------------
+    Alryn/Character/CharacterModel.cpp
+    Alryn/Character/CharacterAnimator.cpp
     # ---- Renderer (Vulkan RHI) ---------------------------------------------
     Alryn/Renderer/Vulkan/VulkanCommon.cpp
     Alryn/Renderer/Vulkan/VulkanInstance.cpp
@@ -36,6 +40,7 @@ add_library(alryn STATIC
     Alryn/Terrain/VoxelField.cpp
     Alryn/Terrain/MarchingTetra.cpp
     Alryn/Terrain/Terrain.cpp
+    Alryn/Terrain/StreamingTerrain.cpp
     # ---- Net ---------------------------------------------------------------
     Alryn/Net/ByteBuffer.cpp
     Alryn/Net/Protocol.cpp

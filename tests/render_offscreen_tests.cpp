@@ -20,6 +20,8 @@ namespace {
 struct PushConstants {
     Mat4 mvp;
     Mat4 model;
+    Vec4 tint;
+    Vec4 params;
 };
 
 void image_barrier(VkCommandBuffer cmd, VkImage image, VkImageAspectFlags aspect,
@@ -107,6 +109,8 @@ TEST_CASE("Renderer: offscreen render of a lit cube (headless)") {
     PushConstants push{};
     push.model = Mat4{1.0f};
     push.mvp = proj * view * push.model;
+    push.tint = Vec4{1.0f};
+    push.params = Vec4{0.0f};
 
     const Vec3 background{0.10f, 0.12f, 0.18f};
 

@@ -9,6 +9,7 @@ add_executable(alryn_tests
     terrain_tests.cpp
     physics_tests.cpp
     net_tests.cpp
+    character_tests.cpp
 )
 
 target_link_libraries(alryn_tests PRIVATE

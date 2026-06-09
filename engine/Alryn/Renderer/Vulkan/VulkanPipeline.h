@@ -21,6 +21,8 @@ struct PipelineConfig {
     VkFormat depth_format = VK_FORMAT_UNDEFINED; // UNDEFINED => no depth test
     u32 push_constant_size = 0;
     VkCullModeFlags cull_mode = VK_CULL_MODE_NONE;
+    bool blend = false;       // alpha blending (transparent materials)
+    bool depth_write = true;  // write depth (turn off for transparent passes)
 };
 
 // A graphics pipeline for alryn::Vertex geometry, built for dynamic rendering

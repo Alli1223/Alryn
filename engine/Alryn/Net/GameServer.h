@@ -5,18 +5,17 @@
 #include <Alryn/Net/NetServer.h>
 #include <Alryn/Net/Protocol.h>
 #include <Alryn/Physics/CharacterController.h>
-#include <Alryn/Terrain/VoxelField.h>
+#include <Alryn/Terrain/WorldSampler.h>
 
-#include <memory>
 #include <unordered_map>
 
 namespace alryn {
 
-// The authoritative simulation. Owns the world voxel field and one
-// CharacterController per connected client. Each tick() it: drains network
+// The authoritative simulation. Owns the world density (seed + replicated edits)
+// and one CharacterController per connected client. Each tick() it drains network
 // events (spawn/despawn/input), applies terrain edits, steps every player from
-// their latest input, and broadcasts a Snapshot. Used by the dedicated server and
-// exercised directly by tests.
+// their latest input against the density function, and broadcasts a Snapshot. The
+// world is unbounded - collision samples the function, so players can roam freely.
 class GameServer {
 public:
     struct ServerPlayer {
@@ -31,17 +30,16 @@ public:
     void tick(Timestep dt);
 
     usize player_count() const { return players_.size(); }
-    u32 seed() const { return seed_; }
+    u32 seed() const { return sampler_.seed(); }
     const std::unordered_map<net::PlayerId, ServerPlayer>& players() const { return players_; }
 
 private:
     Vec3 spawn_point(net::PlayerId id) const;
 
     net::NetServer server_;
-    std::unique_ptr<VoxelField> field_;
+    WorldSampler sampler_;
     std::unordered_map<net::PlayerId, ServerPlayer> players_;
     u32 tick_ = 0;
-    u32 seed_ = 0;
 };
 
 } // namespace alryn
