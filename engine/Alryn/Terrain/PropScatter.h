@@ -2,7 +2,7 @@
 
 #include <Alryn/Core/Math.h>
 #include <Alryn/Core/Types.h>
-#include <Alryn/Terrain/TreeScatter.h> // detail::tree_hash / hash01
+#include <Alryn/Terrain/ScatterHash.h> // detail::tree_hash / hash01
 #include <Alryn/Terrain/WorldGen.h>
 #include <Alryn/World/Prop.h>
 
@@ -58,32 +58,28 @@ inline std::vector<PropInstance> scatter_props(int cx, int cz, f32 chunk_world, 
         }
     };
 
-    // Bushes: gentle, above-water, non-desert ground.
-    place(3.0f, seed + 6100u, PropCategory::Bush, 3, [&](f32 x, f32 z, f32 gh, u32 h) {
+    // Bushes: dense forest undergrowth on gentle, above-water, non-desert ground.
+    place(2.2f, seed + 6100u, PropCategory::Bush, 3, [&](f32 x, f32 z, f32 gh, u32 h) {
         if (gh < worldgen::water_level + 0.8f || gh > 9.0f) return false;
-        if (worldgen::moisture(x, z, seed) < -0.05f) return false;
-        if (detail::ground_slope(x, z, seed) > 2.0f) return false;
-        return detail::hash01(h) < 0.4f;
+        const f32 moist = worldgen::moisture(x, z, seed);
+        if (moist < -0.05f) return false;
+        if (detail::ground_slope(x, z, seed) > 2.2f) return false;
+        return detail::hash01(h) < 0.30f + glm::clamp(moist, 0.0f, 0.5f) * 0.5f; // lusher when wet
     });
 
-    // Rocks: sparse, tolerate slopes, above water.
-    place(6.0f, seed + 6200u, PropCategory::Rock, 3, [&](f32 /*x*/, f32 /*z*/, f32 gh, u32 h) {
+    // Rocks / mossy boulders: tolerate slopes, above water.
+    place(5.0f, seed + 6200u, PropCategory::Rock, 3, [&](f32 /*x*/, f32 /*z*/, f32 gh, u32 h) {
         if (gh < worldgen::water_level + 0.4f) return false;
-        return detail::hash01(h) < 0.30f;
+        return detail::hash01(h) < 0.32f;
     });
 
-    // Houses: occasional, on a reasonably flat, above-water clearing (villages
-    // cluster in flatter terrain; steep hills stay empty).
-    place(chunk_world, seed + 6300u, PropCategory::House, 4, [&](f32 x, f32 z, f32 gh, u32 h) {
-        if (detail::hash01(h) > 0.22f) return false;
-        if (gh < worldgen::water_level + 1.2f || gh > 7.5f) return false;
-        // Need fairly flat ground over the footprint (villages favour flat land).
-        for (f32 ox : {-2.5f, 2.5f}) {
-            for (f32 oz : {-2.5f, 2.5f}) {
-                if (std::abs(worldgen::height(x + ox, z + oz, seed) - gh) > 1.4f) return false;
-            }
-        }
-        return true;
+    // Fallen logs: occasional forest-floor debris (you bump into them) on flattish,
+    // moist, wooded ground.
+    place(5.5f, seed + 6400u, PropCategory::Log, 3, [&](f32 x, f32 z, f32 gh, u32 h) {
+        if (gh < worldgen::water_level + 1.0f) return false;
+        if (worldgen::moisture(x, z, seed) < 0.0f) return false;
+        if (detail::ground_slope(x, z, seed) > 1.6f) return false;
+        return detail::hash01(h) < 0.18f;
     });
 
     return out;

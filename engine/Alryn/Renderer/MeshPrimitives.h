@@ -34,6 +34,26 @@ MeshData grass_tuft(int blades = 4, const Vec3& color = Vec3{0.33f, 0.55f, 0.27f
 // `blossom`-coloured petal ring around a yellow centre.
 MeshData flower(const Vec3& blossom = Vec3{0.90f, 0.30f, 0.35f});
 
+// A low-poly fern: a rosette of arching, drooping fronds rooted at y = 0. Reads as
+// forest-floor bracken. `variant` changes the frond count/spread.
+MeshData fern(int variant = 0, const Vec3& color = Vec3{0.20f, 0.42f, 0.22f});
+
+// A taller grassy clump - wider, more upright arching blades than grass_tuft, for
+// meadow / forest-clearing variety.
+MeshData tall_grass(int blades = 6, const Vec3& color = Vec3{0.34f, 0.52f, 0.26f});
+
+// A low-poly mushroom: pale stem + a coloured cap, sitting on y = 0. `spots` adds
+// white flecks (the classic toadstool). Scale for tiny sprouts to fat boletes.
+MeshData mushroom(const Vec3& cap = Vec3{0.74f, 0.18f, 0.15f}, f32 scale = 1.0f, bool spots = true);
+
+// A small leafy ground plant (clover / forest herb): a few flat leaflets fanned
+// low to the ground around a short stem.
+MeshData ground_leaf(int variant = 0, const Vec3& color = Vec3{0.26f, 0.46f, 0.24f});
+
+// A fallen log lying along +X on y = 0 (octagonal), bark sides with paler cut ends
+// and a hint of moss on top. A collidable bit of forest-floor debris.
+MeshData fallen_log(int variant = 0, const Vec3& color = Vec3{0.34f, 0.26f, 0.18f});
+
 // A low-poly tree split into an opaque trunk and (alpha-blendable) foliage so the
 // foliage can fade when a player walks under it. The trunk base sits at y = 0.
 struct TreeMeshData {

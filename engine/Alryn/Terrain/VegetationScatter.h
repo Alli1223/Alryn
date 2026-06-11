@@ -16,8 +16,10 @@ namespace detail {
 
 // Appends `src` to `dst` transformed by `xf` (positions + normals) and tinted.
 // Assumes near-uniform scale (grass/flowers), so mat3(xf) suffices for normals.
+// `base_y` is the plant's ground height: each vertex's height above it becomes the
+// `sway` weight so the wind shader bends tips more than roots.
 inline void append_transformed(MeshData& dst, const MeshData& src, const Mat4& xf,
-                               const Vec3& tint) {
+                               const Vec3& tint, f32 base_y) {
     const Mat3 nm{xf};
     const u32 base = static_cast<u32>(dst.vertices.size());
     for (const Vertex& v : src.vertices) {
@@ -25,6 +27,7 @@ inline void append_transformed(MeshData& dst, const MeshData& src, const Mat4& x
         o.position = Vec3{xf * Vec4{v.position, 1.0f}};
         o.normal = glm::normalize(nm * v.normal);
         o.color = v.color * tint;
+        o.sway = glm::max(o.position.y - base_y, 0.0f); // height above the plant base
         dst.vertices.push_back(o);
     }
     for (u32 i : src.indices) {
@@ -34,76 +37,157 @@ inline void append_transformed(MeshData& dst, const MeshData& src, const Mat4& x
 
 } // namespace detail
 
-// Builds a single baked mesh of grass tufts + occasional flowers for the chunk
-// covering world [cx*cw,(cx+1)*cw] x [cz*cw,(cz+1)*cw]. Vegetation grows on gentle,
-// above-water, non-desert ground; denser and lusher where the world is wetter.
-// Placement is on a global cell grid, so neighbouring chunks tile seamlessly.
+namespace detail {
+
+// Common gate for ground vegetation: above water, not bare desert, not too steep.
+// Returns the local moisture (or NaN-ish sentinel via the bool) for the caller.
+inline bool veg_ground(f32 wx, f32 wz, u32 seed, f32 gh, f32 max_slope, f32 min_moist,
+                       f32& out_moist) {
+    if (gh < worldgen::water_level + 0.6f) {
+        return false;
+    }
+    out_moist = worldgen::moisture(wx, wz, seed);
+    if (out_moist < min_moist) {
+        return false;
+    }
+    const f32 slope = std::abs(worldgen::height(wx + 1.0f, wz, seed) - gh) +
+                      std::abs(worldgen::height(wx, wz + 1.0f, seed) - gh);
+    return slope <= max_slope;
+}
+
+} // namespace detail
+
+// Builds one baked mesh of ground vegetation for the chunk covering world
+// [cx*cw,(cx+1)*cw] x [cz*cw,(cz+1)*cw]: a dense, varied forest floor of grass,
+// tall grass, ferns, mushrooms, leafy ground cover and wildflowers. Each kind is
+// scattered on its own global cell grid (so chunks tile) and chosen by moisture -
+// wetter ground reads as lush forest floor, drier as open meadow. It's all one
+// opaque mesh, so a whole chunk of undergrowth is a single draw call.
 inline MeshData build_vegetation(int cx, int cz, f32 chunk_world, u32 seed) {
     MeshData m;
-    constexpr f32 cell = 0.7f;
     const f32 x0 = static_cast<f32>(cx) * chunk_world;
     const f32 z0 = static_cast<f32>(cz) * chunk_world;
-    const int gx0 = static_cast<int>(std::floor(x0 / cell));
-    const int gz0 = static_cast<int>(std::floor(z0 / cell));
-    const int n = std::max(1, static_cast<int>(std::lround(chunk_world / cell)));
 
+    // Runs `place` for each jittered cell of size `cell` overlapping the chunk.
+    auto for_cells = [&](f32 cell, u32 salt, auto&& place) {
+        const int gx0 = static_cast<int>(std::floor(x0 / cell));
+        const int gz0 = static_cast<int>(std::floor(z0 / cell));
+        const int n = std::max(1, static_cast<int>(std::lround(chunk_world / cell)));
+        for (int j = 0; j < n; ++j) {
+            for (int i = 0; i < n; ++i) {
+                const int gx = gx0 + i;
+                const int gz = gz0 + j;
+                const f32 jx = (detail::hash01(detail::tree_hash(gx, gz, salt + 1u)) - 0.5f) * cell * 0.9f;
+                const f32 jz = (detail::hash01(detail::tree_hash(gx, gz, salt + 2u)) - 0.5f) * cell * 0.9f;
+                const f32 wx = (static_cast<f32>(gx) + 0.5f) * cell + jx;
+                const f32 wz = (static_cast<f32>(gz) + 0.5f) * cell + jz;
+                place(gx, gz, wx, wz);
+            }
+        }
+    };
+    auto place_at = [&](const MeshData& src, f32 wx, f32 wz, f32 gh, f32 yaw, f32 sc, f32 sy,
+                        const Vec3& tint) {
+        const Mat4 xf = glm::translate(Mat4{1.0f}, Vec3{wx, gh, wz}) *
+                        glm::rotate(Mat4{1.0f}, yaw, Vec3{0.0f, 1.0f, 0.0f}) *
+                        glm::scale(Mat4{1.0f}, Vec3{sc, sc * sy, sc});
+        detail::append_transformed(m, src, xf, tint, gh);
+    };
+
+    // ---- Grass: dense, everywhere it can grow; lush green when wet, tan when dry.
+    for_cells(0.6f, seed + 5000u, [&](int gx, int gz, f32 wx, f32 wz) {
+        f32 moist;
+        const f32 gh = worldgen::height(wx, wz, seed);
+        if (!detail::veg_ground(wx, wz, seed, gh, 2.4f, -0.08f, moist)) return;
+        const f32 density = 0.4f + glm::clamp(moist, 0.0f, 0.7f) * 0.5f;
+        if (detail::hash01(detail::tree_hash(gx, gz, seed + 5003u)) > density) return;
+        const Vec3 dry{0.55f, 0.50f, 0.26f};
+        const Vec3 lush{0.24f, 0.52f, 0.23f};
+        const Vec3 g = glm::mix(dry, lush, glm::smoothstep(-0.05f, 0.32f, moist));
+        const f32 shade = 0.85f + detail::hash01(detail::tree_hash(gx, gz, seed + 5004u)) * 0.28f;
+        const f32 sc = 0.8f + detail::hash01(detail::tree_hash(gx, gz, seed + 5005u)) * 0.8f;
+        const f32 sy = 0.8f + detail::hash01(detail::tree_hash(gx, gz, seed + 5006u)) * 0.6f;
+        place_at(primitives::grass_tuft(4, g), wx, wz, gh,
+                 detail::hash01(detail::tree_hash(gx, gz, seed + 5007u)) * TwoPi, sc, sy, Vec3{shade});
+    });
+
+    // ---- Ferns: lush, shady forest floor (needs moisture).
+    for_cells(1.05f, seed + 5100u, [&](int gx, int gz, f32 wx, f32 wz) {
+        f32 moist;
+        const f32 gh = worldgen::height(wx, wz, seed);
+        if (!detail::veg_ground(wx, wz, seed, gh, 2.0f, 0.04f, moist)) return;
+        const f32 density = glm::clamp(moist, 0.0f, 0.5f) * 0.75f;
+        if (detail::hash01(detail::tree_hash(gx, gz, seed + 5103u)) > density) return;
+        const int var = static_cast<int>(detail::tree_hash(gx, gz, seed + 5104u) % 3u);
+        const f32 sc = 0.9f + detail::hash01(detail::tree_hash(gx, gz, seed + 5105u)) * 0.9f;
+        const f32 shade = 0.85f + detail::hash01(detail::tree_hash(gx, gz, seed + 5106u)) * 0.3f;
+        place_at(primitives::fern(var), wx, wz, gh,
+                 detail::hash01(detail::tree_hash(gx, gz, seed + 5107u)) * TwoPi, sc, 1.0f, Vec3{shade});
+    });
+
+    // ---- Tall grass tufts: scattered taller clumps.
+    for_cells(1.4f, seed + 5200u, [&](int gx, int gz, f32 wx, f32 wz) {
+        f32 moist;
+        const f32 gh = worldgen::height(wx, wz, seed);
+        if (!detail::veg_ground(wx, wz, seed, gh, 2.2f, -0.02f, moist)) return;
+        if (detail::hash01(detail::tree_hash(gx, gz, seed + 5203u)) > 0.3f) return;
+        const Vec3 g = glm::mix(Vec3{0.45f, 0.46f, 0.24f}, Vec3{0.30f, 0.54f, 0.26f},
+                                glm::smoothstep(-0.05f, 0.3f, moist));
+        const f32 sc = 0.9f + detail::hash01(detail::tree_hash(gx, gz, seed + 5205u)) * 0.6f;
+        place_at(primitives::tall_grass(6, g), wx, wz, gh,
+                 detail::hash01(detail::tree_hash(gx, gz, seed + 5207u)) * TwoPi, sc, 1.0f, Vec3{1.0f});
+    });
+
+    // ---- Mushrooms: damp forest floor, various caps; the odd cluster.
+    static const Vec3 caps[] = {{0.74f, 0.16f, 0.13f}, {0.55f, 0.34f, 0.20f}, {0.80f, 0.66f, 0.40f},
+                                {0.86f, 0.74f, 0.30f}, {0.55f, 0.40f, 0.55f}};
+    for_cells(1.7f, seed + 5300u, [&](int gx, int gz, f32 wx, f32 wz) {
+        f32 moist;
+        const f32 gh = worldgen::height(wx, wz, seed);
+        if (!detail::veg_ground(wx, wz, seed, gh, 1.8f, 0.06f, moist)) return;
+        if (detail::hash01(detail::tree_hash(gx, gz, seed + 5303u)) > 0.22f) return;
+        const u32 ci = detail::tree_hash(gx, gz, seed + 5304u) % 5u;
+        const bool red = ci == 0;
+        const int count = 1 + static_cast<int>(detail::hash01(detail::tree_hash(gx, gz, seed + 5305u)) * 3.0f);
+        for (int k = 0; k < count; ++k) {
+            const f32 ox = (detail::hash01(detail::tree_hash(gx * 7 + k, gz, seed + 5306u)) - 0.5f) * 0.35f;
+            const f32 oz = (detail::hash01(detail::tree_hash(gx, gz * 7 + k, seed + 5307u)) - 0.5f) * 0.35f;
+            const f32 sc = 0.6f + detail::hash01(detail::tree_hash(gx + k, gz, seed + 5308u)) * 0.9f;
+            const f32 gh2 = worldgen::height(wx + ox, wz + oz, seed);
+            place_at(primitives::mushroom(caps[ci], 1.0f, red), wx + ox, wz + oz, gh2, 0.0f, sc, 1.0f,
+                     Vec3{1.0f});
+        }
+    });
+
+    // ---- Leafy ground cover (clover / herbs): low, common, fills gaps.
+    for_cells(0.85f, seed + 5400u, [&](int gx, int gz, f32 wx, f32 wz) {
+        f32 moist;
+        const f32 gh = worldgen::height(wx, wz, seed);
+        if (!detail::veg_ground(wx, wz, seed, gh, 2.2f, 0.0f, moist)) return;
+        const f32 density = 0.18f + glm::clamp(moist, 0.0f, 0.5f) * 0.4f;
+        if (detail::hash01(detail::tree_hash(gx, gz, seed + 5403u)) > density) return;
+        const int var = static_cast<int>(detail::tree_hash(gx, gz, seed + 5404u) % 4u);
+        const Vec3 g = glm::mix(Vec3{0.30f, 0.42f, 0.22f}, Vec3{0.22f, 0.48f, 0.24f},
+                                glm::smoothstep(0.0f, 0.3f, moist));
+        const f32 sc = 0.8f + detail::hash01(detail::tree_hash(gx, gz, seed + 5405u)) * 0.7f;
+        place_at(primitives::ground_leaf(var, g), wx, wz, gh,
+                 detail::hash01(detail::tree_hash(gx, gz, seed + 5407u)) * TwoPi, sc, 1.0f, Vec3{1.0f});
+    });
+
+    // ---- Wildflowers: occasional dabs of colour on wetter ground.
     static const Vec3 blossoms[] = {{0.92f, 0.28f, 0.32f}, {0.95f, 0.82f, 0.28f},
                                     {0.97f, 0.97f, 0.99f}, {0.72f, 0.45f, 0.90f},
                                     {0.96f, 0.60f, 0.78f}};
+    for_cells(1.3f, seed + 5500u, [&](int gx, int gz, f32 wx, f32 wz) {
+        f32 moist;
+        const f32 gh = worldgen::height(wx, wz, seed);
+        if (!detail::veg_ground(wx, wz, seed, gh, 2.2f, 0.02f, moist)) return;
+        if (detail::hash01(detail::tree_hash(gx, gz, seed + 5503u)) > 0.16f) return;
+        const u32 bi = detail::tree_hash(gx, gz, seed + 5504u) % 5u;
+        const f32 sc = 0.9f + detail::hash01(detail::tree_hash(gx, gz, seed + 5505u)) * 0.6f;
+        place_at(primitives::flower(blossoms[bi]), wx, wz, gh,
+                 detail::hash01(detail::tree_hash(gx, gz, seed + 5507u)) * TwoPi, sc, 1.0f, Vec3{1.0f});
+    });
 
-    for (int j = 0; j < n; ++j) {
-        for (int i = 0; i < n; ++i) {
-            const int gx = gx0 + i;
-            const int gz = gz0 + j;
-            const f32 jx = (detail::hash01(detail::tree_hash(gx, gz, seed + 5001u)) - 0.5f) * cell * 0.9f;
-            const f32 jz = (detail::hash01(detail::tree_hash(gx, gz, seed + 5002u)) - 0.5f) * cell * 0.9f;
-            const f32 wx = (static_cast<f32>(gx) + 0.5f) * cell + jx;
-            const f32 wz = (static_cast<f32>(gz) + 0.5f) * cell + jz;
-
-            const f32 gh = worldgen::height(wx, wz, seed);
-            if (gh < worldgen::water_level + 0.6f) {
-                continue; // underwater or on the waterline
-            }
-            const f32 moist = worldgen::moisture(wx, wz, seed);
-            if (moist < -0.08f) {
-                continue; // dry desert: bare sand
-            }
-            const f32 slope = std::abs(worldgen::height(wx + 1.0f, wz, seed) - gh) +
-                              std::abs(worldgen::height(wx, wz + 1.0f, seed) - gh);
-            if (slope > 2.4f) {
-                continue; // too steep
-            }
-            const f32 density = 0.32f + glm::clamp(moist, 0.0f, 0.7f) * 0.5f;
-            if (detail::hash01(detail::tree_hash(gx, gz, seed + 5003u)) > density) {
-                continue;
-            }
-
-            // Lush green where wet, dry tan where arid.
-            const Vec3 dry{0.55f, 0.50f, 0.26f};
-            const Vec3 lush{0.27f, 0.55f, 0.25f};
-            const Vec3 g = glm::mix(dry, lush, glm::smoothstep(-0.05f, 0.32f, moist));
-            const f32 shade = 0.88f + detail::hash01(detail::tree_hash(gx, gz, seed + 5004u)) * 0.24f;
-            const f32 sc = 0.75f + detail::hash01(detail::tree_hash(gx, gz, seed + 5005u)) * 0.7f;
-            const f32 sy = 0.8f + detail::hash01(detail::tree_hash(gx, gz, seed + 5006u)) * 0.5f;
-            const f32 yaw = detail::hash01(detail::tree_hash(gx, gz, seed + 5007u)) * TwoPi;
-            const Mat4 xf = glm::translate(Mat4{1.0f}, Vec3{wx, gh, wz}) *
-                            glm::rotate(Mat4{1.0f}, yaw, Vec3{0.0f, 1.0f, 0.0f}) *
-                            glm::scale(Mat4{1.0f}, Vec3{sc, sc * sy, sc});
-            detail::append_transformed(m, primitives::grass_tuft(4, g), xf, Vec3{shade});
-
-            // Occasional wildflower on wetter ground.
-            if (moist > 0.04f &&
-                detail::hash01(detail::tree_hash(gx, gz, seed + 5008u)) < 0.08f) {
-                const u32 bi = detail::tree_hash(gx, gz, seed + 5009u) % 5u;
-                const f32 fsc = 0.9f + detail::hash01(detail::tree_hash(gx, gz, seed + 5010u)) * 0.5f;
-                const f32 fyaw = detail::hash01(detail::tree_hash(gx, gz, seed + 5011u)) * TwoPi;
-                const Mat4 fxf = glm::translate(Mat4{1.0f}, Vec3{wx, gh, wz}) *
-                                 glm::rotate(Mat4{1.0f}, fyaw, Vec3{0.0f, 1.0f, 0.0f}) *
-                                 glm::scale(Mat4{1.0f}, Vec3{fsc});
-                detail::append_transformed(m, primitives::flower(blossoms[bi]), fxf, Vec3{1.0f});
-            }
-        }
-    }
     return m;
 }
 

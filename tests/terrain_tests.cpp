@@ -237,7 +237,7 @@ TEST_CASE("Trees: low-poly meshes + deterministic, on-land scatter") {
                     underwater = true;
                 }
                 CHECK(t.scale > 0.5f);
-                CHECK((t.variant == 0 || t.variant == 1));
+                CHECK((t.variant >= 0 && t.variant < 5)); // pine/oak/birch/broad/dead
             }
         }
     }
@@ -273,31 +273,27 @@ TEST_CASE("Vegetation: grass + flowers bake deterministically onto land") {
     CHECK(min_y >= worldgen::water_level); // nothing grows below the waterline
 }
 
-TEST_CASE("Props: library builds geometry + lights, scatter is deterministic & on land") {
+TEST_CASE("Props: library builds geometry, scatter is deterministic & on land") {
     PropLibrary lib;
     REQUIRE(lib.bushes().size() >= 1);
     REQUIRE(lib.rocks().size() >= 1);
-    REQUIRE(lib.houses().size() >= 1);
+    REQUIRE(lib.logs().size() >= 1);
     CHECK_FALSE(lib.bushes()[0].parts.empty());
     CHECK_FALSE(lib.rocks()[0].parts.empty());
 
-    // Every house has geometry and at least one lantern light.
-    for (const PropDef& house : lib.houses()) {
-        CHECK_FALSE(house.parts.empty());
-        CHECK(house.lights.size() >= 1);
-        bool has_emissive = false;
-        for (const PropPart& part : house.parts) {
-            if (part.layer == PropLayer::Emissive && !part.mesh.indices.empty()) has_emissive = true;
-        }
-        CHECK(has_emissive); // glowing windows / lantern glass
+    // Logs are solid (have a collider); bushes/rocks are decorative.
+    for (const PropDef& log : lib.logs()) {
+        CHECK_FALSE(log.parts.empty());
+        CHECK_FALSE(log.colliders.empty());
     }
+    CHECK(lib.bushes()[0].colliders.empty());
 
     const u32 seed = 1337u;
     const auto a = scatter_props(1, 2, 8.0f, seed);
     const auto b = scatter_props(1, 2, 8.0f, seed);
     REQUIRE(a.size() == b.size());
 
-    int bushes = 0, rocks = 0, houses = 0;
+    int bushes = 0, rocks = 0, logs = 0;
     bool underwater = false;
     for (int cz = -20; cz < 20; ++cz) {
         for (int cx = -20; cx < 20; ++cx) {
@@ -305,14 +301,32 @@ TEST_CASE("Props: library builds geometry + lights, scatter is deterministic & o
                 if (p.position.y < worldgen::water_level) underwater = true;
                 if (p.category == PropCategory::Bush) ++bushes;
                 else if (p.category == PropCategory::Rock) ++rocks;
-                else ++houses;
+                else ++logs;
             }
         }
     }
     CHECK(bushes > 0);
     CHECK(rocks > 0);
-    CHECK(houses > 0);
+    CHECK(logs > 0);
     CHECK_FALSE(underwater);
+}
+
+TEST_CASE("Vegetation: a chunk bakes a dense, varied ground mesh; deterministic") {
+    const u32 seed = 4242u;
+    const f32 cw = 8.0f;
+    // Find a chunk that grows vegetation (most land does) and confirm it's rich.
+    bool found_rich = false;
+    for (int cz = 0; cz < 24 && !found_rich; ++cz) {
+        for (int cx = 0; cx < 24 && !found_rich; ++cx) {
+            const MeshData veg = build_vegetation(cx, cz, cw, seed);
+            const MeshData veg2 = build_vegetation(cx, cz, cw, seed);
+            REQUIRE(veg.vertices.size() == veg2.vertices.size()); // deterministic
+            if (veg.vertices.size() > 800) { // many plants baked into one mesh
+                found_rich = true;
+            }
+        }
+    }
+    CHECK(found_rich);
 }
 
 TEST_CASE("StreamingTerrain: streams + unloads chunks around a moving focus") {

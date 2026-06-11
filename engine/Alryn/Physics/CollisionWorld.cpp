@@ -31,25 +31,12 @@ const std::vector<Collider>& CollisionWorld::chunk_colliders(int cx, int cz) {
         colliders.push_back(c);
     }
 
-    // House walls -> boxes (from the prop's local colliders, placed in the world).
+    // Solid forest props (fallen logs) -> boxes from the prop's local colliders.
     for (const PropInstance& p : scatter_props(cx, cz, chunk_world_, seed_)) {
-        if (p.category != PropCategory::House) {
-            continue;
-        }
         const PropDef& def = library_->resolve(p);
-        const f32 cs = std::cos(p.yaw);
-        const f32 sn = std::sin(p.yaw);
         for (const BoxCollider& b : def.colliders) {
-            const Vec2 lc{b.center.x * p.scale, b.center.z * p.scale};
-            Collider c;
-            c.shape = Collider::Shape::Box;
-            c.center = Vec3{p.position.x + lc.x * cs - lc.y * sn, p.position.y,
-                            p.position.z + lc.x * sn + lc.y * cs};
-            c.half = b.half_extents * p.scale;
-            c.yaw = p.yaw + b.yaw;
-            c.y_min = p.position.y + b.center.y * p.scale;
-            c.y_max = c.y_min + b.height * p.scale;
-            colliders.push_back(c);
+            colliders.push_back(
+                place_box(b.center, b.half_extents, b.height, b.yaw, p.position, p.yaw, p.scale));
         }
     }
 

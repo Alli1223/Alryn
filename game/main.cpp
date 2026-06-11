@@ -94,7 +94,8 @@ protected:
         // A large wave grid that follows the player; the water shader animates it.
         water_mesh_.create(renderer_->device(), primitives::grid(80, 2.0f, Vec3{0.1f, 0.3f, 0.4f}));
         // Shared tree meshes (trunk opaque, foliage alpha-blendable); instances vary.
-        for (int v = 0; v < 2; ++v) {
+        // Five variants: pine / oak / birch / broad oak / dead.
+        for (int v = 0; v < 5; ++v) {
             const primitives::TreeMeshData td = primitives::tree(v);
             TreeVisual tv;
             tv.trunk.create(renderer_->device(), td.trunk);
@@ -107,7 +108,7 @@ protected:
         shape_cylinder_.create(renderer_->device(), primitives::cylinder(10, Vec3{1.0f}));
         shape_rounded_.create(renderer_->device(), primitives::rounded_box(0.12f, Vec3{1.0f}));
 
-        // Upload the prop catalogue (bushes, rocks, houses) to GPU meshes.
+        // Upload the forest-prop catalogue (bushes, rocks, logs) to GPU meshes.
         auto upload_props = [&](const std::vector<PropDef>& defs, std::vector<GpuProp>& out) {
             for (const PropDef& def : defs) {
                 GpuProp gp;
@@ -118,15 +119,12 @@ protected:
                     gpp.layer = part.layer;
                     gp.parts.push_back(std::move(gpp));
                 }
-                gp.lights = def.lights;
-                gp.footprint = def.footprint;
-                gp.wall_height = def.wall_height;
                 out.push_back(std::move(gp));
             }
         };
         upload_props(prop_lib_.bushes(), gpu_bushes_);
         upload_props(prop_lib_.rocks(), gpu_rocks_);
-        upload_props(prop_lib_.houses(), gpu_houses_);
+        upload_props(prop_lib_.logs(), gpu_logs_);
 
         // Skip the menu when launched for scripted/CI runs (--host=... or a fixed
         // frame count); otherwise open the main menu and let the player choose.
@@ -163,6 +161,12 @@ protected:
 
     // Disconnects and returns to the main menu.
     void return_to_menu() {
+        // The terrain owns GPU meshes that in-flight frames may still reference;
+        // wait for the device to go idle before freeing them (else VK_ERROR_DEVICE_LOST).
+        if (renderer_ != nullptr) {
+            renderer_->device().wait_idle();
+        }
+        paused_ = false;
         client_.disconnect();
         local_server_.stop();
         terrain_.reset();
@@ -173,8 +177,32 @@ protected:
         show_screen(Screen::Main);
     }
 
+    // ---- In-game pause menu --------------------------------------------------
+    void enter_pause() {
+        paused_ = true;
+        show_screen(Screen::Pause);
+    }
+    void resume() {
+        paused_ = false;
+        ui_.root().clear_children();
+    }
+    // ESC: in the main menu it backs out/quits; in-game it toggles the pause menu
+    // (and Settings opened from pause backs out to the pause menu, not the game).
+    void escape_pressed() {
+        if (state_ == AppState::Menu) {
+            menu_escape();
+        } else if (!paused_) {
+            enter_pause();
+        } else if (current_screen_ == Screen::Settings) {
+            show_screen(Screen::Pause);
+        } else {
+            resume();
+        }
+    }
+    void settings_back() { show_screen(paused_ ? Screen::Pause : Screen::Main); }
+
     // ---- Menu construction --------------------------------------------------
-    enum class Screen { Main, Join, Settings, Customise };
+    enum class Screen { Main, Join, Settings, Customise, Pause };
 
     Vec2 pointer_pos() {
         if (Input* in = input()) {
@@ -207,12 +235,43 @@ protected:
         const f32 h = static_cast<f32>(e.height);
         ui_.set_screen(w, h);
         ui_.root().clear_children();
+        if (paused_) {
+            // Dim the live game behind the pause UI.
+            auto& dim = ui_.root().add<ui::Panel>();
+            dim.bounds = ui::Rect{0.0f, 0.0f, w, h};
+            dim.color = ui::theme().overlay;
+            dim.border = Vec4{0.0f};
+            dim.radius = 0.0f;
+        }
         switch (current_screen_) {
             case Screen::Main: build_main(w, h); break;
             case Screen::Join: build_join(w, h); break;
             case Screen::Settings: build_settings(w, h); break;
             case Screen::Customise: build_customise(w, h); break;
+            case Screen::Pause: build_pause(w, h); break;
         }
+    }
+
+    void build_pause(f32 w, f32 h) {
+        auto& title = ui_.root().add<ui::Label>("PAUSED", std::min(w, h) * 0.07f, ui::TextAlign::Center);
+        title.bounds = ui::Rect{0.0f, h * 0.24f, w, std::min(w, h) * 0.08f};
+
+        constexpr f32 cw = 340.0f, pad = 26.0f, rh = 52.0f, gap = 14.0f;
+        constexpr int rows = 4;
+        const f32 ch = pad * 2.0f + rows * rh + (rows - 1) * gap;
+        const ui::Rect card{(w - cw) * 0.5f, h * 0.40f, cw, ch};
+        auto& panel = ui_.root().add<ui::Panel>();
+        panel.bounds = card;
+        auto row = [&](int i) {
+            return ui::Rect{card.x + pad, card.y + pad + static_cast<f32>(i) * (rh + gap),
+                            card.w - pad * 2.0f, rh};
+        };
+        auto& resume = panel.add<ui::Button>("RESUME", [this] { this->resume(); });
+        resume.primary = true;
+        resume.bounds = row(0);
+        panel.add<ui::Button>("SETTINGS", [this] { show_screen(Screen::Settings); }).bounds = row(1);
+        panel.add<ui::Button>("MAIN MENU", [this] { return_to_menu(); }).bounds = row(2);
+        panel.add<ui::Button>("EXIT GAME", [this] { close(); }).bounds = row(3);
     }
 
     void add_title(f32 w, f32 h, const char* heading, const char* sub) {
@@ -311,7 +370,7 @@ protected:
         rd.integer = true;
         rd.bounds = row(2);
 
-        panel.add<ui::Button>("BACK", [this] { show_screen(Screen::Main); }).bounds = row(3);
+        panel.add<ui::Button>("BACK", [this] { settings_back(); }).bounds = row(3);
     }
 
     void build_customise(f32 w, f32 h) {
@@ -439,7 +498,14 @@ protected:
             }
 
             update_camera();
-            update_aim();
+            if (renderer_ != nullptr) {
+                renderer_->set_player_position(local_feet()); // bends nearby vegetation
+            }
+            if (paused_) {
+                aim_valid_ = false; // no dig-marker while the pause menu is up
+            } else {
+                update_aim();
+            }
             send_input();
             update_visuals(dt);
 
@@ -456,10 +522,19 @@ protected:
             }
         }
 
-        // Keep the UI sized to the framebuffer and tick its hover/animations.
+        // Keep the UI sized to the framebuffer; when the window (framebuffer) size
+        // actually changes, relayout the current menu so it re-fits and re-centres.
+        // We detect it here (after the swapchain has recreated) rather than on the
+        // resize event, whose extent is still stale at that point.
         if (renderer_ != nullptr) {
             const VkExtent2D e = renderer_->extent();
             ui_.set_screen(static_cast<f32>(e.width), static_cast<f32>(e.height));
+            if (e.width != ui_extent_.x || e.height != ui_extent_.y) {
+                ui_extent_ = UVec2{e.width, e.height};
+                if (state_ == AppState::Menu || paused_) {
+                    rebuild_ui();
+                }
+            }
         }
         ui_.update(dt.seconds, pointer_pos());
     }
@@ -472,7 +547,8 @@ protected:
         renderer_->set_camera(camera_);
 
         terrain_->for_each_mesh([&](const Mesh& mesh) { renderer_->draw(mesh, Mat4{1.0f}); });
-        terrain_->for_each_vegetation_mesh([&](const Mesh& mesh) { renderer_->draw(mesh, Mat4{1.0f}); });
+        terrain_->for_each_vegetation_mesh(
+            [&](const Mesh& mesh) { renderer_->draw_vegetation(mesh, Mat4{1.0f}); });
 
         if (have_snapshot_) {
             for (const net::PlayerState& p : snapshot_.players) {
@@ -511,12 +587,19 @@ protected:
         renderer_->draw_water(water_mesh_, glm::translate(Mat4{1.0f}, Vec3{feet.x,
                                                           worldgen::water_level, feet.z}));
 
-        // Tree foliage (transparent), drawn last. Fades out when the local player
-        // is under the canopy so you can see yourself and the ground beneath.
+        // Tree foliage (transparent), drawn last. Fades when the local player is
+        // under the canopy, AND when a canopy is near the camera - in a dense forest
+        // the third-person camera sits among the trees, so foliage right at the eye
+        // is faded out to keep the player and the scene visible.
+        const Vec3 cam_eye = camera_.position();
         terrain_->for_each_tree([&](const TreeInstance& t) {
             const f32 dxz = glm::length(Vec2{t.position.x - feet.x, t.position.z - feet.z});
             const f32 canopy = 2.6f * t.scale;
-            const f32 alpha = dxz < canopy ? glm::mix(0.18f, 1.0f, dxz / canopy) : 1.0f;
+            f32 alpha = dxz < canopy ? glm::mix(0.18f, 1.0f, dxz / canopy) : 1.0f;
+            // Fade canopies close to the camera so they don't block the view.
+            const Vec3 cc = t.position + Vec3{0.0f, 3.2f * t.scale, 0.0f};
+            alpha = std::min(alpha, glm::mix(0.06f, 1.0f, glm::smoothstep(2.5f, 7.0f,
+                                                                          glm::length(cc - cam_eye))));
             renderer_->draw_transparent(tree_library_[tree_index(t)].foliage, tree_model(t),
                                         Vec4{t.tint, alpha});
         });
@@ -592,16 +675,12 @@ protected:
     void on_event(Event& event) override {
         EventDispatcher dispatcher{event};
 
-        // Keep the menu centred when the window resizes.
-        dispatcher.dispatch<WindowResizeEvent>([&](WindowResizeEvent&) {
-            if (state_ == AppState::Menu) {
-                rebuild_ui();
-            }
-            return false;
-        });
+        // (Window resizes are handled in on_update once the swapchain has the new
+        // size, so the menu relayout reads the correct extent.)
 
-        // While the menu is up, route input to the UI first.
-        if (state_ == AppState::Menu) {
+        // Route input to the UI whenever it's showing: the main menu, or the
+        // in-game pause menu overlaid on the (still-live) game.
+        if (state_ == AppState::Menu || paused_) {
             dispatcher.dispatch<MouseButtonPressedEvent>([&](MouseButtonPressedEvent& e) {
                 return ui_.pointer_down(pointer_pos(), e.button());
             });
@@ -613,7 +692,7 @@ protected:
             });
             dispatcher.dispatch<KeyPressedEvent>([&](KeyPressedEvent& e) {
                 if (e.key() == key::Escape) {
-                    menu_escape();
+                    escape_pressed();
                     return true;
                 }
                 return ui_.key(e.key());
@@ -621,7 +700,7 @@ protected:
             return;
         }
 
-        // In-game input.
+        // In-game input (not paused).
         dispatcher.dispatch<MouseButtonPressedEvent>([&](MouseButtonPressedEvent& e) {
             if (e.button() == 0) {
                 pending_dig_ = true;
@@ -632,7 +711,7 @@ protected:
         });
         dispatcher.dispatch<KeyPressedEvent>([&](KeyPressedEvent& e) {
             if (e.key() == key::Escape) {
-                return_to_menu();
+                escape_pressed(); // opens the pause menu
             } else if (e.key() == key::F) {
                 pending_fire_ = true; // throw a projectile toward the cursor
             }
@@ -641,6 +720,11 @@ protected:
     }
 
     void on_shutdown() override {
+        // Frees GPU resources while the device is still alive; wait for any
+        // in-flight frame to finish first so nothing is freed mid-use.
+        if (renderer_ != nullptr) {
+            renderer_->device().wait_idle();
+        }
         visuals_.clear();
         shape_box_.destroy();
         shape_sphere_.destroy();
@@ -651,7 +735,7 @@ protected:
             tv.foliage.destroy();
         }
         tree_library_.clear();
-        for (std::vector<GpuProp>* set : {&gpu_bushes_, &gpu_rocks_, &gpu_houses_}) {
+        for (std::vector<GpuProp>* set : {&gpu_bushes_, &gpu_rocks_, &gpu_logs_}) {
             for (GpuProp& gp : *set) {
                 for (GpuPropPart& part : gp.parts) {
                     part.mesh.destroy();
@@ -760,7 +844,7 @@ private:
     void draw_prop(const PropInstance& p) {
         const std::vector<GpuProp>& set = p.category == PropCategory::Bush   ? gpu_bushes_
                                           : p.category == PropCategory::Rock ? gpu_rocks_
-                                                                             : gpu_houses_;
+                                                                             : gpu_logs_;
         if (set.empty()) {
             return;
         }
@@ -768,51 +852,11 @@ private:
         const Mat4 m = glm::translate(Mat4{1.0f}, p.position) *
                        glm::rotate(Mat4{1.0f}, p.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
                        glm::scale(Mat4{1.0f}, Vec3{p.scale});
-        // Windows/lanterns glow brightest at night, dim in daylight.
-        const f32 glow = glm::mix(1.0f, 0.45f, sun_intensity_);
-
-        // Fade the roof when the local player is inside this house's footprint.
-        bool inside = false;
-        if (gp.footprint.x > 0.0f) {
-            const Vec3 rel = local_feet() - p.position;
-            const f32 cs = std::cos(-p.yaw);
-            const f32 sn = std::sin(-p.yaw);
-            const Vec2 lp{rel.x * cs - rel.z * sn, rel.x * sn + rel.z * cs};
-            inside = std::abs(lp.x) < gp.footprint.x * p.scale + 0.5f &&
-                     std::abs(lp.y) < gp.footprint.y * p.scale + 0.5f && rel.y > -1.5f &&
-                     rel.y < gp.wall_height * p.scale + 1.5f;
-        }
-
         for (const GpuPropPart& part : gp.parts) {
             if (part.layer == PropLayer::Foliage) {
                 renderer_->draw_transparent(part.mesh, m, Vec4{1.0f});
-            } else if (part.layer == PropLayer::Emissive) {
-                renderer_->draw_emissive(part.mesh, m, Vec4{glow, glow, glow, 1.0f});
-            } else if (part.layer == PropLayer::Roof) {
-                if (inside) {
-                    renderer_->draw_transparent(part.mesh, m, Vec4{1.0f, 1.0f, 1.0f, 0.22f});
-                } else {
-                    renderer_->draw(part.mesh, m);
-                }
             } else {
                 renderer_->draw(part.mesh, m);
-            }
-        }
-
-        // Register the prop's lanterns as shadow-casting spotlights (at dusk/night).
-        const f32 night = 1.0f - sun_intensity_;
-        if (night > 0.12f && !gp.lights.empty()) {
-            const Mat3 rot{m};
-            for (const PropLight& pl : gp.lights) {
-                Renderer::SpotLight sl;
-                sl.position = Vec3{m * Vec4{pl.offset, 1.0f}};
-                sl.direction = glm::normalize(rot * pl.direction);
-                sl.color = pl.color * (pl.intensity * night);
-                sl.range = pl.range;
-                const f32 half = glm::radians(pl.cone_deg * 0.5f);
-                sl.cone_outer_cos = std::cos(half);
-                sl.cone_inner_cos = std::cos(half * 0.65f);
-                renderer_->add_light(sl);
             }
         }
     }
@@ -834,7 +878,9 @@ private:
         const Vec3 cam_right{-cam_fwd.z, 0.0f, cam_fwd.x};
         Vec3 move{0.0f};
         bool jump = false;
-        if (Input* in = input()) {
+        // While the pause menu is up the player holds still (and ignores WASD/SPACE
+        // that would otherwise leak through to movement).
+        if (Input* in = input(); in != nullptr && !paused_) {
             if (in->key_down(key::W)) move += cam_fwd;
             if (in->key_down(key::S)) move -= cam_fwd;
             if (in->key_down(key::D)) move += cam_right;
@@ -930,6 +976,8 @@ private:
     // Menu / settings.
     ui::UIContext ui_;
     Screen current_screen_ = Screen::Main;
+    bool paused_ = false;   // in-game pause menu (overlaid on the live game)
+    UVec2 ui_extent_{0, 0}; // last framebuffer size the menu was laid out for
     std::string host_ip_ = "127.0.0.1";
     Vec3 menu_sky_{0.05f, 0.06f, 0.09f};
     bool vsync_ = true;
@@ -956,9 +1004,6 @@ private:
     };
     struct GpuProp {
         std::vector<GpuPropPart> parts;
-        std::vector<PropLight> lights;
-        Vec2 footprint{0.0f}; // house wall half-extents (0 = not enclosable)
-        f32 wall_height = 0.0f;
     };
 
     std::unordered_map<net::PlayerId, PlayerVisual> visuals_;
@@ -966,7 +1011,7 @@ private:
     PropLibrary prop_lib_;
     std::vector<GpuProp> gpu_bushes_;
     std::vector<GpuProp> gpu_rocks_;
-    std::vector<GpuProp> gpu_houses_;
+    std::vector<GpuProp> gpu_logs_;
     Mesh shape_box_;
     Mesh shape_sphere_;
     Mesh shape_cylinder_;

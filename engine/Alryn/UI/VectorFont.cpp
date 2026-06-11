@@ -10,12 +10,79 @@ namespace {
 using Stroke = std::vector<Vec2>;
 using Strokes = std::vector<Stroke>;
 
+// Smooths a polyline into many short segments so curved letters read as crisp
+// curves rather than faceted polygons. Uses corner-preserving Catmull-Rom: gentle
+// bends (the bowl of an O/C/S) are interpolated, but sharp corners (the apex of an
+// A, the corners of an E) keep a one-sided tangent so they stay perfectly sharp.
+// Closed loops (O, 0, 8) wrap their tangents so the seam is smooth too.
+Stroke smooth_stroke(const Stroke& p) {
+    const usize n = p.size();
+    if (n < 3) {
+        return p; // straight lines, dots and dashes need no smoothing
+    }
+    const bool closed = glm::length(p.front() - p.back()) < 1e-4f;
+    Stroke pts = p;
+    if (closed) {
+        pts.pop_back(); // drop the duplicated closing point; we wrap instead
+    }
+    const long m = static_cast<long>(pts.size());
+
+    auto at = [&](long i) -> Vec2 {
+        if (closed) {
+            return pts[static_cast<usize>((i % m + m) % m)];
+        }
+        return pts[static_cast<usize>(glm::clamp<long>(i, 0, m - 1))];
+    };
+    auto is_corner = [&](long i) -> bool {
+        if (!closed && (i == 0 || i == m - 1)) {
+            return true; // open-stroke endpoints: straight in/out
+        }
+        const Vec2 a = at(i) - at(i - 1);
+        const Vec2 b = at(i + 1) - at(i);
+        const f32 la = glm::length(a);
+        const f32 lb = glm::length(b);
+        if (la < 1e-5f || lb < 1e-5f) {
+            return true;
+        }
+        return glm::dot(a / la, b / lb) < 0.35f; // turn sharper than ~70 deg
+    };
+
+    constexpr int kSub = 6;
+    Stroke out;
+    const long seg_count = closed ? m : m - 1;
+    for (long s = 0; s < seg_count; ++s) {
+        const Vec2 p1 = at(s);
+        const Vec2 p2 = at(s + 1);
+        // A segment between two corners is straight - emit it as a single point so
+        // it stays one clean capsule (subdividing straight runs into overlapping
+        // capsules is what caused edge grain). Only curved segments are tessellated.
+        if (is_corner(s) && is_corner(s + 1)) {
+            out.push_back(p1);
+            continue;
+        }
+        const Vec2 m1 = is_corner(s) ? (p2 - p1) : 0.5f * (at(s + 1) - at(s - 1));
+        const Vec2 m2 = is_corner(s + 1) ? (p2 - p1) : 0.5f * (at(s + 2) - at(s));
+        for (int k = 0; k < kSub; ++k) {
+            const f32 t = static_cast<f32>(k) / static_cast<f32>(kSub);
+            const f32 t2 = t * t;
+            const f32 t3 = t2 * t;
+            out.push_back((2.0f * t3 - 3.0f * t2 + 1.0f) * p1 + (t3 - 2.0f * t2 + t) * m1 +
+                          (-2.0f * t3 + 3.0f * t2) * p2 + (t3 - t2) * m2);
+        }
+    }
+    out.push_back(at(seg_count));
+    return out;
+}
+
 // Build the glyph table once. Coordinates are in cap-height units: x grows
 // right, y grows down, the cap box spans y in [0,1] and x roughly [0,0.62].
 const std::unordered_map<char, Glyph>& table() {
     static const std::unordered_map<char, Glyph> glyphs = [] {
         std::unordered_map<char, Glyph> g;
         auto add = [&](char c, Strokes s, f32 advance = 0.62f) {
+            for (Stroke& stroke : s) {
+                stroke = smooth_stroke(stroke);
+            }
             g.emplace(c, Glyph{std::move(s), advance});
         };
 

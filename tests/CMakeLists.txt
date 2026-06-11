@@ -11,7 +11,11 @@ add_executable(alryn_tests
     net_tests.cpp
     character_tests.cpp
     ui_tests.cpp
+    scene_shot_tests.cpp
+    support/OffscreenRenderer.cpp
 )
+
+target_include_directories(alryn_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_link_libraries(alryn_tests PRIVATE
     alryn

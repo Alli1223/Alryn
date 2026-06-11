@@ -21,6 +21,30 @@ struct Collider {
     f32 yaw = 0.0f;    // box rotation about Y (world)
 };
 
+// Transforms a prop-local axis-aligned box collider into a world Collider, using
+// the SAME transform the client applies to the prop mesh: translate(position) *
+// rotateY(yaw) * scale. glm::rotate about +Y is R_y, which in the xz plane is
+// Rot2D(-yaw): a local point maps as (x,z) -> (x·cos + z·sin, -x·sin + z·cos).
+// `resolve_collider` rotates a world point into the box frame by Rot2D(-c.yaw), so
+// to match the mesh's Rot2D(-yaw) the stored `c.yaw` must be -(yaw + local_yaw).
+// Getting both the centre AND the orientation right is what keeps a house's walls
+// and door opening exactly where the player sees them.
+inline Collider place_box(const Vec3& local_center, const Vec2& local_half, f32 local_height,
+                          f32 local_yaw, const Vec3& position, f32 yaw, f32 scale) {
+    const f32 cs = std::cos(yaw);
+    const f32 sn = std::sin(yaw);
+    const Vec2 lc{local_center.x * scale, local_center.z * scale};
+    Collider c;
+    c.shape = Collider::Shape::Box;
+    c.center = Vec3{position.x + lc.x * cs + lc.y * sn, position.y,
+                    position.z - lc.x * sn + lc.y * cs};
+    c.half = local_half * scale;
+    c.yaw = -(yaw + local_yaw);
+    c.y_min = position.y + local_center.y * scale;
+    c.y_max = c.y_min + local_height * scale;
+    return c;
+}
+
 // Pushes a vertical capsule (xz centre `pos`, radius `r`, spanning [foot, foot+height])
 // out of `c` if it penetrates. Returns the corrected xz (caller keeps y).
 inline Vec2 resolve_collider(const Collider& c, Vec2 pos, f32 r, f32 foot, f32 height) {

@@ -47,6 +47,9 @@ public:
 
     void set_camera(const Camera& camera);
     void set_time(f32 seconds) { time_ = seconds; }
+    // The player's world position + wind strength, used to bend nearby vegetation.
+    void set_player_position(const Vec3& p) { player_position_ = p; }
+    void set_wind(f32 strength) { wind_strength_ = strength; }
 
     // Directional sun for the day/night cycle. `direction` points TO the sun
     // (normalized); `intensity` fades to 0 below the horizon (night).
@@ -70,6 +73,9 @@ public:
 
     // Opaque geometry (terrain, characters). tint multiplies the vertex colour.
     void draw(const Mesh& mesh, const Mat4& model, const Vec4& tint = Vec4{1.0f});
+    // Vegetation (grass/ferns/...): opaque + depth-written, but drawn with the wind
+    // shader so it sways in the breeze and bends away from the player.
+    void draw_vegetation(const Mesh& mesh, const Mat4& model);
     // Alpha-blended geometry (foliage). tint.a is the opacity. Draw after opaque.
     void draw_transparent(const Mesh& mesh, const Mat4& model, const Vec4& tint);
     // Animated water surface (its own shader). Draw after opaque.
@@ -97,8 +103,9 @@ public:
     VkExtent2D extent() const { return swapchain_.extent(); }
 
 private:
-    // Draw layers, ordered so a sort yields opaque -> emissive -> water -> foliage.
-    enum class Layer : u8 { Opaque = 0, Emissive = 1, Water = 2, Foliage = 3 };
+    // Draw layers, ordered so a sort yields opaque -> vegetation -> emissive ->
+    // water -> foliage.
+    enum class Layer : u8 { Opaque = 0, Vegetation = 1, Emissive = 2, Water = 3, Foliage = 4 };
     struct DrawItem {
         const Mesh* mesh;
         Mat4 model;
@@ -139,7 +146,7 @@ private:
     void recreate_swapchain();
     Mat4 compute_light_matrix() const;
     void process_lights(); // pick nearest lights, build atlas matrices + UBO
-    void push_constants(const Mat4& model, const Vec4& tint);
+    void push_constants(const Mat4& model, const Vec4& tint, bool vegetation = false);
     void record_shadow_pass(VkCommandBuffer cmd);
     void record_light_atlas_pass(VkCommandBuffer cmd);
     void record_main_pass(VkCommandBuffer cmd);
@@ -157,6 +164,7 @@ private:
     vk::Pipeline pipeline_foliage_;
     vk::Pipeline pipeline_water_;
     vk::Pipeline pipeline_emissive_;
+    vk::Pipeline pipeline_vegetation_;
     vk::Pipeline pipeline_shadow_;
     vk::Pipeline pipeline_ui_;
     VkPipeline current_pipeline_ = VK_NULL_HANDLE; // avoids redundant binds within a frame
@@ -182,6 +190,8 @@ private:
     Mat4 view_{1.0f};
     Mat4 projection_{1.0f};
     Vec3 camera_position_{0.0f};
+    Vec3 player_position_{0.0f};
+    f32 wind_strength_ = 0.12f;
     f32 time_ = 0.0f;
 
     // Lighting / day-night state, pushed to the shaders each draw.

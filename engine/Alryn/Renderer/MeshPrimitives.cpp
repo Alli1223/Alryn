@@ -89,6 +89,48 @@ MeshData blob(f32 rxz, f32 ry, f32 cy, const Vec3& color) {
     return m;
 }
 
+// A tapered, double-sided strip following the polyline `pts` (width w0 -> wT),
+// with `perp` the horizontal width axis. Normals are up-biased so blades/fronds
+// stay lit. Colour fades base -> tip. Used for grass, ferns, reeds.
+void ribbon(MeshData& m, const std::vector<Vec3>& pts, f32 w0, f32 wT, const Vec3& perp,
+            const Vec3& c0, const Vec3& cT) {
+    const usize n = pts.size();
+    if (n < 2) {
+        return;
+    }
+    for (usize i = 0; i + 1 < n; ++i) {
+        const f32 t0 = static_cast<f32>(i) / static_cast<f32>(n - 1);
+        const f32 t1 = static_cast<f32>(i + 1) / static_cast<f32>(n - 1);
+        const f32 wa = glm::mix(w0, wT, t0);
+        const f32 wb = glm::mix(w0, wT, t1);
+        const Vec3 ca = glm::mix(c0, cT, t0);
+        const Vec3 cb = glm::mix(c0, cT, t1);
+        const Vec3 a0 = pts[i] - perp * wa;
+        const Vec3 a1 = pts[i] + perp * wa;
+        const Vec3 b0 = pts[i + 1] - perp * wb;
+        const Vec3 b1 = pts[i + 1] + perp * wb;
+        Vec3 nrm = glm::cross(b0 - a0, a1 - a0);
+        const f32 len = glm::length(nrm);
+        nrm = len > 1e-6f ? nrm / len : Vec3{0.0f, 1.0f, 0.0f};
+        if (nrm.y < 0.0f) {
+            nrm = -nrm;
+        }
+        nrm = glm::normalize(nrm + Vec3{0.0f, 0.6f, 0.0f});
+        const u32 base = static_cast<u32>(m.vertices.size());
+        m.vertices.push_back({a0, nrm, ca});
+        m.vertices.push_back({a1, nrm, ca});
+        m.vertices.push_back({b1, nrm, cb});
+        m.vertices.push_back({b0, nrm, cb});
+        m.indices.insert(m.indices.end(), {base, base + 1, base + 2, base + 2, base + 3, base});
+    }
+}
+
+// Small deterministic hash -> [0,1) for procedural variants.
+f32 vrnd(u32 h, int salt) {
+    const u32 v = (h ^ (static_cast<u32>(salt) * 0x9E3779B9u)) * 0x85EBCA77u;
+    return static_cast<f32>((v >> 9) & 0xFFFFu) / 65536.0f;
+}
+
 } // namespace
 
 MeshData cube(f32 size, const Vec3& color) {
@@ -268,6 +310,155 @@ MeshData flower(const Vec3& blossom) {
     return m;
 }
 
+MeshData fern(int variant, const Vec3& color) {
+    MeshData m;
+    const u32 h = static_cast<u32>(variant) * 2654435761u + 13u;
+    const int fronds = 5 + static_cast<int>(vrnd(h, 1) * 4.0f);
+    const Vec3 dark = color * 0.62f;
+    const Vec3 light = glm::clamp(color * 1.3f + Vec3{0.04f, 0.08f, 0.0f}, Vec3{0.0f}, Vec3{1.0f});
+    for (int f = 0; f < fronds; ++f) {
+        const f32 ang = TwoPi * static_cast<f32>(f) / static_cast<f32>(fronds) + vrnd(h, f * 5) * 0.7f;
+        const f32 ca = std::cos(ang);
+        const f32 sa = std::sin(ang);
+        const Vec3 dir{ca, 0.0f, sa};
+        const Vec3 perp{-sa, 0.0f, ca};
+        const f32 reach = 0.42f + vrnd(h, f * 5 + 1) * 0.28f;
+        const f32 height = 0.42f + vrnd(h, f * 5 + 2) * 0.22f;
+        // An arch that rises then droops back toward the ground at full reach.
+        std::vector<Vec3> rib;
+        constexpr int segs = 5;
+        for (int k = 0; k <= segs; ++k) {
+            const f32 t = static_cast<f32>(k) / static_cast<f32>(segs);
+            rib.push_back(dir * (reach * t) + Vec3{0.0f, height * std::sin(t * Pi * 0.9f), 0.0f});
+        }
+        ribbon(m, rib, 0.06f, 0.012f, perp, dark, light);
+    }
+    return m;
+}
+
+MeshData tall_grass(int blades, const Vec3& color) {
+    MeshData m;
+    const Vec3 dark = color * 0.55f;
+    const Vec3 tip = glm::clamp(color * 1.25f + Vec3{0.05f, 0.08f, 0.0f}, Vec3{0.0f}, Vec3{1.0f});
+    for (int i = 0; i < blades; ++i) {
+        const u32 h = static_cast<u32>(i) * 0x9E3779B9u + 1u;
+        const f32 ang = TwoPi * static_cast<f32>(i) / static_cast<f32>(blades) + vrnd(h, 1) * 0.6f;
+        const f32 ca = std::cos(ang);
+        const f32 sa = std::sin(ang);
+        const Vec3 dir{ca, 0.0f, sa};
+        const Vec3 perp{-sa, 0.0f, ca};
+        const f32 height = 0.6f + vrnd(h, 2) * 0.35f;
+        const f32 lean = 0.18f + vrnd(h, 3) * 0.18f;
+        // Mostly upright, arching over near the tip.
+        std::vector<Vec3> rib = {
+            Vec3{0.0f}, dir * (lean * 0.3f) + Vec3{0.0f, height * 0.45f, 0.0f},
+            dir * (lean * 0.7f) + Vec3{0.0f, height * 0.8f, 0.0f},
+            dir * lean + Vec3{0.0f, height, 0.0f}};
+        ribbon(m, rib, 0.04f, 0.008f, perp, dark, tip);
+    }
+    return m;
+}
+
+MeshData mushroom(const Vec3& cap, f32 scale, bool spots) {
+    MeshData m;
+    const Vec3 stem_c{0.93f, 0.90f, 0.82f};
+    const f32 stem_h = 0.18f * scale;
+    const f32 stem_r = 0.05f * scale;
+    // Stem: a short octagonal column.
+    constexpr int sides = 8;
+    for (int i = 0; i < sides; ++i) {
+        const f32 a0 = TwoPi * static_cast<f32>(i) / sides;
+        const f32 a1 = TwoPi * static_cast<f32>(i + 1) / sides;
+        const Vec3 p0{std::cos(a0) * stem_r, 0.0f, std::sin(a0) * stem_r};
+        const Vec3 p1{std::cos(a1) * stem_r, 0.0f, std::sin(a1) * stem_r};
+        add_quad(m, p0, p1, p1 + Vec3{0.0f, stem_h, 0.0f}, p0 + Vec3{0.0f, stem_h, 0.0f},
+                 glm::normalize(Vec3{std::cos((a0 + a1) * 0.5f), 0.0f, std::sin((a0 + a1) * 0.5f)}),
+                 stem_c);
+    }
+    // Cap: a low cone seated on the stem, slightly overhanging.
+    const f32 cap_r = 0.16f * scale;
+    const f32 cap_h = 0.12f * scale;
+    const Vec3 apex{0.0f, stem_h + cap_h, 0.0f};
+    const Vec3 axis{0.0f, stem_h + cap_h * 0.4f, 0.0f};
+    const f32 cap_y = stem_h - 0.02f * scale;
+    for (int i = 0; i < 10; ++i) {
+        const f32 a0 = TwoPi * static_cast<f32>(i) / 10.0f;
+        const f32 a1 = TwoPi * static_cast<f32>(i + 1) / 10.0f;
+        const Vec3 b0{std::cos(a0) * cap_r, cap_y, std::sin(a0) * cap_r};
+        const Vec3 b1{std::cos(a1) * cap_r, cap_y, std::sin(a1) * cap_r};
+        emit_tri(m, apex, b0, b1, axis, cap);
+        emit_tri(m, b0, b1, axis, axis + Vec3{0.0f, -1.0f, 0.0f}, cap * 0.7f); // underside
+    }
+    if (spots) {
+        const Vec3 white{0.96f, 0.95f, 0.92f};
+        for (int s = 0; s < 5; ++s) {
+            const f32 a = TwoPi * static_cast<f32>(s) / 5.0f + 0.4f;
+            const f32 rr = cap_r * 0.55f;
+            const Vec3 c{std::cos(a) * rr, stem_h + cap_h * 0.62f, std::sin(a) * rr};
+            const f32 d = 0.022f * scale;
+            add_quad(m, c + Vec3{-d, 0, -d}, c + Vec3{d, 0, -d}, c + Vec3{d, 0.004f, d},
+                     c + Vec3{-d, 0.004f, d}, Vec3{0, 1, 0}, white);
+        }
+    }
+    return m;
+}
+
+MeshData ground_leaf(int variant, const Vec3& color) {
+    MeshData m;
+    const u32 h = static_cast<u32>(variant) * 374761393u + 3u;
+    const int leaves = 3 + static_cast<int>(vrnd(h, 1) * 3.0f);
+    const Vec3 dark = color * 0.7f;
+    const Vec3 light = glm::clamp(color * 1.2f, Vec3{0.0f}, Vec3{1.0f});
+    for (int i = 0; i < leaves; ++i) {
+        const f32 ang = TwoPi * static_cast<f32>(i) / static_cast<f32>(leaves) + vrnd(h, i + 2) * 0.5f;
+        const f32 ca = std::cos(ang);
+        const f32 sa = std::sin(ang);
+        const Vec3 dir{ca, 0.0f, sa};
+        const Vec3 perp{-sa, 0.0f, ca};
+        const f32 len = 0.14f + vrnd(h, i + 9) * 0.08f;
+        // A small flat leaf lifted just off the ground.
+        std::vector<Vec3> rib = {Vec3{0.0f, 0.02f, 0.0f}, dir * (len * 0.5f) + Vec3{0.0f, 0.06f, 0.0f},
+                                 dir * len + Vec3{0.0f, 0.05f, 0.0f}};
+        ribbon(m, rib, 0.05f, 0.02f, perp, dark, light);
+    }
+    return m;
+}
+
+MeshData fallen_log(int variant, const Vec3& color) {
+    MeshData m;
+    const u32 h = static_cast<u32>(variant) * 2246822519u + 5u;
+    const f32 length = 1.3f + vrnd(h, 1) * 0.8f;
+    const f32 radius = 0.20f + vrnd(h, 2) * 0.08f;
+    constexpr int sides = 8;
+    const f32 x0 = -length * 0.5f;
+    const f32 x1 = length * 0.5f;
+    const Vec3 end_c{0.62f, 0.50f, 0.36f}; // pale cut wood
+    const Vec3 moss{0.30f, 0.45f, 0.25f};
+    auto ring = [&](int i) {
+        const f32 a = TwoPi * static_cast<f32>(i) / sides;
+        return Vec3{0.0f, radius + std::sin(a) * radius, std::cos(a) * radius};
+    };
+    for (int i = 0; i < sides; ++i) {
+        const Vec3 r0 = ring(i);
+        const Vec3 r1 = ring(i + 1);
+        const f32 a = TwoPi * (static_cast<f32>(i) + 0.5f) / sides;
+        const Vec3 nrm{0.0f, std::sin(a), std::cos(a)};
+        const bool top = nrm.y > 0.45f;
+        const Vec3 bark = (top ? glm::mix(color, moss, 0.5f) : color) * (0.85f + vrnd(h, i + 3) * 0.3f);
+        add_quad(m, {x0, r0.y, r0.z}, {x1, r0.y, r0.z}, {x1, r1.y, r1.z}, {x0, r1.y, r1.z}, nrm, bark);
+    }
+    // Cut ends (tris fanned to the axis).
+    for (int i = 0; i < sides; ++i) {
+        const Vec3 r0 = ring(i);
+        const Vec3 r1 = ring(i + 1);
+        emit_tri(m, {x1, radius, 0.0f}, {x1, r0.y, r0.z}, {x1, r1.y, r1.z}, {x1 - 1.0f, radius, 0.0f},
+                 end_c);
+        emit_tri(m, {x0, radius, 0.0f}, {x0, r0.y, r0.z}, {x0, r1.y, r1.z}, {x0 + 1.0f, radius, 0.0f},
+                 end_c);
+    }
+    return m;
+}
+
 MeshData box(const Vec3& lo, const Vec3& hi, const Vec3& color) {
     MeshData m;
     add_quad(m, {lo.x, lo.y, hi.z}, {hi.x, lo.y, hi.z}, {hi.x, hi.y, hi.z}, {lo.x, hi.y, hi.z},
@@ -332,19 +523,52 @@ MeshData rock(int variant, const Vec3& color) {
 TreeMeshData tree(int variant) {
     TreeMeshData t;
     const Vec3 bark{0.34f, 0.24f, 0.16f};
-    const Vec3 leaf{0.20f, 0.48f, 0.23f};
+    const Vec3 bark2{0.28f, 0.20f, 0.14f};
+    const Vec3 birch{0.82f, 0.82f, 0.78f};
+    const Vec3 leaf{0.16f, 0.40f, 0.19f};  // deep forest green
+    const Vec3 leaf2{0.22f, 0.50f, 0.24f}; // lighter highlight green
 
-    if (variant % 2 == 0) { // pine: stacked cones
-        const f32 trunk_h = 1.3f;
-        t.trunk = box_column(0.22f, trunk_h, bark);
-        append(t.foliage, cone(1.1f, 1.5f, 6, trunk_h - 0.2f, leaf));
-        append(t.foliage, cone(0.85f, 1.3f, 6, trunk_h + 0.6f, leaf * 1.05f));
-        append(t.foliage, cone(0.55f, 1.1f, 6, trunk_h + 1.5f, leaf * 1.1f));
-    } else { // round: trunk + leafy blobs
-        const f32 trunk_h = 1.5f;
-        t.trunk = box_column(0.24f, trunk_h, bark);
-        append(t.foliage, blob(1.15f, 1.0f, trunk_h + 0.7f, leaf));
-        append(t.foliage, blob(0.8f, 0.7f, trunk_h + 1.4f, leaf * 1.08f));
+    switch (variant % 5) {
+        case 0: { // tall pine - stacked cones
+            const f32 th = 2.8f;
+            t.trunk = box_column(0.30f, th, bark);
+            append(t.foliage, cone(1.6f, 2.3f, 7, th - 0.7f, leaf));
+            append(t.foliage, cone(1.2f, 2.0f, 7, th + 0.6f, leaf * 1.05f));
+            append(t.foliage, cone(0.82f, 1.7f, 7, th + 1.9f, leaf2));
+            append(t.foliage, cone(0.46f, 1.3f, 7, th + 3.1f, leaf2 * 1.05f));
+            break;
+        }
+        case 1: { // round oak - tall trunk + stacked blobs
+            const f32 th = 2.6f;
+            t.trunk = box_column(0.36f, th, bark);
+            append(t.foliage, blob(1.9f, 1.5f, th + 1.1f, leaf));
+            append(t.foliage, blob(1.35f, 1.1f, th + 2.2f, leaf2));
+            append(t.foliage, blob(0.85f, 0.75f, th + 3.0f, leaf2 * 1.06f));
+            break;
+        }
+        case 2: { // tall slender birch - pale trunk, high small canopy
+            const f32 th = 3.8f;
+            t.trunk = box_column(0.20f, th, birch);
+            append(t.foliage, blob(1.0f, 1.4f, th + 0.7f, leaf2));
+            append(t.foliage, blob(0.72f, 0.95f, th + 1.8f, leaf2 * 1.08f));
+            break;
+        }
+        case 3: { // big broad oak - thick trunk, wide low canopy
+            const f32 th = 2.3f;
+            t.trunk = box_column(0.46f, th, bark2);
+            append(t.foliage, blob(2.5f, 1.3f, th + 1.0f, leaf));
+            append(t.foliage, blob(1.8f, 1.1f, th + 2.0f, leaf2));
+            append(t.foliage, blob(1.1f, 0.85f, th + 2.8f, leaf2 * 1.05f));
+            break;
+        }
+        default: { // weathered dead tree - bare-ish, sparse brown foliage
+            const f32 th = 3.2f;
+            t.trunk = box_column(0.26f, th, bark2);
+            const Vec3 dead{0.40f, 0.33f, 0.22f};
+            append(t.foliage, blob(0.8f, 0.55f, th + 0.5f, dead));
+            append(t.foliage, blob(0.55f, 0.45f, th + 1.3f, dead * 1.08f));
+            break;
+        }
     }
     return t;
 }

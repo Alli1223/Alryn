@@ -116,6 +116,12 @@ bool Renderer::create_pipelines() {
         return false;
     }
 
+    vk::PipelineConfig vegetation = opaque; // grass/ferns: opaque, but wind-swayed
+    vegetation.vertex_spv = shader_path("grass.vert.spv").string();
+    if (!pipeline_vegetation_.create(device_, vegetation)) {
+        return false;
+    }
+
     vk::PipelineConfig foliage = base; // alpha-blended tree leaves
     foliage.blend = true;
     foliage.depth_write = false;
@@ -424,14 +430,19 @@ bool Renderer::begin_frame() {
     return true;
 }
 
-void Renderer::push_constants(const Mat4& model, const Vec4& tint) {
+void Renderer::push_constants(const Mat4& model, const Vec4& tint, bool vegetation) {
     FrameSync& frame = frames_[frame_index_];
     PushConstants push{};
     push.mvp = projection_ * view_ * model;
     push.model = model;
     push.light_vp = light_view_proj_;
     push.tint = tint;
-    push.params = Vec4{time_, camera_position_.x, camera_position_.y, camera_position_.z};
+    // mesh.frag ignores params; the vegetation shader (grass.vert) reads the player
+    // position + wind there, while everything else carries the camera position (for
+    // the water shader).
+    push.params = vegetation
+                      ? Vec4{time_, player_position_.x, player_position_.z, wind_strength_}
+                      : Vec4{time_, camera_position_.x, camera_position_.y, camera_position_.z};
     push.sun = Vec4{sun_direction_, sun_intensity_};
     push.sun_color = Vec4{sun_color_, shadow_strength_};
     // Layouts of all main pipelines are compatible, so push via the opaque one.
@@ -596,15 +607,16 @@ void Renderer::record_main_pass(VkCommandBuffer cmd) {
 
     current_pipeline_ = VK_NULL_HANDLE;
     for (const DrawItem& item : draw_items_) {
-        const vk::Pipeline& pipe = item.layer == Layer::Water      ? pipeline_water_
-                                   : item.layer == Layer::Foliage  ? pipeline_foliage_
-                                   : item.layer == Layer::Emissive ? pipeline_emissive_
-                                                                   : pipeline_opaque_;
+        const vk::Pipeline& pipe = item.layer == Layer::Water        ? pipeline_water_
+                                   : item.layer == Layer::Foliage    ? pipeline_foliage_
+                                   : item.layer == Layer::Emissive   ? pipeline_emissive_
+                                   : item.layer == Layer::Vegetation ? pipeline_vegetation_
+                                                                     : pipeline_opaque_;
         if (pipe.handle() != current_pipeline_) {
             pipe.bind(cmd);
             current_pipeline_ = pipe.handle();
         }
-        push_constants(item.model, item.tint);
+        push_constants(item.model, item.tint, item.layer == Layer::Vegetation);
         item.mesh->bind(cmd);
         item.mesh->draw(cmd);
     }
@@ -669,6 +681,12 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Vec4& tint) {
     }
 }
 
+void Renderer::draw_vegetation(const Mesh& mesh, const Mat4& model) {
+    if (frame_active_) {
+        draw_items_.push_back({&mesh, model, Vec4{1.0f}, Layer::Vegetation});
+    }
+}
+
 void Renderer::draw_transparent(const Mesh& mesh, const Mat4& model, const Vec4& tint) {
     if (frame_active_) {
         draw_items_.push_back({&mesh, model, tint, Layer::Foliage});
@@ -711,7 +729,7 @@ void Renderer::draw_ui_segment(const Vec2& p0, const Vec2& p1, f32 thickness, co
     UIDrawCmd cmd;
     cmd.rect = Vec4{lo.x, lo.y, hi.x - lo.x, hi.y - lo.y};
     cmd.color = color;
-    cmd.params = Vec4{0.0f, 1.0f, 1.0f /*segment mode*/, half};
+    cmd.params = Vec4{0.0f, 0.75f /*tighter AA = crisper text*/, 1.0f /*segment mode*/, half};
     cmd.seg = Vec4{p0.x, p0.y, p1.x, p1.y};
     ui_items_.push_back(cmd);
 }
@@ -798,6 +816,7 @@ void Renderer::on_shutdown() {
     pipeline_foliage_.destroy();
     pipeline_water_.destroy();
     pipeline_emissive_.destroy();
+    pipeline_vegetation_.destroy();
     pipeline_shadow_.destroy();
     pipeline_ui_.destroy();
     if (shadow_sampler_ != VK_NULL_HANDLE) {

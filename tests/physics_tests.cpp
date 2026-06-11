@@ -143,6 +143,61 @@ TEST_CASE("Collision: box push-out + deterministic world colliders") {
     CHECK(any_box);     // at least one house contributed wall colliders
 }
 
+TEST_CASE("place_box: a rotated box keeps its orientation (long axis stays long)") {
+    // A single wall: long along local-x, thin along local-z, placed at a yaw. With
+    // no other colliders around, this isolates the box's orientation - it only
+    // behaves correctly if place_box matches the client's R_y mesh transform.
+    const f32 yaw = 0.9f;
+    const f32 cs = std::cos(yaw);
+    const f32 sn = std::sin(yaw);
+    const Collider wall = place_box(Vec3{0.0f}, Vec2{2.0f, 0.1f}, 2.0f, 0.0f, Vec3{0.0f}, yaw, 1.0f);
+    auto world = [&](f32 lx, f32 lz) { return Vec2{lx * cs + lz * sn, -lx * sn + lz * cs}; };
+    auto moved = [&](const Vec2& p) {
+        return glm::length(resolve_collider(wall, p, 0.3f, 0.0f, 2.0f) - p);
+    };
+    CHECK(moved(world(1.5f, 0.0f)) > 0.1f);    // on the wall, along its length -> blocked
+    CHECK(moved(world(0.0f, 0.6f)) < 1e-3f);   // off the thin side -> clear
+    CHECK(moved(world(2.6f, 0.0f)) < 1e-3f);   // past the end -> clear
+
+    // Centre placement: a box whose local centre is offset, at a world position +
+    // yaw, must block at the mesh-transformed world centre (R_y) and be clear back
+    // at the prop origin. This pins down the translation half of place_box.
+    const Vec3 pos{10.0f, 0.0f, -5.0f};
+    const Collider off = place_box(Vec3{3.0f, 0.0f, 0.0f}, Vec2{0.5f, 0.5f}, 2.0f, 0.0f, pos, yaw, 1.0f);
+    const Vec2 world_centre{pos.x + 3.0f * cs, pos.z - 3.0f * sn}; // R_y(yaw) * (3,0)
+    CHECK(glm::length(resolve_collider(off, world_centre, 0.3f, 0.0f, 2.0f) - world_centre) > 0.1f);
+    const Vec2 origin{pos.x, pos.z};
+    CHECK(glm::length(resolve_collider(off, origin, 0.3f, 0.0f, 2.0f) - origin) < 1e-3f);
+}
+
+TEST_CASE("Forest props: a fallen log has a collider that blocks along its length") {
+    PropLibrary lib;
+    REQUIRE_FALSE(lib.logs().empty());
+    const PropDef& log = lib.logs()[0];
+    REQUIRE_FALSE(log.colliders.empty()); // logs are solid; bushes/rocks aren't
+
+    // Place the log rotated and build its world collider the way CollisionWorld
+    // does. The log lies along local +X; a point along it blocks, while a point well
+    // off to the side (perpendicular) is clear - which only holds if place_box keeps
+    // the collider's orientation aligned with the visible (rotated) log.
+    const Vec3 pos{6.0f, 0.0f, -3.0f};
+    const f32 yaw = 0.8f;
+    const BoxCollider& b = log.colliders[0];
+    const Collider c = place_box(b.center, b.half_extents, b.height, b.yaw, pos, yaw, 1.0f);
+    const f32 cs = std::cos(yaw);
+    const f32 sn = std::sin(yaw);
+    auto world = [&](f32 lx, f32 lz) { return Vec2{pos.x + lx * cs + lz * sn, pos.z - lx * sn + lz * cs}; };
+    auto moved = [&](const Vec2& p) { return glm::length(resolve_collider(c, p, 0.4f, 0.0f, 1.8f) - p); };
+
+    CHECK(moved(world(b.half_extents.x * 0.7f, 0.0f)) > 0.05f);          // along the log -> blocked
+    CHECK(moved(world(0.0f, b.half_extents.y + 1.2f)) < 1e-3f);          // off to the side -> clear
+    CHECK(moved(world(b.half_extents.x + 1.2f, 0.0f)) < 1e-3f);          // past the end -> clear
+
+    // Bushes are decorative (no collider).
+    REQUIRE_FALSE(lib.bushes().empty());
+    CHECK(lib.bushes()[0].colliders.empty());
+}
+
 TEST_CASE("Projectile: gravity + terrain bounce stays above the floor and settles") {
     const DensitySampler density = flat_floor(2.0f);
     Projectile pr;

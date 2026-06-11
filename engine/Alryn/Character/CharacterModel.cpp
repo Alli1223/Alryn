@@ -101,27 +101,29 @@ void CharacterModel::add_features(CharacterModel& m, const CharacterAppearance& 
     }
 
     // ---- Hair (on/around the top) ----
+    // Caps are seated so their lower edge stays above the eyes (eye top ≈ 0.28r)
+    // and they read as a hairstyle on the crown rather than covering the face.
     switch (app.hair) {
         case HairStyle::Bald:
             break;
         case HairStyle::Short:
-            add(Vec3{c.x, c.y + r * 0.5f, c.z}, Vec3{hs * 1.06f, hs * 0.62f, hs * 1.06f},
+            add(Vec3{c.x, c.y + r * 0.74f, c.z}, Vec3{hs * 1.04f, hs * 0.42f, hs * 1.04f},
                 BoneColor::Hair, BoneShape::RoundedBox);
             break;
         case HairStyle::Spiky:
-            add(Vec3{c.x, c.y + r * 0.42f, c.z}, Vec3{hs * 1.04f, hs * 0.5f, hs * 1.04f},
+            add(Vec3{c.x, c.y + r * 0.76f, c.z}, Vec3{hs * 1.02f, hs * 0.42f, hs * 1.02f},
                 BoneColor::Hair, BoneShape::RoundedBox);
-            add(Vec3{c.x, c.y + r * 1.05f, c.z}, Vec3{hs * 0.55f, hs * 0.7f, hs * 0.55f},
+            add(Vec3{c.x, c.y + r * 1.2f, c.z}, Vec3{hs * 0.55f, hs * 0.7f, hs * 0.55f},
                 BoneColor::Hair, BoneShape::Sphere);
             break;
         case HairStyle::Mohawk:
-            add(Vec3{c.x, c.y + r * 0.95f, c.z}, Vec3{hs * 0.18f, hs * 0.55f, hs * 1.0f},
+            add(Vec3{c.x, c.y + r * 1.0f, c.z}, Vec3{hs * 0.18f, hs * 0.6f, hs * 1.0f},
                 BoneColor::Hair, BoneShape::RoundedBox);
             break;
         case HairStyle::Ponytail:
-            add(Vec3{c.x, c.y + r * 0.55f, c.z}, Vec3{hs * 1.06f, hs * 0.6f, hs * 1.06f},
+            add(Vec3{c.x, c.y + r * 0.74f, c.z}, Vec3{hs * 1.04f, hs * 0.42f, hs * 1.04f},
                 BoneColor::Hair, BoneShape::RoundedBox);
-            add(Vec3{c.x, c.y + r * 0.1f, c.z - r * 0.95f}, Vec3{hs * 0.34f, hs * 0.7f, hs * 0.34f},
+            add(Vec3{c.x, c.y + r * 0.2f, c.z - r * 0.95f}, Vec3{hs * 0.34f, hs * 0.7f, hs * 0.34f},
                 BoneColor::Hair, BoneShape::Cylinder);
             break;
     }

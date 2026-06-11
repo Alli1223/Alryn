@@ -22,7 +22,7 @@ struct Glyph {
 const Glyph& font_glyph(char c);
 
 // Stroke thickness as a fraction of the font (cap-height) size.
-constexpr f32 kFontStrokeRatio = 0.085f;
+constexpr f32 kFontStrokeRatio = 0.095f;
 // Extra space added after each glyph's advance, in cap-height units.
 constexpr f32 kFontTracking = 0.16f;
 
