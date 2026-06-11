@@ -29,6 +29,44 @@ TEST_CASE("CharacterModel: deterministic generation and valid hierarchy") {
     CHECK(different);
 }
 
+TEST_CASE("CharacterModel: create() applies appearance and adds feature bones") {
+    CharacterAppearance look;
+    look.skin = 3;
+    look.hair_color = 4;
+    look.eyes = EyeStyle::Wide;
+    look.ears = EarStyle::Pointed;
+    look.hair = HairStyle::Mohawk;
+
+    const CharacterModel m = CharacterModel::create(7, look);
+
+    // Body (13) + 2 eyes + 2 ears + hair bones.
+    CHECK(m.bone_count() > 13);
+    CHECK(m.palette().skin == skin_color(3));
+    CHECK(m.palette().hair == hair_color_of(4));
+
+    // The added features are parented to the head and keep the precede-children
+    // invariant, and at least one eye/hair bone exists.
+    int eyes = 0;
+    int hair = 0;
+    for (usize i = 0; i < m.bones().size(); ++i) {
+        CHECK(m.bones()[i].parent < static_cast<int>(i));
+        if (m.bones()[i].color == BoneColor::Eye) ++eyes;
+        if (m.bones()[i].color == BoneColor::Hair) ++hair;
+    }
+    CHECK(eyes == 2);
+    CHECK(hair >= 1);
+
+    // A bald character adds no hair bones.
+    CharacterAppearance bald = look;
+    bald.hair = HairStyle::Bald;
+    const CharacterModel b = CharacterModel::create(7, bald);
+    int bald_hair = 0;
+    for (const Bone& bone : b.bones()) {
+        if (bone.color == BoneColor::Hair) ++bald_hair;
+    }
+    CHECK(bald_hair == 0);
+}
+
 TEST_CASE("CharacterModel: bind pose stands upright (feet down, head up)") {
     const CharacterModel m = CharacterModel::generate(3);
     const std::vector<Quat> no_pose; // empty -> all identity

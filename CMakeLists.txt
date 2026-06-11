@@ -149,7 +149,11 @@ alryn_compile_shaders(alryn SHADERS
     ${CMAKE_SOURCE_DIR}/shaders/mesh.vert
     ${CMAKE_SOURCE_DIR}/shaders/mesh.frag
     ${CMAKE_SOURCE_DIR}/shaders/water.vert
-    ${CMAKE_SOURCE_DIR}/shaders/water.frag)
+    ${CMAKE_SOURCE_DIR}/shaders/water.frag
+    ${CMAKE_SOURCE_DIR}/shaders/shadow.vert
+    ${CMAKE_SOURCE_DIR}/shaders/emissive.frag
+    ${CMAKE_SOURCE_DIR}/shaders/ui.vert
+    ${CMAKE_SOURCE_DIR}/shaders/ui.frag)
 
 if(ALRYN_BUILD_GAME)
     add_subdirectory(game)

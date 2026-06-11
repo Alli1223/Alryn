@@ -109,6 +109,37 @@ void Window::set_cursor_captured(bool captured) {
     cursor_captured_ = captured;
 }
 
+void Window::set_size(u32 width, u32 height) {
+    if (window_ == nullptr || fullscreen_) {
+        return;
+    }
+    glfwSetWindowSize(window_, static_cast<int>(width), static_cast<int>(height));
+}
+
+void Window::set_fullscreen(bool fullscreen) {
+    if (window_ == nullptr || fullscreen == fullscreen_) {
+        return;
+    }
+    if (fullscreen) {
+        glfwGetWindowPos(window_, &windowed_x_, &windowed_y_);
+        glfwGetWindowSize(window_, &windowed_w_, &windowed_h_);
+        GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+        if (monitor == nullptr) {
+            return;
+        }
+        const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+        // Borderless windowed fullscreen: cover the monitor at its native mode.
+        glfwSetWindowMonitor(window_, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
+    } else {
+        const int w = windowed_w_ > 0 ? windowed_w_ : static_cast<int>(config_.width);
+        const int h = windowed_h_ > 0 ? windowed_h_ : static_cast<int>(config_.height);
+        const int x = windowed_x_ > 0 ? windowed_x_ : 80;
+        const int y = windowed_y_ > 0 ? windowed_y_ : 80;
+        glfwSetWindowMonitor(window_, nullptr, x, y, w, h, 0);
+    }
+    fullscreen_ = fullscreen;
+}
+
 UVec2 Window::framebuffer_size() const {
     if (window_ == nullptr) {
         return UVec2{0, 0};
@@ -176,6 +207,14 @@ void Window::install_callbacks() {
             self->callback_(event);
         } else if (action == GLFW_RELEASE) {
             KeyReleasedEvent event{key};
+            self->callback_(event);
+        }
+    });
+
+    glfwSetCharCallback(window_, [](GLFWwindow* w, unsigned int codepoint) {
+        auto* self = static_cast<Window*>(glfwGetWindowUserPointer(w));
+        if (self != nullptr && self->callback_) {
+            KeyTypedEvent event{static_cast<u32>(codepoint)};
             self->callback_(event);
         }
     });

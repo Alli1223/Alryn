@@ -7,17 +7,46 @@
 #include <Alryn/Renderer/Vulkan/VulkanCommon.h>
 #include <Alryn/Scene/Camera.h>
 
+#include <algorithm>
+#include <cmath>
 #include <limits>
+#include <numeric>
 
 namespace alryn {
 
 namespace {
-// Must match the push_constant block in the shaders (160 bytes).
+// Must match the push_constant block in the shaders (256 bytes).
 struct PushConstants {
     Mat4 mvp;
     Mat4 model;
-    Vec4 tint;   // rgb colour multiplier, a = alpha
-    Vec4 params; // x = time, yzw = camera position
+    Mat4 light_vp;  // world -> light clip space (shadow lookup)
+    Vec4 tint;      // rgb colour multiplier, a = alpha
+    Vec4 params;    // x = time, yzw = camera position
+    Vec4 sun;       // xyz = normalized direction TO the sun, w = intensity
+    Vec4 sun_color; // rgb = sun colour, w = shadow strength
+};
+
+// Must match the Lights UBO in mesh.frag (std140).
+struct GpuSpot {
+    Vec4 pos_range;       // xyz position, w range
+    Vec4 dir_cos_inner;   // xyz direction, w cos(inner)
+    Vec4 color_cos_outer; // rgb colour, w cos(outer)
+    Vec4 atlas;           // xy tile offset, zw tile scale
+    Mat4 view_proj;
+};
+struct LightUbo {
+    i32 count[4]; // ivec4: x = active count
+    GpuSpot spots[4];
+};
+
+// Must match the push_constant block in ui.vert / ui.frag.
+struct UIPush {
+    Vec4 rect;
+    Vec4 color;
+    Vec4 params;
+    Vec4 seg;
+    Vec4 border;
+    Vec2 screen;
 };
 } // namespace
 
@@ -54,7 +83,8 @@ bool Renderer::on_init(Engine& /*engine*/) {
     if (!swapchain_.create(device_, surface_, fb.x, fb.y, config_.vsync)) {
         return false;
     }
-    if (!create_depth() || !create_pipelines() || !create_sync_and_commands()) {
+    if (!create_depth() || !create_shadow_resources() || !create_pipelines() ||
+        !create_sync_and_commands()) {
         return false;
     }
 
@@ -77,6 +107,7 @@ bool Renderer::create_pipelines() {
     base.depth_format = kDepthFormat;
     base.push_constant_size = sizeof(PushConstants);
     base.cull_mode = VK_CULL_MODE_NONE;
+    base.descriptor_set_layout = shadow_set_layout_; // shadow map sampler at set 0
 
     vk::PipelineConfig opaque = base; // terrain, characters
     opaque.blend = false;
@@ -97,7 +128,88 @@ bool Renderer::create_pipelines() {
     water.fragment_spv = shader_path("water.frag.spv").string();
     water.blend = true;
     water.depth_write = false;
-    return pipeline_water_.create(device_, water);
+    if (!pipeline_water_.create(device_, water)) {
+        return false;
+    }
+
+    vk::PipelineConfig emissive = base; // self-lit windows / lantern glass
+    emissive.fragment_spv = shader_path("emissive.frag.spv").string();
+    emissive.blend = false;
+    emissive.depth_write = true;
+    if (!pipeline_emissive_.create(device_, emissive)) {
+        return false;
+    }
+
+    // Depth-only pass that renders the scene from the sun into the shadow map.
+    vk::PipelineConfig shadow;
+    shadow.vertex_spv = shader_path("shadow.vert.spv").string();
+    shadow.depth_format = kDepthFormat;
+    shadow.push_constant_size = sizeof(PushConstants);
+    shadow.cull_mode = VK_CULL_MODE_NONE;
+    shadow.depth_only = true;
+    shadow.depth_write = true;
+    shadow.depth_bias = true;
+    if (!pipeline_shadow_.create(device_, shadow)) {
+        return false;
+    }
+
+    // Screen-space UI overlay: vertexless rounded-rect / capsule SDF, alpha
+    // blended, no depth (drawn in its own pass after the 3D scene).
+    vk::PipelineConfig ui;
+    ui.vertex_spv = shader_path("ui.vert.spv").string();
+    ui.fragment_spv = shader_path("ui.frag.spv").string();
+    ui.color_format = swapchain_.format();
+    ui.depth_format = VK_FORMAT_UNDEFINED;
+    ui.push_constant_size = sizeof(UIPush);
+    ui.cull_mode = VK_CULL_MODE_NONE;
+    ui.blend = true;
+    ui.vertexless = true;
+    return pipeline_ui_.create(device_, ui);
+}
+
+bool Renderer::create_shadow_resources() {
+    // set 0: binding 0 = sun shadow map, 1 = spot-light atlas, 2 = light UBO.
+    VkDescriptorSetLayoutBinding bindings[3]{};
+    bindings[0].binding = 0;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[1] = bindings[0];
+    bindings[1].binding = 1;
+    bindings[2].binding = 2;
+    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    bindings[2].descriptorCount = 1;
+    bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    VkDescriptorSetLayoutCreateInfo layout_info{};
+    layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layout_info.bindingCount = 3;
+    layout_info.pBindings = bindings;
+    ALRYN_VK_CHECK(
+        vkCreateDescriptorSetLayout(device_.handle(), &layout_info, nullptr, &shadow_set_layout_));
+
+    VkDescriptorPoolSize pool_sizes[2]{};
+    pool_sizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    pool_sizes[0].descriptorCount = 2 * kFramesInFlight;
+    pool_sizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    pool_sizes[1].descriptorCount = kFramesInFlight;
+    VkDescriptorPoolCreateInfo pool_info{};
+    pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pool_info.maxSets = kFramesInFlight;
+    pool_info.poolSizeCount = 2;
+    pool_info.pPoolSizes = pool_sizes;
+    ALRYN_VK_CHECK(vkCreateDescriptorPool(device_.handle(), &pool_info, nullptr, &descriptor_pool_));
+
+    VkSamplerCreateInfo sampler_info{};
+    sampler_info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    sampler_info.magFilter = VK_FILTER_LINEAR;
+    sampler_info.minFilter = VK_FILTER_LINEAR;
+    sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    sampler_info.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE; // off-map => lit
+    ALRYN_VK_CHECK(vkCreateSampler(device_.handle(), &sampler_info, nullptr, &shadow_sampler_));
+    return true;
 }
 
 bool Renderer::create_sync_and_commands() {
@@ -124,6 +236,53 @@ bool Renderer::create_sync_and_commands() {
         ALRYN_VK_CHECK(vkAllocateCommandBuffers(device_.handle(), &alloc, &frame.cmd));
         ALRYN_VK_CHECK(vkCreateSemaphore(device_.handle(), &sem_info, nullptr, &frame.image_available));
         ALRYN_VK_CHECK(vkCreateFence(device_.handle(), &fence_info, nullptr, &frame.in_flight));
+
+        // Per-frame shadow targets (so the two frames in flight never alias) + UBO.
+        const VkImageUsageFlags shadow_usage =
+            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        if (!frame.shadow_map.create(device_, kShadowSize, kShadowSize, kDepthFormat, shadow_usage,
+                                     VK_IMAGE_ASPECT_DEPTH_BIT) ||
+            !frame.light_atlas.create(device_, kAtlasSize, kAtlasSize, kDepthFormat, shadow_usage,
+                                      VK_IMAGE_ASPECT_DEPTH_BIT) ||
+            !frame.light_ubo.create(device_, sizeof(LightUbo), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+            return false;
+        }
+        VkDescriptorSetAllocateInfo set_alloc{};
+        set_alloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        set_alloc.descriptorPool = descriptor_pool_;
+        set_alloc.descriptorSetCount = 1;
+        set_alloc.pSetLayouts = &shadow_set_layout_;
+        ALRYN_VK_CHECK(vkAllocateDescriptorSets(device_.handle(), &set_alloc, &frame.shadow_set));
+
+        VkDescriptorImageInfo sun_info{};
+        sun_info.sampler = shadow_sampler_;
+        sun_info.imageView = frame.shadow_map.view();
+        sun_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkDescriptorImageInfo atlas_info{};
+        atlas_info.sampler = shadow_sampler_;
+        atlas_info.imageView = frame.light_atlas.view();
+        atlas_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkDescriptorBufferInfo ubo_info{};
+        ubo_info.buffer = frame.light_ubo.handle();
+        ubo_info.offset = 0;
+        ubo_info.range = sizeof(LightUbo);
+
+        VkWriteDescriptorSet writes[3]{};
+        for (int b = 0; b < 3; ++b) {
+            writes[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[b].dstSet = frame.shadow_set;
+            writes[b].dstBinding = static_cast<u32>(b);
+            writes[b].descriptorCount = 1;
+        }
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[0].pImageInfo = &sun_info;
+        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[1].pImageInfo = &atlas_info;
+        writes[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[2].pBufferInfo = &ubo_info;
+        vkUpdateDescriptorSets(device_.handle(), 3, writes, 0, nullptr);
     }
 
     render_finished_.resize(swapchain_.image_count());
@@ -137,6 +296,76 @@ void Renderer::set_camera(const Camera& camera) {
     view_ = camera.view();
     projection_ = camera.projection();
     camera_position_ = camera.position();
+}
+
+void Renderer::set_sun(const Vec3& direction, const Vec3& color, f32 intensity) {
+    const f32 len = glm::length(direction);
+    sun_direction_ = len > 1e-4f ? direction / len : Vec3{0.0f, 1.0f, 0.0f};
+    sun_color_ = color;
+    sun_intensity_ = intensity;
+    shadow_strength_ = 0.55f * glm::clamp(intensity, 0.0f, 1.0f); // fade out at dusk/night
+}
+
+// Orthographic light frustum centred on what the camera looks at, so the shadow
+// map's resolution is spent on the visible area around the player.
+Mat4 Renderer::compute_light_matrix() const {
+    const Vec3 forward = -glm::normalize(Vec3{view_[0][2], view_[1][2], view_[2][2]});
+    const Vec3 focus = camera_position_ + forward * 14.0f;
+    const Vec3 light_pos = focus + sun_direction_ * 60.0f;
+    const Vec3 up = std::abs(sun_direction_.y) > 0.99f ? Vec3{0.0f, 0.0f, 1.0f}
+                                                       : Vec3{0.0f, 1.0f, 0.0f};
+    const Mat4 light_view = glm::lookAt(light_pos, focus, up);
+    constexpr f32 s = 42.0f;
+    const Mat4 light_proj = glm::ortho(-s, s, -s, s, 1.0f, 140.0f);
+    return light_proj * light_view;
+}
+
+void Renderer::add_light(const SpotLight& light) {
+    if (frame_active_) {
+        pending_lights_.push_back(light);
+    }
+}
+
+// Picks the nearest kMaxLights to the camera, assigns each an atlas tile, and
+// fills the per-frame light UBO + the matrices used by the atlas pass.
+void Renderer::process_lights() {
+    static_assert(kMaxLights == 4, "LightUbo/shader assume 4 lights");
+    active_light_vp_.clear();
+    LightUbo ubo{};
+
+    std::vector<u32> order(pending_lights_.size());
+    std::iota(order.begin(), order.end(), 0u);
+    const Vec3 cam = camera_position_;
+    std::sort(order.begin(), order.end(), [&](u32 a, u32 b) {
+        return glm::length(pending_lights_[a].position - cam) <
+               glm::length(pending_lights_[b].position - cam);
+    });
+
+    const u32 n = std::min<u32>(kMaxLights, static_cast<u32>(pending_lights_.size()));
+    const f32 tile = 1.0f / static_cast<f32>(kAtlasTiles);
+    for (u32 i = 0; i < n; ++i) {
+        const SpotLight& l = pending_lights_[order[i]];
+        const Vec3 dir = glm::length(l.direction) > 1e-4f ? glm::normalize(l.direction)
+                                                          : Vec3{0.0f, -1.0f, 0.0f};
+        const Vec3 up = std::abs(dir.y) > 0.99f ? Vec3{0.0f, 0.0f, 1.0f} : Vec3{0.0f, 1.0f, 0.0f};
+        const Mat4 view = glm::lookAt(l.position, l.position + dir, up);
+        const f32 outer = glm::clamp(l.cone_outer_cos, -0.999f, 0.999f);
+        const f32 fov = glm::clamp(2.0f * std::acos(outer), 0.35f, 2.7f);
+        const Mat4 proj = glm::perspective(fov, 1.0f, 0.25f, std::max(l.range, 1.0f));
+        const Mat4 vp = proj * view;
+        active_light_vp_.push_back(vp);
+
+        const u32 col = i % kAtlasTiles;
+        const u32 row = i / kAtlasTiles;
+        GpuSpot& g = ubo.spots[i];
+        g.pos_range = Vec4{l.position, l.range};
+        g.dir_cos_inner = Vec4{dir, l.cone_inner_cos};
+        g.color_cos_outer = Vec4{l.color, outer};
+        g.atlas = Vec4{static_cast<f32>(col) * tile, static_cast<f32>(row) * tile, tile, tile};
+        g.view_proj = vp;
+    }
+    ubo.count[0] = static_cast<i32>(n);
+    frames_[frame_index_].light_ubo.upload(&ubo, sizeof(ubo));
 }
 
 f32 Renderer::aspect() const {
@@ -188,20 +417,147 @@ bool Renderer::begin_frame() {
     }
 
     vkResetFences(device_.handle(), 1, &frame.in_flight);
-    vkResetCommandBuffer(frame.cmd, 0);
+    draw_items_.clear();
+    ui_items_.clear();
+    pending_lights_.clear();
+    frame_active_ = true;
+    return true;
+}
 
-    VkCommandBufferBeginInfo begin{};
-    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    ALRYN_VK_CHECK(vkBeginCommandBuffer(frame.cmd, &begin));
+void Renderer::push_constants(const Mat4& model, const Vec4& tint) {
+    FrameSync& frame = frames_[frame_index_];
+    PushConstants push{};
+    push.mvp = projection_ * view_ * model;
+    push.model = model;
+    push.light_vp = light_view_proj_;
+    push.tint = tint;
+    push.params = Vec4{time_, camera_position_.x, camera_position_.y, camera_position_.z};
+    push.sun = Vec4{sun_direction_, sun_intensity_};
+    push.sun_color = Vec4{sun_color_, shadow_strength_};
+    // Layouts of all main pipelines are compatible, so push via the opaque one.
+    vkCmdPushConstants(frame.cmd, pipeline_opaque_.layout(),
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                       sizeof(PushConstants), &push);
+}
 
-    vk::image_barrier(frame.cmd, swapchain_.image(image_index_), VK_IMAGE_ASPECT_COLOR_BIT,
-                      VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                      VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                      0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
-    vk::image_barrier(frame.cmd, depth_.handle(), VK_IMAGE_ASPECT_DEPTH_BIT,
+// Pass 1: render scene depth from the sun's point of view into the shadow map.
+void Renderer::record_shadow_pass(VkCommandBuffer cmd) {
+    FrameSync& frame = frames_[frame_index_];
+    vk::image_barrier(cmd, frame.shadow_map.handle(), VK_IMAGE_ASPECT_DEPTH_BIT,
                       VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                       VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
                       0, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+
+    VkRenderingAttachmentInfo depth{};
+    depth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    depth.imageView = frame.shadow_map.view();
+    depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE; // sampled in the main pass
+    depth.clearValue.depthStencil = {1.0f, 0};
+
+    VkRenderingInfo rendering{};
+    rendering.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    rendering.renderArea = {{0, 0}, {kShadowSize, kShadowSize}};
+    rendering.layerCount = 1;
+    rendering.pDepthAttachment = &depth;
+    vkCmdBeginRendering(cmd, &rendering);
+
+    const VkViewport viewport{0.0f, 0.0f, static_cast<f32>(kShadowSize),
+                              static_cast<f32>(kShadowSize), 0.0f, 1.0f};
+    const VkRect2D scissor{{0, 0}, {kShadowSize, kShadowSize}};
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    pipeline_shadow_.bind(cmd);
+    for (const DrawItem& item : draw_items_) {
+        if (item.layer == Layer::Water) {
+            continue; // the water surface doesn't cast shadows
+        }
+        PushConstants push{};
+        push.mvp = light_view_proj_ * item.model;
+        vkCmdPushConstants(cmd, pipeline_shadow_.layout(),
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                           sizeof(PushConstants), &push);
+        item.mesh->bind(cmd);
+        item.mesh->draw(cmd);
+    }
+    vkCmdEndRendering(cmd);
+
+    vk::image_barrier(cmd, frame.shadow_map.handle(), VK_IMAGE_ASPECT_DEPTH_BIT,
+                      VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                      VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+}
+
+// Pass 1b: render scene depth from each active spot light into its atlas tile.
+void Renderer::record_light_atlas_pass(VkCommandBuffer cmd) {
+    FrameSync& frame = frames_[frame_index_];
+    vk::image_barrier(cmd, frame.light_atlas.handle(), VK_IMAGE_ASPECT_DEPTH_BIT,
+                      VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                      VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+                      0, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+
+    VkRenderingAttachmentInfo depth{};
+    depth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    depth.imageView = frame.light_atlas.view();
+    depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    depth.clearValue.depthStencil = {1.0f, 0};
+
+    VkRenderingInfo rendering{};
+    rendering.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    rendering.renderArea = {{0, 0}, {kAtlasSize, kAtlasSize}};
+    rendering.layerCount = 1;
+    rendering.pDepthAttachment = &depth;
+    vkCmdBeginRendering(cmd, &rendering);
+
+    pipeline_shadow_.bind(cmd);
+    const u32 tile = kAtlasSize / kAtlasTiles;
+    for (u32 i = 0; i < active_light_vp_.size(); ++i) {
+        const u32 col = i % kAtlasTiles;
+        const u32 row = i / kAtlasTiles;
+        const VkViewport vp{static_cast<f32>(col * tile), static_cast<f32>(row * tile),
+                            static_cast<f32>(tile), static_cast<f32>(tile), 0.0f, 1.0f};
+        const VkRect2D sc{{static_cast<i32>(col * tile), static_cast<i32>(row * tile)},
+                          {tile, tile}};
+        vkCmdSetViewport(cmd, 0, 1, &vp);
+        vkCmdSetScissor(cmd, 0, 1, &sc);
+        for (const DrawItem& item : draw_items_) {
+            if (item.layer == Layer::Water) {
+                continue;
+            }
+            PushConstants push{};
+            push.mvp = active_light_vp_[i] * item.model;
+            vkCmdPushConstants(cmd, pipeline_shadow_.layout(),
+                               VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                               sizeof(PushConstants), &push);
+            item.mesh->bind(cmd);
+            item.mesh->draw(cmd);
+        }
+    }
+    vkCmdEndRendering(cmd);
+
+    vk::image_barrier(cmd, frame.light_atlas.handle(), VK_IMAGE_ASPECT_DEPTH_BIT,
+                      VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                      VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+}
+
+// Pass 2: forward-render to the swapchain, sampling the shadow map for occlusion.
+void Renderer::record_main_pass(VkCommandBuffer cmd) {
+    FrameSync& frame = frames_[frame_index_];
+    vk::image_barrier(cmd, swapchain_.image(image_index_), VK_IMAGE_ASPECT_COLOR_BIT,
+                      VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                      VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                      0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+    vk::image_barrier(cmd, depth_.handle(), VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+                      VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                      VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, 0,
+                      VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
 
     VkRenderingAttachmentInfo color{};
     color.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -209,7 +565,7 @@ bool Renderer::begin_frame() {
     color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    color.clearValue.color = {{config_.clear_color.r, config_.clear_color.g, config_.clear_color.b, 1.0f}};
+    color.clearValue.color = {{sky_color_.r, sky_color_.g, sky_color_.b, 1.0f}};
 
     VkRenderingAttachmentInfo depth{};
     depth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -226,52 +582,147 @@ bool Renderer::begin_frame() {
     rendering.colorAttachmentCount = 1;
     rendering.pColorAttachments = &color;
     rendering.pDepthAttachment = &depth;
-    vkCmdBeginRendering(frame.cmd, &rendering);
+    vkCmdBeginRendering(cmd, &rendering);
 
     const VkExtent2D extent = swapchain_.extent();
     const VkViewport viewport{0.0f, 0.0f, static_cast<f32>(extent.width),
                               static_cast<f32>(extent.height), 0.0f, 1.0f};
     const VkRect2D scissor{{0, 0}, extent};
-    vkCmdSetViewport(frame.cmd, 0, 1, &viewport);
-    vkCmdSetScissor(frame.cmd, 0, 1, &scissor);
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    current_pipeline_ = VK_NULL_HANDLE; // pipelines are bound lazily per draw
-    frame_active_ = true;
-    return true;
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_opaque_.layout(), 0, 1,
+                            &frame.shadow_set, 0, nullptr);
+
+    current_pipeline_ = VK_NULL_HANDLE;
+    for (const DrawItem& item : draw_items_) {
+        const vk::Pipeline& pipe = item.layer == Layer::Water      ? pipeline_water_
+                                   : item.layer == Layer::Foliage  ? pipeline_foliage_
+                                   : item.layer == Layer::Emissive ? pipeline_emissive_
+                                                                   : pipeline_opaque_;
+        if (pipe.handle() != current_pipeline_) {
+            pipe.bind(cmd);
+            current_pipeline_ = pipe.handle();
+        }
+        push_constants(item.model, item.tint);
+        item.mesh->bind(cmd);
+        item.mesh->draw(cmd);
+    }
+    vkCmdEndRendering(cmd);
+    // The swapchain image stays in COLOR_ATTACHMENT_OPTIMAL for the UI pass,
+    // which transitions it to PRESENT_SRC.
 }
 
-void Renderer::submit(const vk::Pipeline& pipeline, const Mesh& mesh, const Mat4& model,
-                      const Vec4& tint) {
-    if (!frame_active_) {
-        return;
+// Pass 3: screen-space UI overlay. A second rendering instance that loads (keeps)
+// the 3D image and draws alpha-blended rounded-rect / capsule SDF primitives, then
+// transitions the image to present.
+void Renderer::record_ui_pass(VkCommandBuffer cmd) {
+    if (!ui_items_.empty()) {
+        VkRenderingAttachmentInfo color{};
+        color.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        color.imageView = swapchain_.view(image_index_);
+        color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        color.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD; // keep the rendered scene
+        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+        VkRenderingInfo rendering{};
+        rendering.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        rendering.renderArea = {{0, 0}, swapchain_.extent()};
+        rendering.layerCount = 1;
+        rendering.colorAttachmentCount = 1;
+        rendering.pColorAttachments = &color;
+        vkCmdBeginRendering(cmd, &rendering);
+
+        const VkExtent2D extent = swapchain_.extent();
+        const VkViewport viewport{0.0f, 0.0f, static_cast<f32>(extent.width),
+                                  static_cast<f32>(extent.height), 0.0f, 1.0f};
+        const VkRect2D scissor{{0, 0}, extent};
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+        pipeline_ui_.bind(cmd);
+        for (const UIDrawCmd& item : ui_items_) {
+            UIPush push{};
+            push.rect = item.rect;
+            push.color = item.color;
+            push.params = item.params;
+            push.seg = item.seg;
+            push.border = item.border;
+            push.screen = Vec2{static_cast<f32>(extent.width), static_cast<f32>(extent.height)};
+            vkCmdPushConstants(cmd, pipeline_ui_.layout(),
+                               VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                               sizeof(UIPush), &push);
+            vkCmdDraw(cmd, 6, 1, 0, 0);
+        }
+        vkCmdEndRendering(cmd);
     }
-    FrameSync& frame = frames_[frame_index_];
-    if (pipeline.handle() != current_pipeline_) {
-        pipeline.bind(frame.cmd);
-        current_pipeline_ = pipeline.handle();
-    }
-    PushConstants push{};
-    push.mvp = projection_ * view_ * model;
-    push.model = model;
-    push.tint = tint;
-    push.params = Vec4{time_, camera_position_.x, camera_position_.y, camera_position_.z};
-    vkCmdPushConstants(frame.cmd, pipeline.layout(),
-                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                       sizeof(PushConstants), &push);
-    mesh.bind(frame.cmd);
-    mesh.draw(frame.cmd);
+
+    vk::image_barrier(cmd, swapchain_.image(image_index_), VK_IMAGE_ASPECT_COLOR_BIT,
+                      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                      VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, 0);
 }
 
 void Renderer::draw(const Mesh& mesh, const Mat4& model, const Vec4& tint) {
-    submit(pipeline_opaque_, mesh, model, tint);
+    if (frame_active_) {
+        draw_items_.push_back({&mesh, model, tint, Layer::Opaque});
+    }
 }
 
 void Renderer::draw_transparent(const Mesh& mesh, const Mat4& model, const Vec4& tint) {
-    submit(pipeline_foliage_, mesh, model, tint);
+    if (frame_active_) {
+        draw_items_.push_back({&mesh, model, tint, Layer::Foliage});
+    }
 }
 
 void Renderer::draw_water(const Mesh& mesh, const Mat4& model) {
-    submit(pipeline_water_, mesh, model, Vec4{1.0f});
+    if (frame_active_) {
+        draw_items_.push_back({&mesh, model, Vec4{1.0f}, Layer::Water});
+    }
+}
+
+void Renderer::draw_emissive(const Mesh& mesh, const Mat4& model, const Vec4& tint) {
+    if (frame_active_) {
+        draw_items_.push_back({&mesh, model, tint, Layer::Emissive});
+    }
+}
+
+void Renderer::draw_ui_rect(const Vec4& rect_xywh, const Vec4& color, f32 radius, f32 border,
+                            const Vec4& border_color) {
+    if (!frame_active_) {
+        return;
+    }
+    UIDrawCmd cmd;
+    cmd.rect = rect_xywh;
+    cmd.color = color;
+    cmd.params = Vec4{radius, 1.0f, 0.0f /*rect mode*/, border};
+    cmd.border = border_color;
+    ui_items_.push_back(cmd);
+}
+
+void Renderer::draw_ui_segment(const Vec2& p0, const Vec2& p1, f32 thickness, const Vec4& color) {
+    if (!frame_active_) {
+        return;
+    }
+    const f32 half = thickness * 0.5f;
+    const f32 pad = half + 2.0f; // room for the anti-aliased edge
+    const Vec2 lo{std::min(p0.x, p1.x) - pad, std::min(p0.y, p1.y) - pad};
+    const Vec2 hi{std::max(p0.x, p1.x) + pad, std::max(p0.y, p1.y) + pad};
+    UIDrawCmd cmd;
+    cmd.rect = Vec4{lo.x, lo.y, hi.x - lo.x, hi.y - lo.y};
+    cmd.color = color;
+    cmd.params = Vec4{0.0f, 1.0f, 1.0f /*segment mode*/, half};
+    cmd.seg = Vec4{p0.x, p0.y, p1.x, p1.y};
+    ui_items_.push_back(cmd);
+}
+
+void Renderer::set_vsync(bool enabled) {
+    if (config_.vsync == enabled) {
+        return;
+    }
+    config_.vsync = enabled;
+    swapchain_.set_vsync(enabled);
+    needs_resize_ = true; // recreate_swapchain rebuilds with the new present mode
 }
 
 void Renderer::end_frame() {
@@ -280,11 +731,21 @@ void Renderer::end_frame() {
     }
     FrameSync& frame = frames_[frame_index_];
 
-    vkCmdEndRendering(frame.cmd);
-    vk::image_barrier(frame.cmd, swapchain_.image(image_index_), VK_IMAGE_ASPECT_COLOR_BIT,
-                      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                      VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, 0);
+    light_view_proj_ = compute_light_matrix();
+    process_lights();
+    std::stable_sort(draw_items_.begin(), draw_items_.end(),
+                     [](const DrawItem& a, const DrawItem& b) { return a.layer < b.layer; });
+
+    vkResetCommandBuffer(frame.cmd, 0);
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    ALRYN_VK_CHECK(vkBeginCommandBuffer(frame.cmd, &begin));
+
+    record_shadow_pass(frame.cmd);
+    record_light_atlas_pass(frame.cmd);
+    record_main_pass(frame.cmd);
+    record_ui_pass(frame.cmd);
+
     ALRYN_VK_CHECK(vkEndCommandBuffer(frame.cmd));
 
     VkSemaphore signal = render_finished_[image_index_];
@@ -336,6 +797,21 @@ void Renderer::on_shutdown() {
     pipeline_opaque_.destroy();
     pipeline_foliage_.destroy();
     pipeline_water_.destroy();
+    pipeline_emissive_.destroy();
+    pipeline_shadow_.destroy();
+    pipeline_ui_.destroy();
+    if (shadow_sampler_ != VK_NULL_HANDLE) {
+        vkDestroySampler(device_.handle(), shadow_sampler_, nullptr);
+        shadow_sampler_ = VK_NULL_HANDLE;
+    }
+    if (descriptor_pool_ != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(device_.handle(), descriptor_pool_, nullptr);
+        descriptor_pool_ = VK_NULL_HANDLE;
+    }
+    if (shadow_set_layout_ != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device_.handle(), shadow_set_layout_, nullptr);
+        shadow_set_layout_ = VK_NULL_HANDLE;
+    }
     depth_.destroy();
     swapchain_.destroy();
     if (surface_ != VK_NULL_HANDLE) {

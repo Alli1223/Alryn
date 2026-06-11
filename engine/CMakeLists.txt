@@ -22,6 +22,7 @@ add_library(alryn STATIC
     Alryn/Platform/Input.cpp
     # ---- Physics -----------------------------------------------------------
     Alryn/Physics/CharacterController.cpp
+    Alryn/Physics/CollisionWorld.cpp
     # ---- Character ---------------------------------------------------------
     Alryn/Character/CharacterModel.cpp
     Alryn/Character/CharacterAnimator.cpp
@@ -36,11 +37,19 @@ add_library(alryn STATIC
     Alryn/Renderer/Mesh.cpp
     Alryn/Renderer/MeshPrimitives.cpp
     Alryn/Renderer/Renderer.cpp
+    # ---- UI ----------------------------------------------------------------
+    Alryn/UI/VectorFont.cpp
+    Alryn/UI/Widget.cpp
+    Alryn/UI/Widgets.cpp
+    Alryn/UI/DrawList.cpp
+    Alryn/UI/UIContext.cpp
     # ---- Terrain -----------------------------------------------------------
     Alryn/Terrain/VoxelField.cpp
     Alryn/Terrain/MarchingTetra.cpp
     Alryn/Terrain/Terrain.cpp
     Alryn/Terrain/StreamingTerrain.cpp
+    # ---- World -------------------------------------------------------------
+    Alryn/World/PropLibrary.cpp
     # ---- Net ---------------------------------------------------------------
     Alryn/Net/ByteBuffer.cpp
     Alryn/Net/Protocol.cpp

@@ -11,10 +11,13 @@ namespace alryn {
 namespace {
 constexpr f32 kEditRadius = 2.5f;
 constexpr f32 kEditAmount = 2.0f;
+constexpr f32 kProjectileSpeed = 24.0f;
+constexpr usize kMaxProjectiles = 256;
 } // namespace
 
 bool GameServer::start(u16 port, u32 seed, u32 max_clients) {
     sampler_.set_seed(seed);
+    collision_.emplace(seed, prop_lib_);
     if (!server_.start(port, max_clients)) {
         return false;
     }
@@ -92,6 +95,21 @@ void GameServer::tick(Timestep dt) {
                     sampler_.add_edit(e.input.aim, kEditRadius, -kEditAmount);
                     server_.broadcast_deform(net::DeformEvent{e.input.aim, kEditRadius, -kEditAmount});
                 }
+                if (e.input.fire) {
+                    const Vec3 eye = it->second.controller.eye_position();
+                    Vec3 dir = e.input.aim - eye;
+                    if (glm::length(dir) > 0.2f) {
+                        dir = glm::normalize(dir);
+                        Projectile pr;
+                        pr.position = eye + dir * 0.6f;
+                        pr.velocity = dir * kProjectileSpeed;
+                        pr.owner = e.client;
+                        projectiles_.push_back(pr);
+                        if (projectiles_.size() > kMaxProjectiles) {
+                            projectiles_.erase(projectiles_.begin());
+                        }
+                    }
+                }
                 break;
             }
             case net::ServerEventType::ClientDisconnected: {
@@ -104,14 +122,41 @@ void GameServer::tick(Timestep dt) {
     }
 
     for (auto& [id, player] : players_) {
-        player.controller.update(density, player.input.move, player.input.jump, dt);
+        if (collision_) {
+            collision_->gather(player.controller.position(), collider_scratch_);
+        }
+        player.controller.update(density, player.input.move, player.input.jump, dt,
+                                 collider_scratch_);
     }
+
+    // Step projectiles: gravity + bounce off terrain/props, and despawn on a hit.
+    for (Projectile& pr : projectiles_) {
+        if (collision_) {
+            collision_->gather(pr.position, collider_scratch_);
+        }
+        step_projectile(pr, density, collider_scratch_, dt);
+        for (const auto& [id, player] : players_) {
+            if (id == pr.owner) {
+                continue;
+            }
+            const Vec3 chest = player.controller.position() + Vec3{0.0f, 0.9f, 0.0f};
+            if (glm::length(chest - pr.position) < pr.radius + 0.55f) {
+                pr.alive = false; // struck a player
+            }
+        }
+    }
+    std::erase_if(projectiles_, [](const Projectile& pr) { return !pr.alive; });
 
     net::Snapshot snapshot;
     snapshot.tick = ++tick_;
     snapshot.players.reserve(players_.size());
     for (const auto& [id, player] : players_) {
-        snapshot.players.push_back({id, player.controller.position(), player.input.yaw});
+        snapshot.players.push_back(
+            {id, player.controller.position(), player.input.yaw, player.input.appearance});
+    }
+    snapshot.projectiles.reserve(projectiles_.size());
+    for (const Projectile& pr : projectiles_) {
+        snapshot.projectiles.push_back({pr.position, pr.kind});
     }
     server_.broadcast_snapshot(snapshot);
 }

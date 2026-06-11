@@ -7,8 +7,11 @@ layout(location = 2) in vec3 inColor;  // unused
 layout(push_constant) uniform Push {
     mat4 mvp;
     mat4 model; // pure translation (water grid follows the player in xz)
+    mat4 lightVP;
     vec4 tint;
     vec4 params; // x = time, yzw = camera position
+    vec4 sun;      // xyz = normalized direction TO the sun, w = sun intensity
+    vec4 sunColor; // rgb = sun colour, w = shadow strength
 } pc;
 
 layout(location = 0) out vec3 vWorldPos;

@@ -18,6 +18,8 @@ TEST_CASE("Net: message serialization round-trips") {
     input.jump = true;
     input.add = true;
     input.aim = Vec3{3.0f, 4.0f, 5.0f};
+    input.appearance = CharacterAppearance{3, 5, EyeStyle::Sleepy, EarStyle::Pointed,
+                                           HairStyle::Ponytail};
 
     ByteWriter w;
     write(w, input);
@@ -31,11 +33,14 @@ TEST_CASE("Net: message serialization round-trips") {
     CHECK_FALSE(out.dig);
     CHECK(out.add);
     CHECK(out.aim.z == doctest::Approx(5.0f));
+    CHECK(out.appearance == input.appearance); // cosmetics survive the round-trip
 
     Snapshot snapshot;
     snapshot.tick = 7;
-    snapshot.players.push_back({1, Vec3{1.0f, 2.0f, 3.0f}, 0.5f});
-    snapshot.players.push_back({2, Vec3{4.0f, 5.0f, 6.0f}, 1.5f});
+    snapshot.players.push_back({1, Vec3{1.0f, 2.0f, 3.0f}, 0.5f, CharacterAppearance{}});
+    snapshot.players.push_back(
+        {2, Vec3{4.0f, 5.0f, 6.0f}, 1.5f, CharacterAppearance{2, 0, EyeStyle::Sharp,
+                                                              EarStyle::Small, HairStyle::Spiky}});
     ByteWriter ws;
     write(ws, snapshot);
     ByteReader rs(ws.bytes(), ws.size());
@@ -45,6 +50,8 @@ TEST_CASE("Net: message serialization round-trips") {
     REQUIRE(decoded.players.size() == 2);
     CHECK(decoded.players[1].id == 2);
     CHECK(decoded.players[1].position.y == doctest::Approx(5.0f));
+    CHECK(decoded.players[1].appearance.hair == HairStyle::Spiky);
+    CHECK(decoded.players[1].appearance.eyes == EyeStyle::Sharp);
 
     Welcome welcome{77, 0xABCDu};
     ByteWriter ww;

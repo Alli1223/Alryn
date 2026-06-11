@@ -23,6 +23,13 @@ struct PipelineConfig {
     VkCullModeFlags cull_mode = VK_CULL_MODE_NONE;
     bool blend = false;       // alpha blending (transparent materials)
     bool depth_write = true;  // write depth (turn off for transparent passes)
+    bool vertexless = false;  // no vertex buffer (UI quads emit from gl_VertexIndex)
+    bool depth_only = false;  // no fragment shader / colour attachment (shadow pass)
+    bool depth_bias = false;  // slope-scaled depth bias (shadow pass, fights acne)
+    f32 depth_bias_constant = 1.25f;
+    f32 depth_bias_slope = 2.0f;
+    // Optional descriptor set 0 (e.g. the shadow map sampler). VK_NULL_HANDLE => none.
+    VkDescriptorSetLayout descriptor_set_layout = VK_NULL_HANDLE;
 };
 
 // A graphics pipeline for alryn::Vertex geometry, built for dynamic rendering

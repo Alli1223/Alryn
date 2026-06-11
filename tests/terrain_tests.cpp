@@ -7,10 +7,14 @@
 #include <Alryn/Terrain/MarchingTetra.h>
 #include <Alryn/Terrain/StreamingTerrain.h>
 #include <Alryn/Terrain/Terrain.h>
+#include <Alryn/Terrain/PropScatter.h>
 #include <Alryn/Terrain/TreeScatter.h>
+#include <Alryn/Terrain/VegetationScatter.h>
 #include <Alryn/Terrain/VoxelField.h>
 #include <Alryn/Terrain/WorldGen.h>
+#include <Alryn/World/PropLibrary.h>
 
+#include <algorithm>
 #include <cmath>
 #include <map>
 #include <tuple>
@@ -238,6 +242,76 @@ TEST_CASE("Trees: low-poly meshes + deterministic, on-land scatter") {
         }
     }
     CHECK(total > 0);
+    CHECK_FALSE(underwater);
+}
+
+TEST_CASE("Vegetation: grass + flowers bake deterministically onto land") {
+    CHECK_FALSE(primitives::grass_tuft().indices.empty());
+    CHECK_FALSE(primitives::flower().indices.empty());
+
+    const u32 seed = 1337u;
+    const MeshData a = build_vegetation(2, 3, 8.0f, seed);
+    const MeshData b = build_vegetation(2, 3, 8.0f, seed);
+    REQUIRE(a.vertices.size() == b.vertices.size());
+    REQUIRE(a.indices.size() == b.indices.size());
+
+    usize total_indices = 0;
+    f32 min_y = 1e9f;
+    bool any = false;
+    for (int cz = -16; cz < 16; ++cz) {
+        for (int cx = -16; cx < 16; ++cx) {
+            const MeshData v = build_vegetation(cx, cz, 8.0f, seed);
+            total_indices += v.indices.size();
+            for (const Vertex& vert : v.vertices) {
+                any = true;
+                min_y = std::min(min_y, vert.position.y);
+            }
+        }
+    }
+    CHECK(total_indices > 0);
+    REQUIRE(any);
+    CHECK(min_y >= worldgen::water_level); // nothing grows below the waterline
+}
+
+TEST_CASE("Props: library builds geometry + lights, scatter is deterministic & on land") {
+    PropLibrary lib;
+    REQUIRE(lib.bushes().size() >= 1);
+    REQUIRE(lib.rocks().size() >= 1);
+    REQUIRE(lib.houses().size() >= 1);
+    CHECK_FALSE(lib.bushes()[0].parts.empty());
+    CHECK_FALSE(lib.rocks()[0].parts.empty());
+
+    // Every house has geometry and at least one lantern light.
+    for (const PropDef& house : lib.houses()) {
+        CHECK_FALSE(house.parts.empty());
+        CHECK(house.lights.size() >= 1);
+        bool has_emissive = false;
+        for (const PropPart& part : house.parts) {
+            if (part.layer == PropLayer::Emissive && !part.mesh.indices.empty()) has_emissive = true;
+        }
+        CHECK(has_emissive); // glowing windows / lantern glass
+    }
+
+    const u32 seed = 1337u;
+    const auto a = scatter_props(1, 2, 8.0f, seed);
+    const auto b = scatter_props(1, 2, 8.0f, seed);
+    REQUIRE(a.size() == b.size());
+
+    int bushes = 0, rocks = 0, houses = 0;
+    bool underwater = false;
+    for (int cz = -20; cz < 20; ++cz) {
+        for (int cx = -20; cx < 20; ++cx) {
+            for (const PropInstance& p : scatter_props(cx, cz, 8.0f, seed)) {
+                if (p.position.y < worldgen::water_level) underwater = true;
+                if (p.category == PropCategory::Bush) ++bushes;
+                else if (p.category == PropCategory::Rock) ++rocks;
+                else ++houses;
+            }
+        }
+    }
+    CHECK(bushes > 0);
+    CHECK(rocks > 0);
+    CHECK(houses > 0);
     CHECK_FALSE(underwater);
 }
 

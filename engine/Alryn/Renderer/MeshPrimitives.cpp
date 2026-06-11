@@ -171,6 +171,164 @@ MeshData cylinder(int sides, const Vec3& color) {
     return m;
 }
 
+MeshData rounded_box(f32 bevel, const Vec3& color) {
+    MeshData m;
+    const f32 h = 0.5f;        // half-extent
+    const f32 i = h - bevel;   // inset of the flat faces
+    auto quad = [&](const Vec3& a, const Vec3& b, const Vec3& c, const Vec3& d) {
+        emit_tri(m, a, b, c, Vec3{0.0f}, color);
+        emit_tri(m, a, c, d, Vec3{0.0f}, color);
+    };
+
+    // 6 inset faces.
+    for (f32 s : {-1.0f, 1.0f}) {
+        quad({s * h, -i, -i}, {s * h, i, -i}, {s * h, i, i}, {s * h, -i, i}); // X
+        quad({-i, s * h, -i}, {i, s * h, -i}, {i, s * h, i}, {-i, s * h, i}); // Y
+        quad({-i, -i, s * h}, {i, -i, s * h}, {i, i, s * h}, {-i, i, s * h}); // Z
+    }
+    // 12 edge chamfers.
+    for (f32 sa : {-1.0f, 1.0f}) {
+        for (f32 sb : {-1.0f, 1.0f}) {
+            quad({sa * h, sb * i, -i}, {sa * i, sb * h, -i}, {sa * i, sb * h, i},
+                 {sa * h, sb * i, i}); // along Z
+            quad({-i, sa * h, sb * i}, {-i, sa * i, sb * h}, {i, sa * i, sb * h},
+                 {i, sa * h, sb * i}); // along X
+            quad({sb * i, -i, sa * h}, {sb * h, -i, sa * i}, {sb * h, i, sa * i},
+                 {sb * i, i, sa * h}); // along Y
+        }
+    }
+    // 8 corner triangles.
+    for (f32 sx : {-1.0f, 1.0f}) {
+        for (f32 sy : {-1.0f, 1.0f}) {
+            for (f32 sz : {-1.0f, 1.0f}) {
+                emit_tri(m, {sx * h, sy * i, sz * i}, {sx * i, sy * h, sz * i},
+                         {sx * i, sy * i, sz * h}, Vec3{0.0f}, color);
+            }
+        }
+    }
+    return m;
+}
+
+MeshData grass_tuft(int blades, const Vec3& color) {
+    MeshData m;
+    const Vec3 root_c = color * 0.55f;                                       // dark at the base
+    const Vec3 tip_c = glm::clamp(color * 1.2f + Vec3{0.06f, 0.08f, 0.02f},  // bright at the tip
+                                  Vec3{0.0f}, Vec3{1.0f});
+    for (int i = 0; i < blades; ++i) {
+        const f32 ang = TwoPi * static_cast<f32>(i) / static_cast<f32>(blades) + 0.4f;
+        const f32 ca = std::cos(ang);
+        const f32 sa = std::sin(ang);
+        const f32 h = 0.30f + 0.06f * static_cast<f32>((i * 7) % 5) / 5.0f; // slight height variety
+        const f32 w = 0.045f;
+        const f32 lean = 0.12f;
+        const Vec3 perp{-sa, 0.0f, ca};                   // blade width axis
+        const Vec3 root{ca * 0.03f, 0.0f, sa * 0.03f};    // fanned out from centre
+        const Vec3 b0 = root - perp * w;
+        const Vec3 b1 = root + perp * w;
+        const Vec3 tip = root + Vec3{ca * lean, h, sa * lean};
+        const Vec3 n = glm::normalize(Vec3{ca * 0.3f, 0.7f, sa * 0.3f}); // up-biased so it stays lit
+        const u32 base = static_cast<u32>(m.vertices.size());
+        m.vertices.push_back({b0, n, root_c});
+        m.vertices.push_back({b1, n, root_c});
+        m.vertices.push_back({tip, n, tip_c});
+        m.indices.insert(m.indices.end(), {base, base + 1, base + 2});
+    }
+    return m;
+}
+
+MeshData flower(const Vec3& blossom) {
+    MeshData m;
+    const Vec3 stem_c{0.30f, 0.46f, 0.24f};
+    const Vec3 centre_c{1.0f, 0.85f, 0.30f};
+    const f32 stem_h = 0.28f;
+    const f32 sw = 0.02f;
+
+    // Stem: two crossed vertical quads so it reads from any angle.
+    add_quad(m, {-sw, 0.0f, 0.0f}, {sw, 0.0f, 0.0f}, {sw, stem_h, 0.0f}, {-sw, stem_h, 0.0f},
+             {0, 0, 1}, stem_c);
+    add_quad(m, {0.0f, 0.0f, -sw}, {0.0f, 0.0f, sw}, {0.0f, stem_h, sw}, {0.0f, stem_h, -sw},
+             {1, 0, 0}, stem_c);
+
+    // Blossom: a flat ring of petals around a yellow centre.
+    const Vec3 centre{0.0f, stem_h + 0.02f, 0.0f};
+    const Vec3 up{0.0f, 1.0f, 0.0f};
+    const int petals = 5;
+    const f32 r = 0.12f;
+    for (int i = 0; i < petals; ++i) {
+        const f32 a0 = TwoPi * static_cast<f32>(i) / static_cast<f32>(petals);
+        const f32 a1 = TwoPi * static_cast<f32>(i + 1) / static_cast<f32>(petals);
+        const Vec3 p0 = centre + Vec3{std::cos(a0) * r, 0.0f, std::sin(a0) * r};
+        const Vec3 p1 = centre + Vec3{std::cos(a1) * r, 0.0f, std::sin(a1) * r};
+        const u32 base = static_cast<u32>(m.vertices.size());
+        m.vertices.push_back({centre, up, centre_c});
+        m.vertices.push_back({p0, up, blossom});
+        m.vertices.push_back({p1, up, blossom});
+        m.indices.insert(m.indices.end(), {base, base + 1, base + 2});
+    }
+    return m;
+}
+
+MeshData box(const Vec3& lo, const Vec3& hi, const Vec3& color) {
+    MeshData m;
+    add_quad(m, {lo.x, lo.y, hi.z}, {hi.x, lo.y, hi.z}, {hi.x, hi.y, hi.z}, {lo.x, hi.y, hi.z},
+             {0, 0, 1}, color); // +Z
+    add_quad(m, {hi.x, lo.y, lo.z}, {lo.x, lo.y, lo.z}, {lo.x, hi.y, lo.z}, {hi.x, hi.y, lo.z},
+             {0, 0, -1}, color); // -Z
+    add_quad(m, {hi.x, lo.y, hi.z}, {hi.x, lo.y, lo.z}, {hi.x, hi.y, lo.z}, {hi.x, hi.y, hi.z},
+             {1, 0, 0}, color); // +X
+    add_quad(m, {lo.x, lo.y, lo.z}, {lo.x, lo.y, hi.z}, {lo.x, hi.y, hi.z}, {lo.x, hi.y, lo.z},
+             {-1, 0, 0}, color); // -X
+    add_quad(m, {lo.x, hi.y, hi.z}, {hi.x, hi.y, hi.z}, {hi.x, hi.y, lo.z}, {lo.x, hi.y, lo.z},
+             {0, 1, 0}, color); // +Y
+    add_quad(m, {lo.x, lo.y, lo.z}, {hi.x, lo.y, lo.z}, {hi.x, lo.y, hi.z}, {lo.x, lo.y, hi.z},
+             {0, -1, 0}, color); // -Y
+    return m;
+}
+
+MeshData bush(int variant, const Vec3& color) {
+    MeshData m;
+    const u32 h = static_cast<u32>(variant) * 2654435761u + 1u;
+    auto rnd = [&](int salt) {
+        const u32 v = (h ^ (static_cast<u32>(salt) * 0x9E3779B9u));
+        return static_cast<f32>((v >> 8) & 0xFFFFu) / 65535.0f;
+    };
+    const int blobs = 3 + static_cast<int>(rnd(1) * 2.0f);
+    for (int i = 0; i < blobs; ++i) {
+        const f32 ang = TwoPi * static_cast<f32>(i) / static_cast<f32>(blobs);
+        const f32 r = 0.18f + rnd(i * 3 + 2) * 0.16f;
+        const f32 rad = 0.34f + rnd(i * 3 + 3) * 0.18f;
+        const f32 cy = 0.28f + rnd(i * 3 + 4) * 0.22f;
+        MeshData b = blob(rad, rad * 0.85f, cy, color * (0.85f + rnd(i * 3 + 5) * 0.3f));
+        for (Vertex& v : b.vertices) {
+            v.position.x += std::cos(ang) * r;
+            v.position.z += std::sin(ang) * r;
+        }
+        append(m, b);
+    }
+    return m;
+}
+
+MeshData rock(int variant, const Vec3& color) {
+    const u32 h = static_cast<u32>(variant) * 374761393u + 7u;
+    auto rnd = [&](int salt) {
+        const u32 v = (h ^ (static_cast<u32>(salt) * 0x85EBCA77u));
+        return static_cast<f32>((v >> 9) & 0xFFFFu) / 65535.0f;
+    };
+    // Start from a low-poly sphere, then jitter each vertex outward for facets.
+    MeshData m = sphere(8, 5, color);
+    for (Vertex& v : m.vertices) {
+        const f32 key = std::floor(v.position.x * 13.0f) + std::floor(v.position.y * 7.0f) +
+                        std::floor(v.position.z * 11.0f);
+        const u32 hv = h ^ static_cast<u32>(static_cast<i32>(key) * 0x27D4EB2F);
+        const f32 j = 0.7f + (static_cast<f32>((hv >> 8) & 0xFFFFu) / 65535.0f) * 0.6f;
+        v.position.x *= j;
+        v.position.z *= j;
+        v.position.y = v.position.y * (0.45f + rnd(2) * 0.2f) + 0.28f; // squashed, sat on ground
+    }
+    m.recompute_flat_normals();
+    return m;
+}
+
 TreeMeshData tree(int variant) {
     TreeMeshData t;
     const Vec3 bark{0.34f, 0.24f, 0.16f};

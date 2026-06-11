@@ -5,9 +5,14 @@
 #include <Alryn/Net/NetServer.h>
 #include <Alryn/Net/Protocol.h>
 #include <Alryn/Physics/CharacterController.h>
+#include <Alryn/Physics/CollisionWorld.h>
+#include <Alryn/Physics/Projectile.h>
 #include <Alryn/Terrain/WorldSampler.h>
+#include <Alryn/World/PropLibrary.h>
 
+#include <optional>
 #include <unordered_map>
+#include <vector>
 
 namespace alryn {
 
@@ -38,7 +43,11 @@ private:
 
     net::NetServer server_;
     WorldSampler sampler_;
+    PropLibrary prop_lib_;                    // house wall colliders come from here
+    std::optional<CollisionWorld> collision_; // built in start() once the seed is known
+    std::vector<Collider> collider_scratch_;  // reused per player each tick
     std::unordered_map<net::PlayerId, ServerPlayer> players_;
+    std::vector<Projectile> projectiles_;     // live thrown bodies
     u32 tick_ = 0;
 };
 

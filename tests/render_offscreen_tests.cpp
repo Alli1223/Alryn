@@ -20,8 +20,11 @@ namespace {
 struct PushConstants {
     Mat4 mvp;
     Mat4 model;
+    Mat4 light_vp;
     Vec4 tint;
     Vec4 params;
+    Vec4 sun;
+    Vec4 sun_color;
 };
 
 void image_barrier(VkCommandBuffer cmd, VkImage image, VkImageAspectFlags aspect,
@@ -80,6 +83,97 @@ TEST_CASE("Renderer: offscreen render of a lit cube (headless)") {
     REQUIRE(depth.create(device, kWidth, kHeight, depth_format,
                          VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT));
 
+    // mesh.frag's set 0 has: 0 = sun shadow map, 1 = spot-light atlas, 2 = light
+    // UBO. Supply a 1x1 dummy depth for 0 & 1 and a zeroed UBO (count = 0) so no
+    // lighting is sampled; sun shadows are also off via sun_color.w = 0.
+    VkDescriptorSetLayoutBinding lbinds[3]{};
+    lbinds[0].binding = 0;
+    lbinds[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    lbinds[0].descriptorCount = 1;
+    lbinds[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    lbinds[1] = lbinds[0];
+    lbinds[1].binding = 1;
+    lbinds[2].binding = 2;
+    lbinds[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    lbinds[2].descriptorCount = 1;
+    lbinds[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    VkDescriptorSetLayoutCreateInfo shadow_layout_info{};
+    shadow_layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    shadow_layout_info.bindingCount = 3;
+    shadow_layout_info.pBindings = lbinds;
+    VkDescriptorSetLayout shadow_set_layout = VK_NULL_HANDLE;
+    REQUIRE(vkCreateDescriptorSetLayout(device.handle(), &shadow_layout_info, nullptr,
+                                        &shadow_set_layout) == VK_SUCCESS);
+
+    vk::Image shadow_dummy;
+    REQUIRE(shadow_dummy.create(device, 1, 1, depth_format,
+                                VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                                    VK_IMAGE_USAGE_SAMPLED_BIT,
+                                VK_IMAGE_ASPECT_DEPTH_BIT));
+    device.immediate_submit([&](VkCommandBuffer cmd) {
+        image_barrier(cmd, shadow_dummy.handle(), VK_IMAGE_ASPECT_DEPTH_BIT,
+                      VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                      VK_ACCESS_SHADER_READ_BIT);
+    });
+
+    vk::Buffer light_ubo; // 16-byte count + 4 * 128-byte spots (std140)
+    REQUIRE(light_ubo.create(device, 16 + 4 * 128, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT));
+    {
+        std::vector<u8> zero(16 + 4 * 128, 0); // count = 0 -> no lights sampled
+        light_ubo.upload(zero.data(), zero.size());
+    }
+
+    VkSamplerCreateInfo sampler_info{};
+    sampler_info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    sampler_info.magFilter = VK_FILTER_NEAREST;
+    sampler_info.minFilter = VK_FILTER_NEAREST;
+    VkSampler shadow_sampler = VK_NULL_HANDLE;
+    REQUIRE(vkCreateSampler(device.handle(), &sampler_info, nullptr, &shadow_sampler) == VK_SUCCESS);
+
+    VkDescriptorPoolSize pool_sizes[2]{};
+    pool_sizes[0] = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2};
+    pool_sizes[1] = {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1};
+    VkDescriptorPoolCreateInfo pool_info{};
+    pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pool_info.maxSets = 1;
+    pool_info.poolSizeCount = 2;
+    pool_info.pPoolSizes = pool_sizes;
+    VkDescriptorPool shadow_pool = VK_NULL_HANDLE;
+    REQUIRE(vkCreateDescriptorPool(device.handle(), &pool_info, nullptr, &shadow_pool) == VK_SUCCESS);
+
+    VkDescriptorSetAllocateInfo set_alloc{};
+    set_alloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    set_alloc.descriptorPool = shadow_pool;
+    set_alloc.descriptorSetCount = 1;
+    set_alloc.pSetLayouts = &shadow_set_layout;
+    VkDescriptorSet shadow_set = VK_NULL_HANDLE;
+    REQUIRE(vkAllocateDescriptorSets(device.handle(), &set_alloc, &shadow_set) == VK_SUCCESS);
+
+    VkDescriptorImageInfo dummy_image{};
+    dummy_image.sampler = shadow_sampler;
+    dummy_image.imageView = shadow_dummy.view();
+    dummy_image.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkDescriptorBufferInfo ubo_info{};
+    ubo_info.buffer = light_ubo.handle();
+    ubo_info.offset = 0;
+    ubo_info.range = 16 + 4 * 128;
+    VkWriteDescriptorSet writes[3]{};
+    for (int b = 0; b < 3; ++b) {
+        writes[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[b].dstSet = shadow_set;
+        writes[b].dstBinding = static_cast<u32>(b);
+        writes[b].descriptorCount = 1;
+    }
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[0].pImageInfo = &dummy_image;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[1].pImageInfo = &dummy_image;
+    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    writes[2].pBufferInfo = &ubo_info;
+    vkUpdateDescriptorSets(device.handle(), 3, writes, 0, nullptr);
+
     vk::Pipeline pipeline;
     vk::PipelineConfig pipeline_config;
     pipeline_config.vertex_spv = shader_path("mesh.vert.spv").string();
@@ -88,6 +182,7 @@ TEST_CASE("Renderer: offscreen render of a lit cube (headless)") {
     pipeline_config.depth_format = depth_format;
     pipeline_config.push_constant_size = sizeof(PushConstants);
     pipeline_config.cull_mode = VK_CULL_MODE_NONE;
+    pipeline_config.descriptor_set_layout = shadow_set_layout;
     if (!pipeline.create(device, pipeline_config)) {
         MESSAGE("Pipeline/shaders unavailable - skipping (are shaders in build/bin/shaders?)");
         return;
@@ -109,8 +204,11 @@ TEST_CASE("Renderer: offscreen render of a lit cube (headless)") {
     PushConstants push{};
     push.model = Mat4{1.0f};
     push.mvp = proj * view * push.model;
+    push.light_vp = Mat4{1.0f};
     push.tint = Vec4{1.0f};
     push.params = Vec4{0.0f};
+    push.sun = Vec4{glm::normalize(Vec3{0.4f, 1.0f, 0.3f}), 1.0f}; // daytime sun
+    push.sun_color = Vec4{1.0f, 1.0f, 1.0f, 0.0f};                 // white, no shadows
 
     const Vec3 background{0.10f, 0.12f, 0.18f};
 
@@ -157,6 +255,8 @@ TEST_CASE("Renderer: offscreen render of a lit cube (headless)") {
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
         pipeline.bind(cmd);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(), 0, 1,
+                                &shadow_set, 0, nullptr);
         vkCmdPushConstants(cmd, pipeline.layout(),
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                            sizeof(PushConstants), &push);
@@ -206,6 +306,11 @@ TEST_CASE("Renderer: offscreen render of a lit cube (headless)") {
         }
     }
     readback.unmap();
+
+    vkDestroySampler(device.handle(), shadow_sampler, nullptr);
+    vkDestroyDescriptorPool(device.handle(), shadow_pool, nullptr);
+    vkDestroyDescriptorSetLayout(device.handle(), shadow_set_layout, nullptr);
+
     const std::string wrote_message = "Wrote " + ppm;
     MESSAGE(wrote_message);
 }

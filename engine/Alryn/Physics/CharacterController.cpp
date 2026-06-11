@@ -42,7 +42,7 @@ std::optional<f32> CharacterController::ground_height(const DensitySampler& dens
 }
 
 void CharacterController::update(const DensitySampler& density, const Vec3& move_dir, bool jump,
-                                 Timestep dt) {
+                                 Timestep dt, std::span<const Collider> colliders) {
     const f32 dts = dt.seconds;
     if (dts <= 0.0f) {
         return;
@@ -70,6 +70,19 @@ void CharacterController::update(const DensitySampler& density, const Vec3& move
         if (!wall_at(density, candidate)) {
             p.z = candidate.z;
         }
+    }
+
+    // Push the capsule out of solid props (trees, house walls). A couple of
+    // iterations settle overlapping colliders (e.g. a wall corner).
+    if (!colliders.empty()) {
+        Vec2 xz{p.x, p.z};
+        for (int iter = 0; iter < 2; ++iter) {
+            for (const Collider& c : colliders) {
+                xz = resolve_collider(c, xz, config_.radius, p.y, config_.height);
+            }
+        }
+        p.x = xz.x;
+        p.z = xz.y;
     }
 
     // Vertical: gravity/jump in the air, ground-following when grounded.

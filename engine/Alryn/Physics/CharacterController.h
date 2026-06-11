@@ -4,8 +4,10 @@
 #include <Alryn/Core/Math.h>
 #include <Alryn/Core/Time.h>
 #include <Alryn/Core/Types.h>
+#include <Alryn/Physics/Collider.h>
 
 #include <optional>
+#include <span>
 
 namespace alryn {
 
@@ -36,7 +38,9 @@ public:
     const CharacterConfig& config() const { return config_; }
 
     // move_dir: desired world-space horizontal direction (xz; y ignored, length<=1).
-    void update(const DensitySampler& density, const Vec3& move_dir, bool jump, Timestep dt);
+    // `colliders` are static props (trees/walls) the capsule is pushed out of.
+    void update(const DensitySampler& density, const Vec3& move_dir, bool jump, Timestep dt,
+                std::span<const Collider> colliders = {});
 
 private:
     bool wall_at(const DensitySampler& density, const Vec3& feet) const;

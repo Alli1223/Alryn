@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Alryn/Character/CharacterAppearance.h>
 #include <Alryn/Core/Math.h>
 #include <Alryn/Core/Types.h>
 #include <Alryn/Net/ByteBuffer.h>
@@ -29,18 +30,28 @@ struct PlayerInput {
     bool jump = false;
     bool dig = false;
     bool add = false;
-    Vec3 aim{0.0f}; // world point being aimed at (for dig/add)
+    bool fire = false; // throw a projectile toward `aim`
+    Vec3 aim{0.0f};    // world point being aimed at (for dig/add/fire)
+    CharacterAppearance appearance; // the player's chosen look (sent each tick)
 };
 
 struct PlayerState {
     PlayerId id = 0;
     Vec3 position{0.0f};
     f32 yaw = 0.0f;
+    CharacterAppearance appearance; // so every client renders the right avatar
+};
+
+// A live projectile, broadcast each tick so clients can render it.
+struct ProjectileState {
+    Vec3 position{0.0f};
+    u8 kind = 0;
 };
 
 struct Snapshot {
     u32 tick = 0;
     std::vector<PlayerState> players;
+    std::vector<ProjectileState> projectiles;
 };
 
 struct Welcome {

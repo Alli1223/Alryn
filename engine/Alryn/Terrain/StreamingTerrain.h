@@ -7,6 +7,7 @@
 #include <Alryn/Terrain/TreeScatter.h>
 #include <Alryn/Terrain/VoxelField.h>
 #include <Alryn/Terrain/WorldSampler.h>
+#include <Alryn/World/Prop.h>
 
 #include <memory>
 #include <optional>
@@ -44,10 +45,28 @@ public:
     }
 
     template <typename Fn>
+    void for_each_vegetation_mesh(Fn fn) const {
+        for (const auto& [key, chunk] : chunks_) {
+            if (chunk.vegetation.valid()) {
+                fn(chunk.vegetation);
+            }
+        }
+    }
+
+    template <typename Fn>
     void for_each_tree(Fn fn) const {
         for (const auto& [key, chunk] : chunks_) {
             for (const TreeInstance& tree : chunk.trees) {
                 fn(tree);
+            }
+        }
+    }
+
+    template <typename Fn>
+    void for_each_prop(Fn fn) const {
+        for (const auto& [key, chunk] : chunks_) {
+            for (const PropInstance& prop : chunk.props) {
+                fn(prop);
             }
         }
     }
@@ -66,8 +85,11 @@ private:
         IVec2 coord{0};
         std::unique_ptr<VoxelField> field;
         Mesh mesh;
+        Mesh vegetation;              // baked grass + flowers (worldgen-derived)
         std::vector<TreeInstance> trees;
+        std::vector<PropInstance> props; // bushes, rocks, houses
         bool needs_mesh = true;
+        bool vegetation_built = false; // vegetation only depends on the seed, build once
     };
     struct PendingDelete {
         Mesh mesh;

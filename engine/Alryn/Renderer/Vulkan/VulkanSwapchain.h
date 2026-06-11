@@ -22,6 +22,10 @@ public:
     bool recreate(u32 width, u32 height);
     void destroy();
 
+    // Changes the desired present mode; takes effect on the next recreate().
+    void set_vsync(bool vsync) { vsync_ = vsync; }
+    bool vsync() const { return vsync_; }
+
     VkResult acquire_next(VkSemaphore signal_semaphore, u32& out_index);
     VkResult present(VkQueue queue, VkSemaphore wait_semaphore, u32 image_index);
 

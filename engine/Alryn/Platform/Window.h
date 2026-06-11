@@ -41,6 +41,13 @@ public:
     void set_cursor_captured(bool captured);
     bool cursor_captured() const { return cursor_captured_; }
 
+    // Resize the (windowed) window to the given client size.
+    void set_size(u32 width, u32 height);
+    // Switch between borderless-fullscreen (matching the primary monitor) and a
+    // windowed size. Restores the previous windowed geometry when leaving.
+    void set_fullscreen(bool fullscreen);
+    bool fullscreen() const { return fullscreen_; }
+
     void set_event_callback(EventCallback callback) { callback_ = std::move(callback); }
 
     UVec2 framebuffer_size() const;
@@ -64,6 +71,12 @@ private:
     u32 fb_width_ = 0;
     u32 fb_height_ = 0;
     bool cursor_captured_ = false;
+    bool fullscreen_ = false;
+    // Saved windowed geometry, so leaving fullscreen restores it.
+    int windowed_x_ = 0;
+    int windowed_y_ = 0;
+    int windowed_w_ = 0;
+    int windowed_h_ = 0;
 };
 
 } // namespace alryn

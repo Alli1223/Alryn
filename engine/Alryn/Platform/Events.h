@@ -66,6 +66,22 @@ public:
     ALRYN_EVENT_CLASS_TYPE(KeyReleased)
 };
 
+// A typed text character (Unicode codepoint), for text fields. Distinct from
+// KeyPressed: this is layout-aware text input, not a physical key.
+class KeyTypedEvent : public Event {
+public:
+    explicit KeyTypedEvent(u32 codepoint) : codepoint_(codepoint) {}
+    u32 codepoint() const { return codepoint_; }
+    std::string to_string() const override {
+        return std::format("KeyTyped({})", codepoint_);
+    }
+    ALRYN_EVENT_CLASS_TYPE(KeyTyped)
+    ALRYN_EVENT_CLASS_CATEGORY(EventCategoryInput | EventCategoryKeyboard)
+
+private:
+    u32 codepoint_;
+};
+
 // ---- Mouse events --------------------------------------------------------
 
 class MouseMovedEvent : public Event {

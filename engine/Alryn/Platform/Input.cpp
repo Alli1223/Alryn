@@ -28,12 +28,18 @@ void Input::on_event(Event& event) {
         }
         return false;
     });
+    dispatcher.dispatch<MouseScrolledEvent>([&](MouseScrolledEvent& e) {
+        scroll_accum_ += e.y_offset();
+        return false;
+    });
 }
 
 void Input::on_update(Timestep /*dt*/) {
-    // Runs before the game's on_update, so the delta reflects this frame's motion.
+    // Runs before the game's on_update, so the deltas reflect this frame's motion.
     mouse_delta_ = mouse_position_ - last_mouse_;
     last_mouse_ = mouse_position_;
+    scroll_delta_ = scroll_accum_;
+    scroll_accum_ = 0.0f;
 }
 
 } // namespace alryn

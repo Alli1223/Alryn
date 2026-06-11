@@ -23,7 +23,8 @@ public:
     bool mouse_down(MouseCode button) const { return buttons_.contains(button); }
 
     Vec2 mouse_position() const { return mouse_position_; }
-    Vec2 mouse_delta() const { return mouse_delta_; } // movement since last frame
+    Vec2 mouse_delta() const { return mouse_delta_; }   // movement since last frame
+    f32 scroll_delta() const { return scroll_delta_; }  // wheel ticks this frame (+ = up)
 
 private:
     std::unordered_set<KeyCode> keys_;
@@ -31,6 +32,8 @@ private:
     Vec2 mouse_position_{0.0f};
     Vec2 last_mouse_{0.0f};
     Vec2 mouse_delta_{0.0f};
+    f32 scroll_accum_ = 0.0f;
+    f32 scroll_delta_ = 0.0f;
     bool first_mouse_ = true;
 };
 

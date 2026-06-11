@@ -2,6 +2,8 @@
 
 #include <Alryn/Renderer/Vulkan/VulkanDevice.h>
 #include <Alryn/Terrain/MarchingTetra.h>
+#include <Alryn/Terrain/PropScatter.h>
+#include <Alryn/Terrain/VegetationScatter.h>
 
 #include <algorithm>
 #include <cmath>
@@ -40,6 +42,7 @@ StreamingTerrain::Chunk& StreamingTerrain::ensure_chunk(int cx, int cz) {
     chunk.field = std::make_unique<VoxelField>(dims, voxel_size_, origin);
     chunk.field->fill([this](const Vec3& wp) { return sampler_(wp); });
     chunk.trees = scatter_trees(cx, cz, chunk_world_, sampler_.seed());
+    chunk.props = scatter_props(cx, cz, chunk_world_, sampler_.seed());
     chunk.needs_mesh = true;
     return chunks_.emplace(key, std::move(chunk)).first->second;
 }
@@ -64,6 +67,15 @@ void StreamingTerrain::mesh_chunk(Chunk& chunk, const vk::Device& device) {
         chunk.mesh.create(device, data);
     }
     chunk.needs_mesh = false;
+
+    // Grass + flowers depend only on the seed (not on edits), so bake them once.
+    if (!chunk.vegetation_built) {
+        const MeshData veg = build_vegetation(chunk.coord.x, chunk.coord.y, chunk_world_, seed);
+        if (!veg.indices.empty()) {
+            chunk.vegetation.create(device, veg);
+        }
+        chunk.vegetation_built = true;
+    }
 }
 
 void StreamingTerrain::apply_edit(const Vec3& center, f32 radius, f32 amount) {
@@ -132,6 +144,7 @@ void StreamingTerrain::update(const Vec3& focus, const vk::Device& device) {
         const int dz = std::abs(it->second.coord.y - center.y);
         if (std::max(dx, dz) > unload_dist) {
             retire_mesh(std::move(it->second.mesh));
+            retire_mesh(std::move(it->second.vegetation));
             it = chunks_.erase(it);
         } else {
             ++it;

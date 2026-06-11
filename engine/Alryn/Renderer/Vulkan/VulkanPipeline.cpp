@@ -43,8 +43,11 @@ bool Pipeline::create(const Device& device, const PipelineConfig& config) {
     device_ = device.handle();
 
     VkShaderModule vert = load_shader_module(device_, config.vertex_spv);
-    VkShaderModule frag = load_shader_module(device_, config.fragment_spv);
-    if (vert == VK_NULL_HANDLE || frag == VK_NULL_HANDLE) {
+    VkShaderModule frag = VK_NULL_HANDLE;
+    if (!config.depth_only) {
+        frag = load_shader_module(device_, config.fragment_spv);
+    }
+    if (vert == VK_NULL_HANDLE || (!config.depth_only && frag == VK_NULL_HANDLE)) {
         if (vert != VK_NULL_HANDLE) vkDestroyShaderModule(device_, vert, nullptr);
         if (frag != VK_NULL_HANDLE) vkDestroyShaderModule(device_, frag, nullptr);
         return false;
@@ -59,15 +62,18 @@ bool Pipeline::create(const Device& device, const PipelineConfig& config) {
     stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
     stages[1].module = frag;
     stages[1].pName = "main";
+    const u32 stage_count = config.depth_only ? 1u : 2u;
 
     const auto binding = Vertex::binding_description();
     const auto attributes = Vertex::attribute_descriptions();
     VkPipelineVertexInputStateCreateInfo vertex_input{};
     vertex_input.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertex_input.vertexBindingDescriptionCount = 1;
-    vertex_input.pVertexBindingDescriptions = &binding;
-    vertex_input.vertexAttributeDescriptionCount = static_cast<u32>(attributes.size());
-    vertex_input.pVertexAttributeDescriptions = attributes.data();
+    if (!config.vertexless) {
+        vertex_input.vertexBindingDescriptionCount = 1;
+        vertex_input.pVertexBindingDescriptions = &binding;
+        vertex_input.vertexAttributeDescriptionCount = static_cast<u32>(attributes.size());
+        vertex_input.pVertexAttributeDescriptions = attributes.data();
+    }
 
     VkPipelineInputAssemblyStateCreateInfo input_assembly{};
     input_assembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -84,6 +90,11 @@ bool Pipeline::create(const Device& device, const PipelineConfig& config) {
     raster.cullMode = config.cull_mode;
     raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     raster.lineWidth = 1.0f;
+    if (config.depth_bias) {
+        raster.depthBiasEnable = VK_TRUE;
+        raster.depthBiasConstantFactor = config.depth_bias_constant;
+        raster.depthBiasSlopeFactor = config.depth_bias_slope;
+    }
 
     VkPipelineMultisampleStateCreateInfo multisample{};
     multisample.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
@@ -108,8 +119,8 @@ bool Pipeline::create(const Device& device, const PipelineConfig& config) {
     blend_attachment.alphaBlendOp = VK_BLEND_OP_ADD;
     VkPipelineColorBlendStateCreateInfo color_blend{};
     color_blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    color_blend.attachmentCount = 1;
-    color_blend.pAttachments = &blend_attachment;
+    color_blend.attachmentCount = config.depth_only ? 0u : 1u;
+    color_blend.pAttachments = config.depth_only ? nullptr : &blend_attachment;
 
     const VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
     VkPipelineDynamicStateCreateInfo dynamic{};
@@ -128,6 +139,10 @@ bool Pipeline::create(const Device& device, const PipelineConfig& config) {
         layout_info.pushConstantRangeCount = 1;
         layout_info.pPushConstantRanges = &push_range;
     }
+    if (config.descriptor_set_layout != VK_NULL_HANDLE) {
+        layout_info.setLayoutCount = 1;
+        layout_info.pSetLayouts = &config.descriptor_set_layout;
+    }
     if (vkCreatePipelineLayout(device_, &layout_info, nullptr, &layout_) != VK_SUCCESS) {
         ALRYN_ERROR("vkCreatePipelineLayout failed");
         vkDestroyShaderModule(device_, vert, nullptr);
@@ -138,14 +153,14 @@ bool Pipeline::create(const Device& device, const PipelineConfig& config) {
     // Dynamic rendering: declare the attachment formats instead of a render pass.
     VkPipelineRenderingCreateInfo rendering{};
     rendering.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
-    rendering.colorAttachmentCount = 1;
-    rendering.pColorAttachmentFormats = &config.color_format;
+    rendering.colorAttachmentCount = config.depth_only ? 0u : 1u;
+    rendering.pColorAttachmentFormats = config.depth_only ? nullptr : &config.color_format;
     rendering.depthAttachmentFormat = config.depth_format;
 
     VkGraphicsPipelineCreateInfo pipeline_info{};
     pipeline_info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
     pipeline_info.pNext = &rendering;
-    pipeline_info.stageCount = 2;
+    pipeline_info.stageCount = stage_count;
     pipeline_info.pStages = stages;
     pipeline_info.pVertexInputState = &vertex_input;
     pipeline_info.pInputAssemblyState = &input_assembly;

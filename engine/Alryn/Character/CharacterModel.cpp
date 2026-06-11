@@ -35,6 +35,107 @@ Vec3 hsv(f32 h, f32 s, f32 v) {
 
 } // namespace
 
+// Appends face (eyes/ears) and hair feature bones, all parented to the head
+// (bone index 2), positioned/sized/shaped from the chosen appearance. Geometry is
+// derived from the head bone so it tracks the character's proportions.
+void CharacterModel::add_features(CharacterModel& m, const CharacterAppearance& app) {
+    constexpr int kHeadIndex = 2;
+    if (static_cast<usize>(kHeadIndex) >= m.bones_.size()) {
+        return;
+    }
+    const Bone& head = m.bones_[kHeadIndex];
+    const f32 hs = head.box_size.x; // head extent (≈ width/height)
+    const f32 r = hs * 0.5f;        // head half-extent
+    const Vec3 c = head.box_center; // head centre in the head-joint frame
+
+    // A feature bone: joint at the head joint, geometry offset via box_center.
+    auto add = [&](Vec3 center, Vec3 size, BoneColor color, BoneShape shape) {
+        m.bones_.push_back(Bone{BonePart::None, kHeadIndex, Vec3{0.0f}, size, center, color, shape});
+    };
+
+    // ---- Eyes (on the front face, +Z) ----
+    {
+        const f32 fz = c.z + r * 0.96f;       // front surface
+        const f32 ey = c.y + r * 0.12f;       // a touch above centre
+        f32 ex = r * 0.42f;                   // horizontal spacing
+        Vec3 size{hs * 0.16f, hs * 0.16f, hs * 0.10f};
+        BoneShape shape = BoneShape::Sphere;
+        switch (app.eyes) {
+            case EyeStyle::Round: break;
+            case EyeStyle::Wide:
+                ex = r * 0.52f;
+                size = Vec3{hs * 0.20f, hs * 0.20f, hs * 0.10f};
+                break;
+            case EyeStyle::Sleepy:
+                size = Vec3{hs * 0.20f, hs * 0.08f, hs * 0.10f};
+                shape = BoneShape::RoundedBox;
+                break;
+            case EyeStyle::Sharp:
+                size = Vec3{hs * 0.18f, hs * 0.11f, hs * 0.10f};
+                shape = BoneShape::Box;
+                break;
+        }
+        add(Vec3{-ex, ey, fz}, size, BoneColor::Eye, shape);
+        add(Vec3{ex, ey, fz}, size, BoneColor::Eye, shape);
+    }
+
+    // ---- Ears (on the sides, ±X) ----
+    {
+        const f32 sx = r * 0.96f;
+        switch (app.ears) {
+            case EarStyle::Round:
+                add(Vec3{-sx, c.y, c.z}, Vec3{hs * 0.16f}, BoneColor::Skin, BoneShape::Sphere);
+                add(Vec3{sx, c.y, c.z}, Vec3{hs * 0.16f}, BoneColor::Skin, BoneShape::Sphere);
+                break;
+            case EarStyle::Pointed: {
+                const Vec3 size{hs * 0.11f, hs * 0.30f, hs * 0.12f};
+                add(Vec3{-sx, c.y + r * 0.22f, c.z}, size, BoneColor::Skin, BoneShape::Box);
+                add(Vec3{sx, c.y + r * 0.22f, c.z}, size, BoneColor::Skin, BoneShape::Box);
+                break;
+            }
+            case EarStyle::Small:
+                add(Vec3{-sx, c.y, c.z}, Vec3{hs * 0.10f}, BoneColor::Skin, BoneShape::Sphere);
+                add(Vec3{sx, c.y, c.z}, Vec3{hs * 0.10f}, BoneColor::Skin, BoneShape::Sphere);
+                break;
+        }
+    }
+
+    // ---- Hair (on/around the top) ----
+    switch (app.hair) {
+        case HairStyle::Bald:
+            break;
+        case HairStyle::Short:
+            add(Vec3{c.x, c.y + r * 0.5f, c.z}, Vec3{hs * 1.06f, hs * 0.62f, hs * 1.06f},
+                BoneColor::Hair, BoneShape::RoundedBox);
+            break;
+        case HairStyle::Spiky:
+            add(Vec3{c.x, c.y + r * 0.42f, c.z}, Vec3{hs * 1.04f, hs * 0.5f, hs * 1.04f},
+                BoneColor::Hair, BoneShape::RoundedBox);
+            add(Vec3{c.x, c.y + r * 1.05f, c.z}, Vec3{hs * 0.55f, hs * 0.7f, hs * 0.55f},
+                BoneColor::Hair, BoneShape::Sphere);
+            break;
+        case HairStyle::Mohawk:
+            add(Vec3{c.x, c.y + r * 0.95f, c.z}, Vec3{hs * 0.18f, hs * 0.55f, hs * 1.0f},
+                BoneColor::Hair, BoneShape::RoundedBox);
+            break;
+        case HairStyle::Ponytail:
+            add(Vec3{c.x, c.y + r * 0.55f, c.z}, Vec3{hs * 1.06f, hs * 0.6f, hs * 1.06f},
+                BoneColor::Hair, BoneShape::RoundedBox);
+            add(Vec3{c.x, c.y + r * 0.1f, c.z - r * 0.95f}, Vec3{hs * 0.34f, hs * 0.7f, hs * 0.34f},
+                BoneColor::Hair, BoneShape::Cylinder);
+            break;
+    }
+}
+
+CharacterModel CharacterModel::create(u32 seed, const CharacterAppearance& appearance) {
+    CharacterModel m = generate(seed);
+    m.palette_.skin = skin_color(appearance.skin);
+    m.palette_.hair = hair_color_of(appearance.hair_color);
+    m.palette_.eye = Vec3{0.09f, 0.08f, 0.10f};
+    add_features(m, appearance);
+    return m;
+}
+
 CharacterModel CharacterModel::generate(u32 seed) {
     Rng rng(seed);
     CharacterModel m;
@@ -73,12 +174,12 @@ CharacterModel CharacterModel::generate(u32 seed) {
 
     // Rounder body: sphere torso/head/pelvis, cylinder limbs, little round feet.
     // Parents always precede children (indices 0..12).
-    add(BonePart::Pelvis, -1, {0.0f, leg_len, 0.0f}, {0.32f * build, 0.24f, 0.26f * build},
-        {0.0f, 0.0f, 0.0f}, BoneColor::Pants, BoneShape::Sphere);
-    add(BonePart::Torso, 0, {0.0f, 0.10f, 0.0f}, {0.44f * build, torso, 0.34f * build},
-        {0.0f, torso * 0.5f, 0.0f}, BoneColor::Shirt, BoneShape::Sphere);
-    add(BonePart::Head, 1, {0.0f, torso * 0.88f, 0.0f}, {head, head, head},
-        {0.0f, head * 0.5f, 0.0f}, BoneColor::Skin, BoneShape::Sphere);
+    add(BonePart::Pelvis, -1, {0.0f, leg_len, 0.0f}, {0.32f * build, 0.24f, 0.24f * build},
+        {0.0f, 0.0f, 0.0f}, BoneColor::Pants, BoneShape::RoundedBox);
+    add(BonePart::Torso, 0, {0.0f, 0.10f, 0.0f}, {0.42f * build, torso, 0.30f * build},
+        {0.0f, torso * 0.5f, 0.0f}, BoneColor::Shirt, BoneShape::RoundedBox);
+    add(BonePart::Head, 1, {0.0f, torso * 0.9f, 0.0f}, {head, head * 0.96f, head},
+        {0.0f, head * 0.5f, 0.0f}, BoneColor::Skin, BoneShape::RoundedBox);
     add(BonePart::UpperArmL, 1, {-shoulder_x, shoulder_y, 0.0f}, {0.15f, arm_upper, 0.15f},
         {0.0f, -arm_upper * 0.5f, 0.0f}, BoneColor::Shirt, BoneShape::Cylinder);
     add(BonePart::LowerArmL, 3, {0.0f, -arm_upper, 0.0f}, {0.13f, arm_lower, 0.13f},
