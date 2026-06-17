@@ -49,4 +49,24 @@ std::vector<Quat> CharacterAnimator::pose(const CharacterModel& model) const {
     return pose;
 }
 
+std::vector<Quat> CharacterAnimator::sit_pose(const CharacterModel& model) {
+    std::vector<Quat> pose(model.bone_count(), QuatIdentity);
+    const auto rot = [](f32 a) { return glm::angleAxis(a, Vec3{1.0f, 0.0f, 0.0f}); };
+    for (usize i = 0; i < model.bones().size(); ++i) {
+        switch (model.bones()[i].part) {
+            case BonePart::UpperLegL:
+            case BonePart::UpperLegR: pose[i] = rot(-1.45f); break; // thighs forward (horizontal)
+            case BonePart::LowerLegL:
+            case BonePart::LowerLegR: pose[i] = rot(1.4f); break;   // shins drop down
+            case BonePart::UpperArmL:
+            case BonePart::UpperArmR: pose[i] = rot(-0.35f); break; // hands toward the lap
+            case BonePart::LowerArmL:
+            case BonePart::LowerArmR: pose[i] = rot(0.5f); break;
+            case BonePart::Torso: pose[i] = rot(0.08f); break;      // a slight lean
+            default: break;
+        }
+    }
+    return pose;
+}
+
 } // namespace alryn

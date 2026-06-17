@@ -11,6 +11,7 @@
 #include <Alryn/Terrain/ScatterHash.h>
 #include <Alryn/Terrain/WorldGen.h>
 #include <Alryn/World/Village.h>
+#include <Alryn/World/VehicleTypes.h>
 
 #include <algorithm>
 #include <cmath>
@@ -30,6 +31,7 @@ constexpr f32 kArcherKeepDist = 9.0f;
 constexpr f32 kArcherInterval = 2.4f;
 constexpr f32 kArrowSpeed = 20.0f;
 constexpr f32 kArrowDamage = 8.0f;
+constexpr f32 kDriverStuckSeconds = 2.0f; // no waypoint progress for this long => skip it
 
 // Ground height under (x,z) via the density function.
 f32 ground_at(const DensitySampler& density, f32 x, f32 z) {
@@ -128,6 +130,8 @@ std::vector<Vec2> astar_path(const Vec2& start, const Vec2& goal, std::span<cons
         path.push_back(pos_of(c % nx, c / nx));
     }
     std::reverse(path.begin(), path.end());
+    path.front() = start; // anchor exactly on the puller (not the snapped cell centre, which
+                          // can sit behind it and cause a backward step on every repath)
     path.push_back(goal); // finish exactly on the waypoint
 
     // String-pull: collapse the 1 m grid staircase into a few straight waypoints (keep a
@@ -237,42 +241,74 @@ void GameServer::update_contracts(Timestep dt, const DensitySampler& density) {
             break;
         }
         case ContractPhase::Active: {
-            // `E` (grab) near the active wagon: dismount if riding, unhitch if hauling, else
-            // start hauling (manual + no hauler yet) or hop on the back to ride along.
-            for (const auto& [id, pl] : players_) {
+            const VehicleType& vt = vehicle_type(active_.type);
+            // `E` (grab) resolves in priority order: load a carried crate, then pick up a fallen
+            // crate, then the role controls (drop your role, or near the wagon take the open
+            // control / ride as a passenger).
+            for (auto& [id, pl] : players_) {
                 if (!pl.input.grab) {
                     continue;
                 }
+                const Vec3 ppos = pl.controller.position();
+                // 1) Carrying a crate: load it back into the cart's bed when close enough.
+                if (pl.carrying) {
+                    if (cargo_.size() < active_.goods_total &&
+                        glm::length(ppos - active_.position) < kGoodLoadRange + vt.reach()) {
+                        // Drop it onto the nearest open spot on the bed floor.
+                        const CargoBed b = vt.bed();
+                        cargo_.push_back({next_good_id_++,
+                                          Vec2{glm::mix(b.lo.x + kCargoHalf, b.hi.x - kCargoHalf, 0.5f),
+                                               glm::mix(b.lo.z + kCargoHalf, b.hi.z - kCargoHalf, 0.5f)},
+                                          Vec2{0.0f}});
+                        pl.carrying = false;
+                    }
+                    continue;
+                }
+                // 2) Pick up the nearest fallen crate within reach.
+                {
+                    int best = -1;
+                    f32 best_d = kGoodPickupRange;
+                    for (usize gi = 0; gi < goods_.size(); ++gi) {
+                        const f32 d = glm::length(goods_[gi].position - ppos);
+                        if (d < best_d) {
+                            best_d = d;
+                            best = static_cast<int>(gi);
+                        }
+                    }
+                    if (best >= 0) {
+                        goods_.erase(goods_.begin() + best);
+                        pl.carrying = true;
+                        continue;
+                    }
+                }
+                // 4) Role controls.
                 if (riders_.count(id) != 0u) {
                     riders_.erase(id);
                 } else if (tower_ == id) {
                     tower_ = 0;
-                } else if (glm::length(pl.controller.position() - active_.position) <
-                           kWagonGrabRange + 1.0f) {
-                    if (active_mode_ == WagonMode::Manual && tower_ == 0) {
-                        tower_ = id; // take the handles
+                } else if (pilot_ == id) {
+                    pilot_ = 0;
+                } else if (glm::length(ppos - active_.position) < kWagonGrabRange + vt.reach()) {
+                    if (active_mode_ == WagonMode::Manual && vt.horse_drawn() && pilot_ == 0) {
+                        pilot_ = id; // climb up top to drive the carriage
+                    } else if (active_mode_ == WagonMode::Manual && !vt.horse_drawn() && tower_ == 0) {
+                        tower_ = id; // take the handles to haul
                     } else {
-                        riders_.insert(id); // sit on the back
+                        riders_.insert(id); // ride as a passenger
                     }
                 }
             }
             if (tower_ != 0 && players_.count(tower_) == 0u) {
-                tower_ = 0; // hauler left
+                tower_ = 0;
+            }
+            if (pilot_ != 0 && players_.count(pilot_) == 0u) {
+                pilot_ = 0;
             }
             update_wagon(dt, density);
             if (contract_phase_ == ContractPhase::Active) {
                 update_ambush(dt, density);
             }
-            // Seat the riders on the back of the cart (after it has moved this tick).
-            for (const net::PlayerId rid : riders_) {
-                const auto it = players_.find(rid);
-                if (it == players_.end()) {
-                    continue;
-                }
-                const Vec3 fwd{std::cos(active_.yaw), 0.0f, std::sin(active_.yaw)};
-                const Vec3 seat = active_.position - fwd * 0.5f + Vec3{0.0f, 0.85f, 0.0f};
-                it->second.controller.set_position(seat);
-            }
+            seat_occupants(vt); // place riders/pilot/seated-driver on the vehicle (post-move)
             break;
         }
         case ContractPhase::Settle: {
@@ -336,7 +372,20 @@ void GameServer::generate_offers() {
             wg.dest = dest->center;
             wg.source_half = origin->half;
             wg.difficulty = difficulty;
-            wg.reward = contract_reward(dist, difficulty, false);
+            // Vehicle type: longer / harder routes lean toward bigger vehicles (which pay
+            // more); deterministic per (origin,dest) so server + client agree.
+            const f32 tn = detail::hash01(
+                detail::tree_hash(static_cast<int>(origin->vseed), static_cast<int>(dest->vseed), 5160u));
+            u8 type = 0;
+            if (dist > 300.0f && tn < 0.65f) {
+                type = 2; // carriage
+            } else if (dist > 200.0f || tn < 0.5f) {
+                type = 1; // wagon
+            }
+            type = static_cast<u8>(std::min<u32>(type, vehicle_type_count() - 1u));
+            wg.type = type;
+            wg.reward = static_cast<u32>(std::lround(
+                contract_reward(dist, difficulty, false) * capacity_reward_mult(vehicle_type(type).capacity())));
             wg.route = std::move(route);
             // Park the offer in a reserved depot spot (clear of buildings); face the dest.
             const Vec3 sp = spots[static_cast<usize>(idx) % spots.size()];
@@ -358,8 +407,34 @@ void GameServer::accept_contract(const Wagon& chosen, WagonMode mode) {
     }
     active_.health = kWagonHealth;
     active_.ambush_waves_spawned = 0;
+    active_.goods_total = goods_for_capacity(vehicle_type(active_.type).capacity());
+    wagon_prev_pos_ = active_.position;
+    wagon_vel_ = Vec2{0.0f};
+    wagon_vy_ = 0.0f;
+    goods_.clear();
     active_mode_ = mode;
     tower_ = 0;
+    for (auto& [pid, pl] : players_) {
+        pl.carrying = false;
+    }
+    // Load the bed: spread the crates across the cargo floor in a tidy grid.
+    cargo_.clear();
+    {
+        const CargoBed b = vehicle_type(active_.type).bed();
+        const f32 x0 = b.lo.x + kCargoHalf;
+        const f32 x1 = b.hi.x - kCargoHalf;
+        const f32 z0 = b.lo.z + kCargoHalf;
+        const f32 z1 = b.hi.z - kCargoHalf;
+        const int cols = std::max(1, static_cast<int>(active_.goods_total + 1) / 2);
+        for (u8 i = 0; i < active_.goods_total; ++i) {
+            const int cx = i % cols;
+            const int cz = i / cols;
+            const f32 fx = cols > 1 ? static_cast<f32>(cx) / static_cast<f32>(cols - 1) : 0.5f;
+            const f32 fz = (i / cols) % 2 == 0 && active_.goods_total > 1 ? 0.3f : 0.7f;
+            (void)cz;
+            cargo_.push_back({next_good_id_++, Vec2{glm::mix(x0, x1, fx), glm::mix(z0, z1, fz)}, Vec2{0.0f}});
+        }
+    }
     ambush_.clear();
     offers_.clear();
     votes_.clear();
@@ -377,25 +452,42 @@ void GameServer::accept_contract(const Wagon& chosen, WagonMode mode) {
     }
     active_.progress = static_cast<f32>(start);
 
-    // Hire a teamster NPC to pull the cart in driver mode (it walks the route, the wagon
-    // trails it). Manual mode has no driver - a player hauls it instead.
     driver_.reset();
     driver_path_.clear();
     driver_path_i_ = 0;
     driver_repath_ = 0.0f;
+    driver_stuck_ = 0.0f;
+    driver_best_dist_ = 1e9f;
     riders_.clear();
-    if (mode == WagonMode::Driver) {
+    pilot_ = 0;
+
+    const VehicleType& vt = vehicle_type(active_.type);
+    has_horse_ = vt.horse_drawn();
+    const Vec2 fdir = glm::normalize(active_.dest - active_.source);
+    auto make_driver = [&](u8 kind, const Vec3& pos) {
         Villager d;
         d.id = active_.id ^ 0xD1234u;
-        d.kind = 2; // teamster
+        d.kind = kind;
         d.appearance = villager_look(d.id);
-        const Vec2 dir = glm::normalize(active_.dest - active_.source);
-        const Vec2 ahead{active_.position.x + dir.x * kHitchDist, active_.position.z + dir.y * kHitchDist};
-        d.position = Vec3{ahead.x, worldgen::height(ahead.x, ahead.y, seed), ahead.y};
+        d.position = pos;
         d.yaw = active_.yaw;
         d.home_center = active_.source;
         d.rng = d.id | 1u;
         driver_ = d;
+    };
+    if (has_horse_) {
+        // Carriages are horse-drawn: a horse pulls in front (in either mode).
+        const Vec2 hp = Vec2{active_.position.x, active_.position.z} + fdir * (vt.reach() + 1.8f);
+        horse_pos_ = Vec3{hp.x, worldgen::height(hp.x, hp.y, seed), hp.y};
+        horse_yaw_ = active_.yaw;
+        if (mode == WagonMode::Driver) {
+            make_driver(3, active_.position); // hired driver sits up top (kind 3, seated)
+        }
+        // Manual carriage: a player drives it from the top (pilot_), assigned on `E`.
+    } else if (mode == WagonMode::Driver) {
+        // Hand-cart / wagon hire: a teamster walks the route in front, pulling.
+        const Vec2 ahead = Vec2{active_.position.x, active_.position.z} + fdir * kHitchDist;
+        make_driver(2, Vec3{ahead.x, worldgen::height(ahead.x, ahead.y, seed), ahead.y});
     }
     contract_phase_ = ContractPhase::Active;
     ALRYN_INFO("Contract accepted ({}), reward {}", mode == WagonMode::Manual ? "manual" : "driver",
@@ -404,83 +496,162 @@ void GameServer::accept_contract(const Wagon& chosen, WagonMode mode) {
 
 void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
     Wagon& w = active_;
-    // The wagon is towed: a puller (the hired teamster NPC, or the hauling player) leads
-    // and the cart trails behind it. The wheels spin client-side from the cart's motion.
-    Vec3 puller{0.0f};
-    f32 speed = 0.0f;
-    bool towed = false;
+    const VehicleType& vt = vehicle_type(w.type);
+    const f32 hitch = vt.horse_drawn() ? vt.reach() + 1.8f : kHitchDist;
+    const f32 dmg = damage_speed_factor(w.health / kWagonHealth); // a battered cart moves slower
 
-    if (active_mode_ == WagonMode::Driver && driver_) {
-        // Walk the teamster toward the next route waypoint, A*-routing AROUND obstacles
-        // (houses / fences / rocks / logs) so it never gets stuck; the wagon follows it.
-        const Vec2 dxz{driver_->position.x, driver_->position.z};
-        const int idx = static_cast<int>(w.progress);
-        const Vec2 wp = idx < static_cast<int>(w.route.size()) ? w.route[idx] : w.dest;
+    // Walks a puller (horse or teamster) toward the next route waypoint, A*-routing around
+    // obstacles so it never snags. It targets sparse, string-pulled nodes using the LIVE
+    // position, skipping any node already reached (so a fresh path never sends it back toward
+    // its own cell centre) and easing the heading so it doesn't snap or stutter per node.
+    auto walk_route = [&](Vec3& pos, f32& yaw) {
+        const int ridx = static_cast<int>(w.progress);
+        const Vec2 wp = ridx < static_cast<int>(w.route.size()) ? w.route[ridx] : w.dest;
         driver_repath_ -= dt.seconds;
         if (driver_path_.empty() || driver_path_i_ >= driver_path_.size() || driver_repath_ <= 0.0f) {
             if (collision_) {
-                collision_->gather(driver_->position, collider_scratch_);
+                collision_->gather(pos, collider_scratch_);
             }
-            // Clearance is the cart's half-width + margin, so the routed path leaves room
-            // for the trailing wagon to clear houses/fences/rocks, not just the teamster.
-            driver_path_ = astar_path(dxz, wp, collider_scratch_, 1.1f, driver_->position.y);
+            driver_path_ = astar_path({pos.x, pos.z}, wp, collider_scratch_, vt.reach() + 0.2f, pos.y);
             driver_path_i_ = 0;
             driver_repath_ = 0.6f;
+        }
+        // Skip any leading nodes we've effectively reached (look-ahead): keeps the puller
+        // aiming at the next *real* node instead of decelerating + pivoting at each one.
+        const Vec2 here{pos.x, pos.z};
+        while (driver_path_i_ + 1 < driver_path_.size() &&
+               glm::length(here - driver_path_[driver_path_i_]) < 0.9f) {
+            ++driver_path_i_;
         }
         const Vec2 node = driver_path_.empty()
                               ? wp
                               : driver_path_[std::min(driver_path_i_, driver_path_.size() - 1)];
-        step_villager(*driver_, density, std::span<const Collider>{},
-                      Vec3{node.x, driver_->position.y, node.y}, dt, kWagonDriverSpeed);
-        if (driver_path_i_ < driver_path_.size() && glm::length(dxz - node) < 0.6f) {
-            ++driver_path_i_;
+        const Vec3 to{node.x - pos.x, 0.0f, node.y - pos.z};
+        const f32 d = glm::length(to);
+        if (d > 1e-3f) {
+            const Vec3 dir = to / d;
+            const f32 stp = std::min(d, kWagonDriverSpeed * dmg * dt.seconds);
+            pos.x += dir.x * stp;
+            pos.z += dir.z * stp;
+            // Ease the heading toward the travel direction (shortest way round) rather than
+            // snapping it, so the horse/teamster turns smoothly.
+            const f32 want = std::atan2(dir.z, dir.x);
+            f32 dyaw = want - yaw;
+            while (dyaw > Pi) dyaw -= TwoPi;
+            while (dyaw < -Pi) dyaw += TwoPi;
+            yaw += dyaw * std::min(1.0f, dt.seconds * 7.0f);
         }
-        if (glm::length(dxz - wp) < 1.4f) { // reached the route waypoint
+        pos.y = ground_at(density, pos.x, pos.z);
+        // Advance to (or skip) the current route waypoint.
+        const f32 dist_wp = glm::length(Vec2{pos.x, pos.z} - wp);
+        auto next_waypoint = [&]() {
             w.progress += 1.0f;
             driver_path_.clear();
+            driver_path_i_ = 0;
+            driver_stuck_ = 0.0f;
+            driver_best_dist_ = 1e9f;
+        };
+        if (dist_wp < 1.4f) {
+            next_waypoint(); // reached it
+        } else if (dist_wp < driver_best_dist_ - 0.05f) {
+            driver_best_dist_ = dist_wp; // still closing in - making progress
+            driver_stuck_ = 0.0f;
+        } else {
+            // Anti-stuck: the puller isn't getting any closer (an obstacle pocket, or a route
+            // point behind a wall makes it oscillate forward/backward). After a couple of
+            // seconds with no net progress, give up on this waypoint and skip to the next -
+            // A* re-routes to it from wherever we are.
+            driver_stuck_ += dt.seconds;
+            if (driver_stuck_ > kDriverStuckSeconds) {
+                ALRYN_INFO("Driver stuck on a waypoint - skipping ahead");
+                next_waypoint();
+            }
         }
+    };
+
+    Vec3 puller{0.0f};
+    f32 speed = 0.0f;
+    bool towed = false;
+
+    if (vt.horse_drawn() && active_mode_ == WagonMode::Driver) {
+        walk_route(horse_pos_, horse_yaw_); // a horse pulls the carriage along the route
+        puller = horse_pos_;
+        speed = kWagonDriverSpeed * 1.6f * dmg;
+        towed = true;
+    } else if (vt.horse_drawn()) {
+        // Manual carriage: the pilot drives it like a car - throttle (W/S) + rein (A/D).
+        if (pilot_ != 0 && players_.count(pilot_) != 0u) {
+            const net::PlayerInput& in = players_.at(pilot_).input;
+            const f32 throttle = glm::clamp(in.throttle, -1.0f, 1.0f);
+            const f32 steer = glm::clamp(in.steer, -1.0f, 1.0f);
+            w.yaw += steer * kCarriageTurnRate * dt.seconds * (0.35f + 0.65f * std::abs(throttle));
+            const Vec3 dir{std::cos(w.yaw), 0.0f, std::sin(w.yaw)};
+            Vec2 next{w.position.x + dir.x * throttle * kCarriageSpeed * dmg * dt.seconds,
+                      w.position.z + dir.z * throttle * kCarriageSpeed * dmg * dt.seconds};
+            if (collision_) {
+                collision_->gather(Vec3{next.x, w.position.y, next.y}, collider_scratch_);
+                for (const Collider& c : collider_scratch_) {
+                    next = resolve_collider(c, next, vt.reach(), w.position.y, 1.5f);
+                }
+            }
+            w.position.x = next.x;
+            w.position.z = next.y;
+            w.position.y = ground_at(density, w.position.x, w.position.z);
+        }
+        // The horse rides in front along the carriage heading.
+        const Vec3 hdir{std::cos(w.yaw), 0.0f, std::sin(w.yaw)};
+        horse_pos_ = w.position + hdir * hitch;
+        horse_pos_.y = ground_at(density, horse_pos_.x, horse_pos_.z);
+        horse_yaw_ = w.yaw;
+    } else if (active_mode_ == WagonMode::Driver && driver_) {
+        walk_route(driver_->position, driver_->yaw); // teamster walks in front, pulling
         puller = driver_->position;
-        speed = kWagonDriverSpeed * 1.6f;
+        speed = kWagonDriverSpeed * 1.6f * dmg;
         towed = true;
     } else if (active_mode_ == WagonMode::Manual && tower_ != 0 && players_.count(tower_) != 0u) {
         puller = players_.at(tower_).controller.position();
-        speed = kWagonManualSpeed * 1.6f;
+        speed = kWagonManualSpeed * 1.6f; // the tower's own walk speed already reflects size+damage
         towed = true;
     }
 
     if (towed) {
-        // Rope/tongue tow: the cart trails directly behind the puller along the line
-        // between them, kept at the hitch distance. Following the connecting LINE (not the
-        // puller's facing) means it never swings out to the side when the puller turns.
+        // Rope/tongue tow: the cart trails the puller along the line between them at the
+        // hitch distance (following the LINE, not the puller's facing, so it never swings).
         Vec3 to = puller - w.position;
         to.y = 0.0f;
         const f32 dist = glm::length(to);
         if (dist > 1e-3f) {
             const Vec3 dir = to / dist;
-            const f32 over = dist - kHitchDist; // how far past the hitch length we are
+            const f32 over = dist - hitch;
             if (over > 0.0f) {
                 const f32 stp = std::min(over, speed * dt.seconds);
                 w.position.x += dir.x * stp;
                 w.position.z += dir.z * stp;
             }
-            w.yaw = std::atan2(dir.z, dir.x); // face the puller (tongue points at them)
+            w.yaw = std::atan2(dir.z, dir.x);
         }
         w.position.y = ground_at(density, w.position.x, w.position.z);
     }
 
-    // Delivered: reached the destination town.
+    // Slide the physical cargo in the bed (and spill it out on bumps) - all driven by the
+    // cart's real acceleration + the terrain under the wheels, no cart-tilt model.
+    update_cargo(dt, density);
+
+    // Delivered: reached the destination town. Pay scales with the share of the load still in
+    // the bed, so crates that bounced out and weren't recovered cost money.
     if (glm::length(Vec2{w.position.x - w.dest.x, w.position.z - w.dest.y}) < kDeliverRadius) {
         const bool manual = active_mode_ == WagonMode::Manual;
-        money_ += manual ? static_cast<u32>(std::lround(w.reward * kManualRewardMult)) : w.reward;
+        const f32 frac =
+            w.goods_total > 0 ? static_cast<f32>(cargo_.size()) / static_cast<f32>(w.goods_total) : 1.0f;
+        const f32 base = manual ? static_cast<f32>(w.reward) * kManualRewardMult
+                                : static_cast<f32>(w.reward);
+        money_ += static_cast<u32>(std::lround(base * frac));
         contract_outcome_ = 1;
         contract_phase_ = ContractPhase::Settle;
         settle_timer_ = kSettleSeconds;
-        ambush_.clear();
-        tower_ = 0;
-        driver_.reset();
-        driver_path_.clear();
-        riders_.clear();
-        ALRYN_INFO("Wagon delivered! Party money now {}", money_);
+        ALRYN_INFO("Wagon delivered ({}/{} crates)! Party money now {}", cargo_.size(), w.goods_total,
+                   money_);
+        end_contract_cleanup();
         return;
     }
     // Wrecked: the ambush destroyed it.
@@ -488,12 +659,206 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
         contract_outcome_ = 2;
         contract_phase_ = ContractPhase::Settle;
         settle_timer_ = kSettleSeconds;
-        ambush_.clear();
-        tower_ = 0;
-        driver_.reset();
-        driver_path_.clear();
-        riders_.clear();
+        end_contract_cleanup();
         ALRYN_INFO("Wagon was wrecked - contract failed");
+    }
+}
+
+// Simulates the cargo crates riding in the bed: each is a little body sliding on the bed
+// floor, pushed by the cart's real acceleration (inertia) and by gravity along the
+// terrain-tilted bed, damped by friction, bouncing off the bed rails - and tumbling out onto
+// the ground when a bump or hard turn throws it over a rail fast enough. No cart-tilt model.
+void GameServer::update_cargo(Timestep dt, const DensitySampler& density) {
+    Wagon& w = active_;
+    const f32 dts = std::max(dt.seconds, 1e-4f);
+    // Cart velocity + acceleration this tick (world xz, plus vertical for bump detection).
+    const Vec2 pos{w.position.x, w.position.z};
+    const Vec2 vel = (pos - Vec2{wagon_prev_pos_.x, wagon_prev_pos_.z}) / dts;
+    const Vec2 accel = (vel - wagon_vel_) / dts;
+    const f32 cart_vy = (w.position.y - wagon_prev_pos_.y) / dts;
+    const f32 cart_vy_accel = (cart_vy - wagon_vy_) / dts;
+    wagon_vel_ = vel;
+    wagon_vy_ = cart_vy;
+    wagon_prev_pos_ = w.position;
+    if (cargo_.empty()) {
+        return;
+    }
+
+    // Bed slope from the terrain under the cart, in the cart's local frame (x = fore/aft,
+    // y = lateral). Gravity pulls crates downhill; cart acceleration slings them the other way.
+    const Vec2 fwd{std::cos(w.yaw), std::sin(w.yaw)};
+    const Vec2 lat{-std::sin(w.yaw), std::cos(w.yaw)};
+    constexpr f32 sd = 0.9f;
+    auto gnd = [&](const Vec2& o) { return ground_at(density, w.position.x + o.x, w.position.z + o.y); };
+    const f32 slope_f = (gnd(fwd * sd) - gnd(fwd * -sd)) / (2.0f * sd);
+    const f32 slope_l = (gnd(lat * sd) - gnd(lat * -sd)) / (2.0f * sd);
+    const Vec2 grav_local{-slope_f * kCargoGravity, -slope_l * kCargoGravity};
+    // Clamp the cart's acceleration so a rope-tow "snap" can't fling crates.
+    Vec2 accel_local{glm::dot(accel, fwd), glm::dot(accel, lat)};
+    accel_local.x = glm::clamp(accel_local.x, -kCargoMaxAccel, kCargoMaxAccel);
+    accel_local.y = glm::clamp(accel_local.y, -kCargoMaxAccel, kCargoMaxAccel);
+    // A bump that drops the bed away (cart accelerating downward) tosses crates up off the
+    // floor; clamp so a single jolt can't launch them absurdly high.
+    const f32 lift = glm::clamp(-cart_vy_accel, 0.0f, 80.0f);
+
+    const CargoBed b = vehicle_type(w.type).bed();
+    const f32 x0 = b.lo.x + kCargoHalf;
+    const f32 x1 = b.hi.x - kCargoHalf;
+    const f32 z0 = b.lo.z + kCargoHalf;
+    const f32 z1 = b.hi.z - kCargoHalf;
+    const f32 friction = std::max(0.0f, 1.0f - kCargoFriction * dts);
+
+    // 1) Integrate each crate: slide on the floor (gravity-along-bed + inertia, friction) and
+    //    rise/fall vertically (a bump's lift vs. gravity), resting back on the bed floor.
+    for (CargoBox& c : cargo_) {
+        c.vel += (grav_local - accel_local * kCargoInertia) * dts;
+        c.vel *= friction;
+        c.local += c.vel * dts;
+        c.vh += (lift - kCargoVertGravity) * dts;
+        c.h += c.vh * dts;
+        if (c.h <= 0.0f) {
+            c.h = 0.0f;
+            c.vh = c.vh < 0.0f ? -c.vh * kCargoFloorBounce : c.vh; // land + small bounce
+        }
+        c.h = std::min(c.h, kCargoMaxLift);
+    }
+
+    // 2) Crate-vs-crate collisions (only when their heights overlap): separate the boxes along
+    //    the least-penetrating xz axis and average their velocity there, so they stack/jostle
+    //    instead of sliding through one another.
+    constexpr f32 full = 2.0f * kCargoHalf;
+    for (int it = 0; it < 4; ++it) {
+        for (usize i = 0; i < cargo_.size(); ++i) {
+            for (usize j = i + 1; j < cargo_.size(); ++j) {
+                if (std::abs(cargo_[i].h - cargo_[j].h) >= full) {
+                    continue; // stacked at different heights - no xz collision
+                }
+                const Vec2 d = cargo_[j].local - cargo_[i].local;
+                const f32 pen_x = full - std::abs(d.x);
+                const f32 pen_z = full - std::abs(d.y);
+                if (pen_x <= 0.0f || pen_z <= 0.0f) {
+                    continue; // not overlapping
+                }
+                if (pen_x <= pen_z) {
+                    const f32 push = pen_x * 0.5f * (d.x < 0.0f ? -1.0f : 1.0f);
+                    cargo_[i].local.x -= push;
+                    cargo_[j].local.x += push;
+                    const f32 avg = 0.5f * (cargo_[i].vel.x + cargo_[j].vel.x);
+                    cargo_[i].vel.x = avg;
+                    cargo_[j].vel.x = avg;
+                } else {
+                    const f32 push = pen_z * 0.5f * (d.y < 0.0f ? -1.0f : 1.0f);
+                    cargo_[i].local.y -= push;
+                    cargo_[j].local.y += push;
+                    const f32 avg = 0.5f * (cargo_[i].vel.y + cargo_[j].vel.y);
+                    cargo_[i].vel.y = avg;
+                    cargo_[j].vel.y = avg;
+                }
+            }
+        }
+    }
+
+    // 3) Walls: a crate below the rail top is contained (clamp + bounce off a SOLID wall); a
+    //    crate launched above the rail (h >= wall) by a bump can pass over it and tumble out.
+    //    The carriage's very tall wall means its load never clears - the enclosed-cabin benefit.
+    auto rail = [&](f32& p, f32& v, f32 lo, f32 hi, bool over) {
+        if (p < lo) {
+            if (over) {
+                return true; // above the wall - slides off over the top
+            }
+            p = lo;
+            v = -v * kCargoRestitution;
+        } else if (p > hi) {
+            if (over) {
+                return true;
+            }
+            p = hi;
+            v = -v * kCargoRestitution;
+        }
+        return false;
+    };
+    for (usize i = 0; i < cargo_.size();) {
+        CargoBox& c = cargo_[i];
+        const bool over = c.h >= b.wall;                          // launched above the rail top
+        const bool out_x = rail(c.local.x, c.vel.x, x0, x1, over); // evaluate both rails
+        const bool out_z = rail(c.local.y, c.vel.y, z0, z1, over);
+        if (out_x || out_z) {
+            const Vec2 wp = pos + fwd * c.local.x + lat * c.local.y;
+            Vec3 gp{wp.x, 0.0f, wp.y};
+            gp.y = ground_at(density, gp.x, gp.z);
+            goods_.push_back({c.id, gp});
+            cargo_.erase(cargo_.begin() + static_cast<long>(i));
+            ALRYN_INFO("A crate bounced up and out over the cart wall!");
+        } else {
+            ++i;
+        }
+    }
+}
+
+// Box colliders for every wagon (parked offers, or the active cargo) so players can't walk
+// through them. The cart mesh is drawn with rotateY(-yaw), so the collider's yaw is +yaw.
+void GameServer::append_wagon_colliders(std::vector<Collider>& out) const {
+    auto add = [&](const Wagon& wg) {
+        const Vec2 fp = vehicle_type(wg.type).footprint();
+        Collider c;
+        c.shape = Collider::Shape::Box;
+        c.center = wg.position;
+        c.yaw = wg.yaw;
+        c.half = fp;
+        c.y_min = wg.position.y;
+        c.y_max = wg.position.y + 1.6f;
+        out.push_back(c);
+    };
+    if (contract_phase_ == ContractPhase::Offer) {
+        for (const Wagon& o : offers_) {
+            add(o);
+        }
+    } else {
+        add(active_);
+    }
+}
+
+// Shared teardown when a contract ends (delivered or wrecked): clear the haul state.
+void GameServer::end_contract_cleanup() {
+    ambush_.clear();
+    tower_ = 0;
+    pilot_ = 0;
+    driver_.reset();
+    driver_path_.clear();
+    riders_.clear();
+    has_horse_ = false;
+    cargo_.clear();
+    goods_.clear();
+    for (auto& [pid, pl] : players_) {
+        pl.carrying = false;
+    }
+}
+
+// Places the pilot, passengers and seated NPC driver on the vehicle (after it has moved),
+// each at a distinct local seat transformed into the world like the mesh (rotateY(-yaw)).
+void GameServer::seat_occupants(const VehicleType& vt) {
+    auto seat_world = [&](const Vec3& local) {
+        const Vec3 off = Vec3{glm::rotate(Mat4{1.0f}, -active_.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
+                              Vec4{local, 0.0f}};
+        return active_.position + off;
+    };
+    if (pilot_ != 0 && players_.count(pilot_) != 0u && vt.has_driver_seat()) {
+        players_.at(pilot_).controller.set_position(seat_world(vt.driver_seat()));
+    }
+    if (driver_ && driver_->kind == 3) { // hired driver seated up top
+        driver_->position = seat_world(vt.driver_seat());
+        driver_->yaw = active_.yaw;
+    }
+    const std::vector<Seat> seats = vt.seats();
+    std::vector<net::PlayerId> rs(riders_.begin(), riders_.end());
+    std::sort(rs.begin(), rs.end()); // stable seat assignment by id
+    for (usize i = 0; i < rs.size(); ++i) {
+        const auto it = players_.find(rs[i]);
+        if (it == players_.end()) {
+            continue;
+        }
+        const Vec3 local = seats.empty() ? Vec3{-0.6f, 0.85f, 0.0f} : seats[i % seats.size()].pos;
+        it->second.controller.set_position(seat_world(local));
     }
 }
 

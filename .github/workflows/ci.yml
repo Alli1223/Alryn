@@ -1,0 +1,52 @@
+name: CI
+
+# Build the engine + game and run the full test suite on every push and PR.
+# GPU/display tests (offscreen render, window) degrade gracefully and skip on the
+# headless runner; the logic tests (core, scene, physics, collision, terrain,
+# networking, character, UI) all run. Shaders need glslc, which the runner does not
+# have - CompileShaders just warns and skips, which is fine for the logic tests.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & test (Linux / GCC 14)
+    runs-on: ubuntu-24.04
+    env:
+      CC: gcc-14
+      CXX: g++-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain + dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake gcc-14 g++-14 \
+            libvulkan-dev \
+            xorg-dev libxkbcommon-dev libwayland-dev wayland-protocols \
+            libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Upload visual artifacts (offscreen PPM screenshots)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: offscreen-shots
+          path: build/bin/*.ppm
+          if-no-files-found: ignore

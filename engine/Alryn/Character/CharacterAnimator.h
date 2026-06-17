@@ -20,6 +20,10 @@ public:
     // Per-bone pose (rotations) for `model`, indexed to match model.bones().
     std::vector<Quat> pose(const CharacterModel& model) const;
 
+    // A static seated pose (thighs forward, shins down, hands on the lap) for a character
+    // sitting on a wagon. Not phase-driven, so it's a plain static helper.
+    static std::vector<Quat> sit_pose(const CharacterModel& model);
+
     f32 phase() const { return phase_; }
     f32 stride() const { return stride_; }
 

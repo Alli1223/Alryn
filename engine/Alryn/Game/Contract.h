@@ -36,6 +36,50 @@ inline constexpr f32 kHitchDist = 2.0f;        // puller stands at the cart's dr
 inline constexpr f32 kManualRewardMult = 1.6f; // hauling it yourself pays more
 inline constexpr u32 kAmbushPerDifficulty = 3; // enemies per difficulty star
 inline constexpr f32 kDeliverRadius = 11.0f;   // within this of the dest centre = delivered
+inline constexpr f32 kCarriageSpeed = 5.0f;    // player-driven carriage top speed (m/s)
+inline constexpr f32 kCarriageTurnRate = 1.6f; // rein steering rate (rad/s)
+
+// Bigger vehicles carry more cargo, so they pay more: +30% per capacity unit over 1.
+inline f32 capacity_reward_mult(u32 capacity) {
+    return 1.0f + 0.3f * static_cast<f32>(capacity > 0 ? capacity - 1 : 0);
+}
+
+// --- Load, hauling effort & capsizing ------------------------------------------
+// How many cargo crates a vehicle of this capacity carries (reward scales by the share
+// delivered, so spilled-and-lost goods cost money).
+inline u8 goods_for_capacity(u32 capacity) {
+    return static_cast<u8>(2u * (capacity > 0 ? capacity : 1u));
+}
+inline constexpr f32 kTowSizePenalty = 0.34f; // a hauled cart slows the puller per capacity unit
+inline constexpr f32 kDamageSpeedFloor = 0.5f; // a wrecked-but-rolling cart moves at half speed
+// How much slower a player hauls a cart of this `capacity` at this `health_frac` (0..1).
+// Bigger and more damaged => slower. Returns a multiplier in (0, 1].
+inline f32 tow_speed_factor(u32 capacity, f32 health_frac) {
+    const f32 size = 1.0f / (1.0f + kTowSizePenalty * static_cast<f32>(capacity > 0 ? capacity - 1 : 0));
+    const f32 hf = health_frac < 0.0f ? 0.0f : (health_frac > 1.0f ? 1.0f : health_frac);
+    const f32 dmg = kDamageSpeedFloor + (1.0f - kDamageSpeedFloor) * hf;
+    return size * dmg;
+}
+// Damage-only speed multiplier (for horse/teamster/driven carriage motion).
+inline f32 damage_speed_factor(f32 health_frac) {
+    const f32 hf = health_frac < 0.0f ? 0.0f : (health_frac > 1.0f ? 1.0f : health_frac);
+    return kDamageSpeedFloor + (1.0f - kDamageSpeedFloor) * hf;
+}
+inline constexpr f32 kGoodPickupRange = 2.0f; // how close to pick up a spilled crate (E)
+inline constexpr f32 kGoodLoadRange = 3.0f;   // how close to the cart to load a carried crate (E)
+// Cargo box physics: each crate is a little body that slides on the cart bed. The bed walls are
+// SOLID - crates slam into them and bounce, they never pass through from sliding - so normal
+// hauling + hard turns keep the load aboard. A crate only spills *over* a wall when the bed is
+// tilted steeply (a hill/bump), so the load is lost on rough ground, not on a quick pull-away.
+inline constexpr f32 kCargoGravity = 16.0f;     // pulls crates downhill along a terrain-tilted bed
+inline constexpr f32 kCargoFriction = 2.4f;     // bed friction (per-second velocity damping)
+inline constexpr f32 kCargoRestitution = 0.3f;  // how bouncily a crate rebounds off a solid wall
+inline constexpr f32 kCargoHalf = 0.2f;         // crate half-size (kept off the bed walls)
+inline constexpr f32 kCargoInertia = 1.0f;      // how strongly cart acceleration slings crates
+inline constexpr f32 kCargoMaxAccel = 18.0f;    // clamp on the cart accel (a tow "snap" can't fling crates)
+inline constexpr f32 kCargoVertGravity = 18.0f; // gravity pulling an airborne crate back to the bed floor
+inline constexpr f32 kCargoFloorBounce = 0.2f;  // how bouncily a crate lands back on the bed floor
+inline constexpr f32 kCargoMaxLift = 1.5f;      // cap on how high a bump can toss a crate (sanity)
 inline constexpr f32 kWagonDamage = 9.0f;      // an ambusher's hit on the wagon
 inline constexpr u32 kMaxOffers = 4;           // wagons offered per town
 inline constexpr f32 kSettleSeconds = 6.0f;    // banner hold before re-offering
@@ -50,10 +94,12 @@ struct Wagon {
     Vec2 dest{0.0f};              // destination town centre
     f32 source_half = 20.0f;      // origin town half-width (ambush holds until past it)
     u32 reward = 0;               // base payout (driver); manual multiplies it
+    u8 type = 0;                  // VehicleType index (cart / wagon / carriage)
     u8 difficulty = 1;            // 1..3 -> ambush count
     std::vector<Vec2> route;      // road polyline source -> dest (driver path)
     f32 progress = 0.0f;          // index-space progress along `route` (driver)
     u8 ambush_waves_spawned = 0;  // how many ambush waves have triggered
+    u8 goods_total = 0;           // crates a full load carries (reward scales by aboard/total)
 };
 
 // Payout for delivering a contract of this `distance` (world units) + `difficulty`,

@@ -1,10 +1,15 @@
 #include <doctest/doctest.h>
 
+#include <algorithm>
+#include <cmath>
+#include <vector>
+
 #include <Alryn/Net/ByteBuffer.h>
 #include <Alryn/Net/GameServer.h>
 #include <Alryn/Net/NetClient.h>
 #include <Alryn/Net/NetServer.h>
 #include <Alryn/Net/Protocol.h>
+#include <Alryn/World/VehicleTypes.h>
 
 using namespace alryn;
 using namespace alryn::net;
@@ -24,6 +29,8 @@ TEST_CASE("Net: message serialization round-trips") {
     input.aim = Vec3{3.0f, 4.0f, 5.0f};
     input.vote_wagon = 12345u;
     input.vote_mode = 2;
+    input.throttle = 1.0f;
+    input.steer = -1.0f;
     input.appearance = CharacterAppearance{3, 5, EyeStyle::Sleepy, EarStyle::Pointed,
                                            HairStyle::Ponytail};
 
@@ -45,6 +52,8 @@ TEST_CASE("Net: message serialization round-trips") {
     CHECK(out.grab);
     CHECK(out.vote_wagon == 12345u);
     CHECK(out.vote_mode == 2);
+    CHECK(out.throttle == doctest::Approx(1.0f));
+    CHECK(out.steer == doctest::Approx(-1.0f));
     CHECK(out.appearance == input.appearance); // cosmetics survive the round-trip
 
     Snapshot snapshot;
@@ -56,9 +65,9 @@ TEST_CASE("Net: message serialization round-trips") {
     snapshot.wave = 4;
     snapshot.houses_standing = 9;
     snapshot.houses_total = 12;
-    snapshot.players.push_back({1, Vec3{1.0f, 2.0f, 3.0f}, 0.5f, 100, 8, CharacterAppearance{}});
+    snapshot.players.push_back({1, Vec3{1.0f, 2.0f, 3.0f}, 0.5f, 100, 8, 0, 0, CharacterAppearance{}});
     snapshot.players.push_back(
-        {2, Vec3{4.0f, 5.0f, 6.0f}, 1.5f, 73, 3,
+        {2, Vec3{4.0f, 5.0f, 6.0f}, 1.5f, 73, 3, 1, 1, // seated + carrying a crate
          CharacterAppearance{2, 0, EyeStyle::Sharp, EarStyle::Small, HairStyle::Spiky}});
     snapshot.enemies.push_back({40u, Vec3{7.0f, 1.0f, -2.0f}, 0.8f, 1, 200});
     snapshot.enemies.push_back({41u, Vec3{9.0f, 1.5f, -4.0f}, 2.0f, 0, 60});
@@ -72,8 +81,12 @@ TEST_CASE("Net: message serialization round-trips") {
     snapshot.money = 1234u;
     snapshot.contract_phase = static_cast<u8>(ContractPhase::Active);
     snapshot.contract_outcome = 1;
-    snapshot.wagons.push_back({55u, Vec3{2.0f, 0.5f, 3.0f}, 0.9f, Vec3{40.0f, 0.0f, 60.0f}, 500u, 200,
-                               static_cast<u8>(WagonMode::Manual), 3, 1});
+    snapshot.wagons.push_back({55u, Vec3{2.0f, 0.5f, 3.0f}, 0.9f, Vec3{40.0f, 0.0f, 60.0f},
+                               Vec3{6.0f, 0.5f, 4.0f}, 1.2f, 500u, 2 /*carriage*/, 200,
+                               static_cast<u8>(WagonMode::Manual), 3, 1, 1 /*has_horse*/,
+                               4 /*aboard*/, 6 /*total*/});
+    snapshot.goods.push_back({77u, Vec3{12.0f, 1.0f, 13.0f}, 1});  // a fallen crate (loose)
+    snapshot.goods.push_back({78u, Vec3{0.2f, 0.55f, -0.1f}, 0}); // a crate in the bed (local pos)
     ByteWriter ws;
     write(ws, snapshot);
     ByteReader rs(ws.bytes(), ws.size());
@@ -125,6 +138,22 @@ TEST_CASE("Net: message serialization round-trips") {
     CHECK(decoded.wagons[0].dest.z == doctest::Approx(60.0f));
     CHECK(decoded.wagons[0].mode == static_cast<u8>(WagonMode::Manual));
     CHECK(decoded.wagons[0].difficulty == 3);
+    CHECK(decoded.wagons[0].type == 2);            // carriage
+    CHECK(decoded.wagons[0].has_horse == 1);
+    CHECK(decoded.wagons[0].horse_pos.x == doctest::Approx(6.0f));
+    CHECK(decoded.wagons[0].horse_yaw == doctest::Approx(1.2f));
+    CHECK(decoded.wagons[0].goods_aboard == 4);
+    CHECK(decoded.wagons[0].goods_total == 6);
+    CHECK(decoded.players[0].seated == 0);
+    CHECK(decoded.players[1].seated == 1);
+    CHECK(decoded.players[0].carrying == 0);
+    CHECK(decoded.players[1].carrying == 1);
+    REQUIRE(decoded.goods.size() == 2);
+    CHECK(decoded.goods[0].id == 77u);
+    CHECK(decoded.goods[0].loose == 1);
+    CHECK(decoded.goods[0].position.z == doctest::Approx(13.0f));
+    CHECK(decoded.goods[1].id == 78u);
+    CHECK(decoded.goods[1].loose == 0); // a crate riding in the bed
 
     Welcome welcome{77, 0xABCDu};
     ByteWriter ww;
@@ -411,6 +440,10 @@ TEST_CASE("GameServer: a wagon contract is offered, accepted by vote, and ambush
     CHECK(server.contract_phase() == ContractPhase::Active);
     REQUIRE_FALSE(snap.wagons.empty());
     CHECK(snap.wagons[0].mode == static_cast<u8>(WagonMode::Driver));
+    // The networked horse flag matches the accepted vehicle's type (seed-independent):
+    // only horse-drawn types (carriages) ride with a horse.
+    const bool horse_drawn = vehicle_type(snap.wagons[0].type).horse_drawn();
+    CHECK(snap.wagons[0].has_horse == (horse_drawn ? 1 : 0));
 
     // Once the cargo has driven clear of the town walls, ambushers spawn + are networked
     // (in the enemy list). The hired driver is slow, so poll until it has left town.
@@ -419,4 +452,497 @@ TEST_CASE("GameServer: a wagon contract is offered, accepted by vote, and ambush
     }
     CHECK(server.ambusher_count() > 0);
     CHECK_FALSE(snap.enemies.empty());
+}
+
+// Hiring a horse-drawn carriage puts a horse out front pulling and a driver seated up top.
+// Carriages are offered only on long routes, so we scan a few seeds until one offers a
+// carriage, then accept it with a hired driver and check the horse + seated driver are
+// networked. Skips (rather than fails) if no scanned seed offers a carriage.
+TEST_CASE("GameServer: hiring a carriage spawns a pulling horse + a seated driver") {
+    bool tested = false;
+    for (u32 attempt = 0; attempt < 12 && !tested; ++attempt) {
+        GameServer server;
+        const u16 port = static_cast<u16>(24670 + attempt);
+        if (!server.start(port, 7000u + attempt * 131u)) {
+            continue; // port busy - try the next
+        }
+        NetClient c;
+        if (!c.connect("127.0.0.1", port)) {
+            continue;
+        }
+        PlayerId id = 0;
+        Snapshot snap{};
+        PlayerInput intent{};
+        auto pump = [&](int iterations) {
+            for (int i = 0; i < iterations; ++i) {
+                c.send_input(intent);
+                server.tick(Timestep{1.0f / 60.0f});
+                for (const ClientEvent& e : c.poll(1)) {
+                    if (e.type == ClientEventType::WelcomeReceived) {
+                        id = e.welcome.your_id;
+                    } else if (e.type == ClientEventType::SnapshotReceived) {
+                        snap = e.snapshot;
+                    }
+                }
+            }
+        };
+        pump(150);
+        if (id == 0 || server.contract_phase() != ContractPhase::Offer) {
+            continue;
+        }
+        // Find a carriage among the offers (a horse-drawn vehicle type).
+        u32 carriage_id = 0;
+        for (const WagonState& w : snap.wagons) {
+            if (vehicle_type(w.type).horse_drawn()) {
+                carriage_id = w.id;
+                break;
+            }
+        }
+        if (carriage_id == 0) {
+            continue; // this seed's town offers no carriage - try another
+        }
+
+        // Hire a driver for the carriage (solo -> consensus is immediate).
+        intent.vote_wagon = carriage_id;
+        intent.vote_mode = 1;
+        pump(20);
+        REQUIRE(server.contract_phase() == ContractPhase::Active);
+        REQUIRE_FALSE(snap.wagons.empty());
+        const WagonState& wg = snap.wagons[0];
+        CHECK(vehicle_type(wg.type).horse_drawn());
+        CHECK(wg.has_horse == 1);
+        // The horse is placed out in front (away from the wagon body).
+        const f32 horse_gap = glm::length(wg.horse_pos - wg.position);
+        CHECK(horse_gap > 1.0f);
+        // A hired carriage driver rides up top, networked as a seated villager (kind 3).
+        bool seated_driver = false;
+        for (const VillagerState& v : snap.villagers) {
+            if (v.kind == 3) {
+                seated_driver = true;
+            }
+        }
+        CHECK(seated_driver);
+        tested = true;
+    }
+    if (!tested) {
+        MESSAGE("No scanned seed offered a carriage - skipping carriage horse/driver check");
+    }
+}
+
+// Regression: the hired puller (teamster) should walk a smooth route, never stepping
+// backward and forward on a node. We sample its motion en route and assert it never sharply
+// reverses direction frame-to-frame (the old A* snapped to the start cell centre on every
+// repath, causing that jitter).
+TEST_CASE("GameServer: a hired puller follows the route without back-and-forth jitter") {
+    GameServer server;
+    if (!server.start(24668, 4242u)) {
+        MESSAGE("Could not bind game server - skipping");
+        return;
+    }
+    NetClient c;
+    REQUIRE(c.connect("127.0.0.1", 24668));
+
+    PlayerId id = 0;
+    Snapshot snap{};
+    PlayerInput intent{};
+    auto pump = [&](int iterations) {
+        for (int i = 0; i < iterations; ++i) {
+            c.send_input(intent);
+            server.tick(Timestep{1.0f / 60.0f});
+            for (const ClientEvent& e : c.poll(1)) {
+                if (e.type == ClientEventType::WelcomeReceived) {
+                    id = e.welcome.your_id;
+                } else if (e.type == ClientEventType::SnapshotReceived) {
+                    snap = e.snapshot;
+                }
+            }
+        }
+    };
+    pump(150);
+    REQUIRE(id != 0);
+    if (server.offer_count() == 0) {
+        MESSAGE("Spawn town has no road-connected neighbour - skipping puller jitter check");
+        return;
+    }
+    // Hire a driver for the first offer (solo -> immediate consensus).
+    intent.vote_wagon = snap.wagons[0].id;
+    intent.vote_mode = 1;
+    pump(20);
+    REQUIRE(server.contract_phase() == ContractPhase::Active);
+
+    // Find the puller's position each tick: the teamster (villager kind 2) for a cart/wagon,
+    // or the horse for a carriage. Track consecutive movement directions and count sharp
+    // reversals (a near-180-degree flip = the back-and-forth jitter).
+    auto puller_pos = [&](bool& ok) -> Vec3 {
+        for (const VillagerState& v : snap.villagers) {
+            if (v.kind == 2 || v.kind == 3) { // teamster (walking) or seated driver
+                ok = true;
+                return v.position;
+            }
+        }
+        if (!snap.wagons.empty() && snap.wagons[0].has_horse) {
+            ok = true;
+            return snap.wagons[0].horse_pos;
+        }
+        ok = false;
+        return Vec3{0.0f};
+    };
+
+    Vec3 prev{0.0f};
+    Vec3 prev_dir{0.0f};
+    bool have_prev = false;
+    int samples = 0;
+    int reversals = 0;
+    for (int t = 0; t < 600; ++t) {
+        pump(1);
+        if (server.contract_phase() != ContractPhase::Active) {
+            break; // delivered / wrecked
+        }
+        bool ok = false;
+        const Vec3 p = puller_pos(ok);
+        if (!ok) {
+            continue;
+        }
+        if (have_prev) {
+            Vec3 step = p - prev;
+            step.y = 0.0f;
+            if (glm::length(step) > 0.02f) { // only count real motion
+                const Vec3 dir = glm::normalize(step);
+                if (glm::length(prev_dir) > 0.0f && glm::dot(dir, prev_dir) < -0.5f) {
+                    ++reversals;
+                }
+                prev_dir = dir;
+                ++samples;
+            }
+        }
+        prev = p;
+        have_prev = true;
+    }
+    if (samples < 20) {
+        MESSAGE("Puller didn't travel enough to judge smoothness - skipping");
+        return;
+    }
+    // A smooth route has no sharp reversals; allow a tiny margin for a genuine hairpin.
+    CHECK(reversals <= 1);
+}
+
+// An accepted contract starts with a full bed of cargo crates, all networked (in-bed, none
+// loose on the ground yet).
+TEST_CASE("GameServer: an accepted contract starts fully loaded with goods") {
+    GameServer server;
+    if (!server.start(24671, 4242u)) {
+        MESSAGE("Could not bind game server - skipping");
+        return;
+    }
+    NetClient c;
+    REQUIRE(c.connect("127.0.0.1", 24671));
+    PlayerId id = 0;
+    Snapshot snap{};
+    PlayerInput intent{};
+    auto pump = [&](int n) {
+        for (int i = 0; i < n; ++i) {
+            c.send_input(intent);
+            server.tick(Timestep{1.0f / 60.0f});
+            for (const ClientEvent& e : c.poll(1)) {
+                if (e.type == ClientEventType::WelcomeReceived) {
+                    id = e.welcome.your_id;
+                } else if (e.type == ClientEventType::SnapshotReceived) {
+                    snap = e.snapshot;
+                }
+            }
+        }
+    };
+    pump(150);
+    REQUIRE(id != 0);
+    if (server.offer_count() == 0) {
+        MESSAGE("Spawn town has no road-connected neighbour - skipping load check");
+        return;
+    }
+    intent.vote_wagon = snap.wagons[0].id;
+    intent.vote_mode = 1;
+    pump(20);
+    REQUIRE(server.contract_phase() == ContractPhase::Active);
+    REQUIRE_FALSE(snap.wagons.empty());
+    const WagonState& wg = snap.wagons[0];
+    CHECK(wg.goods_total > 0);
+    CHECK(wg.goods_aboard == wg.goods_total);             // fully loaded at the depot
+    CHECK(server.wagon_goods_aboard() == wg.goods_total); // crates in the bed
+    CHECK(server.good_count() == 0);                      // none fallen out yet
+    // The bed crates are networked (loose == 0); none loose on the ground.
+    int in_bed = 0;
+    int loose = 0;
+    for (const GoodState& g : snap.goods) {
+        (g.loose != 0 ? loose : in_bed) += 1;
+    }
+    CHECK(in_bed == wg.goods_total);
+    CHECK(loose == 0);
+}
+
+// Driving a carriage hard in a circle slides the physical cargo around the bed, but the SOLID
+// walls keep it aboard on flat ground - it doesn't spill just from acceleration / hard turns.
+// Scans seeds for a carriage, walks the player to it, takes the reins, then circles. Skips if
+// no carriage can be reached (degrades gracefully, never flakes).
+TEST_CASE("GameServer: a carriage's walls keep the cargo in under hard driving") {
+    bool tested = false;
+    for (u32 attempt = 0; attempt < 12 && !tested; ++attempt) {
+        GameServer server;
+        const u16 port = static_cast<u16>(24672 + attempt);
+        if (!server.start(port, 7000u + attempt * 131u)) {
+            continue;
+        }
+        NetClient c;
+        if (!c.connect("127.0.0.1", port)) {
+            continue;
+        }
+        PlayerId id = 0;
+        Snapshot snap{};
+        PlayerInput intent{};
+        auto pump = [&](int n) {
+            for (int i = 0; i < n; ++i) {
+                c.send_input(intent);
+                server.tick(Timestep{1.0f / 60.0f});
+                for (const ClientEvent& e : c.poll(1)) {
+                    if (e.type == ClientEventType::WelcomeReceived) {
+                        id = e.welcome.your_id;
+                    } else if (e.type == ClientEventType::SnapshotReceived) {
+                        snap = e.snapshot;
+                    }
+                }
+            }
+        };
+        auto me = [&]() -> const PlayerState* {
+            for (const PlayerState& p : snap.players) {
+                if (p.id == id) {
+                    return &p;
+                }
+            }
+            return nullptr;
+        };
+        pump(150);
+        if (id == 0 || server.contract_phase() != ContractPhase::Offer) {
+            continue;
+        }
+        u32 cid = 0;
+        for (const WagonState& w : snap.wagons) {
+            if (vehicle_type(w.type).horse_drawn()) {
+                cid = w.id;
+                break;
+            }
+        }
+        if (cid == 0) {
+            continue; // no carriage offered this seed
+        }
+        intent.vote_wagon = cid;
+        intent.vote_mode = 2; // haul manually -> a carriage is driven from the top
+        pump(20);
+        if (server.contract_phase() != ContractPhase::Active || snap.wagons.empty()) {
+            continue;
+        }
+        // Walk to the parked carriage and take the reins (E within grab range).
+        bool piloting = false;
+        for (int t = 0; t < 600 && !piloting; ++t) {
+            const PlayerState* p = me();
+            if (p == nullptr || snap.wagons.empty()) {
+                pump(1);
+                continue;
+            }
+            Vec3 d = snap.wagons[0].position - p->position;
+            d.y = 0.0f;
+            const f32 dist = glm::length(d);
+            if (dist > 3.0f) {
+                intent.move = d / dist;
+                intent.grab = false;
+            } else {
+                intent.move = Vec3{0.0f};
+                intent.grab = true; // board / take the reins
+            }
+            pump(1);
+            intent.grab = false;
+            const PlayerState* p2 = me();
+            piloting = p2 != nullptr && p2->seated != 0;
+        }
+        if (!piloting) {
+            continue; // couldn't reach the carriage this seed - try another
+        }
+        // Record the crates' starting bed-local positions, then drive a hard circle.
+        const u8 loaded = snap.wagons.empty() ? 0 : snap.wagons[0].goods_aboard;
+        std::vector<u32> ids;
+        std::vector<Vec2> start;
+        for (const GoodState& g : snap.goods) {
+            if (g.loose == 0) {
+                ids.push_back(g.id);
+                start.push_back(Vec2{g.position.x, g.position.z});
+            }
+        }
+        intent.move = Vec3{0.0f};
+        intent.throttle = 1.0f;
+        intent.steer = 1.0f;
+        for (int t = 0; t < 300; ++t) {
+            pump(1);
+        }
+        // The crates slid around the bed...
+        f32 max_move = 0.0f;
+        for (const GoodState& g : snap.goods) {
+            if (g.loose != 0) {
+                continue;
+            }
+            for (usize k = 0; k < ids.size(); ++k) {
+                if (ids[k] == g.id) {
+                    max_move = std::max(max_move, glm::length(Vec2{g.position.x, g.position.z} - start[k]));
+                }
+            }
+        }
+        CHECK(max_move > 0.1f); // they really did slide (physics is live)
+        // ...but the solid walls kept the whole load aboard (nothing spilled on flat ground).
+        CHECK(server.good_count() == 0);
+        CHECK(server.wagon_goods_aboard() == loaded);
+        tested = true;
+    }
+    if (!tested) {
+        MESSAGE("No carriage could be reached to drive - skipping cargo-containment check");
+    }
+}
+
+// A player who walks straight at a parked wagon is blocked by it - they can't pass through to
+// its centre.
+TEST_CASE("GameServer: players are blocked from walking through a wagon") {
+    GameServer server;
+    if (!server.start(24690, 4242u)) {
+        MESSAGE("Could not bind game server - skipping");
+        return;
+    }
+    NetClient c;
+    REQUIRE(c.connect("127.0.0.1", 24690));
+    PlayerId id = 0;
+    Snapshot snap{};
+    PlayerInput intent{};
+    auto pump = [&](int n) {
+        for (int i = 0; i < n; ++i) {
+            c.send_input(intent);
+            server.tick(Timestep{1.0f / 60.0f});
+            for (const ClientEvent& e : c.poll(1)) {
+                if (e.type == ClientEventType::WelcomeReceived) {
+                    id = e.welcome.your_id;
+                } else if (e.type == ClientEventType::SnapshotReceived) {
+                    snap = e.snapshot;
+                }
+            }
+        }
+    };
+    auto me = [&]() -> const PlayerState* {
+        for (const PlayerState& p : snap.players) {
+            if (p.id == id) {
+                return &p;
+            }
+        }
+        return nullptr;
+    };
+    pump(150);
+    REQUIRE(id != 0);
+    if (server.offer_count() == 0 || snap.wagons.empty()) {
+        MESSAGE("Spawn town has no parked wagons - skipping collision check");
+        return;
+    }
+    // Aim at the nearest parked wagon and walk straight into it for a few seconds.
+    const PlayerState* p0 = me();
+    REQUIRE(p0 != nullptr);
+    Vec3 target = snap.wagons[0].position;
+    f32 best = 1e9f;
+    for (const WagonState& w : snap.wagons) {
+        const f32 d = glm::length(w.position - p0->position);
+        if (d < best) {
+            best = d;
+            target = w.position;
+        }
+    }
+    f32 min_dist = 1e9f;
+    for (int t = 0; t < 400; ++t) {
+        const PlayerState* p = me();
+        if (p == nullptr) {
+            pump(1);
+            continue;
+        }
+        Vec3 d = target - p->position;
+        d.y = 0.0f;
+        const f32 dist = glm::length(d);
+        const f32 flat = glm::length(Vec2{p->position.x - target.x, p->position.z - target.z});
+        if (flat < min_dist) {
+            min_dist = flat;
+        }
+        intent.move = dist > 0.1f ? d / dist : Vec3{0.0f};
+        pump(1);
+    }
+    intent.move = Vec3{0.0f};
+    // If the player reached the cart at all, the box collider must have stopped them well shy
+    // of its centre (without collision they'd walk right onto it, min_dist ~0).
+    if (min_dist < 1.7f) {
+        CHECK(min_dist > 0.6f);
+    } else {
+        MESSAGE("Couldn't path to the wagon (blocked by town geometry) - collision not exercised");
+    }
+}
+
+// The cargo crates collide with each other: as the cart accelerates from the depot they pile
+// up, and the bed solver keeps them from overlapping (sliding through one another).
+TEST_CASE("GameServer: cargo crates don't overlap each other in the bed") {
+    GameServer server;
+    if (!server.start(24691, 4242u)) {
+        MESSAGE("Could not bind game server - skipping");
+        return;
+    }
+    NetClient c;
+    REQUIRE(c.connect("127.0.0.1", 24691));
+    PlayerId id = 0;
+    Snapshot snap{};
+    PlayerInput intent{};
+    auto pump = [&](int n) {
+        for (int i = 0; i < n; ++i) {
+            c.send_input(intent);
+            server.tick(Timestep{1.0f / 60.0f});
+            for (const ClientEvent& e : c.poll(1)) {
+                if (e.type == ClientEventType::WelcomeReceived) {
+                    id = e.welcome.your_id;
+                } else if (e.type == ClientEventType::SnapshotReceived) {
+                    snap = e.snapshot;
+                }
+            }
+        }
+    };
+    pump(150);
+    REQUIRE(id != 0);
+    if (server.offer_count() == 0) {
+        MESSAGE("Spawn town has no road-connected neighbour - skipping crate-overlap check");
+        return;
+    }
+    intent.vote_wagon = snap.wagons[0].id;
+    intent.vote_mode = 1; // hire a driver so the cart hauls itself out of town
+    pump(20);
+    REQUIRE(server.contract_phase() == ContractPhase::Active);
+
+    // While the cart travels, the in-bed crates (loose == 0, positions are bed-local) must stay
+    // separated. AABB crates of side 2*kCargoHalf overlap only if BOTH axes are within that.
+    constexpr f32 full = 2.0f * kCargoHalf;
+    f32 worst_overlap = 0.0f;
+    int max_seen = 0;
+    for (int t = 0; t < 240; ++t) {
+        pump(1);
+        std::vector<Vec3> bed;
+        for (const GoodState& g : snap.goods) {
+            if (g.loose == 0) {
+                bed.push_back(g.position); // x, (floor y), z = bed-local
+            }
+        }
+        max_seen = std::max(max_seen, static_cast<int>(bed.size()));
+        for (usize i = 0; i < bed.size(); ++i) {
+            for (usize j = i + 1; j < bed.size(); ++j) {
+                const f32 ox = full - std::abs(bed[i].x - bed[j].x);
+                const f32 oz = full - std::abs(bed[i].z - bed[j].z);
+                if (ox > 0.0f && oz > 0.0f) {
+                    worst_overlap = std::max(worst_overlap, std::min(ox, oz));
+                }
+            }
+        }
+    }
+    REQUIRE(max_seen >= 2);        // a meaningful test needs at least two crates aboard
+    CHECK(worst_overlap < 0.12f);  // never deeply interpenetrating (small solver residual only)
 }

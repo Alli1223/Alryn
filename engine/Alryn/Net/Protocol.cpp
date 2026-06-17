@@ -32,6 +32,8 @@ void write(ByteWriter& w, const PlayerInput& in) {
     w.write_vec3(in.aim);
     w.write_u32(in.vote_wagon);
     w.write_u8(in.vote_mode);
+    w.write_f32(in.throttle);
+    w.write_f32(in.steer);
     write_appearance(w, in.appearance);
 }
 
@@ -52,6 +54,8 @@ bool read(ByteReader& r, PlayerInput& in) {
     in.aim = r.read_vec3();
     in.vote_wagon = r.read_u32();
     in.vote_mode = r.read_u8();
+    in.throttle = r.read_f32();
+    in.steer = r.read_f32();
     read_appearance(r, in.appearance);
     return r.ok();
 }
@@ -75,6 +79,8 @@ void write(ByteWriter& w, const Snapshot& s) {
         w.write_f32(p.yaw);
         w.write_u8(p.health);
         w.write_u8(p.build_stock);
+        w.write_u8(p.seated);
+        w.write_u8(p.carrying);
         write_appearance(w, p.appearance);
     }
     w.write_u16(static_cast<u16>(s.projectiles.size()));
@@ -117,11 +123,23 @@ void write(ByteWriter& w, const Snapshot& s) {
         w.write_vec3(wg.position);
         w.write_f32(wg.yaw);
         w.write_vec3(wg.dest);
+        w.write_vec3(wg.horse_pos);
+        w.write_f32(wg.horse_yaw);
         w.write_u32(wg.reward);
+        w.write_u8(wg.type);
         w.write_u8(wg.health);
         w.write_u8(wg.mode);
         w.write_u8(wg.difficulty);
         w.write_u8(wg.votes);
+        w.write_u8(wg.has_horse);
+        w.write_u8(wg.goods_aboard);
+        w.write_u8(wg.goods_total);
+    }
+    w.write_u16(static_cast<u16>(s.goods.size()));
+    for (const GoodState& g : s.goods) {
+        w.write_u32(g.id);
+        w.write_vec3(g.position);
+        w.write_u8(g.loose);
     }
 }
 
@@ -147,6 +165,8 @@ bool read(ByteReader& r, Snapshot& s) {
         p.yaw = r.read_f32();
         p.health = r.read_u8();
         p.build_stock = r.read_u8();
+        p.seated = r.read_u8();
+        p.carrying = r.read_u8();
         read_appearance(r, p.appearance);
         s.players.push_back(p);
     }
@@ -213,12 +233,28 @@ bool read(ByteReader& r, Snapshot& s) {
         wg.position = r.read_vec3();
         wg.yaw = r.read_f32();
         wg.dest = r.read_vec3();
+        wg.horse_pos = r.read_vec3();
+        wg.horse_yaw = r.read_f32();
         wg.reward = r.read_u32();
+        wg.type = r.read_u8();
         wg.health = r.read_u8();
         wg.mode = r.read_u8();
         wg.difficulty = r.read_u8();
         wg.votes = r.read_u8();
+        wg.has_horse = r.read_u8();
+        wg.goods_aboard = r.read_u8();
+        wg.goods_total = r.read_u8();
         s.wagons.push_back(wg);
+    }
+    const u16 good_count = r.read_u16();
+    s.goods.clear();
+    s.goods.reserve(good_count);
+    for (u16 i = 0; i < good_count && r.ok(); ++i) {
+        GoodState g;
+        g.id = r.read_u32();
+        g.position = r.read_vec3();
+        g.loose = r.read_u8();
+        s.goods.push_back(g);
     }
     return r.ok();
 }

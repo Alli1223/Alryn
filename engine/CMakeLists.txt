@@ -51,6 +51,7 @@ add_library(alryn STATIC
     Alryn/Terrain/RoadNetwork.cpp
     # ---- World -------------------------------------------------------------
     Alryn/World/PropLibrary.cpp
+    Alryn/World/VehicleTypes.cpp
     # ---- Game --------------------------------------------------------------
     Alryn/Game/GameManager.cpp
     Alryn/Game/Contracts.cpp

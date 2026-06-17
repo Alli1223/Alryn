@@ -10,9 +10,12 @@
 #include <Alryn/Terrain/WorldGen.h>
 #include <Alryn/UI/UI.h>
 #include <Alryn/World/PropLibrary.h>
+#include <Alryn/World/VehicleTypes.h>
 #include <Alryn/World/Village.h>
 
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -98,8 +101,21 @@ protected:
             day_seconds_ = std::max(5.0f, static_cast<f32>(std::atof(d)));
         }
         marker_.create(renderer_->device(), primitives::cube(1.0f, Vec3{1.0f, 0.85f, 0.2f}));
-        wagon_mesh_.create(renderer_->device(), PropLibrary::build_wagon().parts[0].mesh);
+        vehicle_meshes_.resize(vehicle_type_count());
+        for (u8 i = 0; i < vehicle_type_count(); ++i) {
+            vehicle_meshes_[i].create(renderer_->device(), vehicle_type(i).body());
+        }
         wagon_wheel_mesh_.create(renderer_->device(), PropLibrary::build_wagon_wheel().parts[0].mesh);
+        horse_body_mesh_.create(renderer_->device(), build_horse_body());
+        horse_leg_mesh_.create(renderer_->device(), build_horse_leg());
+        // A unit rope segment (along +Y, 0..1) for the verlet harness traces; scaled per link.
+        rope_mesh_.create(renderer_->device(),
+                          primitives::box(Vec3{-0.5f, 0.0f, -0.5f}, Vec3{0.5f, 1.0f, 0.5f},
+                                          Vec3{0.16f, 0.11f, 0.06f}));
+        // A cargo crate (spilled goods on the ground / carried back to the cart).
+        goods_mesh_.create(renderer_->device(),
+                           primitives::box(Vec3{-0.22f, 0.0f, -0.22f}, Vec3{0.22f, 0.44f, 0.22f},
+                                           Vec3{0.55f, 0.40f, 0.22f}));
         // A large wave grid that follows the player; the water shader animates it.
         water_mesh_.create(renderer_->device(), primitives::grid(80, 2.0f, Vec3{0.1f, 0.3f, 0.4f}));
         // Shared tree meshes (trunk opaque, foliage alpha-blendable); instances vary.
@@ -537,6 +553,7 @@ protected:
             update_enemy_visuals(dt);
             update_villager_visuals(dt);
             update_feedback(dt);
+            update_ropes(dt);
 
             if (terrain_ != nullptr && renderer_ != nullptr) {
                 terrain_->update(local_feet(), renderer_->device());
@@ -580,10 +597,17 @@ protected:
             [&](const Mesh& mesh) { renderer_->draw_vegetation(mesh, Mat4{1.0f}); });
 
         if (have_snapshot_) {
+            const net::WagonState* aw = active_wagon();
             for (const net::PlayerState& p : snapshot_.players) {
                 const auto it = visuals_.find(p.id);
                 if (it != visuals_.end()) {
-                    draw_character(it->second, p.position, p.yaw);
+                    // Seated riders attach to the cart's tilt + bob so they ride with it.
+                    const Vec3 feet =
+                        (p.seated != 0 && aw != nullptr) ? attach_to_wagon(*aw, p.position) : p.position;
+                    draw_character(it->second, feet, p.yaw, p.seated != 0);
+                }
+                if (p.carrying != 0) {
+                    draw_carried_good(p.position, p.yaw);
                 }
             }
         }
@@ -592,6 +616,7 @@ protected:
         draw_fires();
         draw_barricades();
         draw_wagons();
+        draw_goods();
         draw_swing();
 
         // Tree trunks (opaque).
@@ -857,8 +882,15 @@ protected:
             set->clear();
         }
         marker_.destroy();
-        wagon_mesh_.destroy();
+        for (Mesh& vm : vehicle_meshes_) {
+            vm.destroy();
+        }
+        vehicle_meshes_.clear();
         wagon_wheel_mesh_.destroy();
+        horse_body_mesh_.destroy();
+        horse_leg_mesh_.destroy();
+        rope_mesh_.destroy();
+        goods_mesh_.destroy();
         water_mesh_.destroy();
         terrain_.reset();
         client_.disconnect();
@@ -1273,32 +1305,65 @@ private:
         return burn;
     }
 
-    // Builds the wagon's transform so it sits ON the terrain: pitched along its travel
-    // direction and rolled across it to match the ground slope under the wheels, plus a
-    // little speed-based bob, so it bumps over hills like a real cart. Keeps the existing
-    // yaw convention (rotateY) and layers the tilt on top.
-    Mat4 wagon_model(const net::WagonState& wg, f32 moved) const {
-        // The wagon mesh faces local +X. The server yaw has forward = (cos, sin) in world
-        // xz, and glm::rotate(-yaw) maps local +X exactly there - so the tongue points the
-        // way the cart travels (toward its puller).
+    // The cart's terrain-following orientation + bob. It simply sits ON the ground: pitched
+    // along its travel direction and rolled across it to match the slope under the wheels (no
+    // tilt/flip dynamics - any drama is the physical cargo sliding around). Bob is a speed jiggle.
+    void wagon_orient(const net::WagonState& wg, f32 moved, f32& pitch, f32& roll, f32& bob) const {
         const f32 cy = std::cos(wg.yaw);
         const f32 sy = std::sin(wg.yaw);
-        const Vec2 fwd{cy, sy};   // world xz the cart faces (local +X under rotate(-yaw))
-        const Vec2 lat{-sy, cy};  // world xz of local +Z under rotate(-yaw)
-        constexpr f32 d = 0.75f;  // wheelbase-ish sample offset
+        const Vec2 fwd{cy, sy};  // world xz the cart faces (local +X under rotate(-yaw))
+        const Vec2 lat{-sy, cy}; // world xz across the cart (local +Z)
+        constexpr f32 d = 0.75f;
         auto height = [&](const Vec2& o) {
             return worldgen::height(wg.position.x + o.x, wg.position.z + o.y, world_seed_);
         };
         const f32 slope_f = (height(fwd * d) - height(fwd * -d)) / (2.0f * d);
         const f32 slope_l = (height(lat * d) - height(lat * -d)) / (2.0f * d);
-        const f32 pitch = glm::clamp(std::atan(slope_f), -0.5f, 0.5f); // nose up going uphill
-        const f32 roll = glm::clamp(-std::atan(slope_l), -0.5f, 0.5f);
-        const f32 bob = std::sin(elapsed_ * 11.0f + wg.position.x * 0.7f) * 0.04f *
-                        glm::clamp(moved * 12.0f, 0.0f, 1.0f);
+        pitch = glm::clamp(std::atan(slope_f), -0.6f, 0.6f); // nose up going uphill
+        roll = glm::clamp(-std::atan(slope_l), -0.6f, 0.6f); // lean across the slope
+        bob = std::sin(elapsed_ * 11.0f + wg.position.x * 0.7f) * 0.04f *
+              glm::clamp(moved * 12.0f, 0.0f, 1.0f);
+    }
+
+    Mat4 wagon_model(const net::WagonState& wg, f32 moved) const {
+        // The wagon mesh faces local +X. The server yaw has forward = (cos, sin) in world
+        // xz, and glm::rotate(-yaw) maps local +X exactly there - so the tongue points the
+        // way the cart travels (toward its puller).
+        f32 pitch, roll, bob;
+        wagon_orient(wg, moved, pitch, roll, bob);
         return glm::translate(Mat4{1.0f}, Vec3{wg.position.x, wg.position.y + bob, wg.position.z}) *
                glm::rotate(Mat4{1.0f}, -wg.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
                glm::rotate(Mat4{1.0f}, pitch, Vec3{0.0f, 0.0f, 1.0f}) *
                glm::rotate(Mat4{1.0f}, roll, Vec3{1.0f, 0.0f, 0.0f});
+    }
+
+    // Re-applies the cart's lean + bob to a rider's flat (server) seat position, so a seated
+    // player/driver rides with the cart instead of floating above its tilt.
+    Vec3 attach_to_wagon(const net::WagonState& wg, const Vec3& flat_world) const {
+        f32 pitch, roll, bob;
+        wagon_orient(wg, wagon_frame_move(wg), pitch, roll, bob);
+        const Mat4 tilt = glm::rotate(Mat4{1.0f}, pitch, Vec3{0.0f, 0.0f, 1.0f}) *
+                          glm::rotate(Mat4{1.0f}, roll, Vec3{1.0f, 0.0f, 0.0f});
+        const Vec3 off = Vec3{tilt * Vec4{flat_world - wg.position, 0.0f}};
+        return wg.position + off + Vec3{0.0f, bob, 0.0f};
+    }
+
+    // The single active cargo wagon being hauled (riders attach to it), or nullptr.
+    const net::WagonState* active_wagon() const {
+        if (have_snapshot_ && snapshot_.contract_phase == static_cast<u8>(ContractPhase::Active) &&
+            !snapshot_.wagons.empty()) {
+            return &snapshot_.wagons.front();
+        }
+        return nullptr;
+    }
+
+    // This frame's cart displacement (for the bob), from the position cached in draw_wagons.
+    f32 wagon_frame_move(const net::WagonState& wg) const {
+        const auto it = wagon_prev_.find(wg.id);
+        if (it == wagon_prev_.end()) {
+            return 0.0f;
+        }
+        return glm::length(Vec2{wg.position.x - it->second.x, wg.position.z - it->second.z});
     }
 
     // Draws the networked wagons (the parked offers, then the active cargo): the body
@@ -1316,26 +1381,218 @@ private:
             }
             tint = glm::mix(Vec3{0.35f, 0.28f, 0.22f}, tint, glm::clamp(hp, 0.25f, 1.0f));
 
-            // Spin the wheels by however far the cart has rolled since last frame.
+            const VehicleType& vt = vehicle_type(wg.type);
+
+            // Spin the wheels at their true rolling speed: with no slip the wheel turns
+            // (ground distance / wheel radius) radians. Sign it by the travel direction so a
+            // reversing carriage rolls its wheels backward.
             f32& roll = wagon_roll_[wg.id];
             f32 moved = 0.0f;
             const auto prev = wagon_prev_.find(wg.id);
             if (prev != wagon_prev_.end()) {
-                moved = glm::length(Vec2{wg.position.x - prev->second.x, wg.position.z - prev->second.z});
-                roll -= moved / kWagonWheelRadius;
+                const Vec2 delta{wg.position.x - prev->second.x, wg.position.z - prev->second.z};
+                moved = glm::length(delta);
+                const Vec2 fwd{std::cos(wg.yaw), std::sin(wg.yaw)};
+                roll -= glm::dot(delta, fwd) / vt.wheel_radius(); // signed distance / radius
             }
             wagon_prev_[wg.id] = wg.position;
 
             const Mat4 m = wagon_model(wg, moved);
-            renderer_->draw(wagon_mesh_, m, Vec4{tint, 1.0f});
-            for (const f32 sx : {-kWagonWheelX, kWagonWheelX}) {
-                for (const f32 sz : {-kWagonWheelZ, kWagonWheelZ}) {
-                    const Mat4 wm = m *
-                                    glm::translate(Mat4{1.0f}, Vec3{sx, kWagonWheelRadius, sz}) *
-                                    glm::rotate(Mat4{1.0f}, roll, Vec3{0.0f, 0.0f, 1.0f});
-                    renderer_->draw(wagon_wheel_mesh_, wm, Vec4{tint, 1.0f});
+            renderer_->draw(vehicle_meshes_[wg.type % vehicle_meshes_.size()], m, Vec4{tint, 1.0f});
+
+            // Wheels (scaled to the type's radius), spun by the accumulated roll.
+            const f32 wscale = vt.wheel_radius() / kWagonWheelRadius;
+            for (const Vec3& off : vt.wheels()) {
+                const Mat4 wm = m * glm::translate(Mat4{1.0f}, off) *
+                                glm::rotate(Mat4{1.0f}, roll, Vec3{0.0f, 0.0f, 1.0f}) *
+                                glm::scale(Mat4{1.0f}, Vec3{wscale});
+                renderer_->draw(wagon_wheel_mesh_, wm, Vec4{tint, 1.0f});
+            }
+
+            // The lamp: an emissive glow always, plus a warm light at night when near.
+            const Vec3 lampw = Vec3{m * Vec4{vt.lamp(), 1.0f}};
+            const f32 night = 1.0f - sun_intensity_;
+            const f32 glow = glm::mix(1.0f, 0.5f, sun_intensity_);
+            renderer_->draw_emissive(shape_sphere_,
+                                     glm::translate(Mat4{1.0f}, lampw) *
+                                         glm::scale(Mat4{1.0f}, Vec3{0.16f}),
+                                     Vec4{glow, glow * 0.82f, glow * 0.5f, 1.0f});
+            if (night > 0.12f && glm::length(lampw - local_feet()) < 38.0f) {
+                Renderer::SpotLight sl;
+                sl.position = lampw;
+                sl.direction = Vec3{0.0f, -1.0f, 0.0f};
+                sl.color = Vec3{1.0f, 0.82f, 0.5f} * (1.5f * night);
+                sl.range = 13.0f;
+                sl.cone_outer_cos = std::cos(glm::radians(70.0f));
+                sl.cone_inner_cos = std::cos(glm::radians(45.0f));
+                sl.cast_shadow = false;
+                renderer_->add_light(sl);
+            }
+
+            // The pulling horse (carriages), with a simple walking leg gait + harness ropes.
+            if (wg.has_horse) {
+                draw_horse(wg.horse_pos, wg.horse_yaw);
+                draw_ropes(wg.id);
+            }
+        }
+    }
+
+    // Cargo crates: in-bed ones (loose==0) ride in the cart (their position is bed-local, so we
+    // place them through the cart transform - they slide + tilt + bob with it); fallen ones
+    // (loose==1) lie on the ground at a world position until picked up (E).
+    void draw_goods() {
+        if (renderer_ == nullptr || !have_snapshot_) {
+            return;
+        }
+        const net::WagonState* aw = active_wagon();
+        const Mat4 cart = aw != nullptr ? wagon_model(*aw, wagon_frame_move(*aw)) : Mat4{1.0f};
+        for (const net::GoodState& g : snapshot_.goods) {
+            Mat4 m;
+            if (g.loose == 0 && aw != nullptr) {
+                // Bed-local position -> world via the cart transform (centred crate on the floor).
+                m = cart * glm::translate(Mat4{1.0f}, g.position + Vec3{0.0f, kCargoHalf, 0.0f});
+            } else {
+                // A slight per-crate lean so fallen goods look tumbled rather than neatly placed.
+                m = glm::translate(Mat4{1.0f}, g.position) *
+                    glm::rotate(Mat4{1.0f}, static_cast<f32>(g.id) * 1.3f, Vec3{0.0f, 1.0f, 0.0f}) *
+                    glm::rotate(Mat4{1.0f}, 0.18f, Vec3{1.0f, 0.0f, 0.0f});
+            }
+            renderer_->draw(goods_mesh_, m);
+        }
+    }
+
+    // A crate held in front of a player who is carrying a spilled good back to the cart.
+    void draw_carried_good(const Vec3& feet, f32 yaw) {
+        const Vec3 fwd{std::cos(yaw), 0.0f, std::sin(yaw)};
+        const Vec3 pos = feet + Vec3{0.0f, 0.85f, 0.0f} + fwd * 0.35f;
+        const Mat4 m = glm::translate(Mat4{1.0f}, pos) *
+                       glm::rotate(Mat4{1.0f}, -yaw, Vec3{0.0f, 1.0f, 0.0f});
+        renderer_->draw(goods_mesh_, m);
+    }
+
+    // Renders a wagon's two verlet harness traces as a chain of short oriented links (the
+    // node positions are simulated in update_ropes from the authoritative endpoints).
+    void draw_ropes(u32 id) {
+        const auto it = wagon_ropes_.find(id);
+        if (it == wagon_ropes_.end()) {
+            return;
+        }
+        constexpr f32 thick = 0.04f;
+        const Vec4 col{0.16f, 0.11f, 0.06f, 1.0f};
+        for (const RopeTrace& r : it->second) {
+            if (!r.init) {
+                continue;
+            }
+            for (int i = 0; i < kRopeNodes - 1; ++i) {
+                const Vec3 a = r.pos[i];
+                const Vec3 d = r.pos[i + 1] - a;
+                const f32 L = glm::length(d);
+                if (L < 1e-4f) {
+                    continue;
+                }
+                // Build a basis whose +Y maps along the link (the rope mesh runs y = 0..1).
+                const Vec3 up = d / L;
+                const Vec3 ref = std::abs(up.y) < 0.99f ? Vec3{0.0f, 1.0f, 0.0f} : Vec3{1.0f, 0.0f, 0.0f};
+                const Vec3 bx = glm::normalize(glm::cross(ref, up));
+                const Vec3 bz = glm::cross(up, bx);
+                Mat4 m{1.0f};
+                m[0] = Vec4{bx * thick, 0.0f};
+                m[1] = Vec4{up * L, 0.0f};
+                m[2] = Vec4{bz * thick, 0.0f};
+                m[3] = Vec4{a, 1.0f};
+                renderer_->draw(rope_mesh_, m, col);
+            }
+        }
+    }
+
+    // Simulates the harness traces: two ropes (left/right) per horse-drawn wagon, each a
+    // verlet chain pinned to the carriage shaft tip and the horse's collar, sagging under
+    // gravity and swinging as the rig moves - so the rope is real physics, not a fixed line.
+    void update_ropes(Timestep dt) {
+        if (!have_snapshot_) {
+            wagon_ropes_.clear();
+            return;
+        }
+        const f32 h = std::min(dt.seconds, 1.0f / 30.0f); // clamp the step for stability
+        auto to_world = [](const Vec3& center, f32 yaw, const Vec3& local) {
+            return center + Vec3{glm::rotate(Mat4{1.0f}, -yaw, Vec3{0.0f, 1.0f, 0.0f}) *
+                                 Vec4{local, 0.0f}};
+        };
+        for (const net::WagonState& wg : snapshot_.wagons) {
+            if (!wg.has_horse) {
+                continue;
+            }
+            std::array<RopeTrace, 2>& ropes = wagon_ropes_[wg.id];
+            for (int side = 0; side < 2; ++side) {
+                const f32 s = side == 0 ? 1.0f : -1.0f;
+                const Vec3 A = to_world(wg.position, wg.yaw, Vec3{2.4f, 0.75f, 0.12f * s}); // shaft tip
+                const Vec3 B = to_world(wg.horse_pos, wg.horse_yaw, Vec3{0.45f, 1.05f, 0.18f * s}); // collar
+                RopeTrace& r = ropes[side];
+                if (!r.init) {
+                    for (int i = 0; i < kRopeNodes; ++i) {
+                        const f32 t = static_cast<f32>(i) / static_cast<f32>(kRopeNodes - 1);
+                        r.pos[i] = glm::mix(A, B, t);
+                        r.prev[i] = r.pos[i];
+                    }
+                    r.init = true;
+                }
+                r.pos[0] = A; // pin the ends to the live attachment points
+                r.prev[0] = A;
+                r.pos[kRopeNodes - 1] = B;
+                r.prev[kRopeNodes - 1] = B;
+                for (int i = 1; i < kRopeNodes - 1; ++i) { // verlet: gravity + damping
+                    const Vec3 cur = r.pos[i];
+                    const Vec3 vel = (r.pos[i] - r.prev[i]) * 0.94f;
+                    r.pos[i] = cur + vel + Vec3{0.0f, -12.0f, 0.0f} * (h * h);
+                    r.prev[i] = cur;
+                }
+                const f32 seg = glm::length(B - A) * 1.08f / static_cast<f32>(kRopeNodes - 1);
+                for (int it = 0; it < 10; ++it) { // satisfy link lengths (a touch slack = sag)
+                    for (int i = 0; i < kRopeNodes - 1; ++i) {
+                        const Vec3 d = r.pos[i + 1] - r.pos[i];
+                        const f32 l = glm::length(d);
+                        if (l < 1e-5f) {
+                            continue;
+                        }
+                        const Vec3 corr = d * ((l - seg) / l);
+                        const bool af = i != 0;
+                        const bool bf = i + 1 != kRopeNodes - 1;
+                        if (af && bf) {
+                            r.pos[i] += corr * 0.5f;
+                            r.pos[i + 1] -= corr * 0.5f;
+                        } else if (af) {
+                            r.pos[i] += corr;
+                        } else if (bf) {
+                            r.pos[i + 1] -= corr;
+                        }
+                    }
                 }
             }
+        }
+        // Cull ropes whose wagon is gone / no longer horse-drawn.
+        for (auto it = wagon_ropes_.begin(); it != wagon_ropes_.end();) {
+            const bool live = std::any_of(snapshot_.wagons.begin(), snapshot_.wagons.end(),
+                                          [&](const net::WagonState& w) {
+                                              return w.id == it->first && w.has_horse != 0;
+                                          });
+            it = live ? std::next(it) : wagon_ropes_.erase(it);
+        }
+    }
+
+    // Draws the carriage's horse with a simple diagonal leg gait driven by its motion.
+    void draw_horse(const Vec3& pos, f32 yaw) {
+        const f32 moved = glm::length(Vec2{pos.x - horse_prev_.x, pos.z - horse_prev_.z});
+        horse_gait_ += moved * 2.2f;
+        horse_prev_ = pos;
+        const Mat4 base = glm::translate(Mat4{1.0f}, pos) *
+                          glm::rotate(Mat4{1.0f}, -yaw, Vec3{0.0f, 1.0f, 0.0f});
+        renderer_->draw(horse_body_mesh_, base);
+        for (int k = 0; k < 4; ++k) {
+            const f32 sign = (k == 0 || k == 3) ? 1.0f : -1.0f; // diagonal pairs
+            const f32 swing = std::sin(horse_gait_) * 0.5f * sign;
+            const Mat4 lm = base * glm::translate(Mat4{1.0f}, kHorseLegs[k]) *
+                            glm::rotate(Mat4{1.0f}, swing, Vec3{0.0f, 0.0f, 1.0f});
+            renderer_->draw(horse_leg_mesh_, lm);
         }
     }
 
@@ -1385,9 +1642,9 @@ private:
                 const f32 dist = glm::length(Vec2{wg.dest.x - feet.x, wg.dest.z - feet.z});
                 const bool picked = wg.id == selected_wagon_;
                 std::string stars(wg.difficulty, '*');
-                const std::string line = std::format("[{}] $ {}   risk {}   ~{}m   ({}/{})", idx,
-                                                      wg.reward, stars, static_cast<int>(dist),
-                                                      wg.votes, total);
+                const std::string line = std::format("[{}] {} $ {}   risk {}   ~{}m   ({}/{})", idx,
+                                                      vehicle_type(wg.type).name(), wg.reward, stars,
+                                                      static_cast<int>(dist), wg.votes, total);
                 draw.text(Vec2{24.0f, ty}, line, ts * 0.8f,
                           picked ? Vec4{1.0f, 0.95f, 0.6f, 1.0f} : Vec4{0.8f, 0.82f, 0.86f, 1.0f});
                 ty += ts * 1.1f;
@@ -1406,21 +1663,58 @@ private:
                       ts * 0.72f, Vec4{0.66f, 0.78f, 0.7f, 1.0f});
         } else if (phase == static_cast<u8>(ContractPhase::Active) && !snapshot_.wagons.empty()) {
             const net::WagonState& wg = snapshot_.wagons.front();
+            const VehicleType& vt = vehicle_type(wg.type);
             const f32 dist = glm::length(Vec2{wg.dest.x - feet.x, wg.dest.z - feet.z});
             const bool manual = wg.mode == static_cast<u8>(WagonMode::Manual);
+            std::string title = vt.name();
+            for (char& c : title) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
             draw.text(Vec2{24.0f, 22.0f},
-                      std::format("DELIVER THE WAGON   $ {}{}   ~{}m", wg.reward,
+                      std::format("DELIVER THE {}   $ {}{}   ~{}m", title, wg.reward,
                                   manual ? " (manual)" : "", static_cast<int>(dist)),
                       ts, Vec4{0.94f, 0.86f, 0.58f, 1.0f});
+            // Cargo load (pay scales with the share delivered).
+            const bool short_load = wg.goods_aboard < wg.goods_total;
+            draw.text(Vec2{24.0f, 22.0f + ts * 1.5f},
+                      std::format("GOODS {}/{}", wg.goods_aboard, wg.goods_total), ts * 0.72f,
+                      short_load ? Vec4{0.95f, 0.7f, 0.35f, 1.0f} : Vec4{0.66f, 0.78f, 0.7f, 1.0f});
             // Wagon health bar.
             const f32 wf = static_cast<f32>(wg.health) / 255.0f;
-            draw.rect(Vec4{24.0f, 22.0f + ts * 1.5f, 220.0f, 12.0f}, Vec4{0.05f, 0.05f, 0.07f, 0.7f},
+            draw.rect(Vec4{24.0f, 22.0f + ts * 2.6f, 220.0f, 12.0f}, Vec4{0.05f, 0.05f, 0.07f, 0.7f},
                       3.0f);
-            draw.rect(Vec4{24.0f, 22.0f + ts * 1.5f, 220.0f * std::max(wf, 0.0f), 12.0f},
+            draw.rect(Vec4{24.0f, 22.0f + ts * 2.6f, 220.0f * std::max(wf, 0.0f), 12.0f},
                       Vec4{glm::mix(Vec3{0.8f, 0.3f, 0.2f}, Vec3{0.5f, 0.7f, 0.4f}, wf), 0.95f}, 3.0f);
-            draw.text(Vec2{24.0f, 22.0f + ts * 2.8f},
-                      manual ? "[E] haul / ride the wagon" : "[E] ride on the wagon", ts * 0.72f,
-                      Vec4{0.66f, 0.78f, 0.7f, 1.0f});
+            // Contextual E hint: righting a flipped cart / handling goods take priority.
+            bool carrying = false;
+            for (const net::PlayerState& pp : snapshot_.players) {
+                if (pp.id == my_id_) {
+                    carrying = pp.carrying != 0;
+                }
+            }
+            bool near_good = false;
+            for (const net::GoodState& g : snapshot_.goods) {
+                if (g.loose != 0 && glm::length(g.position - feet) < kGoodPickupRange + 0.5f) {
+                    near_good = true;
+                }
+            }
+            std::string hint;
+            if (carrying) {
+                hint = "[E] load the crate into the cart";
+            } else if (near_good) {
+                hint = "[E] pick up the fallen crate";
+            } else if (!manual) {
+                hint = "[E] ride on the wagon";
+            } else if (vt.horse_drawn()) {
+                hint = "[E] drive (W/S throttle, A/D rein) / ride";
+            } else {
+                hint = "[E] haul / ride the wagon";
+            }
+            draw.text(Vec2{24.0f, 22.0f + ts * 4.0f}, hint, ts * 0.72f, Vec4{0.66f, 0.78f, 0.7f, 1.0f});
+            // Warn when crates have bounced out and aren't recovered (pay is dropping).
+            if (short_load) {
+                const char* warn = "CARGO SPILLING - RECOVER THE CRATES";
+                draw.text(Vec2{(W - draw.text_width(warn, ts * 0.9f)) * 0.5f, H * 0.3f}, warn,
+                          ts * 0.9f, Vec4{0.95f, 0.6f, 0.3f, 1.0f});
+            }
             draw_dest_arrow(draw, feet, Vec3{wg.dest.x, feet.y, wg.dest.z}, W);
         }
 
@@ -1636,10 +1930,13 @@ private:
         }
     }
 
-    void draw_character(PlayerVisual& v, const Vec3& feet, f32 yaw) {
-        const Mat4 root = glm::translate(Mat4{1.0f}, feet) *
+    void draw_character(PlayerVisual& v, const Vec3& feet, f32 yaw, bool seated = false) {
+        // Seated riders sink onto the bench (the sit pose folds the legs forward).
+        const Vec3 base = seated ? feet - Vec3{0.0f, 0.42f, 0.0f} : feet;
+        const Mat4 root = glm::translate(Mat4{1.0f}, base) *
                           glm::rotate(Mat4{1.0f}, HalfPi - yaw, Vec3{0.0f, 1.0f, 0.0f});
-        const std::vector<Quat> pose = v.animator.pose(v.model);
+        const std::vector<Quat> pose =
+            seated ? CharacterAnimator::sit_pose(v.model) : v.animator.pose(v.model);
         draw_rig(v.model, v.model.bone_matrices(root, pose));
     }
 
@@ -1693,9 +1990,17 @@ private:
                 continue;
             }
             PlayerVisual& v = it->second;
-            const Mat4 root = glm::translate(Mat4{1.0f}, vl.position) *
+            // Kind 3 is a hired carriage driver sitting on the top seat (sit pose), attached to
+            // the cart's tilt + bob so they ride with it.
+            const bool seated = vl.kind == 3;
+            const net::WagonState* aw = seated ? active_wagon() : nullptr;
+            const Vec3 seat = (aw != nullptr) ? attach_to_wagon(*aw, vl.position) : vl.position;
+            const Vec3 base = seated ? seat - Vec3{0.0f, 0.42f, 0.0f} : vl.position;
+            const Mat4 root = glm::translate(Mat4{1.0f}, base) *
                               glm::rotate(Mat4{1.0f}, HalfPi - vl.yaw, Vec3{0.0f, 1.0f, 0.0f});
-            const std::vector<Mat4> mats = v.model.bone_matrices(root, v.animator.pose(v.model));
+            const std::vector<Quat> pose =
+                seated ? CharacterAnimator::sit_pose(v.model) : v.animator.pose(v.model);
+            const std::vector<Mat4> mats = v.model.bone_matrices(root, pose);
             // Guards (kind 1) wear a steel tint + carry a spear gripped in the hand.
             if (vl.kind == 1) {
                 draw_rig(v.model, mats, Vec3{0.72f, 0.76f, 0.86f});
@@ -1716,13 +2021,15 @@ private:
         const Vec3 cam_right{-cam_fwd.z, 0.0f, cam_fwd.x};
         Vec3 move{0.0f};
         bool jump = false;
+        f32 throttle = 0.0f; // raw W/S - drives a carriage when piloting (else ignored)
+        f32 steer = 0.0f;    // raw A/D - reins the horses (RDR-style) when piloting
         // While the pause menu is up the player holds still (and ignores WASD/SPACE
         // that would otherwise leak through to movement).
         if (Input* in = input(); in != nullptr && !paused_ && !map_open_) {
-            if (in->key_down(key::W)) move += cam_fwd;
-            if (in->key_down(key::S)) move -= cam_fwd;
-            if (in->key_down(key::D)) move += cam_right;
-            if (in->key_down(key::A)) move -= cam_right;
+            if (in->key_down(key::W)) { move += cam_fwd; throttle += 1.0f; }
+            if (in->key_down(key::S)) { move -= cam_fwd; throttle -= 1.0f; }
+            if (in->key_down(key::D)) { move += cam_right; steer += 1.0f; } // rein right
+            if (in->key_down(key::A)) { move -= cam_right; steer -= 1.0f; } // rein left
             jump = in->key_down(key::Space);
         }
         if (glm::length(move) > 0.01f) {
@@ -1734,6 +2041,8 @@ private:
         packet.move = move;
         packet.yaw = face_yaw_;
         packet.jump = jump;
+        packet.throttle = throttle;
+        packet.steer = steer;
         packet.add = pending_add_;
         packet.fire = pending_fire_;
         packet.attack = pending_attack_;
@@ -1906,10 +2215,25 @@ private:
     bool pending_grab_ = false; // one-shot hitch/unhitch the nearest wagon
     u32 selected_wagon_ = 0;    // wagon id this client is voting for (0 = none)
     u8 vote_mode_ = 1;          // 1 = hire driver, 2 = haul manually
-    Mesh wagon_mesh_;           // shared cart body mesh, drawn per networked wagon
-    Mesh wagon_wheel_mesh_;     // a single wheel, drawn x4 and spun as the cart rolls
+    std::vector<Mesh> vehicle_meshes_; // one body mesh per VehicleType (cart/wagon/carriage)
+    Mesh wagon_wheel_mesh_;     // a single wheel, drawn x4 (scaled per type) and spun
+    Mesh horse_body_mesh_;      // the carriage puller
+    Mesh horse_leg_mesh_;       // a single leg, drawn x4 with a gait swing
+    Mesh rope_mesh_;            // a unit harness-trace link, drawn per rope segment
+    Mesh goods_mesh_;           // a cargo crate (spilled on the ground / carried by a player)
     std::unordered_map<u32, f32> wagon_roll_;  // accumulated wheel spin per wagon id
     std::unordered_map<u32, Vec3> wagon_prev_; // last wagon position (to derive roll)
+    f32 horse_gait_ = 0.0f;     // horse leg-swing phase (from its motion)
+    Vec3 horse_prev_{0.0f};
+    // Verlet harness traces: two ropes (left/right) per horse-drawn wagon, simulated each
+    // frame between the carriage shaft tips and the horse's collar so they sag + swing.
+    static constexpr int kRopeNodes = 7;
+    struct RopeTrace {
+        Vec3 pos[kRopeNodes];
+        Vec3 prev[kRopeNodes];
+        bool init = false;
+    };
+    std::unordered_map<u32, std::array<RopeTrace, 2>> wagon_ropes_;
     f32 hit_flash_ = 0.0f;   // red damage-flash intensity (decays)
     f32 last_health_ = 1.0f; // last seen local health fraction (to detect hits)
     f32 swing_time_ = 0.0f;  // melee swing-arc animation timer (counts down)

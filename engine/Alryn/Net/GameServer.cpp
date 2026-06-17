@@ -3,6 +3,7 @@
 #include <Alryn/Core/Density.h>
 #include <Alryn/Core/Log.h>
 #include <Alryn/Terrain/WorldGen.h>
+#include <Alryn/World/VehicleTypes.h>
 #include <Alryn/World/Village.h>
 
 #include <cmath>
@@ -157,14 +158,26 @@ void GameServer::tick(Timestep dt) {
     }
 
     for (auto& [id, player] : players_) {
-        if (riders_.count(id) != 0u) {
-            continue; // riding the wagon - position is set by the contract update
+        if (riders_.count(id) != 0u || id == pilot_) {
+            continue; // riding/driving the wagon - position is set by the contract update
+        }
+        Vec3 move = player.input.move;
+        if (id == tower_ && contract_phase_ == ContractPhase::Active) {
+            // Hauling a cart is heavy work: slow the puller by the cart's size + damage.
+            const f32 hf = active_.health / kWagonHealth;
+            const f32 f = tow_speed_factor(vehicle_type(active_.type).capacity(), hf);
+            const f32 l = glm::length(Vec2{move.x, move.z});
+            if (l > 1e-3f) {
+                move = move / l * f; // exact fraction of walk speed, any direction
+            }
         }
         if (collision_) {
             collision_->gather(player.controller.position(), collider_scratch_);
+        } else {
+            collider_scratch_.clear();
         }
-        player.controller.update(density, player.input.move, player.input.jump, dt,
-                                 collider_scratch_);
+        append_wagon_colliders(collider_scratch_); // can't walk through parked / hauled carts
+        player.controller.update(density, move, player.input.jump, dt, collider_scratch_);
     }
 
     // Step thrown rocks: gravity + bounce off terrain/props. With combat dormant they
@@ -188,10 +201,14 @@ void GameServer::tick(Timestep dt) {
     snapshot.contract_phase = static_cast<u8>(contract_phase_);
     snapshot.contract_outcome = contract_outcome_;
     snapshot.players.reserve(players_.size());
+    const bool active = contract_phase_ == ContractPhase::Active;
     for (const auto& [id, player] : players_) {
         const u8 hp = static_cast<u8>(glm::clamp(player.health, 0.0f, kPlayerMaxHealth));
-        snapshot.players.push_back({id, player.controller.position(), player.input.yaw, hp, 0,
-                                    player.input.appearance});
+        const bool seated = active && (riders_.count(id) != 0u || id == pilot_);
+        const f32 yaw = seated ? active_.yaw : player.input.yaw; // seated -> face the vehicle
+        snapshot.players.push_back({id, player.controller.position(), yaw, hp, 0,
+                                    static_cast<u8>(seated ? 1 : 0),
+                                    static_cast<u8>(player.carrying ? 1 : 0), player.input.appearance});
     }
     snapshot.projectiles.reserve(projectiles_.size());
     for (const Projectile& pr : projectiles_) {
@@ -223,20 +240,48 @@ void GameServer::tick(Timestep dt) {
         }
         return n;
     };
-    auto wagon_state = [&](const Wagon& w, WagonMode mode, u8 votes) {
-        const u8 hp = static_cast<u8>(glm::clamp(w.health / kWagonHealth, 0.0f, 1.0f) * 255.0f);
-        return net::WagonState{w.id,         w.position, w.yaw,
-                               Vec3{w.dest.x, 0.0f, w.dest.y},
-                               w.reward,      hp,        static_cast<u8>(mode),
-                               w.difficulty,  votes};
+    auto wagon_state = [&](const Wagon& w, WagonMode mode, u8 votes, bool with_horse) {
+        net::WagonState s;
+        s.id = w.id;
+        s.position = w.position;
+        s.yaw = w.yaw;
+        s.dest = Vec3{w.dest.x, 0.0f, w.dest.y};
+        s.reward = w.reward;
+        s.type = w.type;
+        s.health = static_cast<u8>(glm::clamp(w.health / kWagonHealth, 0.0f, 1.0f) * 255.0f);
+        s.mode = static_cast<u8>(mode);
+        s.difficulty = w.difficulty;
+        s.votes = votes;
+        s.goods_aboard = static_cast<u8>(cargo_.size()); // crates still in the bed
+        s.goods_total = w.goods_total;
+        if (with_horse) {
+            s.has_horse = 1;
+            s.horse_pos = horse_pos_;
+            s.horse_yaw = horse_yaw_;
+        }
+        return s;
     };
     if (contract_phase_ == ContractPhase::Offer) {
         snapshot.wagons.reserve(offers_.size());
         for (const Wagon& w : offers_) {
-            snapshot.wagons.push_back(wagon_state(w, WagonMode::Parked, vote_count(w.id)));
+            snapshot.wagons.push_back(wagon_state(w, WagonMode::Parked, vote_count(w.id), false));
         }
     } else { // Active / Settle: just the cargo
-        snapshot.wagons.push_back(wagon_state(active_, active_mode_, 0));
+        snapshot.wagons.push_back(wagon_state(active_, active_mode_, 0, has_horse_));
+    }
+    // Cargo crates: the ones in the bed ride as LOCAL positions (the client places them via
+    // the cart transform so they slide + tilt with it); the ones that fell out ride as WORLD
+    // positions and are pickable.
+    snapshot.goods.reserve(cargo_.size() + goods_.size());
+    if (contract_phase_ == ContractPhase::Active) {
+        const f32 floor = vehicle_type(active_.type).bed().lo.y;
+        for (const CargoBox& c : cargo_) {
+            // y carries the crate's height in the bed (floor + bump lift) so it visibly bounces.
+            snapshot.goods.push_back({c.id, Vec3{c.local.x, floor + c.h, c.local.y}, 0});
+        }
+    }
+    for (const GroundGood& g : goods_) {
+        snapshot.goods.push_back({g.id, g.position, 1});
     }
     // fires / barricades stay empty (siege dormant); outcome/phase/wave keep defaults.
     server_.broadcast_snapshot(snapshot);

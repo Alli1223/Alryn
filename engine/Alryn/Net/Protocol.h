@@ -38,6 +38,8 @@ struct PlayerInput {
     Vec3 aim{0.0f};      // world point being aimed at (for dig/add/fire)
     u32 vote_wagon = 0;  // wagon id this player is voting to accept (0 = none)
     u8 vote_mode = 0;    // 0 = none, 1 = hire driver, 2 = haul manually
+    f32 throttle = 0.0f; // carriage driving: forward/back (W/S), used when piloting
+    f32 steer = 0.0f;    // carriage driving: rein left/right (A/D), used when piloting
     CharacterAppearance appearance; // the player's chosen look (sent each tick)
 };
 
@@ -47,6 +49,8 @@ struct PlayerState {
     f32 yaw = 0.0f;
     u8 health = 100;                // 0..100, so clients can show a health bar
     u8 build_stock = 0;             // barricades this player can still raise today
+    u8 seated = 0;                  // 1 = riding/driving a wagon -> use the sit pose
+    u8 carrying = 0;                // 1 = hauling a spilled good back to the cart
     CharacterAppearance appearance; // so every client renders the right avatar
 };
 
@@ -83,12 +87,18 @@ struct WagonState {
     u32 id = 0;
     Vec3 position{0.0f};
     f32 yaw = 0.0f;
-    Vec3 dest{0.0f};   // destination town centre
+    Vec3 dest{0.0f};      // destination town centre
+    Vec3 horse_pos{0.0f}; // the pulling horse (carriages), if has_horse
+    f32 horse_yaw = 0.0f;
     u32 reward = 0;
+    u8 type = 0;       // VehicleType index (cart / wagon / carriage)
     u8 health = 255;   // 0..255 of kWagonHealth (active wagon)
     u8 mode = 0;       // WagonMode
     u8 difficulty = 1; // 1..3
     u8 votes = 0;      // players currently voting for this offer
+    u8 has_horse = 0;  // 1 = render the pulling horse
+    u8 goods_aboard = 0; // crates still in the bed
+    u8 goods_total = 0;  // crates the full load carries (reward scales by aboard/total)
 };
 
 // A burning building, broadcast so clients render flames at its position. A low
@@ -111,6 +121,16 @@ struct ProjectileState {
     u8 kind = 0;
 };
 
+// A cargo crate. `loose == 0`: riding in the cart bed - `position` is the crate's LOCAL
+// position in the bed (the client places it via the cart transform so it rides + slides with
+// the cart). `loose == 1`: spilled onto the ground - `position` is WORLD, and it can be picked
+// up (E). Broadcast so clients render the load + the loose crates.
+struct GoodState {
+    u32 id = 0;
+    Vec3 position{0.0f};
+    u8 loose = 0;
+};
+
 struct Snapshot {
     u32 tick = 0;
     f32 time_of_day = 0.0f; // 0..1, server-authoritative day/night clock
@@ -130,6 +150,7 @@ struct Snapshot {
     std::vector<FireState> fires;
     std::vector<BarricadeState> barricades;
     std::vector<WagonState> wagons;
+    std::vector<GoodState> goods; // crates spilled from a flipped cart
 };
 
 struct Welcome {

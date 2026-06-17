@@ -21,6 +21,8 @@
 
 namespace alryn {
 
+class VehicleType; // World/VehicleTypes.h - the cart/wagon/carriage layout (Contracts.cpp)
+
 // The authoritative simulation. Owns the world density (seed + replicated edits)
 // and one CharacterController per connected client. Each tick() it drains network
 // events (spawn/despawn/input), applies terrain edits, steps every player from
@@ -36,6 +38,26 @@ public:
         f32 melee_cd = 0.0f;               // seconds until the next melee swing can land
         f32 water = 0.0f;                  // bucket fill for firefighting (dormant siege)
         i32 wood = 0;                      // barricades buildable today (dormant siege)
+        bool carrying = false;             // hauling a spilled cargo crate back to the cart
+    };
+
+    // A cargo crate that bounced out of the bed and is lying on the ground (world position)
+    // until a player picks it up (E) and carries it back to the cart.
+    struct GroundGood {
+        u32 id = 0;
+        Vec3 position{0.0f};
+    };
+
+    // A cargo crate riding in the cart bed: a little body that slides on the bed floor (its
+    // position + velocity are in the cart's LOCAL xz frame; x = fore/aft, y = lateral) and can
+    // be tossed upward by a bump (h = height above the floor, vh = vertical velocity). It only
+    // escapes by clearing the bed wall (h >= wall) - never by sliding through a side.
+    struct CargoBox {
+        u32 id = 0;
+        Vec2 local{0.0f};
+        Vec2 vel{0.0f};
+        f32 h = 0.0f;
+        f32 vh = 0.0f;
     };
 
     bool start(u16 port, u32 seed, u32 max_clients = 16);
@@ -73,6 +95,9 @@ public:
     usize villager_count() const { return villagers_.size(); }
     usize house_count() const { return houses_.size(); }
     usize barricade_count() const { return barricades_.size(); }
+    usize good_count() const { return goods_.size(); }        // loose crates on the ground
+    usize cargo_count() const { return cargo_.size(); }       // crates still in the bed
+    u8 wagon_goods_aboard() const { return static_cast<u8>(cargo_.size()); }
     u32 seed() const { return sampler_.seed(); }
     f32 time_of_day() const { return time_of_day_; }
     net::MatchOutcome outcome() const { return outcome_; }
@@ -92,6 +117,10 @@ private:
     void generate_offers();                       // offer wagons from the town players are in
     void accept_contract(const Wagon& chosen, WagonMode mode);
     void update_wagon(Timestep dt, const DensitySampler& density);  // drive / tow the cargo
+    void update_cargo(Timestep dt, const DensitySampler& density);  // slide the bed crates, eject on bumps
+    void end_contract_cleanup();                // clear haul state on delivery / wreck
+    void append_wagon_colliders(std::vector<Collider>& out) const; // block players from carts
+    void seat_occupants(const VehicleType& vt); // place pilot/riders/seated-driver on the vehicle
     void update_ambush(Timestep dt, const DensitySampler& density); // ambushers + player combat
     // --- Dormant night siege (Combat/SiegeMode.cpp; not driven in the transport game) ---
     void player_attack(ServerPlayer& player, const net::PlayerInput& in);
@@ -143,12 +172,24 @@ private:
     std::vector<Wagon> offers_;          // wagons offered in the current town
     Wagon active_;                       // the accepted cargo (valid while Active/Settle)
     WagonMode active_mode_ = WagonMode::Parked;
-    net::PlayerId tower_ = 0;            // player currently hauling the wagon (manual)
-    std::unordered_set<net::PlayerId> riders_; // players sitting on the back of the wagon
-    std::optional<Villager> driver_;     // hired teamster NPC pulling the wagon (driver mode)
+    net::PlayerId tower_ = 0;            // player hand-hauling a cart/wagon (manual)
+    net::PlayerId pilot_ = 0;            // player driving a carriage from the top seat (manual)
+    std::unordered_set<net::PlayerId> riders_; // players sitting on the wagon (passengers)
+    std::optional<Villager> driver_;     // hired NPC: teamster pulling, or seated carriage driver
+    bool has_horse_ = false;             // carriage: a horse is the puller
+    Vec3 horse_pos_{0.0f};
+    f32 horse_yaw_ = 0.0f;
+    Vec3 wagon_prev_pos_{0.0f};          // last tick's cart position (to derive velocity)
+    Vec2 wagon_vel_{0.0f};               // cart xz velocity (to derive acceleration for cargo inertia)
+    f32 wagon_vy_ = 0.0f;                // cart vertical velocity (to derive bump jolts for cargo)
+    std::vector<CargoBox> cargo_;        // crates riding in the bed (slide around physically)
+    std::vector<GroundGood> goods_;      // crates that bounced out onto the ground (pickups)
+    u32 next_good_id_ = 1;
     std::vector<Vec2> driver_path_;      // A* path the teamster is following (around obstacles)
     usize driver_path_i_ = 0;            // current node in driver_path_
     f32 driver_repath_ = 0.0f;           // seconds until the path is recomputed
+    f32 driver_stuck_ = 0.0f;            // seconds the puller has gone without getting closer
+    f32 driver_best_dist_ = 1e9f;        // closest the puller has gotten to the current waypoint
     std::vector<Enemy> ambush_;          // ambushers attacking the active wagon
     std::unordered_map<net::PlayerId, std::pair<u32, u8>> votes_; // player -> (wagon id, mode)
     u32 money_ = 0;                      // shared party wallet
