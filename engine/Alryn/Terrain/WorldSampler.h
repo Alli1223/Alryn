@@ -42,9 +42,25 @@ public:
         return glm::clamp(value, -1.0f, 1.0f);
     }
 
-    // Convenience: bind this sampler into a DensitySampler function.
+    // Convenience: bind this sampler into a DensitySampler function (captures `this`,
+    // so only use it while this WorldSampler outlives the function).
     DensitySampler as_sampler() const {
         return [this](const Vec3& p) { return (*this)(p); };
+    }
+
+    // A self-contained DensitySampler that copies the seed + edits by value, so it is
+    // safe to evaluate on another thread (used by the async terrain streamer).
+    DensitySampler snapshot() const {
+        return [seed = seed_, edits = edits_](const Vec3& p) {
+            f32 value = worldgen::density(p, seed);
+            for (const WorldEdit& e : edits) {
+                const f32 d = glm::length(p - e.center);
+                if (d < e.radius) {
+                    value += e.amount * (1.0f - d / e.radius);
+                }
+            }
+            return glm::clamp(value, -1.0f, 1.0f);
+        };
     }
 
 private:

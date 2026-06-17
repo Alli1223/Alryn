@@ -66,6 +66,14 @@ public:
         f32 range = 16.0f;
         f32 cone_inner_cos = 0.82f;
         f32 cone_outer_cos = 0.6f;
+        // Indoor lights (e.g. a hearth) MUST be occluded by walls, so they only render
+        // when they make the shadow budget; they're never added to the cheap unshadowed
+        // pool (which would leak light straight through the walls).
+        bool indoor = false;
+        // Outdoor lights (lanterns) don't need shadows - rendering a shadow map per light
+        // is the expensive part. Setting this false keeps them in the cheap unshadowed
+        // pool, so a town full of lanterns costs almost nothing.
+        bool cast_shadow = true;
     };
     void add_light(const SpotLight& light);
 
@@ -82,6 +90,8 @@ public:
     void draw_water(const Mesh& mesh, const Mat4& model);
     // Self-lit geometry (lantern glass, glowing windows): full-bright, casts shadows.
     void draw_emissive(const Mesh& mesh, const Mat4& model, const Vec4& tint = Vec4{1.0f});
+    // Additive self-lit geometry (light shafts from windows). tint.a = intensity.
+    void draw_glow(const Mesh& mesh, const Mat4& model, const Vec4& tint);
 
     // ---- 2D UI overlay (screen-space, drawn last over the 3D scene) ----------
     // Pixel coordinates: origin top-left, +x right, +y down, matching the window.
@@ -105,7 +115,14 @@ public:
 private:
     // Draw layers, ordered so a sort yields opaque -> vegetation -> emissive ->
     // water -> foliage.
-    enum class Layer : u8 { Opaque = 0, Vegetation = 1, Emissive = 2, Water = 3, Foliage = 4 };
+    enum class Layer : u8 {
+        Opaque = 0,
+        Vegetation = 1,
+        Emissive = 2,
+        Water = 3,
+        Foliage = 4,
+        Glow = 5 // additive light shafts, drawn last
+    };
     struct DrawItem {
         const Mesh* mesh;
         Mat4 model;
@@ -135,9 +152,10 @@ private:
     static constexpr u32 kFramesInFlight = 2;
     static constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
     static constexpr u32 kShadowSize = 2048;
-    static constexpr u32 kMaxLights = 4;
-    static constexpr u32 kAtlasSize = 2048; // 2x2 tiles of 1024 (kMaxLights)
-    static constexpr u32 kAtlasTiles = 2;   // per axis
+    static constexpr u32 kMaxLights = 4;       // shadow-casting spot lights (atlas tiles)
+    static constexpr u32 kMaxPointLights = 48; // extra lights that illuminate without shadows
+    static constexpr u32 kAtlasSize = 2048;    // 2x2 tiles of 1024 (kMaxLights)
+    static constexpr u32 kAtlasTiles = 2;      // per axis
 
     bool create_depth();
     bool create_pipelines();
@@ -164,6 +182,7 @@ private:
     vk::Pipeline pipeline_foliage_;
     vk::Pipeline pipeline_water_;
     vk::Pipeline pipeline_emissive_;
+    vk::Pipeline pipeline_glow_;
     vk::Pipeline pipeline_vegetation_;
     vk::Pipeline pipeline_shadow_;
     vk::Pipeline pipeline_ui_;

@@ -22,6 +22,7 @@ struct PipelineConfig {
     u32 push_constant_size = 0;
     VkCullModeFlags cull_mode = VK_CULL_MODE_NONE;
     bool blend = false;       // alpha blending (transparent materials)
+    bool additive = false;    // additive blending (light shafts / glows)
     bool depth_write = true;  // write depth (turn off for transparent passes)
     bool vertexless = false;  // no vertex buffer (UI quads emit from gl_VertexIndex)
     bool depth_only = false;  // no fragment shader / colour attachment (shadow pass)

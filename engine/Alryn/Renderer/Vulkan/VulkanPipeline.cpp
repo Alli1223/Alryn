@@ -110,9 +110,12 @@ bool Pipeline::create(const Device& device, const PipelineConfig& config) {
     VkPipelineColorBlendAttachmentState blend_attachment{};
     blend_attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                                       VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    blend_attachment.blendEnable = config.blend ? VK_TRUE : VK_FALSE;
+    blend_attachment.blendEnable = (config.blend || config.additive) ? VK_TRUE : VK_FALSE;
     blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-    blend_attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    // Additive: add src*alpha to the framebuffer (glows/light shafts). Alpha blend:
+    // standard src_alpha / one_minus_src_alpha.
+    blend_attachment.dstColorBlendFactor =
+        config.additive ? VK_BLEND_FACTOR_ONE : VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     blend_attachment.colorBlendOp = VK_BLEND_OP_ADD;
     blend_attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
     blend_attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;

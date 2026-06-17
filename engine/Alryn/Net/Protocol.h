@@ -30,8 +30,14 @@ struct PlayerInput {
     bool jump = false;
     bool dig = false;
     bool add = false;
-    bool fire = false; // throw a projectile toward `aim`
-    Vec3 aim{0.0f};    // world point being aimed at (for dig/add/fire)
+    bool fire = false;   // throw a projectile toward `aim`
+    bool attack = false; // melee swing (hits an enemy in front, else carves at `aim`)
+    bool build = false;  // place a defensive barricade (day/prep only)
+    bool rally = false;  // call the night early (skip the rest of the prep day)
+    bool grab = false;   // hitch / unhitch the nearest wagon (manual hauling)
+    Vec3 aim{0.0f};      // world point being aimed at (for dig/add/fire)
+    u32 vote_wagon = 0;  // wagon id this player is voting to accept (0 = none)
+    u8 vote_mode = 0;    // 0 = none, 1 = hire driver, 2 = haul manually
     CharacterAppearance appearance; // the player's chosen look (sent each tick)
 };
 
@@ -39,8 +45,65 @@ struct PlayerState {
     PlayerId id = 0;
     Vec3 position{0.0f};
     f32 yaw = 0.0f;
+    u8 health = 100;                // 0..100, so clients can show a health bar
+    u8 build_stock = 0;             // barricades this player can still raise today
     CharacterAppearance appearance; // so every client renders the right avatar
 };
+
+// A live enemy, broadcast each tick so clients can render + animate it.
+struct EnemyState {
+    u32 id = 0;
+    Vec3 position{0.0f};
+    f32 yaw = 0.0f;
+    u8 kind = 0;
+    u8 health = 0; // 0..255 scaled from max, for a health bar / death fade
+};
+
+// A live villager or town guard, broadcast each tick. Appearance rides along so every
+// client renders the right look without local generation. `kind`: 0 = villager, 1 = guard.
+struct VillagerState {
+    u32 id = 0;
+    Vec3 position{0.0f};
+    f32 yaw = 0.0f;
+    u8 health = 0; // 0..255 scaled from max
+    u8 kind = 0;   // 0 = villager, 1 = guard
+    CharacterAppearance appearance;
+};
+
+// A player-built barricade (defensive obstacle), broadcast so clients render it.
+struct BarricadeState {
+    Vec3 position{0.0f};
+    f32 yaw = 0.0f;
+    u8 health = 0; // 0..255 scaled from max
+};
+
+// A transport wagon, broadcast so clients render it: an offer (Parked) sitting in the
+// plaza, or the active cargo en route. `dest` drives the destination arrow + map marker.
+struct WagonState {
+    u32 id = 0;
+    Vec3 position{0.0f};
+    f32 yaw = 0.0f;
+    Vec3 dest{0.0f};   // destination town centre
+    u32 reward = 0;
+    u8 health = 255;   // 0..255 of kWagonHealth (active wagon)
+    u8 mode = 0;       // WagonMode
+    u8 difficulty = 1; // 1..3
+    u8 votes = 0;      // players currently voting for this offer
+};
+
+// A burning building, broadcast so clients render flames at its position. A low
+// intensity is the smouldering ember of a house that has already burnt down.
+struct FireState {
+    Vec3 position{0.0f};
+    f32 yaw = 0.0f;
+    u8 intensity = 0; // 0..255 fire amount
+};
+
+// The defend-the-town objective outcome for the town nearest the players.
+enum class MatchOutcome : u8 { Ongoing = 0, Won = 1, Lost = 2 };
+
+// Which part of the round we're in: a calm prep/repair lull or a live wave.
+enum class MatchPhase : u8 { Prep = 0, Combat = 1 };
 
 // A live projectile, broadcast each tick so clients can render it.
 struct ProjectileState {
@@ -50,8 +113,23 @@ struct ProjectileState {
 
 struct Snapshot {
     u32 tick = 0;
+    f32 time_of_day = 0.0f; // 0..1, server-authoritative day/night clock
+    u8 outcome = 0;          // MatchOutcome for the defended town
+    u8 phase = 0;            // MatchPhase (Prep / Combat)
+    f32 phase_timer = 0.0f;  // seconds left in the prep lull (0 during a wave)
+    u8 wave = 0;             // waves spawned so far
+    u8 houses_standing = 0;  // un-burnt houses in the defended town
+    u8 houses_total = 0;
+    u32 money = 0;            // shared party wallet
+    u8 contract_phase = 0;   // ContractPhase (Offer / Active / Settle)
+    u8 contract_outcome = 0; // 0 none, 1 delivered, 2 wrecked (for the settle banner)
     std::vector<PlayerState> players;
     std::vector<ProjectileState> projectiles;
+    std::vector<EnemyState> enemies;
+    std::vector<VillagerState> villagers;
+    std::vector<FireState> fires;
+    std::vector<BarricadeState> barricades;
+    std::vector<WagonState> wagons;
 };
 
 struct Welcome {

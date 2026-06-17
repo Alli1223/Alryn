@@ -9,6 +9,8 @@ add_executable(alryn_tests
     terrain_tests.cpp
     physics_tests.cpp
     net_tests.cpp
+    combat_tests.cpp
+    contract_tests.cpp
     character_tests.cpp
     ui_tests.cpp
     scene_shot_tests.cpp

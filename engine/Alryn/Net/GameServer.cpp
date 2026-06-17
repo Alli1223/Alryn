@@ -3,8 +3,10 @@
 #include <Alryn/Core/Density.h>
 #include <Alryn/Core/Log.h>
 #include <Alryn/Terrain/WorldGen.h>
+#include <Alryn/World/Village.h>
 
 #include <cmath>
+#include <cstdlib>
 
 namespace alryn {
 
@@ -18,6 +20,7 @@ constexpr usize kMaxProjectiles = 256;
 bool GameServer::start(u16 port, u32 seed, u32 max_clients) {
     sampler_.set_seed(seed);
     collision_.emplace(seed, prop_lib_);
+    manager_.init(); // owns the server-authoritative day/night clock (ALRYN_TIME / _DAY_SECONDS)
     if (!server_.start(port, max_clients)) {
         return false;
     }
@@ -35,28 +38,57 @@ Vec3 GameServer::spawn_point(net::PlayerId id) const {
     const f32 base_x = -4.0f + static_cast<f32>(id % 5u) * 2.0f;
     const f32 base_z = -4.0f + static_cast<f32>((id / 5u) % 5u) * 2.0f;
 
-    // Spiral outward, preferring a forested spot (so you spawn among trees), then
-    // any dry land, then the start.
     f32 x = base_x;
     f32 z = base_z;
-    bool land_found = false;
-    bool forest_found = false;
-    for (int i = 0; i < 200 && !forest_found; ++i) {
-        const f32 cx = base_x + std::cos(static_cast<f32>(i) * 2.4f) * static_cast<f32>(i) * 1.2f;
-        const f32 cz = base_z + std::sin(static_cast<f32>(i) * 2.4f) * static_cast<f32>(i) * 1.2f;
-        const f32 h = worldgen::height(cx, cz, seed);
-        if (h <= worldgen::water_level + 0.8f) {
-            continue;
+
+    // Spawn in the nearest village so you land right in town. Scan the village grid
+    // outward from the origin in rings; the first ring with a town wins, and within
+    // it the town closest to the origin. A small per-player offset spreads players
+    // around the central plaza.
+    const int ocx = static_cast<int>(std::floor(base_x / worldgen::village_cell));
+    const int ocz = static_cast<int>(std::floor(base_z / worldgen::village_cell));
+    bool village_found = false;
+    f32 best = 1e30f;
+    for (int r = 0; r <= 6 && !village_found; ++r) {
+        for (int dz = -r; dz <= r; ++dz) {
+            for (int dx = -r; dx <= r; ++dx) {
+                if (std::max(std::abs(dx), std::abs(dz)) != r) {
+                    continue; // only the shell of ring r
+                }
+                if (const auto v = worldgen::village_at(ocx + dx, ocz + dz, seed)) {
+                    const f32 d = glm::length(v->center);
+                    if (d < best) {
+                        best = d;
+                        x = v->center.x + base_x * 0.4f; // land in the plaza, spread out
+                        z = v->center.y + base_z * 0.4f;
+                        village_found = true;
+                    }
+                }
+            }
         }
-        if (!land_found) {
-            x = cx;
-            z = cz;
-            land_found = true;
-        }
-        if (h < 7.0f && worldgen::moisture(cx, cz, seed) > 0.15f) {
-            x = cx;
-            z = cz;
-            forest_found = true;
+    }
+
+    // No town nearby: spiral outward to a forested dry spot, then any dry land.
+    if (!village_found) {
+        bool land_found = false;
+        bool forest_found = false;
+        for (int i = 0; i < 200 && !forest_found; ++i) {
+            const f32 cx = base_x + std::cos(static_cast<f32>(i) * 2.4f) * static_cast<f32>(i) * 1.2f;
+            const f32 cz = base_z + std::sin(static_cast<f32>(i) * 2.4f) * static_cast<f32>(i) * 1.2f;
+            const f32 h = worldgen::height(cx, cz, seed);
+            if (h <= worldgen::water_level + 0.8f) {
+                continue;
+            }
+            if (!land_found) {
+                x = cx;
+                z = cz;
+                land_found = true;
+            }
+            if (h < 7.0f && worldgen::moisture(cx, cz, seed) > 0.15f) {
+                x = cx;
+                z = cz;
+                forest_found = true;
+            }
         }
     }
 
@@ -70,6 +102,7 @@ Vec3 GameServer::spawn_point(net::PlayerId id) const {
 
 void GameServer::tick(Timestep dt) {
     const DensitySampler density = sampler_.as_sampler();
+    manager_.update(dt); // advances the day/night clock + (later) the transport objective
 
     for (const net::ServerEvent& e : server_.poll()) {
         switch (e.type) {
@@ -110,6 +143,8 @@ void GameServer::tick(Timestep dt) {
                         }
                     }
                 }
+                // Note: melee/build/rally (e.input.attack/build/rally) are part of the
+                // dormant siege; see Combat/SiegeMode.cpp. They are ignored here.
                 break;
             }
             case net::ServerEventType::ClientDisconnected: {
@@ -122,6 +157,9 @@ void GameServer::tick(Timestep dt) {
     }
 
     for (auto& [id, player] : players_) {
+        if (riders_.count(id) != 0u) {
+            continue; // riding the wagon - position is set by the contract update
+        }
         if (collision_) {
             collision_->gather(player.controller.position(), collider_scratch_);
         }
@@ -129,36 +167,164 @@ void GameServer::tick(Timestep dt) {
                                  collider_scratch_);
     }
 
-    // Step projectiles: gravity + bounce off terrain/props, and despawn on a hit.
+    // Step thrown rocks: gravity + bounce off terrain/props. With combat dormant they
+    // no longer deal damage (the siege resolved hits against enemies/villagers); they
+    // just arc and settle.
     for (Projectile& pr : projectiles_) {
         if (collision_) {
             collision_->gather(pr.position, collider_scratch_);
         }
         step_projectile(pr, density, collider_scratch_, dt);
-        for (const auto& [id, player] : players_) {
-            if (id == pr.owner) {
-                continue;
-            }
-            const Vec3 chest = player.controller.position() + Vec3{0.0f, 0.9f, 0.0f};
-            if (glm::length(chest - pr.position) < pr.radius + 0.55f) {
-                pr.alive = false; // struck a player
-            }
-        }
     }
     std::erase_if(projectiles_, [](const Projectile& pr) { return !pr.alive; });
 
+    update_townsfolk(dt, density); // peaceful villagers stroll the nearby towns
+    update_contracts(dt, density); // the wagon-transport game loop (offers / haul / ambush)
+
     net::Snapshot snapshot;
     snapshot.tick = ++tick_;
+    snapshot.time_of_day = manager_.time_of_day();
+    snapshot.money = money_;
+    snapshot.contract_phase = static_cast<u8>(contract_phase_);
+    snapshot.contract_outcome = contract_outcome_;
     snapshot.players.reserve(players_.size());
     for (const auto& [id, player] : players_) {
-        snapshot.players.push_back(
-            {id, player.controller.position(), player.input.yaw, player.input.appearance});
+        const u8 hp = static_cast<u8>(glm::clamp(player.health, 0.0f, kPlayerMaxHealth));
+        snapshot.players.push_back({id, player.controller.position(), player.input.yaw, hp, 0,
+                                    player.input.appearance});
     }
     snapshot.projectiles.reserve(projectiles_.size());
     for (const Projectile& pr : projectiles_) {
         snapshot.projectiles.push_back({pr.position, pr.kind});
     }
+    snapshot.villagers.reserve(villagers_.size() + 1);
+    for (const auto& [id, vg] : villagers_) {
+        snapshot.villagers.push_back({id, vg.position, vg.yaw, 255, vg.kind, vg.appearance});
+    }
+    // The hired teamster pulling the active wagon rides along as a kind-2 villager.
+    if (contract_phase_ == ContractPhase::Active && active_mode_ == WagonMode::Driver && driver_) {
+        snapshot.villagers.push_back(
+            {driver_->id, driver_->position, driver_->yaw, 255, driver_->kind, driver_->appearance});
+    }
+    // Ambushers ride in the existing enemy list (rendered red by the client).
+    snapshot.enemies.reserve(ambush_.size());
+    for (const Enemy& en : ambush_) {
+        const u8 hp = static_cast<u8>(
+            glm::clamp(en.health / enemy_max_health(en.kind), 0.0f, 1.0f) * 255.0f);
+        snapshot.enemies.push_back({en.id, en.position, en.yaw, en.kind, hp});
+    }
+    // Wagons: the parked offers while choosing, or the single active cargo en route.
+    auto vote_count = [&](u32 wagon_id) {
+        u8 n = 0;
+        for (const auto& [pid, v] : votes_) {
+            if (v.first == wagon_id) {
+                ++n;
+            }
+        }
+        return n;
+    };
+    auto wagon_state = [&](const Wagon& w, WagonMode mode, u8 votes) {
+        const u8 hp = static_cast<u8>(glm::clamp(w.health / kWagonHealth, 0.0f, 1.0f) * 255.0f);
+        return net::WagonState{w.id,         w.position, w.yaw,
+                               Vec3{w.dest.x, 0.0f, w.dest.y},
+                               w.reward,      hp,        static_cast<u8>(mode),
+                               w.difficulty,  votes};
+    };
+    if (contract_phase_ == ContractPhase::Offer) {
+        snapshot.wagons.reserve(offers_.size());
+        for (const Wagon& w : offers_) {
+            snapshot.wagons.push_back(wagon_state(w, WagonMode::Parked, vote_count(w.id)));
+        }
+    } else { // Active / Settle: just the cargo
+        snapshot.wagons.push_back(wagon_state(active_, active_mode_, 0));
+    }
+    // fires / barricades stay empty (siege dormant); outcome/phase/wave keep defaults.
     server_.broadcast_snapshot(snapshot);
+}
+
+// Peaceful townsfolk: ensure one villager per cottage in towns near a player, then have
+// each stroll between random spots in the plaza, pausing at each. No combat - the full
+// flee/guard/firefight AI lives (dormant) in Combat/SiegeMode.cpp.
+void GameServer::update_townsfolk(Timestep dt, const DensitySampler& density) {
+    const u32 seed = sampler_.seed();
+
+    for (const auto& [pid, player] : players_) {
+        const Vec3 focus = player.controller.position();
+        const int vcx = static_cast<int>(std::floor(focus.x / worldgen::village_cell));
+        const int vcz = static_cast<int>(std::floor(focus.z / worldgen::village_cell));
+        for (int dz = -1; dz <= 1; ++dz) {
+            for (int dx = -1; dx <= 1; ++dx) {
+                const auto vv = worldgen::village_at(vcx + dx, vcz + dz, seed);
+                if (!vv) {
+                    continue;
+                }
+                u32 hi = 0;
+                const auto vgates = detail::village_gate_points(*vv, seed);
+                detail::for_each_house(*vv, seed, vgates, [&](const detail::HousePlot& h) {
+                    const u32 id = (vv->vseed * 2654435761u) ^ ((hi + 1u) * 40499u);
+                    ++hi;
+                    if (villagers_.count(id) != 0u) {
+                        return;
+                    }
+                    // Stand them on the street just in front of their house.
+                    Vec2 toward = vv->center - h.pos;
+                    const f32 len = glm::length(toward);
+                    toward = len > 1e-3f ? toward / len : Vec2{0.0f, 1.0f};
+                    const Vec2 sp = h.pos + toward * (detail::house_reach(h.variant) + 1.0f);
+                    Villager vg;
+                    vg.id = id;
+                    vg.appearance = villager_look(id);
+                    vg.position = Vec3{sp.x, worldgen::height(sp.x, sp.y, seed), sp.y};
+                    vg.target = vg.position;
+                    vg.home_center = vv->center;
+                    vg.home_half = vv->half;
+                    vg.rng = id | 1u;
+                    villagers_.emplace(id, std::move(vg));
+                });
+            }
+        }
+    }
+
+    auto rnd = [](u32& s) {
+        s ^= s << 13;
+        s ^= s >> 17;
+        s ^= s << 5;
+        return static_cast<f32>(s & 0xFFFFFFu) / static_cast<f32>(0xFFFFFFu);
+    };
+    auto nearest_player = [&](const Vec3& p) {
+        f32 best = 1e30f;
+        for (const auto& [pid, player] : players_) {
+            best = std::min(best, glm::length(player.controller.position() - p));
+        }
+        return best;
+    };
+
+    for (auto it = villagers_.begin(); it != villagers_.end();) {
+        Villager& vg = it->second;
+        if (nearest_player(vg.position) > 120.0f) {
+            it = villagers_.erase(it); // out of range (respawns deterministically on return)
+            continue;
+        }
+        if (collision_) {
+            collision_->gather(vg.position, collider_scratch_);
+        }
+        Vec3 to = vg.target - vg.position;
+        to.y = 0.0f;
+        if (glm::length(to) < 0.5f) {
+            vg.speed = 0.0f;
+            vg.wait -= dt.seconds;
+            if (vg.wait <= 0.0f) {
+                const f32 ang = rnd(vg.rng) * TwoPi;
+                const f32 rad = rnd(vg.rng) * vg.home_half * 0.7f;
+                vg.target = Vec3{vg.home_center.x + std::cos(ang) * rad, vg.position.y,
+                                 vg.home_center.y + std::sin(ang) * rad};
+                vg.wait = 1.0f + rnd(vg.rng) * 3.0f; // pause a beat at each stop
+            }
+        } else {
+            step_villager(vg, density, collider_scratch_, vg.target, dt, kVillagerSpeed);
+        }
+        ++it;
+    }
 }
 
 } // namespace alryn

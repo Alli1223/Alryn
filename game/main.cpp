@@ -2,16 +2,21 @@
 
 #include <Alryn/Character/CharacterAnimator.h>
 #include <Alryn/Character/CharacterModel.h>
+#include <Alryn/Combat/Enemy.h>
 #include <Alryn/Net/GameServer.h>
 #include <Alryn/Net/NetClient.h>
+#include <Alryn/Terrain/RoadNetwork.h>
 #include <Alryn/Terrain/StreamingTerrain.h>
+#include <Alryn/Terrain/WorldGen.h>
 #include <Alryn/UI/UI.h>
 #include <Alryn/World/PropLibrary.h>
+#include <Alryn/World/Village.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <format>
 #include <memory>
 #include <string>
 #include <thread>
@@ -20,7 +25,9 @@
 using namespace alryn;
 
 namespace key {
-constexpr KeyCode W = 87, A = 65, S = 83, D = 68, F = 70, Space = 32, Escape = 256;
+constexpr KeyCode W = 87, A = 65, S = 83, D = 68, E = 69, F = 70, H = 72, M = 77, Space = 32,
+                  Escape = 256;
+constexpr KeyCode Digit1 = 49, Digit2 = 50, Digit3 = 51, Digit4 = 52;
 }
 
 constexpr u16 kPort = 24650;
@@ -91,6 +98,8 @@ protected:
             day_seconds_ = std::max(5.0f, static_cast<f32>(std::atof(d)));
         }
         marker_.create(renderer_->device(), primitives::cube(1.0f, Vec3{1.0f, 0.85f, 0.2f}));
+        wagon_mesh_.create(renderer_->device(), PropLibrary::build_wagon().parts[0].mesh);
+        wagon_wheel_mesh_.create(renderer_->device(), PropLibrary::build_wagon_wheel().parts[0].mesh);
         // A large wave grid that follows the player; the water shader animates it.
         water_mesh_.create(renderer_->device(), primitives::grid(80, 2.0f, Vec3{0.1f, 0.3f, 0.4f}));
         // Shared tree meshes (trunk opaque, foliage alpha-blendable); instances vary.
@@ -108,7 +117,7 @@ protected:
         shape_cylinder_.create(renderer_->device(), primitives::cylinder(10, Vec3{1.0f}));
         shape_rounded_.create(renderer_->device(), primitives::rounded_box(0.12f, Vec3{1.0f}));
 
-        // Upload the forest-prop catalogue (bushes, rocks, logs) to GPU meshes.
+        // Upload the prop catalogue (bushes, rocks, logs, fences, lanterns) to GPU.
         auto upload_props = [&](const std::vector<PropDef>& defs, std::vector<GpuProp>& out) {
             for (const PropDef& def : defs) {
                 GpuProp gp;
@@ -119,12 +128,26 @@ protected:
                     gpp.layer = part.layer;
                     gp.parts.push_back(std::move(gpp));
                 }
+                gp.lights = def.lights;
+                gp.footprint = def.footprint;
+                gp.wall_height = def.wall_height;
                 out.push_back(std::move(gp));
             }
         };
         upload_props(prop_lib_.bushes(), gpu_bushes_);
         upload_props(prop_lib_.rocks(), gpu_rocks_);
         upload_props(prop_lib_.logs(), gpu_logs_);
+        upload_props(prop_lib_.fences(), gpu_fences_);
+        upload_props(prop_lib_.lanterns(), gpu_lanterns_);
+        upload_props(prop_lib_.houses(), gpu_houses_);
+        upload_props(prop_lib_.walls(), gpu_walls_);
+        upload_props(prop_lib_.gates(), gpu_gates_);
+        upload_props(prop_lib_.wells(), gpu_wells_);
+        upload_props(prop_lib_.bridges(), gpu_bridges_);
+        upload_props(prop_lib_.markets(), gpu_markets_);
+        upload_props(prop_lib_.paths(), gpu_paths_);
+        upload_props(prop_lib_.planters(), gpu_planters_);
+        upload_props(prop_lib_.fountains(), gpu_fountains_);
 
         // Skip the menu when launched for scripted/CI runs (--host=... or a fixed
         // frame count); otherwise open the main menu and let the player choose.
@@ -171,6 +194,8 @@ protected:
         local_server_.stop();
         terrain_.reset();
         visuals_.clear();
+        enemy_visuals_.clear();
+        villager_visuals_.clear();
         have_snapshot_ = false;
         my_id_ = 0;
         state_ = AppState::Menu;
@@ -479,6 +504,7 @@ protected:
                 switch (e.type) {
                     case net::ClientEventType::WelcomeReceived:
                         my_id_ = e.welcome.your_id;
+                        world_seed_ = e.welcome.seed;
                         terrain_ = std::make_unique<StreamingTerrain>(e.welcome.seed, 0.5f, 16,
                                                                       render_distance_);
                         ALRYN_INFO("Joined as player {} (world seed {})", my_id_, e.welcome.seed);
@@ -501,13 +527,16 @@ protected:
             if (renderer_ != nullptr) {
                 renderer_->set_player_position(local_feet()); // bends nearby vegetation
             }
-            if (paused_) {
-                aim_valid_ = false; // no dig-marker while the pause menu is up
+            if (paused_ || map_open_) {
+                aim_valid_ = false; // no dig-marker while the pause menu / map is up
             } else {
                 update_aim();
             }
             send_input();
             update_visuals(dt);
+            update_enemy_visuals(dt);
+            update_villager_visuals(dt);
+            update_feedback(dt);
 
             if (terrain_ != nullptr && renderer_ != nullptr) {
                 terrain_->update(local_feet(), renderer_->device());
@@ -558,6 +587,12 @@ protected:
                 }
             }
         }
+        draw_villagers();
+        draw_enemies();
+        draw_fires();
+        draw_barricades();
+        draw_wagons();
+        draw_swing();
 
         // Tree trunks (opaque).
         terrain_->for_each_tree([&](const TreeInstance& t) {
@@ -567,12 +602,21 @@ protected:
         // Discrete props: rocks/houses (opaque + emissive), bushes (foliage).
         terrain_->for_each_prop([&](const PropInstance& p) { draw_prop(p); });
 
-        // Thrown projectiles (server-simulated; we just render their positions).
+        // Projectiles (server-simulated). kind 0 = thrown rock (grey sphere), 1 =
+        // enemy arrow (a slim dark bolt).
         if (have_snapshot_) {
             for (const net::ProjectileState& pr : snapshot_.projectiles) {
-                const Mat4 m = glm::translate(Mat4{1.0f}, pr.position) *
-                               glm::scale(Mat4{1.0f}, Vec3{0.36f});
-                renderer_->draw(shape_sphere_, m, Vec4{0.55f, 0.5f, 0.45f, 1.0f});
+                if (pr.kind == 1) {
+                    renderer_->draw(shape_box_,
+                                    glm::translate(Mat4{1.0f}, pr.position) *
+                                        glm::scale(Mat4{1.0f}, Vec3{0.07f, 0.07f, 0.6f}),
+                                    Vec4{0.3f, 0.22f, 0.14f, 1.0f});
+                } else {
+                    renderer_->draw(shape_sphere_,
+                                    glm::translate(Mat4{1.0f}, pr.position) *
+                                        glm::scale(Mat4{1.0f}, Vec3{0.36f}),
+                                    Vec4{0.55f, 0.5f, 0.45f, 1.0f});
+                }
             }
         }
 
@@ -603,6 +647,12 @@ protected:
             renderer_->draw_transparent(tree_library_[tree_index(t)].foliage, tree_model(t),
                                         Vec4{t.tint, alpha});
         });
+
+        draw_health_bars();
+        draw_hud();
+        if (map_open_) {
+            draw_map();
+        }
         }
 
         if (state_ == AppState::Menu && current_screen_ == Screen::Customise) {
@@ -654,8 +704,10 @@ protected:
         draw_rig(preview_model_, preview_model_.bone_matrices(root, pose));
     }
 
-    // Draws every bone of a posed character with its palette colour + shape mesh.
-    void draw_rig(const CharacterModel& model, const std::vector<Mat4>& mats) {
+    // Draws every bone of a posed character with its palette colour (times `tint`)
+    // and shape mesh. The tint lets enemies read as hostile without new models.
+    void draw_rig(const CharacterModel& model, const std::vector<Mat4>& mats,
+                  const Vec3& tint = Vec3{1.0f}) {
         const std::vector<Bone>& bones = model.bones();
         const CharacterPalette& pal = model.palette();
         for (usize i = 0; i < bones.size(); ++i) {
@@ -668,8 +720,31 @@ protected:
                                 : bones[i].shape == BoneShape::Cylinder   ? shape_cylinder_
                                 : bones[i].shape == BoneShape::RoundedBox ? shape_rounded_
                                                                           : shape_box_;
-            renderer_->draw(shape, mats[i], Vec4{color, 1.0f});
+            renderer_->draw(shape, mats[i], Vec4{color * tint, 1.0f});
         }
+    }
+
+    // Draws a spear gripped in the character's right hand (anchored to the lower-arm
+    // bone so it swings with the animation, not a stick floating beside them).
+    void draw_held_spear(const CharacterModel& model, const std::vector<Mat4>& mats) {
+        const std::vector<Bone>& bones = model.bones();
+        int hand = -1;
+        for (usize i = 0; i < bones.size(); ++i) {
+            if (bones[i].part == BonePart::LowerArmR) {
+                hand = static_cast<int>(i);
+                break;
+            }
+        }
+        if (hand < 0) {
+            return;
+        }
+        const Vec3 grip = Vec3{mats[hand][3]}; // world position of the forearm/hand
+        const Mat4 shaft = glm::translate(Mat4{1.0f}, grip + Vec3{0.0f, 0.45f, 0.0f}) *
+                           glm::scale(Mat4{1.0f}, Vec3{0.055f, 1.9f, 0.055f});
+        renderer_->draw(shape_box_, shaft, Vec4{0.4f, 0.28f, 0.16f, 1.0f}); // wooden haft
+        const Mat4 head = glm::translate(Mat4{1.0f}, grip + Vec3{0.0f, 1.45f, 0.0f}) *
+                          glm::scale(Mat4{1.0f}, Vec3{0.1f, 0.34f, 0.05f});
+        renderer_->draw(shape_box_, head, Vec4{0.7f, 0.73f, 0.8f, 1.0f}); // steel spearhead
     }
 
     void on_event(Event& event) override {
@@ -700,12 +775,35 @@ protected:
             return;
         }
 
+        // Full-screen map overlay (M). While it's open, world input is frozen and all
+        // other in-game input is swallowed.
+        {
+            bool consumed = false;
+            dispatcher.dispatch<KeyPressedEvent>([&](KeyPressedEvent& e) {
+                if (e.key() == key::M) {
+                    map_open_ = !map_open_;
+                    consumed = true;
+                    return true;
+                }
+                if (map_open_ && e.key() == key::Escape) {
+                    map_open_ = false;
+                    consumed = true;
+                    return true;
+                }
+                return false;
+            });
+            if (map_open_ || consumed) {
+                return;
+            }
+        }
+
         // In-game input (not paused).
         dispatcher.dispatch<MouseButtonPressedEvent>([&](MouseButtonPressedEvent& e) {
             if (e.button() == 0) {
-                pending_dig_ = true;
+                pending_attack_ = true; // melee swing (or carve terrain if nothing to hit)
+                swing_time_ = 0.22f;    // play the swing-arc effect
             } else if (e.button() == 1) {
-                pending_add_ = true;
+                pending_add_ = true; // build up terrain
             }
             return false;
         });
@@ -713,7 +811,19 @@ protected:
             if (e.key() == key::Escape) {
                 escape_pressed(); // opens the pause menu
             } else if (e.key() == key::F) {
-                pending_fire_ = true; // throw a projectile toward the cursor
+                pending_fire_ = true; // throw a rock toward the cursor
+            } else if (e.key() == key::E) {
+                pending_grab_ = true; // hitch / unhitch the nearest wagon (manual haul)
+            } else if (e.key() == key::H) {
+                vote_mode_ = vote_mode_ == 1 ? 2 : 1; // toggle hire driver / haul manually
+            } else if (e.key() == key::Digit1 || e.key() == key::Digit2 ||
+                       e.key() == key::Digit3 || e.key() == key::Digit4) {
+                // Vote for the Nth offered wagon.
+                const usize i = static_cast<usize>(e.key() - key::Digit1);
+                if (snapshot_.contract_phase == static_cast<u8>(ContractPhase::Offer) &&
+                    i < snapshot_.wagons.size()) {
+                    selected_wagon_ = snapshot_.wagons[i].id;
+                }
             }
             return false;
         });
@@ -735,7 +845,10 @@ protected:
             tv.foliage.destroy();
         }
         tree_library_.clear();
-        for (std::vector<GpuProp>* set : {&gpu_bushes_, &gpu_rocks_, &gpu_logs_}) {
+        for (std::vector<GpuProp>* set : {&gpu_bushes_, &gpu_rocks_, &gpu_logs_, &gpu_fences_,
+                                          &gpu_lanterns_, &gpu_houses_, &gpu_walls_, &gpu_gates_,
+                                          &gpu_wells_, &gpu_bridges_, &gpu_markets_,
+                                          &gpu_paths_, &gpu_planters_, &gpu_fountains_}) {
             for (GpuProp& gp : *set) {
                 for (GpuPropPart& part : gp.parts) {
                     part.mesh.destroy();
@@ -744,6 +857,8 @@ protected:
             set->clear();
         }
         marker_.destroy();
+        wagon_mesh_.destroy();
+        wagon_wheel_mesh_.destroy();
         water_mesh_.destroy();
         terrain_.reset();
         client_.disconnect();
@@ -758,6 +873,15 @@ private:
         Vec3 last_pos{0.0f};
         f32 speed = 0.0f;
         bool has_last = false;
+    };
+
+    // A networked enemy's renderable: one shared hostile model, animated from
+    // snapshot position deltas (no animation data on the wire).
+    struct EnemyVisual {
+        CharacterModel model = CharacterModel::create(0u, enemy_look());
+        CharacterAnimator animator;
+        Vec3 last_pos{0.0f};
+        f32 speed = 0.0f;
     };
 
     PlayerVisual& ensure_visual(net::PlayerId id, const CharacterAppearance& appearance) {
@@ -777,10 +901,16 @@ private:
     }
 
     // Advances the time of day and feeds the renderer a moving sun + sky colour.
-    // ALRYN_TIME (0..1) pins the starting time; ALRYN_DAY_SECONDS sets cycle length.
+    // When connected, the server owns the clock (so lighting matches when villagers
+    // sleep); otherwise we advance it locally. ALRYN_TIME (0..1) pins the starting
+    // time; ALRYN_DAY_SECONDS sets cycle length.
     void update_day_night(Timestep dt) {
-        time_of_day_ += dt.seconds / day_seconds_;
-        time_of_day_ -= std::floor(time_of_day_);
+        if (have_snapshot_) {
+            time_of_day_ = snapshot_.time_of_day; // authoritative day/night clock
+        } else {
+            time_of_day_ += dt.seconds / day_seconds_;
+            time_of_day_ -= std::floor(time_of_day_);
+        }
 
         // The sun arcs east -> overhead -> west; below the horizon is night.
         const f32 a = (time_of_day_ - 0.25f) * TwoPi;
@@ -841,10 +971,595 @@ private:
         }
     }
 
+    // The local player's health fraction (0..1) from the snapshot.
+    f32 local_health() const {
+        if (have_snapshot_) {
+            for (const net::PlayerState& p : snapshot_.players) {
+                if (p.id == my_id_) {
+                    return static_cast<f32>(p.health) / 100.0f;
+                }
+            }
+        }
+        return 1.0f;
+    }
+
+    // Tracks a damage flash: when the local player's health drops, flare the screen red.
+    void update_feedback(Timestep dt) {
+        const f32 hp = local_health();
+        if (hp < last_health_ - 0.001f) {
+            hit_flash_ = 1.0f;
+        }
+        last_health_ = hp;
+        hit_flash_ = std::max(0.0f, hit_flash_ - dt.seconds * 1.8f);
+        swing_time_ = std::max(0.0f, swing_time_ - dt.seconds);
+    }
+
+    // A quick white slash that sweeps in an arc in front of the player when they melee.
+    void draw_swing() {
+        if (renderer_ == nullptr || swing_time_ <= 0.0f || !have_snapshot_) {
+            return;
+        }
+        constexpr f32 dur = 0.22f;
+        const f32 t = glm::clamp(1.0f - swing_time_ / dur, 0.0f, 1.0f); // 0..1 sweep
+        const f32 a = face_yaw_ + glm::mix(-1.3f, 1.3f, t);
+        const Vec3 dir{std::cos(a), 0.0f, std::sin(a)};
+        const Vec3 pos = local_feet() + Vec3{0.0f, 1.0f, 0.0f} + dir * 1.0f;
+        const Mat4 m = glm::translate(Mat4{1.0f}, pos) *
+                       glm::rotate(Mat4{1.0f}, -a, Vec3{0.0f, 1.0f, 0.0f}) *
+                       glm::scale(Mat4{1.0f}, Vec3{1.0f, 0.07f, 0.28f});
+        renderer_->draw_transparent(shape_box_, m,
+                                    Vec4{0.95f, 0.97f, 1.0f, swing_time_ / dur * 0.55f});
+    }
+
+    // A menacing low-poly look shared by all enemies (dark skin, sharp eyes, spiky
+    // hair); a red tint at draw time makes them read as hostile.
+    static CharacterAppearance enemy_look() {
+        CharacterAppearance a;
+        a.skin = 0;
+        a.hair_color = 0;
+        a.eyes = EyeStyle::Sharp;
+        a.ears = EarStyle::Pointed;
+        a.hair = HairStyle::Spiky;
+        return a;
+    }
+
+    // Animate enemies from snapshot deltas, like remote players, and drop visuals
+    // for enemies that have died / left the snapshot.
+    void update_enemy_visuals(Timestep dt) {
+        if (!have_snapshot_) {
+            return;
+        }
+        for (const net::EnemyState& en : snapshot_.enemies) {
+            const auto [it, created] = enemy_visuals_.try_emplace(en.id);
+            EnemyVisual& v = it->second;
+            if (created) {
+                v.model = CharacterModel::create(en.id ^ 0xE0E0u, enemy_look());
+                v.last_pos = en.position;
+            }
+            f32 measured = 0.0f;
+            if (dt.seconds > 0.0001f) {
+                Vec3 d = en.position - v.last_pos;
+                d.y = 0.0f;
+                measured = glm::length(d) / dt.seconds;
+            }
+            v.speed = glm::mix(v.speed, measured, 0.3f);
+            v.last_pos = en.position;
+            v.animator.update(v.speed, dt);
+        }
+        for (auto it = enemy_visuals_.begin(); it != enemy_visuals_.end();) {
+            const bool live = std::any_of(snapshot_.enemies.begin(), snapshot_.enemies.end(),
+                                          [&](const net::EnemyState& e) { return e.id == it->first; });
+            it = live ? std::next(it) : enemy_visuals_.erase(it);
+        }
+    }
+
+    void draw_enemies() {
+        if (!have_snapshot_) {
+            return;
+        }
+        for (const net::EnemyState& en : snapshot_.enemies) {
+            const auto it = enemy_visuals_.find(en.id);
+            if (it == enemy_visuals_.end()) {
+                continue;
+            }
+            EnemyVisual& v = it->second;
+            // 0 = grunt (dark red), 1 = torch-bearer (fiery), 2 = brute (big + dark),
+            // 3 = archer (sickly green, carries a bow).
+            const f32 scale = en.kind == 2 ? 1.5f : 1.0f;
+            const Mat4 root = glm::translate(Mat4{1.0f}, en.position) *
+                              glm::rotate(Mat4{1.0f}, HalfPi - en.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
+                              glm::scale(Mat4{1.0f}, Vec3{scale});
+            const Vec3 tint = en.kind == 1   ? Vec3{1.5f, 0.7f, 0.18f}
+                              : en.kind == 2 ? Vec3{1.05f, 0.26f, 0.4f}
+                              : en.kind == 3 ? Vec3{0.5f, 0.85f, 0.45f}
+                                             : Vec3{1.3f, 0.32f, 0.3f};
+            const std::vector<Mat4> emats = v.model.bone_matrices(root, v.animator.pose(v.model));
+            draw_rig(v.model, emats, tint);
+            if (en.kind == 3) {
+                // A bow held out front (a curved stave + string).
+                const Vec3 hand = en.position +
+                                  Vec3{std::cos(en.yaw), 0.0f, std::sin(en.yaw)} * 0.4f +
+                                  Vec3{0.0f, 1.0f, 0.0f};
+                renderer_->draw(shape_box_,
+                                glm::translate(Mat4{1.0f}, hand) *
+                                    glm::rotate(Mat4{1.0f}, en.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
+                                    glm::scale(Mat4{1.0f}, Vec3{0.04f, 0.85f, 0.04f}),
+                                Vec4{0.34f, 0.22f, 0.12f, 1.0f});
+            }
+            if (en.kind == 1) {
+                // The torch: a wooden haft + a flickering emissive flame held aloft, with
+                // a warm point of light around it.
+                const f32 flick = 0.85f + 0.15f * std::sin(elapsed_ * 13.0f + en.position.x);
+                const Vec3 hand = en.position + Vec3{std::cos(en.yaw), 0.0f, std::sin(en.yaw)} * 0.45f +
+                                  Vec3{0.0f, 1.15f, 0.0f};
+                const Mat4 haft = glm::translate(Mat4{1.0f}, hand - Vec3{0.0f, 0.25f, 0.0f}) *
+                                  glm::scale(Mat4{1.0f}, Vec3{0.06f, 0.5f, 0.06f});
+                renderer_->draw(shape_box_, haft, Vec4{0.32f, 0.2f, 0.1f, 1.0f});
+                const Mat4 flame = glm::translate(Mat4{1.0f}, hand + Vec3{0.0f, 0.18f, 0.0f}) *
+                                   glm::scale(Mat4{1.0f}, Vec3{0.18f, 0.3f * flick, 0.18f});
+                renderer_->draw_emissive(shape_sphere_, flame, Vec4{1.0f, 0.6f, 0.2f, 1.0f});
+                renderer_->draw_glow(shape_sphere_,
+                                     glm::translate(Mat4{1.0f}, hand) *
+                                         glm::scale(Mat4{1.0f}, Vec3{1.1f}),
+                                     Vec4{1.0f, 0.55f, 0.2f, 0.4f * flick});
+                Renderer::SpotLight sl;
+                sl.position = hand + Vec3{0.0f, 1.5f, 0.0f};
+                sl.direction = Vec3{0.0f, -1.0f, 0.0f};
+                sl.color = Vec3{1.0f, 0.55f, 0.22f} * (2.4f * flick);
+                sl.range = 8.0f;
+                const f32 half = glm::radians(70.0f);
+                sl.cone_outer_cos = std::cos(half);
+                sl.cone_inner_cos = std::cos(half * 0.5f);
+                renderer_->add_light(sl);
+            }
+        }
+    }
+
+    // Player-built barricades: a low palisade of wooden stakes + rails, darkening as
+    // the enemy hacks it down (health from the snapshot).
+    void draw_barricades() {
+        if (!have_snapshot_) {
+            return;
+        }
+        for (const net::BarricadeState& b : snapshot_.barricades) {
+            const f32 hp = static_cast<f32>(b.health) / 255.0f;
+            const Vec3 wood = glm::mix(Vec3{0.22f, 0.14f, 0.08f}, Vec3{0.46f, 0.32f, 0.19f}, hp);
+            const Vec4 c{wood, 1.0f};
+            const Mat4 m = glm::translate(Mat4{1.0f}, b.position) *
+                           glm::rotate(Mat4{1.0f}, b.yaw, Vec3{0.0f, 1.0f, 0.0f});
+            auto bar = [&](const Vec3& off, const Vec3& scale) {
+                renderer_->draw(shape_box_, m * glm::translate(Mat4{1.0f}, off) *
+                                                glm::scale(Mat4{1.0f}, scale),
+                                c);
+            };
+            bar({0.0f, 0.5f, 0.0f}, {2.0f, 0.14f, 0.12f});  // lower rail
+            bar({0.0f, 0.9f, 0.0f}, {2.0f, 0.14f, 0.12f});  // upper rail
+            for (int i = -2; i <= 2; ++i) {
+                const f32 x = static_cast<f32>(i) * 0.45f;
+                bar({x, 0.6f, 0.0f}, {0.13f, 1.25f, 0.13f}); // upright stakes
+            }
+        }
+    }
+
+    // Floating health bars above combatants (enemies always; guards always; villagers
+    // only when hurt), projected from world space into the 2D UI overlay.
+    void draw_health_bars() {
+        if (renderer_ == nullptr || !have_snapshot_) {
+            return;
+        }
+        const VkExtent2D ext = renderer_->extent();
+        const f32 W = static_cast<f32>(ext.width);
+        const f32 H = static_cast<f32>(ext.height);
+        const Mat4 vp = camera_.view_projection();
+        auto bar = [&](const Vec3& world, f32 frac, const Vec3& col) {
+            const Vec4 clip = vp * Vec4{world, 1.0f};
+            if (clip.w <= 0.05f) {
+                return; // behind the camera
+            }
+            const Vec2 ndc{clip.x / clip.w, clip.y / clip.w};
+            if (std::abs(ndc.x) > 1.15f || std::abs(ndc.y) > 1.15f) {
+                return; // off-screen
+            }
+            const f32 sx = (ndc.x * 0.5f + 0.5f) * W;
+            const f32 sy = (ndc.y * 0.5f + 0.5f) * H;
+            const f32 bw = glm::clamp(300.0f / clip.w, 16.0f, 48.0f);
+            const f32 bh = 4.5f;
+            frac = glm::clamp(frac, 0.0f, 1.0f);
+            renderer_->draw_ui_rect(Vec4{sx - bw * 0.5f - 1.0f, sy - 1.0f, bw + 2.0f, bh + 2.0f},
+                                    Vec4{0.04f, 0.04f, 0.05f, 0.65f}, 1.5f);
+            renderer_->draw_ui_rect(Vec4{sx - bw * 0.5f, sy, bw * frac, bh}, Vec4{col, 0.95f}, 1.0f);
+        };
+        for (const net::EnemyState& en : snapshot_.enemies) {
+            const f32 hgt = en.kind == 2 ? 3.0f : 2.2f;
+            bar(en.position + Vec3{0.0f, hgt, 0.0f}, static_cast<f32>(en.health) / 255.0f,
+                Vec3{0.92f, 0.26f, 0.2f});
+        }
+        for (const net::VillagerState& vl : snapshot_.villagers) {
+            if (vl.kind == 0 && vl.health >= 250) {
+                continue; // hide bars over healthy villagers (only show the hurt)
+            }
+            const Vec3 col = vl.kind == 1 ? Vec3{0.45f, 0.72f, 0.96f} : Vec3{0.42f, 0.86f, 0.42f};
+            bar(vl.position + Vec3{0.0f, 2.15f, 0.0f}, static_cast<f32>(vl.health) / 255.0f, col);
+        }
+    }
+
+    // Burning houses: a cluster of flickering emissive flame tongues that engulf the
+    // whole cottage (spread across its footprint, licking up to the roof), dark smoke
+    // billowing above, an additive firelight bloom and a strong warm light (day or
+    // night). The server sends position + intensity; a low intensity is the smouldering
+    // ember of a burnt-down ruin (small flames, lots of smoke).
+    void draw_fires() {
+        if (renderer_ == nullptr || !have_snapshot_) {
+            return;
+        }
+        // A cheap deterministic [0,1) hash for per-tongue variation.
+        auto frac = [](f32 x) { return x - std::floor(x); };
+        const f32 night = 1.0f - sun_intensity_;
+        for (const net::FireState& fs : snapshot_.fires) {
+            const f32 in = static_cast<f32>(fs.intensity) / 255.0f;
+            const f32 ember = in < 0.35f ? 1.0f : 0.0f; // burnt-out ruin?
+            const f32 vigour = glm::clamp(in, 0.25f, 1.0f);
+            const f32 ph = fs.position.x * 1.3f + fs.position.z * 0.7f; // per-fire phase
+            const Vec3 base = fs.position;
+
+            // Flame tongues spread over the ~6x5.5m footprint, rising toward the roof.
+            const int tongues = ember > 0.0f ? 5 : 13;
+            for (int i = 0; i < tongues; ++i) {
+                const f32 fi = static_cast<f32>(i);
+                const f32 a = frac(fi * 0.61f) * TwoPi + ph;
+                const f32 spread = ember > 0.0f ? 1.0f : 2.0f;
+                const f32 ox = std::cos(a) * (0.3f + frac(fi * 0.37f) * spread);
+                const f32 oz = std::sin(a) * (0.3f + frac(fi * 0.53f) * spread * 0.9f);
+                const f32 flick = std::sin(elapsed_ * (5.0f + fi * 0.7f) + ph + fi);
+                const f32 grow = ember > 0.0f ? 0.55f : (1.4f + frac(fi * 0.29f) * 1.9f);
+                const f32 height = grow * vigour * (0.82f + 0.18f * flick);
+                const f32 width = (0.32f + frac(fi * 0.41f) * 0.32f) * vigour;
+                const Vec3 col = glm::mix(Vec3{1.0f, 0.42f, 0.08f}, Vec3{1.0f, 0.88f, 0.35f},
+                                          frac(fi * 0.71f) * 0.7f);
+                const Mat4 m = glm::translate(Mat4{1.0f}, base + Vec3{ox + 0.12f * flick,
+                                                                      height * 0.5f, oz}) *
+                               glm::scale(Mat4{1.0f}, Vec3{width, height, width});
+                renderer_->draw_emissive(shape_sphere_, m, Vec4{col, 1.0f});
+            }
+
+            // Smoke: dark puffs rising and fattening as they climb.
+            const int puffs = 4;
+            for (int i = 0; i < puffs; ++i) {
+                const f32 t = frac(elapsed_ * 0.16f + static_cast<f32>(i) / puffs + ph);
+                const f32 yy = 3.2f + t * 5.0f;
+                const f32 ss = (0.9f + t * 2.2f) * (0.6f + 0.4f * vigour);
+                const f32 alpha = (1.0f - t) * (ember > 0.0f ? 0.5f : 0.38f);
+                const Mat4 m = glm::translate(Mat4{1.0f},
+                                              base + Vec3{0.7f * std::sin(elapsed_ * 0.6f + i),
+                                                          yy, 0.5f * std::cos(elapsed_ * 0.5f + i)}) *
+                               glm::scale(Mat4{1.0f}, Vec3{ss});
+                renderer_->draw_transparent(shape_sphere_, m, Vec4{0.09f, 0.08f, 0.08f, alpha});
+            }
+
+            // Additive firelight bloom.
+            const f32 bloom = 0.6f * vigour * (0.85f + 0.15f * std::sin(elapsed_ * 9.0f + ph));
+            renderer_->draw_glow(shape_sphere_,
+                                 glm::translate(Mat4{1.0f}, base + Vec3{0.0f, 1.6f, 0.0f}) *
+                                     glm::scale(Mat4{1.0f}, Vec3{3.6f * vigour}),
+                                 Vec4{1.0f, 0.5f, 0.18f, bloom});
+
+            // A strong warm light pooling around the blaze (brightest at night).
+            if (in > 0.15f) {
+                Renderer::SpotLight sl;
+                sl.position = base + Vec3{0.0f, 4.5f, 0.0f};
+                sl.direction = Vec3{0.0f, -1.0f, 0.0f};
+                sl.color = Vec3{1.0f, 0.5f, 0.2f} * ((0.6f + 1.4f * night) * vigour);
+                sl.range = 15.0f;
+                const f32 half = glm::radians(62.0f);
+                sl.cone_outer_cos = std::cos(half);
+                sl.cone_inner_cos = std::cos(half * 0.6f);
+                renderer_->add_light(sl);
+            }
+        }
+    }
+
+    // The burning intensity (0..1) of the house at world position `p`, from the
+    // server's fire list - used to char the cottage and swap its cosy glow for flames.
+    f32 house_burn(const Vec3& p) const {
+        if (!have_snapshot_) {
+            return 0.0f;
+        }
+        f32 burn = 0.0f;
+        for (const net::FireState& fs : snapshot_.fires) {
+            if (glm::length(Vec2{fs.position.x - p.x, fs.position.z - p.z}) < 2.5f) {
+                burn = std::max(burn, static_cast<f32>(fs.intensity) / 255.0f);
+            }
+        }
+        return burn;
+    }
+
+    // Builds the wagon's transform so it sits ON the terrain: pitched along its travel
+    // direction and rolled across it to match the ground slope under the wheels, plus a
+    // little speed-based bob, so it bumps over hills like a real cart. Keeps the existing
+    // yaw convention (rotateY) and layers the tilt on top.
+    Mat4 wagon_model(const net::WagonState& wg, f32 moved) const {
+        // The wagon mesh faces local +X. The server yaw has forward = (cos, sin) in world
+        // xz, and glm::rotate(-yaw) maps local +X exactly there - so the tongue points the
+        // way the cart travels (toward its puller).
+        const f32 cy = std::cos(wg.yaw);
+        const f32 sy = std::sin(wg.yaw);
+        const Vec2 fwd{cy, sy};   // world xz the cart faces (local +X under rotate(-yaw))
+        const Vec2 lat{-sy, cy};  // world xz of local +Z under rotate(-yaw)
+        constexpr f32 d = 0.75f;  // wheelbase-ish sample offset
+        auto height = [&](const Vec2& o) {
+            return worldgen::height(wg.position.x + o.x, wg.position.z + o.y, world_seed_);
+        };
+        const f32 slope_f = (height(fwd * d) - height(fwd * -d)) / (2.0f * d);
+        const f32 slope_l = (height(lat * d) - height(lat * -d)) / (2.0f * d);
+        const f32 pitch = glm::clamp(std::atan(slope_f), -0.5f, 0.5f); // nose up going uphill
+        const f32 roll = glm::clamp(-std::atan(slope_l), -0.5f, 0.5f);
+        const f32 bob = std::sin(elapsed_ * 11.0f + wg.position.x * 0.7f) * 0.04f *
+                        glm::clamp(moved * 12.0f, 0.0f, 1.0f);
+        return glm::translate(Mat4{1.0f}, Vec3{wg.position.x, wg.position.y + bob, wg.position.z}) *
+               glm::rotate(Mat4{1.0f}, -wg.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
+               glm::rotate(Mat4{1.0f}, pitch, Vec3{0.0f, 0.0f, 1.0f}) *
+               glm::rotate(Mat4{1.0f}, roll, Vec3{1.0f, 0.0f, 0.0f});
+    }
+
+    // Draws the networked wagons (the parked offers, then the active cargo): the body
+    // plus four wheels that spin as the cart rolls (roll accumulated from its motion). The
+    // wagon you're voting for is tinted gold; a damaged one darkens toward wrecked.
+    void draw_wagons() {
+        if (renderer_ == nullptr || !have_snapshot_) {
+            return;
+        }
+        for (const net::WagonState& wg : snapshot_.wagons) {
+            const f32 hp = static_cast<f32>(wg.health) / 255.0f;
+            Vec3 tint{1.0f};
+            if (wg.mode == static_cast<u8>(WagonMode::Parked) && wg.id == selected_wagon_) {
+                tint = Vec3{1.4f, 1.25f, 0.7f}; // your pick glows
+            }
+            tint = glm::mix(Vec3{0.35f, 0.28f, 0.22f}, tint, glm::clamp(hp, 0.25f, 1.0f));
+
+            // Spin the wheels by however far the cart has rolled since last frame.
+            f32& roll = wagon_roll_[wg.id];
+            f32 moved = 0.0f;
+            const auto prev = wagon_prev_.find(wg.id);
+            if (prev != wagon_prev_.end()) {
+                moved = glm::length(Vec2{wg.position.x - prev->second.x, wg.position.z - prev->second.z});
+                roll -= moved / kWagonWheelRadius;
+            }
+            wagon_prev_[wg.id] = wg.position;
+
+            const Mat4 m = wagon_model(wg, moved);
+            renderer_->draw(wagon_mesh_, m, Vec4{tint, 1.0f});
+            for (const f32 sx : {-kWagonWheelX, kWagonWheelX}) {
+                for (const f32 sz : {-kWagonWheelZ, kWagonWheelZ}) {
+                    const Mat4 wm = m *
+                                    glm::translate(Mat4{1.0f}, Vec3{sx, kWagonWheelRadius, sz}) *
+                                    glm::rotate(Mat4{1.0f}, roll, Vec3{0.0f, 0.0f, 1.0f});
+                    renderer_->draw(wagon_wheel_mesh_, wm, Vec4{tint, 1.0f});
+                }
+            }
+        }
+    }
+
+    // Project a world point to screen pixels; returns false if behind/off camera.
+    bool world_to_screen(const Vec3& world, f32 W, f32 H, Vec2& out) const {
+        const Vec4 clip = camera_.view_projection() * Vec4{world, 1.0f};
+        if (clip.w <= 0.05f) {
+            return false;
+        }
+        const Vec2 ndc{clip.x / clip.w, clip.y / clip.w};
+        out = Vec2{(ndc.x * 0.5f + 0.5f) * W, (ndc.y * 0.5f + 0.5f) * H};
+        return std::abs(ndc.x) < 1.3f && std::abs(ndc.y) < 1.3f;
+    }
+
+    // The in-game HUD: shared party money, the wagon-contract objective (choose an offer,
+    // or the active delivery + a destination arrow), and the local player's health bar.
+    void draw_hud() {
+        if (renderer_ == nullptr || !have_snapshot_) {
+            return;
+        }
+        f32 hp = 1.0f;
+        for (const net::PlayerState& p : snapshot_.players) {
+            if (p.id == my_id_) {
+                hp = static_cast<f32>(p.health) / 100.0f;
+                break;
+            }
+        }
+        const VkExtent2D ext = renderer_->extent();
+        const f32 W = static_cast<f32>(ext.width);
+        const f32 H = static_cast<f32>(ext.height);
+        ui::DrawList draw{*renderer_};
+        const f32 ts = glm::clamp(H * 0.026f, 15.0f, 30.0f);
+        const Vec3 feet = local_feet();
+        const u8 phase = snapshot_.contract_phase;
+
+        // Shared party money, top-right.
+        const std::string money = std::format("$ {}", snapshot_.money);
+        draw.text(Vec2{W - draw.text_width(money, ts) - 24.0f, 22.0f}, money, ts,
+                  Vec4{0.96f, 0.86f, 0.4f, 1.0f});
+
+        if (phase == static_cast<u8>(ContractPhase::Offer)) {
+            draw.text(Vec2{24.0f, 22.0f}, "CHOOSE A WAGON TO HAUL", ts, Vec4{0.94f, 0.86f, 0.58f, 1.0f});
+            f32 ty = 22.0f + ts * 1.6f;
+            const int total = static_cast<int>(snapshot_.players.size());
+            int idx = 1;
+            for (const net::WagonState& wg : snapshot_.wagons) {
+                const f32 dist = glm::length(Vec2{wg.dest.x - feet.x, wg.dest.z - feet.z});
+                const bool picked = wg.id == selected_wagon_;
+                std::string stars(wg.difficulty, '*');
+                const std::string line = std::format("[{}] $ {}   risk {}   ~{}m   ({}/{})", idx,
+                                                      wg.reward, stars, static_cast<int>(dist),
+                                                      wg.votes, total);
+                draw.text(Vec2{24.0f, ty}, line, ts * 0.8f,
+                          picked ? Vec4{1.0f, 0.95f, 0.6f, 1.0f} : Vec4{0.8f, 0.82f, 0.86f, 1.0f});
+                ty += ts * 1.1f;
+                // Floating label over the wagon in the world.
+                Vec2 sp;
+                if (world_to_screen(wg.position + Vec3{0.0f, 2.2f, 0.0f}, W, H, sp)) {
+                    const std::string tag = std::format("[{}] $ {}", idx, wg.reward);
+                    draw.text(Vec2{sp.x - draw.text_width(tag, ts * 0.7f) * 0.5f, sp.y}, tag, ts * 0.7f,
+                              picked ? Vec4{1.0f, 0.95f, 0.6f, 1.0f} : Vec4{0.85f, 0.85f, 0.9f, 1.0f});
+                }
+                ++idx;
+            }
+            const char* mode = vote_mode_ == 2 ? "HAUL MANUALLY (+pay)" : "HIRE DRIVER";
+            draw.text(Vec2{24.0f, ty + ts * 0.3f},
+                      std::format("1-4 choose   [H] {}   - all must agree to depart", mode),
+                      ts * 0.72f, Vec4{0.66f, 0.78f, 0.7f, 1.0f});
+        } else if (phase == static_cast<u8>(ContractPhase::Active) && !snapshot_.wagons.empty()) {
+            const net::WagonState& wg = snapshot_.wagons.front();
+            const f32 dist = glm::length(Vec2{wg.dest.x - feet.x, wg.dest.z - feet.z});
+            const bool manual = wg.mode == static_cast<u8>(WagonMode::Manual);
+            draw.text(Vec2{24.0f, 22.0f},
+                      std::format("DELIVER THE WAGON   $ {}{}   ~{}m", wg.reward,
+                                  manual ? " (manual)" : "", static_cast<int>(dist)),
+                      ts, Vec4{0.94f, 0.86f, 0.58f, 1.0f});
+            // Wagon health bar.
+            const f32 wf = static_cast<f32>(wg.health) / 255.0f;
+            draw.rect(Vec4{24.0f, 22.0f + ts * 1.5f, 220.0f, 12.0f}, Vec4{0.05f, 0.05f, 0.07f, 0.7f},
+                      3.0f);
+            draw.rect(Vec4{24.0f, 22.0f + ts * 1.5f, 220.0f * std::max(wf, 0.0f), 12.0f},
+                      Vec4{glm::mix(Vec3{0.8f, 0.3f, 0.2f}, Vec3{0.5f, 0.7f, 0.4f}, wf), 0.95f}, 3.0f);
+            draw.text(Vec2{24.0f, 22.0f + ts * 2.8f},
+                      manual ? "[E] haul / ride the wagon" : "[E] ride on the wagon", ts * 0.72f,
+                      Vec4{0.66f, 0.78f, 0.7f, 1.0f});
+            draw_dest_arrow(draw, feet, Vec3{wg.dest.x, feet.y, wg.dest.z}, W);
+        }
+
+        // Settle banner.
+        if (snapshot_.contract_outcome != 0) {
+            const bool ok = snapshot_.contract_outcome == 1;
+            const char* msg = ok ? "WAGON DELIVERED" : "WAGON LOST";
+            const Vec4 c = ok ? Vec4{0.55f, 0.9f, 0.55f, 1.0f} : Vec4{0.95f, 0.4f, 0.36f, 1.0f};
+            const f32 bs = glm::clamp(H * 0.06f, 28.0f, 76.0f);
+            draw.text(Vec2{(W - draw.text_width(msg, bs)) * 0.5f, H * 0.34f}, msg, bs, c);
+        }
+
+        draw.text(Vec2{24.0f, H - 52.0f}, "[M] MAP", ts * 0.72f, Vec4{0.72f, 0.80f, 0.88f, 1.0f});
+
+        // Health bar.
+        const f32 bw = std::min(320.0f, W * 0.28f);
+        const f32 bh = 18.0f;
+        const f32 x = 24.0f;
+        const f32 y = H - 24.0f - bh;
+        draw.rect(Vec4{x - 3.0f, y - 3.0f, bw + 6.0f, bh + 6.0f}, Vec4{0.05f, 0.05f, 0.07f, 0.7f},
+                  5.0f);
+        const Vec3 col = glm::mix(Vec3{0.85f, 0.2f, 0.18f}, Vec3{0.35f, 0.8f, 0.35f}, hp);
+        draw.rect(Vec4{x, y, bw * std::max(hp, 0.0f), bh}, Vec4{col, 0.95f}, 4.0f);
+    }
+
+    // A bold arrow near the top of the screen pointing from the player toward the wagon's
+    // destination (world bearing mapped through the fixed iso camera).
+    void draw_dest_arrow(ui::DrawList& draw, const Vec3& from, const Vec3& to, f32 W) {
+        const f32 cam_yaw = radians(iso::yaw_deg);
+        const Vec2 cam_fwd{-std::cos(cam_yaw), -std::sin(cam_yaw)};
+        const Vec2 cam_right{std::sin(cam_yaw), -std::cos(cam_yaw)};
+        const Vec2 v{to.x - from.x, to.z - from.z};
+        Vec2 d{glm::dot(v, cam_right), -glm::dot(v, cam_fwd)};
+        if (glm::length(d) < 1e-3f) {
+            return;
+        }
+        d = glm::normalize(d);
+        const Vec2 perp{-d.y, d.x};
+        const Vec2 c{W * 0.5f, 84.0f};
+        const Vec4 amber{0.98f, 0.78f, 0.32f, 1.0f};
+        const f32 L = 34.0f, hw = 13.0f;
+        const Vec2 tip = c + d * L;
+        draw.line(c - d * L * 0.6f, tip, 6.0f, amber);
+        draw.line(tip, tip - d * hw + perp * hw, 6.0f, amber);
+        draw.line(tip, tip - d * hw - perp * hw, 6.0f, amber);
+        draw.text(Vec2{c.x - draw.text_width("DESTINATION", 16.0f) * 0.5f, c.y + 22.0f},
+                  "DESTINATION", 16.0f, amber);
+    }
+
+    // Full-screen world map: the towns near the player and the roads between them
+    // (computed deterministically from the shared seed via roads::gather + village_at),
+    // with the player's position + facing. Toggled with M.
+    void draw_map() {
+        if (renderer_ == nullptr) {
+            return;
+        }
+        const VkExtent2D ext = renderer_->extent();
+        const f32 W = static_cast<f32>(ext.width);
+        const f32 H = static_cast<f32>(ext.height);
+        ui::DrawList draw{*renderer_};
+
+        // Dim the world, then a framed map panel.
+        draw.rect(Vec4{0.0f, 0.0f, W, H}, Vec4{0.03f, 0.04f, 0.06f, 0.86f});
+        const f32 mg = std::min(W, H) * 0.07f;
+        const Vec4 panel{mg, mg, W - 2.0f * mg, H - 2.0f * mg};
+        draw.rect(panel, Vec4{0.09f, 0.10f, 0.13f, 0.97f}, Vec4{0.35f, 0.34f, 0.3f, 1.0f}, 2.0f, 10.0f);
+        draw.text(Vec2{panel.x + 22.0f, panel.y + 18.0f}, "WORLD MAP", 30.0f,
+                  Vec4{0.92f, 0.9f, 0.96f, 1.0f});
+
+        // Map projection: centre on the player, a fixed world span across the panel.
+        const f32 inner = std::min(panel.z, panel.w) * 0.5f - 28.0f;
+        const f32 view_world = 480.0f; // metres from centre to edge of the shorter side
+        const f32 ppm = inner / view_world;
+        const Vec2 mc{panel.x + panel.z * 0.5f, panel.y + panel.w * 0.5f};
+        const Vec3 feet = local_feet();
+        auto to_screen = [&](f32 wx, f32 wz) {
+            return Vec2{mc.x + (wx - feet.x) * ppm, mc.y + (wz - feet.z) * ppm};
+        };
+        auto in_panel = [&](const Vec2& p) {
+            return p.x > panel.x + 4.0f && p.x < panel.x + panel.z - 4.0f &&
+                   p.y > panel.y + 36.0f && p.y < panel.y + panel.w - 4.0f;
+        };
+
+        // Roads between towns.
+        const Vec2 origin{feet.x, feet.z};
+        for (const roads::Segment& s : roads::gather(origin, view_world * 1.6f, world_seed_)) {
+            const Vec2 a = to_screen(s.a.x, s.a.y);
+            const Vec2 b = to_screen(s.b.x, s.b.y);
+            if (in_panel(a) || in_panel(b)) {
+                draw.line(a, b, 2.5f, Vec4{0.62f, 0.52f, 0.36f, 1.0f});
+            }
+        }
+
+        // Towns (markers sized by town extent).
+        const int reach = static_cast<int>(view_world * 1.4f / worldgen::village_cell) + 1;
+        const int ccx = static_cast<int>(std::floor(feet.x / worldgen::village_cell));
+        const int ccz = static_cast<int>(std::floor(feet.z / worldgen::village_cell));
+        for (int dz = -reach; dz <= reach; ++dz) {
+            for (int dx = -reach; dx <= reach; ++dx) {
+                const auto v = worldgen::village_at(ccx + dx, ccz + dz, world_seed_);
+                if (!v) {
+                    continue;
+                }
+                const Vec2 c = to_screen(v->center.x, v->center.y);
+                if (!in_panel(c)) {
+                    continue;
+                }
+                const f32 r = glm::clamp(v->half * ppm, 5.0f, 26.0f);
+                draw.rect(Vec4{c.x - r, c.y - r, 2.0f * r, 2.0f * r}, Vec4{0.78f, 0.7f, 0.5f, 0.95f},
+                          Vec4{0.25f, 0.22f, 0.16f, 1.0f}, 1.5f, 3.0f);
+            }
+        }
+
+        // The player: a bright dot with a facing tick.
+        const Vec2 me = to_screen(feet.x, feet.z);
+        const Vec2 dir{std::cos(face_yaw_), std::sin(face_yaw_)};
+        draw.line(me, me + dir * 14.0f, 3.0f, Vec4{0.55f, 0.85f, 1.0f, 1.0f});
+        draw.rect(Vec4{me.x - 5.0f, me.y - 5.0f, 10.0f, 10.0f}, Vec4{0.4f, 0.7f, 1.0f, 1.0f}, 5.0f);
+
+        draw.text(Vec2{panel.x + 22.0f, panel.y + panel.w - 30.0f}, "M / ESC  CLOSE", 18.0f,
+                  Vec4{0.7f, 0.72f, 0.78f, 1.0f});
+    }
+
     void draw_prop(const PropInstance& p) {
-        const std::vector<GpuProp>& set = p.category == PropCategory::Bush   ? gpu_bushes_
-                                          : p.category == PropCategory::Rock ? gpu_rocks_
-                                                                             : gpu_logs_;
+        const std::vector<GpuProp>& set =
+            p.category == PropCategory::Bush      ? gpu_bushes_
+            : p.category == PropCategory::Rock    ? gpu_rocks_
+            : p.category == PropCategory::Log     ? gpu_logs_
+            : p.category == PropCategory::Fence   ? gpu_fences_
+            : p.category == PropCategory::Lantern ? gpu_lanterns_
+            : p.category == PropCategory::House    ? gpu_houses_
+            : p.category == PropCategory::Wall     ? gpu_walls_
+            : p.category == PropCategory::Gate     ? gpu_gates_
+            : p.category == PropCategory::Well     ? gpu_wells_
+            : p.category == PropCategory::Bridge   ? gpu_bridges_
+            : p.category == PropCategory::Market   ? gpu_markets_
+            : p.category == PropCategory::Path     ? gpu_paths_
+            : p.category == PropCategory::Planter  ? gpu_planters_
+                                                   : gpu_fountains_;
         if (set.empty()) {
             return;
         }
@@ -852,11 +1567,71 @@ private:
         const Mat4 m = glm::translate(Mat4{1.0f}, p.position) *
                        glm::rotate(Mat4{1.0f}, p.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
                        glm::scale(Mat4{1.0f}, Vec3{p.scale});
+        const f32 glow = glm::mix(1.0f, 0.45f, sun_intensity_); // emissive dims by day
+
+        // Fade a house roof when the local player is inside its footprint.
+        bool inside = false;
+        if (gp.footprint.x > 0.0f) {
+            const Vec3 rel = local_feet() - p.position;
+            const f32 cs = std::cos(-p.yaw);
+            const f32 sn = std::sin(-p.yaw);
+            const Vec2 lp{rel.x * cs - rel.z * sn, rel.x * sn + rel.z * cs};
+            inside = std::abs(lp.x) < gp.footprint.x + 0.4f && std::abs(lp.y) < gp.footprint.y + 0.4f &&
+                     rel.y > -1.5f && rel.y < gp.wall_height + 2.0f;
+        }
+        // A burning cottage chars toward black and its cosy window-glow gives way to
+        // flames (drawn separately in draw_fires).
+        const f32 burn = gp.footprint.x > 0.0f ? house_burn(p.position) : 0.0f;
+        const f32 cozy = 1.0f - burn;          // cosy emissive / interior light fades out
+        const Vec3 charcoal = glm::mix(Vec3{1.0f}, Vec3{0.14f, 0.12f, 0.11f}, burn);
+        const Vec4 char_tint{charcoal, 1.0f};
+
+        const f32 night = 1.0f - sun_intensity_;
         for (const GpuPropPart& part : gp.parts) {
             if (part.layer == PropLayer::Foliage) {
                 renderer_->draw_transparent(part.mesh, m, Vec4{1.0f});
+            } else if (part.layer == PropLayer::Emissive) {
+                const f32 e = glow * cozy;
+                renderer_->draw_emissive(part.mesh, m, Vec4{e, e, e, 1.0f});
+            } else if (part.layer == PropLayer::Glow) {
+                // Window light shafts: additive, dusk/night only, gone once ablaze.
+                if (night > 0.05f && cozy > 0.05f) {
+                    renderer_->draw_glow(part.mesh, m, Vec4{1.0f, 1.0f, 1.0f, night * 0.6f * cozy});
+                }
+            } else if (part.layer == PropLayer::Roof) {
+                if (inside) {
+                    renderer_->draw_transparent(part.mesh, m, Vec4{charcoal, 0.18f});
+                } else {
+                    renderer_->draw(part.mesh, m, char_tint);
+                }
             } else {
-                renderer_->draw(part.mesh, m);
+                renderer_->draw(part.mesh, m, char_tint);
+            }
+        }
+
+        // Interior + lantern spot lights, added at dusk/night. Only props near the player
+        // submit lights at all (distant town lights are skipped) - this keeps the lit-up
+        // night cheap. House interiors cast shadows (occluded by walls); lanterns/braziers
+        // are cheap unshadowed pools, so a town full of lanterns barely costs anything.
+        constexpr f32 kLightCullDist = 38.0f;
+        const bool near_player = glm::length(p.position - local_feet()) < kLightCullDist;
+        if (night > 0.12f && cozy > 0.1f && near_player && !gp.lights.empty()) {
+            const Mat3 rot{m};
+            for (const PropLight& pl : gp.lights) {
+                Renderer::SpotLight sl;
+                sl.position = Vec3{m * Vec4{pl.offset, 1.0f}};
+                sl.direction = glm::normalize(rot * pl.direction);
+                sl.color = pl.color * (pl.intensity * night * cozy);
+                sl.range = pl.range;
+                const f32 half = glm::radians(pl.cone_deg * 0.5f);
+                sl.cone_outer_cos = std::cos(half);
+                sl.cone_inner_cos = std::cos(half * 0.65f);
+                // House hearth/lamp/candle light is INDOORS: it must be occluded by the
+                // walls, so it casts a real shadow (or isn't drawn). Lanterns/gate braziers
+                // are open-air and need no shadow - keep them in the cheap unshadowed pool.
+                sl.indoor = (p.category == PropCategory::House);
+                sl.cast_shadow = (p.category == PropCategory::House);
+                renderer_->add_light(sl);
             }
         }
     }
@@ -866,6 +1641,69 @@ private:
                           glm::rotate(Mat4{1.0f}, HalfPi - yaw, Vec3{0.0f, 1.0f, 0.0f});
         const std::vector<Quat> pose = v.animator.pose(v.model);
         draw_rig(v.model, v.model.bone_matrices(root, pose));
+    }
+
+    // ---- Village NPCs (server-authoritative; the player defends them) -------
+    // Villagers are simulated on the server (wander/sleep/flee, killable by enemies)
+    // and arrive in the snapshot; the client just renders + animates them, rebuilding
+    // a model when its appearance first appears, and culls visuals that have died /
+    // left the snapshot.
+    void update_villager_visuals(Timestep dt) {
+        if (!have_snapshot_) {
+            return;
+        }
+        for (const net::VillagerState& vl : snapshot_.villagers) {
+            PlayerVisual& v = ensure_villager_visual(vl.id, vl.appearance);
+            f32 measured = 0.0f;
+            if (v.has_last && dt.seconds > 0.0001f) {
+                Vec3 d = vl.position - v.last_pos;
+                d.y = 0.0f;
+                measured = glm::length(d) / dt.seconds;
+            }
+            v.speed = glm::mix(v.speed, measured, 0.3f);
+            v.last_pos = vl.position;
+            v.has_last = true;
+            v.animator.update(v.speed, dt);
+        }
+        for (auto it = villager_visuals_.begin(); it != villager_visuals_.end();) {
+            const bool live = std::any_of(snapshot_.villagers.begin(), snapshot_.villagers.end(),
+                                          [&](const net::VillagerState& s) { return s.id == it->first; });
+            it = live ? std::next(it) : villager_visuals_.erase(it);
+        }
+    }
+
+    PlayerVisual& ensure_villager_visual(u32 id, const CharacterAppearance& appearance) {
+        const auto it = villager_visuals_.find(id);
+        if (it != villager_visuals_.end()) {
+            return it->second;
+        }
+        PlayerVisual v;
+        v.appearance = appearance;
+        v.model = CharacterModel::create(id ^ 0x55u, appearance);
+        return villager_visuals_.emplace(id, std::move(v)).first->second;
+    }
+
+    void draw_villagers() {
+        if (!have_snapshot_) {
+            return;
+        }
+        for (const net::VillagerState& vl : snapshot_.villagers) {
+            const auto it = villager_visuals_.find(vl.id);
+            if (it == villager_visuals_.end()) {
+                continue;
+            }
+            PlayerVisual& v = it->second;
+            const Mat4 root = glm::translate(Mat4{1.0f}, vl.position) *
+                              glm::rotate(Mat4{1.0f}, HalfPi - vl.yaw, Vec3{0.0f, 1.0f, 0.0f});
+            const std::vector<Mat4> mats = v.model.bone_matrices(root, v.animator.pose(v.model));
+            // Guards (kind 1) wear a steel tint + carry a spear gripped in the hand.
+            if (vl.kind == 1) {
+                draw_rig(v.model, mats, Vec3{0.72f, 0.76f, 0.86f});
+                draw_held_spear(v.model, mats);
+            } else {
+                draw_rig(v.model, mats);
+            }
+        }
     }
 
     void send_input() {
@@ -880,7 +1718,7 @@ private:
         bool jump = false;
         // While the pause menu is up the player holds still (and ignores WASD/SPACE
         // that would otherwise leak through to movement).
-        if (Input* in = input(); in != nullptr && !paused_) {
+        if (Input* in = input(); in != nullptr && !paused_ && !map_open_) {
             if (in->key_down(key::W)) move += cam_fwd;
             if (in->key_down(key::S)) move -= cam_fwd;
             if (in->key_down(key::D)) move += cam_right;
@@ -896,15 +1734,25 @@ private:
         packet.move = move;
         packet.yaw = face_yaw_;
         packet.jump = jump;
-        packet.dig = pending_dig_;
         packet.add = pending_add_;
         packet.fire = pending_fire_;
+        packet.attack = pending_attack_;
+        packet.build = pending_build_;
+        packet.rally = pending_rally_;
+        packet.grab = pending_grab_;
         packet.aim = aim_;
+        // Vote only matters while wagons are being offered.
+        packet.vote_wagon =
+            snapshot_.contract_phase == static_cast<u8>(ContractPhase::Offer) ? selected_wagon_ : 0;
+        packet.vote_mode = vote_mode_;
         packet.appearance = appearance_;
         client_.send_input(packet);
-        pending_dig_ = false;
         pending_add_ = false;
         pending_fire_ = false;
+        pending_attack_ = false;
+        pending_build_ = false;
+        pending_rally_ = false;
+        pending_grab_ = false;
     }
 
     Vec3 local_feet() const {
@@ -917,6 +1765,7 @@ private:
         }
         return Vec3{0.0f, 5.0f, 0.0f};
     }
+
 
     // Unproject the cursor through the iso camera onto the terrain (for digging).
     void update_aim() {
@@ -1004,14 +1853,30 @@ private:
     };
     struct GpuProp {
         std::vector<GpuPropPart> parts;
+        std::vector<PropLight> lights; // lantern / hearth / brazier spot lights
+        Vec2 footprint{0.0f};          // house interior half-extents (0 = not a house)
+        f32 wall_height = 0.0f;
     };
 
     std::unordered_map<net::PlayerId, PlayerVisual> visuals_;
+    std::unordered_map<u32, EnemyVisual> enemy_visuals_;     // networked hostile NPCs
+    std::unordered_map<u32, PlayerVisual> villager_visuals_; // networked town NPCs
     std::vector<TreeVisual> tree_library_;
     PropLibrary prop_lib_;
     std::vector<GpuProp> gpu_bushes_;
     std::vector<GpuProp> gpu_rocks_;
     std::vector<GpuProp> gpu_logs_;
+    std::vector<GpuProp> gpu_fences_;
+    std::vector<GpuProp> gpu_lanterns_;
+    std::vector<GpuProp> gpu_houses_;
+    std::vector<GpuProp> gpu_walls_;
+    std::vector<GpuProp> gpu_gates_;
+    std::vector<GpuProp> gpu_wells_;
+    std::vector<GpuProp> gpu_bridges_;
+    std::vector<GpuProp> gpu_markets_;
+    std::vector<GpuProp> gpu_paths_;
+    std::vector<GpuProp> gpu_planters_;
+    std::vector<GpuProp> gpu_fountains_;
     Mesh shape_box_;
     Mesh shape_sphere_;
     Mesh shape_cylinder_;
@@ -1026,14 +1891,28 @@ private:
     Camera camera_;
 
     net::PlayerId my_id_ = 0;
+    u32 world_seed_ = 0;     // shared world seed (from Welcome) - for the map's town/road graph
+    bool map_open_ = false;  // full-screen map overlay (M)
     net::Snapshot snapshot_;
     bool have_snapshot_ = false;
 
     f32 face_yaw_ = 0.0f;
     u32 sequence_ = 0;
-    bool pending_dig_ = false;
     bool pending_add_ = false;
     bool pending_fire_ = false;
+    bool pending_attack_ = false;
+    bool pending_build_ = false;
+    bool pending_rally_ = false;
+    bool pending_grab_ = false; // one-shot hitch/unhitch the nearest wagon
+    u32 selected_wagon_ = 0;    // wagon id this client is voting for (0 = none)
+    u8 vote_mode_ = 1;          // 1 = hire driver, 2 = haul manually
+    Mesh wagon_mesh_;           // shared cart body mesh, drawn per networked wagon
+    Mesh wagon_wheel_mesh_;     // a single wheel, drawn x4 and spun as the cart rolls
+    std::unordered_map<u32, f32> wagon_roll_;  // accumulated wheel spin per wagon id
+    std::unordered_map<u32, Vec3> wagon_prev_; // last wagon position (to derive roll)
+    f32 hit_flash_ = 0.0f;   // red damage-flash intensity (decays)
+    f32 last_health_ = 1.0f; // last seen local health fraction (to detect hits)
+    f32 swing_time_ = 0.0f;  // melee swing-arc animation timer (counts down)
     Vec3 aim_{0.0f};
     bool aim_valid_ = false;
 };

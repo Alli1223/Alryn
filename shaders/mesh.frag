@@ -17,9 +17,16 @@ struct Spot {
     vec4 atlas;         // xy tile offset, zw tile scale (in [0,1])
     mat4 viewProj;
 };
+// An unshadowed light: illuminates but casts no shadow (no atlas tile).
+struct Point {
+    vec4 posRange;
+    vec4 dirCosInner;
+    vec4 colorCosOuter;
+};
 layout(set = 0, binding = 2) uniform Lights {
-    ivec4 count; // x = number of active spot lights
-    Spot spots[4];
+    ivec4 count; // x = shadow-casting spot count, y = unshadowed point count
+    Spot spots[9];
+    Point points[48];
 } lights;
 
 layout(push_constant) uniform Push {
@@ -98,6 +105,34 @@ vec3 spotLighting(vec3 N, vec3 wpos) {
     return sum;
 }
 
+// Sum of the unshadowed point lights (cone + falloff, no occlusion test). These are
+// every light past the nearest few, so the whole town stays lit when zoomed out.
+vec3 pointLighting(vec3 N, vec3 wpos) {
+    vec3 sum = vec3(0.0);
+    for (int i = 0; i < lights.count.y; ++i) {
+        Point s = lights.points[i];
+        vec3 toL = s.posRange.xyz - wpos;
+        float dist = length(toL);
+        if (dist > s.posRange.w) {
+            continue;
+        }
+        vec3 L = toL / max(dist, 1e-4);
+        float ndl = max(dot(N, L), 0.0);
+        if (ndl <= 0.0) {
+            continue;
+        }
+        float cosA = dot(-L, s.dirCosInner.xyz);
+        float cone = smoothstep(s.colorCosOuter.w, s.dirCosInner.w, cosA);
+        if (cone <= 0.0) {
+            continue;
+        }
+        float atten = clamp(1.0 - dist / s.posRange.w, 0.0, 1.0);
+        atten *= atten;
+        sum += s.colorCosOuter.rgb * (ndl * cone * atten);
+    }
+    return sum;
+}
+
 void main() {
     vec3 N = normalize(vWorldNormal);
     vec3 L = normalize(pc.sun.xyz);
@@ -111,15 +146,15 @@ void main() {
 
     // Sky/ambient term shifts from a bright daytime blue to a dim moonlit blue.
     vec3 ambientDay = vec3(0.42, 0.49, 0.62);
-    vec3 ambientNight = vec3(0.13, 0.16, 0.25);
+    vec3 ambientNight = vec3(0.20, 0.23, 0.33);
     vec3 ambient = mix(ambientNight, ambientDay, intensity);
 
     // A soft cool fill from above at night so the world stays readable (moonlight).
     float night = 1.0 - intensity;
-    float moon = max(N.y, 0.0) * 0.16 * night;
+    float moon = max(N.y, 0.0) * 0.24 * night;
 
     vec3 base = vColor * pc.tint.rgb;
     vec3 illum = ambient + sunCol * diffuse + vec3(0.55, 0.65, 0.9) * moon +
-                 spotLighting(N, vWorldPos);
+                 spotLighting(N, vWorldPos) + pointLighting(N, vWorldPos);
     outColor = vec4(base * illum, pc.tint.a);
 }

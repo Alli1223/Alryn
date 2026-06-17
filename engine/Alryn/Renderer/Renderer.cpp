@@ -34,9 +34,16 @@ struct GpuSpot {
     Vec4 atlas;           // xy tile offset, zw tile scale
     Mat4 view_proj;
 };
+// A light that illuminates but casts no shadow (no atlas tile / view-proj needed).
+struct GpuPoint {
+    Vec4 pos_range;       // xyz position, w range
+    Vec4 dir_cos_inner;   // xyz direction, w cos(inner)
+    Vec4 color_cos_outer; // rgb colour, w cos(outer)
+};
 struct LightUbo {
-    i32 count[4]; // ivec4: x = active count
-    GpuSpot spots[4];
+    i32 count[4]; // x = shadowed spot count, y = unshadowed point count
+    GpuSpot spots[9];
+    GpuPoint points[48]; // must match kMaxPointLights + mesh.frag
 };
 
 // Must match the push_constant block in ui.vert / ui.frag.
@@ -143,6 +150,14 @@ bool Renderer::create_pipelines() {
     emissive.blend = false;
     emissive.depth_write = true;
     if (!pipeline_emissive_.create(device_, emissive)) {
+        return false;
+    }
+
+    vk::PipelineConfig glow = emissive; // additive light shafts (depth-tested, no write)
+    glow.blend = false;
+    glow.additive = true;
+    glow.depth_write = false;
+    if (!pipeline_glow_.create(device_, glow)) {
         return false;
     }
 
@@ -335,7 +350,8 @@ void Renderer::add_light(const SpotLight& light) {
 // Picks the nearest kMaxLights to the camera, assigns each an atlas tile, and
 // fills the per-frame light UBO + the matrices used by the atlas pass.
 void Renderer::process_lights() {
-    static_assert(kMaxLights == 4, "LightUbo/shader assume 4 lights");
+    static_assert(kMaxLights <= 9, "LightUbo/shader hold up to 9 shadow spots");
+    static_assert(kMaxPointLights <= 48, "LightUbo/shader hold up to 48 point lights");
     active_light_vp_.clear();
     LightUbo ubo{};
 
@@ -347,30 +363,46 @@ void Renderer::process_lights() {
                glm::length(pending_lights_[b].position - cam);
     });
 
-    const u32 n = std::min<u32>(kMaxLights, static_cast<u32>(pending_lights_.size()));
+    // Walk lights nearest-first. The few nearest that WANT a shadow (house interiors) get
+    // an atlas tile + a shadow pass; everything else (lanterns, overflow) illuminates from
+    // the cheap unshadowed pool. Rendering a shadow map per light is the costly part, so
+    // keeping lanterns out of it lets a whole town glow for almost free.
     const f32 tile = 1.0f / static_cast<f32>(kAtlasTiles);
-    for (u32 i = 0; i < n; ++i) {
-        const SpotLight& l = pending_lights_[order[i]];
+    u32 n = 0; // shadow-casting spots assigned
+    u32 m = 0; // unshadowed point lights assigned
+    for (const u32 idx : order) {
+        const SpotLight& l = pending_lights_[idx];
         const Vec3 dir = glm::length(l.direction) > 1e-4f ? glm::normalize(l.direction)
                                                           : Vec3{0.0f, -1.0f, 0.0f};
-        const Vec3 up = std::abs(dir.y) > 0.99f ? Vec3{0.0f, 0.0f, 1.0f} : Vec3{0.0f, 1.0f, 0.0f};
-        const Mat4 view = glm::lookAt(l.position, l.position + dir, up);
-        const f32 outer = glm::clamp(l.cone_outer_cos, -0.999f, 0.999f);
-        const f32 fov = glm::clamp(2.0f * std::acos(outer), 0.35f, 2.7f);
-        const Mat4 proj = glm::perspective(fov, 1.0f, 0.25f, std::max(l.range, 1.0f));
-        const Mat4 vp = proj * view;
-        active_light_vp_.push_back(vp);
-
-        const u32 col = i % kAtlasTiles;
-        const u32 row = i / kAtlasTiles;
-        GpuSpot& g = ubo.spots[i];
-        g.pos_range = Vec4{l.position, l.range};
-        g.dir_cos_inner = Vec4{dir, l.cone_inner_cos};
-        g.color_cos_outer = Vec4{l.color, outer};
-        g.atlas = Vec4{static_cast<f32>(col) * tile, static_cast<f32>(row) * tile, tile, tile};
-        g.view_proj = vp;
+        if (l.cast_shadow && n < kMaxLights) {
+            const Vec3 up = std::abs(dir.y) > 0.99f ? Vec3{0.0f, 0.0f, 1.0f} : Vec3{0.0f, 1.0f, 0.0f};
+            const Mat4 view = glm::lookAt(l.position, l.position + dir, up);
+            const f32 outer = glm::clamp(l.cone_outer_cos, -0.999f, 0.999f);
+            const f32 fov = glm::clamp(2.0f * std::acos(outer), 0.35f, 2.7f);
+            const Mat4 vp = glm::perspective(fov, 1.0f, 0.25f, std::max(l.range, 1.0f)) * view;
+            active_light_vp_.push_back(vp);
+            const u32 col = n % kAtlasTiles;
+            const u32 row = n / kAtlasTiles;
+            GpuSpot& g = ubo.spots[n];
+            g.pos_range = Vec4{l.position, l.range};
+            g.dir_cos_inner = Vec4{dir, l.cone_inner_cos};
+            g.color_cos_outer = Vec4{l.color, outer};
+            g.atlas = Vec4{static_cast<f32>(col) * tile, static_cast<f32>(row) * tile, tile, tile};
+            g.view_proj = vp;
+            ++n;
+        } else if (!l.indoor && m < kMaxPointLights) {
+            // Unshadowed: lanterns + any shadow-overflow that isn't indoor. (An indoor
+            // light with no tile is dropped - it would leak through the walls.)
+            GpuPoint& p = ubo.points[m];
+            p.pos_range = Vec4{l.position, l.range};
+            p.dir_cos_inner = Vec4{dir, l.cone_inner_cos};
+            p.color_cos_outer = Vec4{l.color, glm::clamp(l.cone_outer_cos, -0.999f, 0.999f)};
+            ++m;
+        }
     }
+
     ubo.count[0] = static_cast<i32>(n);
+    ubo.count[1] = static_cast<i32>(m);
     frames_[frame_index_].light_ubo.upload(&ubo, sizeof(ubo));
 }
 
@@ -482,7 +514,7 @@ void Renderer::record_shadow_pass(VkCommandBuffer cmd) {
 
     pipeline_shadow_.bind(cmd);
     for (const DrawItem& item : draw_items_) {
-        if (item.layer == Layer::Water) {
+        if (item.layer == Layer::Water || item.layer == Layer::Glow) {
             continue; // the water surface doesn't cast shadows
         }
         PushConstants push{};
@@ -537,7 +569,7 @@ void Renderer::record_light_atlas_pass(VkCommandBuffer cmd) {
         vkCmdSetViewport(cmd, 0, 1, &vp);
         vkCmdSetScissor(cmd, 0, 1, &sc);
         for (const DrawItem& item : draw_items_) {
-            if (item.layer == Layer::Water) {
+            if (item.layer == Layer::Water || item.layer == Layer::Glow) {
                 continue;
             }
             PushConstants push{};
@@ -609,6 +641,7 @@ void Renderer::record_main_pass(VkCommandBuffer cmd) {
     for (const DrawItem& item : draw_items_) {
         const vk::Pipeline& pipe = item.layer == Layer::Water        ? pipeline_water_
                                    : item.layer == Layer::Foliage    ? pipeline_foliage_
+                                   : item.layer == Layer::Glow       ? pipeline_glow_
                                    : item.layer == Layer::Emissive   ? pipeline_emissive_
                                    : item.layer == Layer::Vegetation ? pipeline_vegetation_
                                                                      : pipeline_opaque_;
@@ -684,6 +717,12 @@ void Renderer::draw(const Mesh& mesh, const Mat4& model, const Vec4& tint) {
 void Renderer::draw_vegetation(const Mesh& mesh, const Mat4& model) {
     if (frame_active_) {
         draw_items_.push_back({&mesh, model, Vec4{1.0f}, Layer::Vegetation});
+    }
+}
+
+void Renderer::draw_glow(const Mesh& mesh, const Mat4& model, const Vec4& tint) {
+    if (frame_active_) {
+        draw_items_.push_back({&mesh, model, tint, Layer::Glow});
     }
 }
 
@@ -816,6 +855,7 @@ void Renderer::on_shutdown() {
     pipeline_foliage_.destroy();
     pipeline_water_.destroy();
     pipeline_emissive_.destroy();
+    pipeline_glow_.destroy();
     pipeline_vegetation_.destroy();
     pipeline_shadow_.destroy();
     pipeline_ui_.destroy();

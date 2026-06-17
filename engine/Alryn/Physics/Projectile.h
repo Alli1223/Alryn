@@ -19,7 +19,8 @@ struct Projectile {
     f32 radius = 0.18f;
     f32 life = 6.0f; // seconds remaining
     u32 owner = 0;
-    u8 kind = 0;
+    u8 kind = 0;          // 0 = thrown rock, 1 = enemy arrow
+    bool hostile = false; // an enemy arrow: damages the town side, not enemies
     bool alive = true;
     bool resting = false;
 };

@@ -16,6 +16,7 @@
 #   make test-render     Renderer (offscreen render, device, buffers)
 #   make test-terrain    Terrain meshing + world scatter (trees/props/houses)
 #   make test-net        Networking (protocol, server, integration)
+#   make test-combat     Enemies + combat (melee cone, enemy AI, damage)
 #   make test-character  Character model + animation
 #   make test-ui         UI widgets / vector font
 #   make test-filter FILTER="*House*"   run any subset by doctest test-case glob
@@ -37,7 +38,7 @@ CACHE   := $(BUILD_DIR)/CMakeCache.txt
 
 .PHONY: all build configure run test clean rebuild ci help \
         test-core test-scene test-physics test-render test-terrain \
-        test-net test-character test-ui test-filter list-tests shots
+        test-net test-combat test-character test-ui test-filter list-tests shots
 
 .DEFAULT_GOAL := build
 
@@ -76,6 +77,7 @@ test-physics:   build ; @$(TESTBIN) "--source-file=*physics_tests*"
 test-render:    build ; @$(TESTBIN) "--source-file=*render_offscreen_tests*,*renderer_tests*,*mesh_tests*,*scene_shot_tests*"
 test-terrain:   build ; @$(TESTBIN) "--source-file=*terrain_tests*"
 test-net:       build ; @$(TESTBIN) "--source-file=*net_tests*"
+test-combat:    build ; @$(TESTBIN) "--source-file=*combat_tests*"
 test-character: build ; @$(TESTBIN) "--source-file=*character_tests*"
 test-ui:        build ; @$(TESTBIN) "--source-file=*ui_tests*"
 

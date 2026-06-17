@@ -4,6 +4,7 @@
 #include <Alryn/Core/Types.h>
 #include <Alryn/Renderer/Mesh.h>
 #include <Alryn/Renderer/MeshPrimitives.h>
+#include <Alryn/Terrain/RoadNetwork.h>
 #include <Alryn/Terrain/TreeScatter.h> // detail::tree_hash / hash01
 #include <Alryn/Terrain/WorldGen.h>
 
@@ -45,6 +46,12 @@ inline bool veg_ground(f32 wx, f32 wz, u32 seed, f32 gh, f32 max_slope, f32 min_
                        f32& out_moist) {
     if (gh < worldgen::water_level + 0.6f) {
         return false;
+    }
+    if (roads::distance(wx, wz, seed) < roads::road_half_width - 0.2f) {
+        return false; // bare dirt on the road itself (grass grows up to the edge)
+    }
+    if (worldgen::inside_village(wx, wz, seed)) {
+        return false; // trampled town ground, not meadow
     }
     out_moist = worldgen::moisture(wx, wz, seed);
     if (out_moist < min_moist) {

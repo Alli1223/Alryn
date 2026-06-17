@@ -48,8 +48,14 @@ add_library(alryn STATIC
     Alryn/Terrain/MarchingTetra.cpp
     Alryn/Terrain/Terrain.cpp
     Alryn/Terrain/StreamingTerrain.cpp
+    Alryn/Terrain/RoadNetwork.cpp
     # ---- World -------------------------------------------------------------
     Alryn/World/PropLibrary.cpp
+    # ---- Game --------------------------------------------------------------
+    Alryn/Game/GameManager.cpp
+    Alryn/Game/Contracts.cpp
+    # ---- Combat ------------------------------------------------------------
+    Alryn/Combat/SiegeMode.cpp
     # ---- Net ---------------------------------------------------------------
     Alryn/Net/ByteBuffer.cpp
     Alryn/Net/Protocol.cpp

@@ -3,6 +3,7 @@
 #include <Alryn/Renderer/Vulkan/VulkanDevice.h>
 #include <Alryn/Terrain/MarchingTetra.h>
 #include <Alryn/Terrain/PropScatter.h>
+#include <Alryn/Terrain/RoadNetwork.h>
 #include <Alryn/Terrain/VegetationScatter.h>
 
 #include <algorithm>
@@ -13,38 +14,76 @@ namespace alryn {
 
 namespace {
 
-constexpr int kTrashHold = 3; // frames to keep a retired mesh before destroying it
-constexpr int kLoadBudget = 12;
-constexpr int kMeshBudget = 6;
+constexpr int kTrashHold = 3;     // frames to keep a retired mesh before destroying it
+constexpr int kUploadBudget = 4;  // generated chunks uploaded to the GPU per frame
+constexpr int kEditMeshBudget = 4; // chunks re-meshed after an edit per frame
 
 } // namespace
 
 StreamingTerrain::StreamingTerrain(u32 seed, f32 voxel_size, int chunk_voxels, int view_radius)
     : sampler_(seed), voxel_size_(voxel_size), chunk_voxels_(chunk_voxels),
       view_radius_(view_radius), chunk_world_(static_cast<f32>(chunk_voxels) * voxel_size),
-      y_voxels_(static_cast<int>((y_max_ - y_min_) / voxel_size)) {}
+      y_voxels_(static_cast<int>((y_max_ - y_min_) / voxel_size)) {
+    worker_ = std::thread(&StreamingTerrain::worker_loop, this);
+}
+
+StreamingTerrain::~StreamingTerrain() {
+    stop_.store(true);
+    in_cv_.notify_all();
+    if (worker_.joinable()) {
+        worker_.join();
+    }
+}
 
 IVec2 StreamingTerrain::chunk_of(const Vec3& p) const {
     return IVec2{static_cast<int>(std::floor(p.x / chunk_world_)),
                  static_cast<int>(std::floor(p.z / chunk_world_))};
 }
 
-StreamingTerrain::Chunk& StreamingTerrain::ensure_chunk(int cx, int cz) {
-    const i64 key = key_of(cx, cz);
-    const auto it = chunks_.find(key);
-    if (it != chunks_.end()) {
-        return it->second;
-    }
-    Chunk chunk;
-    chunk.coord = IVec2{cx, cz};
-    const Vec3 origin{static_cast<f32>(cx) * chunk_world_, y_min_, static_cast<f32>(cz) * chunk_world_};
+// The heavy, thread-safe part of streaming a chunk: build + fill the voxel field,
+// scatter trees/props, polygonise the terrain and bake the vegetation - all on the
+// CPU using only the immutable seed + the density snapshot. No GPU, no shared state.
+StreamingTerrain::GenResult StreamingTerrain::generate(const GenRequest& req) const {
+    const u32 seed = sampler_.seed();
+    GenResult res;
+    res.cx = req.cx;
+    res.cz = req.cz;
+    const Vec3 origin{static_cast<f32>(req.cx) * chunk_world_, y_min_,
+                      static_cast<f32>(req.cz) * chunk_world_};
     const IVec3 dims{chunk_voxels_ + 1, y_voxels_ + 1, chunk_voxels_ + 1};
-    chunk.field = std::make_unique<VoxelField>(dims, voxel_size_, origin);
-    chunk.field->fill([this](const Vec3& wp) { return sampler_(wp); });
-    chunk.trees = scatter_trees(cx, cz, chunk_world_, sampler_.seed());
-    chunk.props = scatter_props(cx, cz, chunk_world_, sampler_.seed());
-    chunk.needs_mesh = true;
-    return chunks_.emplace(key, std::move(chunk)).first->second;
+    res.field = std::make_unique<VoxelField>(dims, voxel_size_, origin);
+    res.field->fill([&](const Vec3& wp) { return req.density(wp); });
+    res.trees = scatter_trees(req.cx, req.cz, chunk_world_, seed);
+    res.props = scatter_props(req.cx, req.cz, chunk_world_, seed);
+    res.terrain = mc::polygonize(
+        *res.field, IVec3{0}, res.field->cell_count(), 0.0f, [seed](const Vec3& p, const Vec3& n) {
+            const f32 up = glm::clamp(n.y, 0.0f, 1.0f);
+            Vec3 c = roads::tint_surface(worldgen::surface_color(p, n, seed), p, up, seed);
+            return town_path_tint(c, p, up, seed); // dirt paths between houses + market
+        });
+    res.vegetation = build_vegetation(req.cx, req.cz, chunk_world_, seed);
+    return res;
+}
+
+// The background worker: pulls generation requests and posts finished CPU data back.
+void StreamingTerrain::worker_loop() {
+    for (;;) {
+        GenRequest req;
+        {
+            std::unique_lock<std::mutex> lock(in_mutex_);
+            in_cv_.wait(lock, [this] { return stop_.load() || !in_queue_.empty(); });
+            if (stop_.load()) {
+                return;
+            }
+            req = std::move(in_queue_.front());
+            in_queue_.pop_front();
+        }
+        GenResult res = generate(req);
+        {
+            std::lock_guard<std::mutex> lock(out_mutex_);
+            out_queue_.push_back(std::move(res));
+        }
+    }
 }
 
 void StreamingTerrain::retire_mesh(Mesh&& mesh) {
@@ -53,6 +92,9 @@ void StreamingTerrain::retire_mesh(Mesh&& mesh) {
     }
 }
 
+// Re-meshes a chunk's terrain after an edit (the field already exists + is edited).
+// Vegetation is seed-only, so it's left untouched. Synchronous, but edits touch only
+// a couple of nearby chunks, on a deliberate player action.
 void StreamingTerrain::mesh_chunk(Chunk& chunk, const vk::Device& device) {
     if (!chunk.field) {
         return;
@@ -60,22 +102,17 @@ void StreamingTerrain::mesh_chunk(Chunk& chunk, const vk::Device& device) {
     const u32 seed = sampler_.seed();
     const MeshData data = mc::polygonize(
         *chunk.field, IVec3{0}, chunk.field->cell_count(), 0.0f,
-        [seed](const Vec3& pos, const Vec3& normal) { return worldgen::surface_color(pos, normal, seed); });
+        [seed](const Vec3& pos, const Vec3& normal) {
+            const f32 up = glm::clamp(normal.y, 0.0f, 1.0f);
+            Vec3 c = roads::tint_surface(worldgen::surface_color(pos, normal, seed), pos, up, seed);
+            return town_path_tint(c, pos, up, seed);
+        });
     retire_mesh(std::move(chunk.mesh)); // defer deleting the old mesh (may be in flight)
     chunk.mesh = Mesh{};
     if (!data.indices.empty()) {
         chunk.mesh.create(device, data);
     }
     chunk.needs_mesh = false;
-
-    // Grass + flowers depend only on the seed (not on edits), so bake them once.
-    if (!chunk.vegetation_built) {
-        const MeshData veg = build_vegetation(chunk.coord.x, chunk.coord.y, chunk_world_, seed);
-        if (!veg.indices.empty()) {
-            chunk.vegetation.create(device, veg);
-        }
-        chunk.vegetation_built = true;
-    }
 }
 
 void StreamingTerrain::apply_edit(const Vec3& center, f32 radius, f32 amount) {
@@ -107,38 +144,75 @@ void StreamingTerrain::update(const Vec3& focus, const vk::Device& device) {
 
     const IVec2 center = chunk_of(focus);
 
-    // 2. Load nearby chunks (nearest rings first), within a per-frame budget.
-    int load_budget = kLoadBudget;
-    for (int r = 0; r <= view_radius_ && load_budget > 0; ++r) {
-        for (int dz = -r; dz <= r && load_budget > 0; ++dz) {
-            for (int dx = -r; dx <= r && load_budget > 0; ++dx) {
-                if (std::max(std::abs(dx), std::abs(dz)) != r) {
-                    continue; // only the ring at Chebyshev distance r
-                }
-                const int cx = center.x + dx;
-                const int cz = center.y + dz; // IVec2 stores (chunk_x, chunk_z)
-                if (chunks_.find(key_of(cx, cz)) == chunks_.end()) {
-                    ensure_chunk(cx, cz);
-                    --load_budget;
+    // 2. Enqueue nearby chunks (nearest rings first) that aren't loaded or already in
+    //    flight. The worker thread fills + meshes them off the main thread, so movement
+    //    never stalls the frame.
+    {
+        std::lock_guard<std::mutex> lock(in_mutex_);
+        for (int r = 0; r <= view_radius_; ++r) {
+            for (int dz = -r; dz <= r; ++dz) {
+                for (int dx = -r; dx <= r; ++dx) {
+                    if (std::max(std::abs(dx), std::abs(dz)) != r) {
+                        continue; // only the ring at Chebyshev distance r
+                    }
+                    const int cx = center.x + dx;
+                    const int cz = center.y + dz; // IVec2 stores (chunk_x, chunk_z)
+                    const i64 key = key_of(cx, cz);
+                    if (chunks_.count(key) == 0 && pending_.count(key) == 0) {
+                        in_queue_.push_back({cx, cz, sampler_.snapshot()});
+                        pending_.insert(key);
+                    }
                 }
             }
         }
     }
+    in_cv_.notify_all();
 
-    // 3. Mesh chunks that need it, within a per-frame budget.
-    int mesh_budget = kMeshBudget;
+    // 3. Upload finished chunks (just a host-visible memcpy - cheap), a few per frame.
+    std::vector<GenResult> ready;
+    {
+        std::lock_guard<std::mutex> lock(out_mutex_);
+        const int take = std::min<int>(kUploadBudget, static_cast<int>(out_queue_.size()));
+        ready.insert(ready.end(), std::make_move_iterator(out_queue_.begin()),
+                     std::make_move_iterator(out_queue_.begin() + take));
+        out_queue_.erase(out_queue_.begin(), out_queue_.begin() + take);
+    }
+    const int unload_dist = view_radius_ + 2;
+    for (GenResult& res : ready) {
+        pending_.erase(key_of(res.cx, res.cz));
+        // Drop results for chunks the focus has already moved away from.
+        if (std::max(std::abs(res.cx - center.x), std::abs(res.cz - center.y)) > unload_dist) {
+            continue;
+        }
+        Chunk chunk;
+        chunk.coord = IVec2{res.cx, res.cz};
+        chunk.field = std::move(res.field);
+        chunk.trees = std::move(res.trees);
+        chunk.props = std::move(res.props);
+        if (!res.terrain.indices.empty()) {
+            chunk.mesh.create(device, res.terrain);
+        }
+        if (!res.vegetation.indices.empty()) {
+            chunk.vegetation.create(device, res.vegetation);
+        }
+        chunk.needs_mesh = false;
+        chunk.vegetation_built = true;
+        chunks_.emplace(key_of(res.cx, res.cz), std::move(chunk));
+    }
+
+    // 4. Re-mesh chunks dirtied by edits (synchronous; few per frame).
+    int edit_budget = kEditMeshBudget;
     for (auto& [key, chunk] : chunks_) {
-        if (mesh_budget <= 0) {
+        if (edit_budget <= 0) {
             break;
         }
         if (chunk.needs_mesh) {
             mesh_chunk(chunk, device);
-            --mesh_budget;
+            --edit_budget;
         }
     }
 
-    // 4. Unload chunks that drifted out of range.
-    const int unload_dist = view_radius_ + 2;
+    // 5. Unload chunks that drifted out of range.
     for (auto it = chunks_.begin(); it != chunks_.end();) {
         const int dx = std::abs(it->second.coord.x - center.x);
         const int dz = std::abs(it->second.coord.y - center.y);

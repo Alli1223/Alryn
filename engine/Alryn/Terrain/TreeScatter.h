@@ -2,6 +2,7 @@
 
 #include <Alryn/Core/Math.h>
 #include <Alryn/Core/Types.h>
+#include <Alryn/Terrain/RoadNetwork.h>
 #include <Alryn/Terrain/ScatterHash.h>
 #include <Alryn/Terrain/WorldGen.h>
 
@@ -58,6 +59,12 @@ inline std::vector<TreeInstance> scatter_trees(int cx, int cz, f32 chunk_world, 
                               std::abs(worldgen::height(wx, wz + 1.0f, seed) - gh);
             if (slope > 2.6f) {
                 continue; // too steep
+            }
+            if (roads::distance(wx, wz, seed) < roads::road_half_width + 1.2f) {
+                continue; // keep roads clear of trees
+            }
+            if (worldgen::inside_village(wx, wz, seed, 2.5f)) {
+                continue; // towns are cleared of forest
             }
 
             TreeInstance t;
