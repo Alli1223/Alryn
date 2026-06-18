@@ -64,7 +64,7 @@ struct PropDef {
 // (cottages, perimeter walls and gate towers).
 enum class PropCategory : u8 {
     Bush, Rock, Log, Fence, Lantern, House, Wall, Gate, Well, Bridge, Market,
-    Path, Planter, Fountain
+    Path, Planter, Fountain, FenceRail
 };
 
 // How many distinct house variants `PropLibrary` builds (cottages, longhouses, two-
@@ -77,6 +77,10 @@ struct PropInstance {
     Vec3 position{0.0f}; // base on the ground
     f32 yaw = 0.0f;
     f32 scale = 1.0f;
+    // Extra stretch along the prop's LOCAL +X axis (1 = none). A fence rail is modelled
+    // unit-length and stretched by this to bridge the exact gap to the next post, so a run
+    // of posts is joined by rails of varying length.
+    f32 length = 1.0f;
 };
 
 } // namespace alryn

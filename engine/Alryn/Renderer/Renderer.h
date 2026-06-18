@@ -81,6 +81,9 @@ public:
 
     // Opaque geometry (terrain, characters). tint multiplies the vertex colour.
     void draw(const Mesh& mesh, const Mat4& model, const Vec4& tint = Vec4{1.0f});
+    // Opaque geometry that also obeys the foliage "peek-through" dissolve (tree trunks),
+    // so trunks between the camera and the player melt away like the leaves do.
+    void draw_cutout(const Mesh& mesh, const Mat4& model, const Vec4& tint = Vec4{1.0f});
     // Vegetation (grass/ferns/...): opaque + depth-written, but drawn with the wind
     // shader so it sways in the breeze and bends away from the player.
     void draw_vegetation(const Mesh& mesh, const Mat4& model);
@@ -117,11 +120,12 @@ private:
     // water -> foliage.
     enum class Layer : u8 {
         Opaque = 0,
-        Vegetation = 1,
-        Emissive = 2,
-        Water = 3,
-        Foliage = 4,
-        Glow = 5 // additive light shafts, drawn last
+        Cutout = 1,     // opaque (tree trunks), but with the foliage peek-through dissolve
+        Vegetation = 2,
+        Emissive = 3,
+        Water = 4,
+        Foliage = 5,
+        Glow = 6 // additive light shafts, drawn last
     };
     struct DrawItem {
         const Mesh* mesh;
@@ -179,6 +183,7 @@ private:
     vk::Swapchain swapchain_;
     vk::Image depth_;
     vk::Pipeline pipeline_opaque_;
+    vk::Pipeline pipeline_cutout_; // opaque + peek-through dissolve (tree trunks)
     vk::Pipeline pipeline_foliage_;
     vk::Pipeline pipeline_water_;
     vk::Pipeline pipeline_emissive_;

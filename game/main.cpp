@@ -131,6 +131,7 @@ protected:
         shape_box_.create(renderer_->device(), primitives::cube(1.0f, Vec3{1.0f}));
         shape_sphere_.create(renderer_->device(), primitives::sphere(10, 7, Vec3{1.0f}));
         shape_cylinder_.create(renderer_->device(), primitives::cylinder(10, Vec3{1.0f}));
+        shape_capsule_.create(renderer_->device(), primitives::capsule(12, 3, Vec3{1.0f}));
         shape_rounded_.create(renderer_->device(), primitives::rounded_box(0.12f, Vec3{1.0f}));
 
         // Upload the prop catalogue (bushes, rocks, logs, fences, lanterns) to GPU.
@@ -154,6 +155,7 @@ protected:
         upload_props(prop_lib_.rocks(), gpu_rocks_);
         upload_props(prop_lib_.logs(), gpu_logs_);
         upload_props(prop_lib_.fences(), gpu_fences_);
+        upload_props(prop_lib_.fence_rails(), gpu_fence_rails_);
         upload_props(prop_lib_.lanterns(), gpu_lanterns_);
         upload_props(prop_lib_.houses(), gpu_houses_);
         upload_props(prop_lib_.walls(), gpu_walls_);
@@ -619,9 +621,10 @@ protected:
         draw_goods();
         draw_swing();
 
-        // Tree trunks (opaque).
+        // Tree trunks (opaque, but they obey the peek-through dissolve so a trunk between
+        // the camera and the player melts away just like the foliage does).
         terrain_->for_each_tree([&](const TreeInstance& t) {
-            renderer_->draw(tree_library_[tree_index(t)].trunk, tree_model(t));
+            renderer_->draw_cutout(tree_library_[tree_index(t)].trunk, tree_model(t));
         });
 
         // Discrete props: rocks/houses (opaque + emissive), bushes (foliage).
@@ -663,12 +666,17 @@ protected:
         const Vec3 cam_eye = camera_.position();
         terrain_->for_each_tree([&](const TreeInstance& t) {
             const f32 dxz = glm::length(Vec2{t.position.x - feet.x, t.position.z - feet.z});
-            const f32 canopy = 2.6f * t.scale;
-            f32 alpha = dxz < canopy ? glm::mix(0.18f, 1.0f, dxz / canopy) : 1.0f;
-            // Fade canopies close to the camera so they don't block the view.
+            // Clear a generous bubble around the character so you always see them, even in
+            // thick forest (the radius scales with the big canopies).
+            const f32 canopy = std::max(2.6f * t.scale, 7.0f);
+            f32 alpha = glm::mix(0.12f, 1.0f, glm::smoothstep(canopy * 0.35f, canopy, dxz));
+            // Fade canopies near the camera / between it and the player so they don't block
+            // the view - the distance band scales with the tree so big trees clear early.
             const Vec3 cc = t.position + Vec3{0.0f, 3.2f * t.scale, 0.0f};
-            alpha = std::min(alpha, glm::mix(0.06f, 1.0f, glm::smoothstep(2.5f, 7.0f,
-                                                                          glm::length(cc - cam_eye))));
+            const f32 cam_fade = glm::mix(0.05f, 1.0f,
+                                          glm::smoothstep(3.0f, 5.0f + t.scale * 1.6f,
+                                                          glm::length(cc - cam_eye)));
+            alpha = std::min(alpha, cam_fade);
             renderer_->draw_transparent(tree_library_[tree_index(t)].foliage, tree_model(t),
                                         Vec4{t.tint, alpha});
         });
@@ -724,7 +732,8 @@ protected:
         camera_.look_at(eye, target);
         renderer_->set_camera(camera_);
 
-        const Mat4 root = glm::rotate(Mat4{1.0f}, preview_turn_, Vec3{0.0f, 1.0f, 0.0f});
+        const Mat4 root = glm::rotate(Mat4{1.0f}, preview_turn_, Vec3{0.0f, 1.0f, 0.0f}) *
+                          preview_anim_.body_offset(); // soft idle breathe on the turntable
         const std::vector<Quat> pose = preview_anim_.pose(preview_model_);
         draw_rig(preview_model_, preview_model_.bone_matrices(root, pose));
     }
@@ -743,6 +752,7 @@ protected:
                                                                     : pal.eye;
             const Mesh& shape = bones[i].shape == BoneShape::Sphere       ? shape_sphere_
                                 : bones[i].shape == BoneShape::Cylinder   ? shape_cylinder_
+                                : bones[i].shape == BoneShape::Capsule    ? shape_capsule_
                                 : bones[i].shape == BoneShape::RoundedBox ? shape_rounded_
                                                                           : shape_box_;
             renderer_->draw(shape, mats[i], Vec4{color * tint, 1.0f});
@@ -864,6 +874,7 @@ protected:
         shape_box_.destroy();
         shape_sphere_.destroy();
         shape_cylinder_.destroy();
+        shape_capsule_.destroy();
         shape_rounded_.destroy();
         for (auto& tv : tree_library_) {
             tv.trunk.destroy();
@@ -871,9 +882,10 @@ protected:
         }
         tree_library_.clear();
         for (std::vector<GpuProp>* set : {&gpu_bushes_, &gpu_rocks_, &gpu_logs_, &gpu_fences_,
-                                          &gpu_lanterns_, &gpu_houses_, &gpu_walls_, &gpu_gates_,
-                                          &gpu_wells_, &gpu_bridges_, &gpu_markets_,
-                                          &gpu_paths_, &gpu_planters_, &gpu_fountains_}) {
+                                          &gpu_fence_rails_, &gpu_lanterns_, &gpu_houses_,
+                                          &gpu_walls_, &gpu_gates_, &gpu_wells_, &gpu_bridges_,
+                                          &gpu_markets_, &gpu_paths_, &gpu_planters_,
+                                          &gpu_fountains_}) {
             for (GpuProp& gp : *set) {
                 for (GpuPropPart& part : gp.parts) {
                     part.mesh.destroy();
@@ -1100,7 +1112,7 @@ private:
             const f32 scale = en.kind == 2 ? 1.5f : 1.0f;
             const Mat4 root = glm::translate(Mat4{1.0f}, en.position) *
                               glm::rotate(Mat4{1.0f}, HalfPi - en.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
-                              glm::scale(Mat4{1.0f}, Vec3{scale});
+                              glm::scale(Mat4{1.0f}, Vec3{scale}) * v.animator.body_offset();
             const Vec3 tint = en.kind == 1   ? Vec3{1.5f, 0.7f, 0.18f}
                               : en.kind == 2 ? Vec3{1.05f, 0.26f, 0.4f}
                               : en.kind == 3 ? Vec3{0.5f, 0.85f, 0.45f}
@@ -1844,6 +1856,7 @@ private:
             : p.category == PropCategory::Rock    ? gpu_rocks_
             : p.category == PropCategory::Log     ? gpu_logs_
             : p.category == PropCategory::Fence   ? gpu_fences_
+            : p.category == PropCategory::FenceRail ? gpu_fence_rails_
             : p.category == PropCategory::Lantern ? gpu_lanterns_
             : p.category == PropCategory::House    ? gpu_houses_
             : p.category == PropCategory::Wall     ? gpu_walls_
@@ -1860,7 +1873,7 @@ private:
         const GpuProp& gp = set[p.variant % set.size()];
         const Mat4 m = glm::translate(Mat4{1.0f}, p.position) *
                        glm::rotate(Mat4{1.0f}, p.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
-                       glm::scale(Mat4{1.0f}, Vec3{p.scale});
+                       glm::scale(Mat4{1.0f}, Vec3{p.scale * p.length, p.scale, p.scale});
         const f32 glow = glm::mix(1.0f, 0.45f, sun_intensity_); // emissive dims by day
 
         // Fade a house roof when the local player is inside its footprint.
@@ -1933,8 +1946,12 @@ private:
     void draw_character(PlayerVisual& v, const Vec3& feet, f32 yaw, bool seated = false) {
         // Seated riders sink onto the bench (the sit pose folds the legs forward).
         const Vec3 base = seated ? feet - Vec3{0.0f, 0.42f, 0.0f} : feet;
-        const Mat4 root = glm::translate(Mat4{1.0f}, base) *
-                          glm::rotate(Mat4{1.0f}, HalfPi - yaw, Vec3{0.0f, 1.0f, 0.0f});
+        Mat4 root = glm::translate(Mat4{1.0f}, base) *
+                    glm::rotate(Mat4{1.0f}, HalfPi - yaw, Vec3{0.0f, 1.0f, 0.0f});
+        // The blobby squash/sway/lean wobble rides on the root when on foot (not seated).
+        if (!seated) {
+            root = root * v.animator.body_offset();
+        }
         const std::vector<Quat> pose =
             seated ? CharacterAnimator::sit_pose(v.model) : v.animator.pose(v.model);
         draw_rig(v.model, v.model.bone_matrices(root, pose));
@@ -1996,8 +2013,11 @@ private:
             const net::WagonState* aw = seated ? active_wagon() : nullptr;
             const Vec3 seat = (aw != nullptr) ? attach_to_wagon(*aw, vl.position) : vl.position;
             const Vec3 base = seated ? seat - Vec3{0.0f, 0.42f, 0.0f} : vl.position;
-            const Mat4 root = glm::translate(Mat4{1.0f}, base) *
-                              glm::rotate(Mat4{1.0f}, HalfPi - vl.yaw, Vec3{0.0f, 1.0f, 0.0f});
+            Mat4 root = glm::translate(Mat4{1.0f}, base) *
+                        glm::rotate(Mat4{1.0f}, HalfPi - vl.yaw, Vec3{0.0f, 1.0f, 0.0f});
+            if (!seated) {
+                root = root * v.animator.body_offset();
+            }
             const std::vector<Quat> pose =
                 seated ? CharacterAnimator::sit_pose(v.model) : v.animator.pose(v.model);
             const std::vector<Mat4> mats = v.model.bone_matrices(root, pose);
@@ -2176,6 +2196,7 @@ private:
     std::vector<GpuProp> gpu_rocks_;
     std::vector<GpuProp> gpu_logs_;
     std::vector<GpuProp> gpu_fences_;
+    std::vector<GpuProp> gpu_fence_rails_;
     std::vector<GpuProp> gpu_lanterns_;
     std::vector<GpuProp> gpu_houses_;
     std::vector<GpuProp> gpu_walls_;
@@ -2189,6 +2210,7 @@ private:
     Mesh shape_box_;
     Mesh shape_sphere_;
     Mesh shape_cylinder_;
+    Mesh shape_capsule_;
     Mesh shape_rounded_;
     Mesh marker_;
     Mesh water_mesh_;

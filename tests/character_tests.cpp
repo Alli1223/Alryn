@@ -3,6 +3,7 @@
 #include <Alryn/Character/CharacterAnimator.h>
 #include <Alryn/Character/CharacterModel.h>
 
+#include <algorithm>
 #include <cmath>
 
 using namespace alryn;
@@ -115,7 +116,51 @@ TEST_CASE("CharacterAnimator: walking advances the cycle; idle is neutral") {
     CHECK(idle.stride() < 0.05f);
     const std::vector<Quat> idle_pose = idle.pose(m);
     for (const Quat& q : idle_pose) {
-        CHECK(q.w == doctest::Approx(1.0f).epsilon(0.02)); // identity-ish
+        CHECK(q.w == doctest::Approx(1.0f).epsilon(0.02)); // identity-ish (no fore-aft swing)
         CHECK(std::abs(q.x) < 0.05f);
     }
+}
+
+TEST_CASE("CharacterAnimator: arms swing in circular arcs (not a flat pendulum)") {
+    CharacterAnimator anim;
+    for (int i = 0; i < 90; ++i) {
+        anim.update(6.0f, Timestep{1.0f / 60.0f});
+    }
+    const CharacterModel m = CharacterModel::generate(2);
+    const std::vector<Quat> walk = anim.pose(m);
+    for (usize i = 0; i < m.bones().size(); ++i) {
+        if (m.bones()[i].part == BonePart::UpperArmL) {
+            // A purely fore-aft (X-axis) swing would have q.y == q.z == 0. The wobbly arms
+            // add a sideways (Z) component + outward splay, so the hand traces a circle.
+            CHECK(std::abs(walk[i].z) > 0.02f);
+        }
+    }
+}
+
+TEST_CASE("CharacterAnimator: body_offset bounces (squash/stretch) walking, calm idle") {
+    // Idle: the body transform stays close to identity apart from a soft breathe.
+    CharacterAnimator idle;
+    for (int i = 0; i < 200; ++i) {
+        idle.update(0.0f, Timestep{1.0f / 60.0f});
+    }
+    const Mat4 bi = idle.body_offset();
+    CHECK(std::abs(bi[3].x) < 0.02f); // barely any sway
+    CHECK(std::abs(bi[3].y) < 0.05f); // barely any bob
+    CHECK(glm::length(Vec3{bi[1]}) == doctest::Approx(1.0f).epsilon(0.05)); // ~no squash
+
+    // Walking: sample the vertical scale (column length = squash/stretch factor) over a
+    // full cycle - it must visibly bounce.
+    CharacterAnimator walk;
+    for (int i = 0; i < 60; ++i) {
+        walk.update(6.0f, Timestep{1.0f / 60.0f});
+    }
+    f32 min_sy = 1e9f;
+    f32 max_sy = -1e9f;
+    for (int i = 0; i < 120; ++i) {
+        walk.update(6.0f, Timestep{1.0f / 60.0f});
+        const f32 sy = glm::length(Vec3{walk.body_offset()[1]});
+        min_sy = std::min(min_sy, sy);
+        max_sy = std::max(max_sy, sy);
+    }
+    CHECK(max_sy - min_sy > 0.03f); // the jelly squash & stretch actually happens
 }

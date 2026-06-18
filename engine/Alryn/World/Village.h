@@ -197,7 +197,8 @@ inline void for_each_house(const worldgen::Village& v, u32 seed,
 // A few reserved wagon-depot spots near the main gate, clear of houses + market, where the
 // transport offers park. Server-side `generate_offers` uses these so a wagon never spawns
 // inside a building (gathers the house layout to avoid it).
-inline std::vector<Vec3> village_wagon_spots(const worldgen::Village& v, u32 seed) {
+inline std::vector<Vec3> village_wagon_spots(const worldgen::Village& v, u32 seed,
+                                             int count = 4) {
     const auto gates = detail::village_gate_points(v, seed);
     std::vector<std::pair<Vec2, f32>> occ;
     detail::for_each_house(v, seed, gates, [&](const detail::HousePlot& h) {
@@ -206,22 +207,35 @@ inline std::vector<Vec3> village_wagon_spots(const worldgen::Village& v, u32 see
     occ.emplace_back(v.center, 4.8f); // the market
     const Vec2 dir = gates.empty() ? Vec2{0.0f, 1.0f} : glm::normalize(gates[0].pos - v.center);
     const Vec2 perp{-dir.y, dir.x};
-    const Vec2 base = v.center + dir * (v.half * 0.34f); // on the plaza, toward the main gate
+    constexpr f32 kSpotSpacing = 3.4f; // distance between adjacent depot spots
     std::vector<Vec3> spots;
-    for (int i = 0; i < 4 && static_cast<int>(spots.size()) < 4; ++i) {
-        const Vec2 c = base + perp * ((static_cast<f32>(i) - 1.5f) * 3.4f);
-        bool ok = true;
-        for (const auto& o : occ) {
-            if (glm::length(o.first - c) < 2.4f + o.second) {
-                ok = false;
-                break;
+    // March outward from the plaza toward the main gate in rows, sweeping laterally in each,
+    // and accept positions clear of buildings/market *and* of spots already placed - so every
+    // offer gets its own distinct spot and wagons never stack.
+    for (int row = 0; row < 6 && static_cast<int>(spots.size()) < count; ++row) {
+        const Vec2 base = v.center + dir * (v.half * 0.34f + static_cast<f32>(row) * kSpotSpacing);
+        for (int i = 0; i < 6 && static_cast<int>(spots.size()) < count; ++i) {
+            const Vec2 c = base + perp * ((static_cast<f32>(i) - 2.5f) * kSpotSpacing);
+            bool ok = true;
+            for (const auto& o : occ) {
+                if (glm::length(o.first - c) < 2.4f + o.second) {
+                    ok = false;
+                    break;
+                }
             }
-        }
-        if (ok) {
-            spots.push_back(Vec3{c.x, worldgen::height(c.x, c.y, seed), c.y});
+            for (const Vec3& s : spots) {
+                if (glm::length(Vec2{s.x, s.z} - c) < kSpotSpacing - 0.5f) {
+                    ok = false;
+                    break;
+                }
+            }
+            if (ok) {
+                spots.push_back(Vec3{c.x, worldgen::height(c.x, c.y, seed), c.y});
+            }
         }
     }
     if (spots.empty()) {
+        const Vec2 base = v.center + dir * (v.half * 0.34f);
         spots.push_back(Vec3{base.x, worldgen::height(base.x, base.y, seed), base.y});
     }
     return spots;

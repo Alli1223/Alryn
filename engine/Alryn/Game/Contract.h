@@ -33,6 +33,8 @@ inline constexpr f32 kWagonDriverSpeed = 2.1f; // hired driver pace (m/s)
 inline constexpr f32 kWagonManualSpeed = 3.0f; // cap while a player hauls it
 inline constexpr f32 kWagonGrabRange = 3.0f;   // how close to hitch a wagon
 inline constexpr f32 kHitchDist = 2.0f;        // puller stands at the cart's draw-tongue tip
+inline constexpr f32 kTowMaxSlack = 1.6f;      // a hired puller waits if the cart lags this far
+                                               // past the hitch (so it can't drag a stuck cart)
 inline constexpr f32 kManualRewardMult = 1.6f; // hauling it yourself pays more
 inline constexpr u32 kAmbushPerDifficulty = 3; // enemies per difficulty star
 inline constexpr f32 kDeliverRadius = 11.0f;   // within this of the dest centre = delivered

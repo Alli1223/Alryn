@@ -22,8 +22,9 @@ namespace alryn::roads {
 inline constexpr f32 road_half_width = 2.2f;
 // Connect towns whose village cells are within this Chebyshev distance (~340 m).
 inline constexpr int road_max_cells = 2;
-// Polyline resolution of a routed road (segments = road_points).
-inline constexpr int road_points = 16;
+// Polyline resolution of a routed road (segments = road_points). Higher now that roads
+// meander, so the curves render + collide smoothly.
+inline constexpr int road_points = 28;
 
 // A straight piece of a road centreline in world xz.
 struct Segment {

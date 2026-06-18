@@ -16,6 +16,13 @@ PropDef PropLibrary::build_rock(int variant) {
     PropDef def;
     def.name = "rock";
     def.parts.push_back({primitives::rock(variant), PropLayer::Opaque});
+    // A boulder you bump into: a box over the squashed sphere's footprint (~±0.45 in xz,
+    // sitting on the ground) so the player and a towed wagon are pushed around it.
+    BoxCollider c;
+    c.center = Vec3{0.0f};
+    c.half_extents = Vec2{0.45f, 0.45f};
+    c.height = 0.6f;
+    def.colliders.push_back(c);
     return def;
 }
 
@@ -65,19 +72,40 @@ void add_tri(MeshData& m, const Vec3& a, const Vec3& b, const Vec3& c, const Vec
 }
 } // namespace
 
-// A wooden fence segment: a post plus two rails running ALONG local +X (so when the
-// prop is yawed to the path tangent, adjacent segments line the path edge).
+// A single fence POST (a stout little pillar with a chamfer cap). Rails connect one post
+// to the next as a separate, length-stretched prop (build_fence_rail), so a run of posts
+// is joined by rails of whatever length the gap happens to be.
 PropDef PropLibrary::build_fence(int variant) {
     PropDef def;
-    def.name = "fence";
+    def.name = "fence_post";
     const Vec3 wood = variant % 2 == 0 ? Vec3{0.42f, 0.30f, 0.18f} : Vec3{0.36f, 0.26f, 0.16f};
     MeshData m;
-    add_box(m, {-0.05f, 0.0f, -0.05f}, {0.05f, 0.95f, 0.05f}, wood);       // post
-    add_box(m, {-0.85f, 0.30f, -0.03f}, {0.85f, 0.40f, 0.03f}, wood * 1.1f); // lower rail
-    add_box(m, {-0.85f, 0.62f, -0.03f}, {0.85f, 0.72f, 0.03f}, wood * 1.1f); // upper rail
+    add_box(m, {-0.075f, 0.0f, -0.075f}, {0.075f, 1.0f, 0.075f}, wood);        // post
+    add_box(m, {-0.095f, 0.9f, -0.095f}, {0.095f, 1.04f, 0.095f}, wood * 0.85f); // cap
     def.parts.push_back({std::move(m), PropLayer::Opaque});
     BoxCollider c;
-    c.half_extents = Vec2{0.85f, 0.12f};
+    c.half_extents = Vec2{0.1f, 0.1f};
+    c.height = 1.0f;
+    def.colliders.push_back(c);
+    return def;
+}
+
+// A fence RAIL span: two horizontal rails modelled UNIT length along local +X (x in
+// -0.5..0.5). The scatter places it at the midpoint between two posts, yawed along the
+// road, and stretches it (PropInstance::length) to exactly bridge the gap - so rails vary
+// in length and butt onto the posts. The collider stretches with it (CollisionWorld scales
+// the local box along +X by the same length).
+PropDef PropLibrary::build_fence_rail(int variant) {
+    PropDef def;
+    def.name = "fence_rail";
+    const Vec3 wood = (variant % 2 == 0 ? Vec3{0.42f, 0.30f, 0.18f} : Vec3{0.36f, 0.26f, 0.16f}) * 1.1f;
+    MeshData m;
+    add_box(m, {-0.5f, 0.34f, -0.028f}, {0.5f, 0.44f, 0.028f}, wood); // lower rail
+    add_box(m, {-0.5f, 0.66f, -0.028f}, {0.5f, 0.76f, 0.028f}, wood); // upper rail
+    def.parts.push_back({std::move(m), PropLayer::Opaque});
+    BoxCollider c;
+    c.center = Vec3{0.0f, 0.0f, 0.0f};
+    c.half_extents = Vec2{0.5f, 0.08f}; // unit half-length in X; scaled by the gap at scatter
     c.height = 0.85f;
     def.colliders.push_back(c);
     return def;
@@ -797,6 +825,7 @@ PropLibrary::PropLibrary() {
     }
     for (int i = 0; i < 2; ++i) {
         fences_.push_back(build_fence(i));
+        fence_rails_.push_back(build_fence_rail(i));
     }
     lanterns_.push_back(build_lantern_post());
     for (u32 i = 0; i < kHouseVariants; ++i) {
@@ -821,6 +850,7 @@ const PropDef& PropLibrary::resolve(const PropInstance& inst) const {
         case PropCategory::Rock: return rocks_[inst.variant % rocks_.size()];
         case PropCategory::Log: return logs_[inst.variant % logs_.size()];
         case PropCategory::Fence: return fences_[inst.variant % fences_.size()];
+        case PropCategory::FenceRail: return fence_rails_[inst.variant % fence_rails_.size()];
         case PropCategory::Lantern: return lanterns_[inst.variant % lanterns_.size()];
         case PropCategory::House: return houses_[inst.variant % houses_.size()];
         case PropCategory::Wall: return walls_[inst.variant % walls_.size()];

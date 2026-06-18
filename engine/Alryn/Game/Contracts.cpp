@@ -344,10 +344,12 @@ void GameServer::generate_offers() {
     // Reserved depot spots (clear of houses/market), one per offer - so a wagon never spawns
     // inside a building.
     const std::vector<Vec3> spots = village_wagon_spots(*origin, seed);
+    // Never offer more wagons than we have distinct depot spots, or two would share a spot.
+    const int max_offers = std::min<int>(static_cast<int>(kMaxOffers), static_cast<int>(spots.size()));
 
     int idx = 0;
-    for (int dz = -roads::road_max_cells; dz <= roads::road_max_cells && idx < static_cast<int>(kMaxOffers); ++dz) {
-        for (int dx = -roads::road_max_cells; dx <= roads::road_max_cells && idx < static_cast<int>(kMaxOffers); ++dx) {
+    for (int dz = -roads::road_max_cells; dz <= roads::road_max_cells && idx < max_offers; ++dz) {
+        for (int dx = -roads::road_max_cells; dx <= roads::road_max_cells && idx < max_offers; ++dx) {
             if (dx == 0 && dz == 0) {
                 continue;
             }
@@ -458,6 +460,7 @@ void GameServer::accept_contract(const Wagon& chosen, WagonMode mode) {
     driver_repath_ = 0.0f;
     driver_stuck_ = 0.0f;
     driver_best_dist_ = 1e9f;
+    tow_trail_.clear();
     riders_.clear();
     pilot_ = 0;
 
@@ -512,7 +515,9 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
             if (collision_) {
                 collision_->gather(pos, collider_scratch_);
             }
-            driver_path_ = astar_path({pos.x, pos.z}, wp, collider_scratch_, vt.reach() + 0.2f, pos.y);
+            // Clear enough room for the puller AND the trailing cart (its half-width + a
+            // margin), so the chosen path actually fits the whole rig, not just the driver.
+            driver_path_ = astar_path({pos.x, pos.z}, wp, collider_scratch_, vt.reach() + 0.4f, pos.y);
             driver_path_i_ = 0;
             driver_repath_ = 0.6f;
         }
@@ -573,9 +578,20 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
     f32 speed = 0.0f;
     bool towed = false;
 
+    // A hired (NPC) puller must not run off and drag a snagged cart through a wall: if the
+    // cart has fallen too far past the hitch (it's stuck / being shoved out of geometry), the
+    // puller holds position until the cart - trailing the breadcrumb - catches back up.
+    auto cart_lagging = [&]() {
+        const f32 d = glm::length(Vec2{w.position.x - puller.x, w.position.z - puller.z});
+        return d > hitch + kTowMaxSlack;
+    };
+
     if (vt.horse_drawn() && active_mode_ == WagonMode::Driver) {
-        walk_route(horse_pos_, horse_yaw_); // a horse pulls the carriage along the route
         puller = horse_pos_;
+        if (!cart_lagging()) {
+            walk_route(horse_pos_, horse_yaw_); // a horse pulls the carriage along the route
+            puller = horse_pos_;
+        }
         speed = kWagonDriverSpeed * 1.6f * dmg;
         towed = true;
     } else if (vt.horse_drawn()) {
@@ -604,8 +620,11 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
         horse_pos_.y = ground_at(density, horse_pos_.x, horse_pos_.z);
         horse_yaw_ = w.yaw;
     } else if (active_mode_ == WagonMode::Driver && driver_) {
-        walk_route(driver_->position, driver_->yaw); // teamster walks in front, pulling
         puller = driver_->position;
+        if (!cart_lagging()) {
+            walk_route(driver_->position, driver_->yaw); // teamster walks in front, pulling
+            puller = driver_->position;
+        }
         speed = kWagonDriverSpeed * 1.6f * dmg;
         towed = true;
     } else if (active_mode_ == WagonMode::Manual && tower_ != 0 && players_.count(tower_) != 0u) {
@@ -615,21 +634,57 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
     }
 
     if (towed) {
-        // Rope/tongue tow: the cart trails the puller along the line between them at the
-        // hitch distance (following the LINE, not the puller's facing, so it never swings).
-        Vec3 to = puller - w.position;
-        to.y = 0.0f;
-        const f32 dist = glm::length(to);
-        if (dist > 1e-3f) {
-            const Vec3 dir = to / dist;
-            const f32 over = dist - hitch;
-            if (over > 0.0f) {
-                const f32 stp = std::min(over, speed * dt.seconds);
-                w.position.x += dir.x * stp;
-                w.position.z += dir.z * stp;
-            }
-            w.yaw = std::atan2(dir.z, dir.x);
+        // Breadcrumb tow: the cart trails the puller along the puller's OWN recent path (not
+        // the straight line to it), so it rounds the same corners the driver pathfound around
+        // - it can't be dragged through a house/wall the driver walked around. The cart sits
+        // `hitch` of arc-length back along that trail.
+        if (tow_trail_.empty()) {
+            tow_trail_.push_back(w.position);
+            tow_trail_.push_back(puller);
+        } else if (glm::length(Vec2{puller.x - tow_trail_.back().x,
+                                    puller.z - tow_trail_.back().z}) > 0.3f) {
+            tow_trail_.push_back(puller);
+        } else {
+            tow_trail_.back() = puller; // keep the head current without bloating the trail
         }
+        if (tow_trail_.size() > 64) {
+            tow_trail_.erase(tow_trail_.begin(), tow_trail_.begin() + (tow_trail_.size() - 64));
+        }
+
+        // Walk `hitch` back from the head (puller) along the trail to find the cart's target.
+        Vec2 target{puller.x, puller.z};
+        f32 want = hitch;
+        for (usize i = tow_trail_.size() - 1; i > 0; --i) {
+            const Vec2 a{tow_trail_[i].x, tow_trail_[i].z};
+            const Vec2 b{tow_trail_[i - 1].x, tow_trail_[i - 1].z};
+            const f32 seg = glm::length(a - b);
+            if (seg >= want) {
+                target = a + (b - a) * (want / std::max(seg, 1e-4f));
+                break;
+            }
+            want -= seg;
+            target = b; // ran off the oldest crumb - sit at the tail
+        }
+
+        // Move the cart toward that target (its catch-up speed), turning to face travel.
+        Vec2 cart{w.position.x, w.position.z};
+        const Vec2 to = target - cart;
+        const f32 d = glm::length(to);
+        if (d > 1e-3f) {
+            const Vec2 dir = to / d;
+            cart += dir * std::min(d, speed * dt.seconds);
+            w.yaw = std::atan2(dir.y, dir.x);
+        }
+        // The towed cart is a solid body too: push it out of rocks, fences, logs and town
+        // walls instead of sliding through them.
+        if (collision_) {
+            collision_->gather(w.position, collider_scratch_);
+            for (const Collider& c : collider_scratch_) {
+                cart = resolve_collider(c, cart, vt.reach(), w.position.y, 1.5f);
+            }
+        }
+        w.position.x = cart.x;
+        w.position.z = cart.y;
         w.position.y = ground_at(density, w.position.x, w.position.z);
     }
 
@@ -825,6 +880,7 @@ void GameServer::end_contract_cleanup() {
     pilot_ = 0;
     driver_.reset();
     driver_path_.clear();
+    tow_trail_.clear();
     riders_.clear();
     has_horse_ = false;
     cargo_.clear();

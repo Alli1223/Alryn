@@ -174,7 +174,7 @@ TEST_CASE("Forest props: a fallen log has a collider that blocks along its lengt
     PropLibrary lib;
     REQUIRE_FALSE(lib.logs().empty());
     const PropDef& log = lib.logs()[0];
-    REQUIRE_FALSE(log.colliders.empty()); // logs are solid; bushes/rocks aren't
+    REQUIRE_FALSE(log.colliders.empty()); // logs are solid (bushes are decorative)
 
     // Place the log rotated and build its world collider the way CollisionWorld
     // does. The log lies along local +X; a point along it blocks, while a point well
@@ -196,6 +196,10 @@ TEST_CASE("Forest props: a fallen log has a collider that blocks along its lengt
     // Bushes are decorative (no collider).
     REQUIRE_FALSE(lib.bushes().empty());
     CHECK(lib.bushes()[0].colliders.empty());
+
+    // Rocks are solid - you (and a towed wagon) bump into a boulder.
+    REQUIRE_FALSE(lib.rocks().empty());
+    CHECK_FALSE(lib.rocks()[0].colliders.empty());
 }
 
 TEST_CASE("Projectile: gravity + terrain bounce stays above the floor and settles") {

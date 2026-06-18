@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <utility>
+#include <vector>
 
 namespace alryn::primitives {
 
@@ -209,6 +210,48 @@ MeshData cylinder(int sides, const Vec3& color) {
         emit_tri(m, t0, b1, t1, Vec3{0.0f}, color);
         emit_tri(m, top, t0, t1, Vec3{0.0f}, color); // top cap
         emit_tri(m, bot, b1, b0, Vec3{0.0f}, color); // bottom cap
+    }
+    return m;
+}
+
+MeshData capsule(int sides, int cap_rings, const Vec3& color) {
+    MeshData m;
+    const f32 r = 0.5f;          // x/z radius (fills the unit box width)
+    const f32 mid = 0.16f;       // half-length of the straight cylindrical middle
+    const f32 cap = 0.5f - mid;  // vertical extent of each rounded (hemispherical) cap
+
+    // Ring profile from bottom pole to top pole: (y, radius). The caps are quarter
+    // ellipses, so the ends are softly domed instead of flat - the bubbly look.
+    std::vector<std::pair<f32, f32>> rings;
+    rings.reserve(static_cast<usize>(cap_rings) * 2 + 2);
+    for (int j = 0; j <= cap_rings; ++j) { // bottom cap (pole -> equator)
+        const f32 a = HalfPi * static_cast<f32>(j) / static_cast<f32>(cap_rings);
+        rings.emplace_back(-mid - cap * std::cos(a), r * std::sin(a));
+    }
+    for (int j = cap_rings; j >= 0; --j) { // top cap (equator -> pole)
+        const f32 a = HalfPi * static_cast<f32>(j) / static_cast<f32>(cap_rings);
+        rings.emplace_back(mid + cap * std::cos(a), r * std::sin(a));
+    }
+
+    for (usize k = 0; k + 1 < rings.size(); ++k) {
+        const auto [y0, r0] = rings[k];
+        const auto [y1, r1] = rings[k + 1];
+        for (int i = 0; i < sides; ++i) {
+            const f32 a0 = TwoPi * static_cast<f32>(i) / static_cast<f32>(sides);
+            const f32 a1 = TwoPi * static_cast<f32>(i + 1) / static_cast<f32>(sides);
+            const Vec3 p00{std::cos(a0) * r0, y0, std::sin(a0) * r0};
+            const Vec3 p01{std::cos(a1) * r0, y0, std::sin(a1) * r0};
+            const Vec3 p10{std::cos(a0) * r1, y1, std::sin(a0) * r1};
+            const Vec3 p11{std::cos(a1) * r1, y1, std::sin(a1) * r1};
+            if (r0 < 1e-5f) { // bottom pole -> fan
+                emit_tri(m, p10, p11, Vec3{0.0f, y0, 0.0f}, Vec3{0.0f}, color);
+            } else if (r1 < 1e-5f) { // top pole -> fan
+                emit_tri(m, p00, Vec3{0.0f, y1, 0.0f}, p01, Vec3{0.0f}, color);
+            } else {
+                emit_tri(m, p00, p01, p11, Vec3{0.0f}, color);
+                emit_tri(m, p00, p11, p10, Vec3{0.0f}, color);
+            }
+        }
     }
     return m;
 }

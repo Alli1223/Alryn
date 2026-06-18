@@ -185,6 +185,8 @@ private:
     std::vector<CargoBox> cargo_;        // crates riding in the bed (slide around physically)
     std::vector<GroundGood> goods_;      // crates that bounced out onto the ground (pickups)
     u32 next_good_id_ = 1;
+    std::vector<Vec3> tow_trail_;        // breadcrumb of the puller's recent path; the cart
+                                         // trails along it (so it rounds corners, not cuts them)
     std::vector<Vec2> driver_path_;      // A* path the teamster is following (around obstacles)
     usize driver_path_i_ = 0;            // current node in driver_path_
     f32 driver_repath_ = 0.0f;           // seconds until the path is recomputed

@@ -145,12 +145,13 @@ CharacterModel CharacterModel::generate(u32 seed) {
     const f32 hscale = rng.range(0.85f, 1.05f); // overall height (short + cute)
     const f32 build = rng.range(0.95f, 1.25f);  // width / bulk (stubby)
 
-    // Chibi proportions: a big head over a short torso with stubby little limbs.
-    const f32 leg_upper = 0.26f * hscale;
-    const f32 leg_lower = 0.24f * hscale;
+    // Chibi proportions: a big round head over a short tubby torso with stubby little
+    // limbs - exaggerated for the soft, blobby look.
+    const f32 leg_upper = 0.25f * hscale;
+    const f32 leg_lower = 0.23f * hscale;
     const f32 leg_len = leg_upper + leg_lower;
     const f32 torso = 0.42f * hscale;
-    const f32 head = 0.40f * hscale;
+    const f32 head = 0.46f * hscale;
     const f32 arm_upper = 0.20f * hscale;
     const f32 arm_lower = 0.18f * hscale;
 
@@ -174,33 +175,34 @@ CharacterModel CharacterModel::generate(u32 seed) {
     const f32 shoulder_y = torso * 0.78f;
     const f32 shoulder_x = 0.40f * build * 0.5f + 0.08f;
 
-    // Rounder body: sphere torso/head/pelvis, cylinder limbs, little round feet.
-    // Parents always precede children (indices 0..12).
-    add(BonePart::Pelvis, -1, {0.0f, leg_len, 0.0f}, {0.32f * build, 0.24f, 0.24f * build},
-        {0.0f, 0.0f, 0.0f}, BoneColor::Pants, BoneShape::RoundedBox);
-    add(BonePart::Torso, 0, {0.0f, 0.10f, 0.0f}, {0.42f * build, torso, 0.30f * build},
-        {0.0f, torso * 0.5f, 0.0f}, BoneColor::Shirt, BoneShape::RoundedBox);
-    add(BonePart::Head, 1, {0.0f, torso * 0.9f, 0.0f}, {head, head * 0.96f, head},
-        {0.0f, head * 0.5f, 0.0f}, BoneColor::Skin, BoneShape::RoundedBox);
-    add(BonePart::UpperArmL, 1, {-shoulder_x, shoulder_y, 0.0f}, {0.15f, arm_upper, 0.15f},
-        {0.0f, -arm_upper * 0.5f, 0.0f}, BoneColor::Shirt, BoneShape::Cylinder);
-    add(BonePart::LowerArmL, 3, {0.0f, -arm_upper, 0.0f}, {0.13f, arm_lower, 0.13f},
-        {0.0f, -arm_lower * 0.5f, 0.0f}, BoneColor::Skin, BoneShape::Cylinder);
-    add(BonePart::UpperArmR, 1, {shoulder_x, shoulder_y, 0.0f}, {0.15f, arm_upper, 0.15f},
-        {0.0f, -arm_upper * 0.5f, 0.0f}, BoneColor::Shirt, BoneShape::Cylinder);
-    add(BonePart::LowerArmR, 5, {0.0f, -arm_upper, 0.0f}, {0.13f, arm_lower, 0.13f},
-        {0.0f, -arm_lower * 0.5f, 0.0f}, BoneColor::Skin, BoneShape::Cylinder);
-    add(BonePart::UpperLegL, 0, {-hip_w, 0.0f, 0.0f}, {0.18f, leg_upper, 0.18f},
-        {0.0f, -leg_upper * 0.5f, 0.0f}, BoneColor::Pants, BoneShape::Cylinder);
-    add(BonePart::LowerLegL, 7, {0.0f, -leg_upper, 0.0f}, {0.16f, leg_lower, 0.16f},
-        {0.0f, -leg_lower * 0.5f, 0.0f}, BoneColor::Pants, BoneShape::Cylinder);
-    add(BonePart::UpperLegR, 0, {hip_w, 0.0f, 0.0f}, {0.18f, leg_upper, 0.18f},
-        {0.0f, -leg_upper * 0.5f, 0.0f}, BoneColor::Pants, BoneShape::Cylinder);
-    add(BonePart::LowerLegR, 9, {0.0f, -leg_upper, 0.0f}, {0.16f, leg_lower, 0.16f},
-        {0.0f, -leg_lower * 0.5f, 0.0f}, BoneColor::Pants, BoneShape::Cylinder);
-    add(BonePart::FootL, 8, {0.0f, -leg_lower, 0.0f}, {0.19f, 0.14f, 0.27f}, {0.0f, 0.03f, 0.06f},
+    // Bubbly body: blobby spherical torso/head/pelvis, soft capsule (sausage) limbs and
+    // little round feet - no hard cylinders or boxes. Parents always precede children
+    // (indices 0..12).
+    add(BonePart::Pelvis, -1, {0.0f, leg_len, 0.0f}, {0.34f * build, 0.27f, 0.26f * build},
+        {0.0f, 0.0f, 0.0f}, BoneColor::Pants, BoneShape::Sphere);
+    add(BonePart::Torso, 0, {0.0f, 0.10f, 0.0f}, {0.46f * build, torso, 0.34f * build},
+        {0.0f, torso * 0.5f, 0.0f}, BoneColor::Shirt, BoneShape::Sphere);
+    add(BonePart::Head, 1, {0.0f, torso * 0.9f, 0.0f}, {head, head * 0.98f, head},
+        {0.0f, head * 0.5f, 0.0f}, BoneColor::Skin, BoneShape::Sphere);
+    add(BonePart::UpperArmL, 1, {-shoulder_x, shoulder_y, 0.0f}, {0.18f, arm_upper, 0.18f},
+        {0.0f, -arm_upper * 0.5f, 0.0f}, BoneColor::Shirt, BoneShape::Capsule);
+    add(BonePart::LowerArmL, 3, {0.0f, -arm_upper, 0.0f}, {0.16f, arm_lower, 0.16f},
+        {0.0f, -arm_lower * 0.5f, 0.0f}, BoneColor::Skin, BoneShape::Capsule);
+    add(BonePart::UpperArmR, 1, {shoulder_x, shoulder_y, 0.0f}, {0.18f, arm_upper, 0.18f},
+        {0.0f, -arm_upper * 0.5f, 0.0f}, BoneColor::Shirt, BoneShape::Capsule);
+    add(BonePart::LowerArmR, 5, {0.0f, -arm_upper, 0.0f}, {0.16f, arm_lower, 0.16f},
+        {0.0f, -arm_lower * 0.5f, 0.0f}, BoneColor::Skin, BoneShape::Capsule);
+    add(BonePart::UpperLegL, 0, {-hip_w, 0.0f, 0.0f}, {0.21f, leg_upper, 0.21f},
+        {0.0f, -leg_upper * 0.5f, 0.0f}, BoneColor::Pants, BoneShape::Capsule);
+    add(BonePart::LowerLegL, 7, {0.0f, -leg_upper, 0.0f}, {0.19f, leg_lower, 0.19f},
+        {0.0f, -leg_lower * 0.5f, 0.0f}, BoneColor::Pants, BoneShape::Capsule);
+    add(BonePart::UpperLegR, 0, {hip_w, 0.0f, 0.0f}, {0.21f, leg_upper, 0.21f},
+        {0.0f, -leg_upper * 0.5f, 0.0f}, BoneColor::Pants, BoneShape::Capsule);
+    add(BonePart::LowerLegR, 9, {0.0f, -leg_upper, 0.0f}, {0.19f, leg_lower, 0.19f},
+        {0.0f, -leg_lower * 0.5f, 0.0f}, BoneColor::Pants, BoneShape::Capsule);
+    add(BonePart::FootL, 8, {0.0f, -leg_lower, 0.0f}, {0.2f, 0.15f, 0.28f}, {0.0f, 0.02f, 0.06f},
         BoneColor::Pants, BoneShape::Sphere);
-    add(BonePart::FootR, 10, {0.0f, -leg_lower, 0.0f}, {0.19f, 0.14f, 0.27f}, {0.0f, 0.03f, 0.06f},
+    add(BonePart::FootR, 10, {0.0f, -leg_lower, 0.0f}, {0.2f, 0.15f, 0.28f}, {0.0f, 0.02f, 0.06f},
         BoneColor::Pants, BoneShape::Sphere);
 
     return m;

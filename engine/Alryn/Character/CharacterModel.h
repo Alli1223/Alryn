@@ -27,7 +27,7 @@ enum class BonePart : u8 {
 };
 
 enum class BoneColor : u8 { Skin, Shirt, Pants, Hair, Eye };
-enum class BoneShape : u8 { Box, Sphere, Cylinder, RoundedBox };
+enum class BoneShape : u8 { Box, Sphere, Cylinder, RoundedBox, Capsule };
 
 struct Bone {
     BonePart part = BonePart::None;

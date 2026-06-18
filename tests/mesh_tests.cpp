@@ -6,6 +6,9 @@
 #include <Alryn/Renderer/Vulkan/VulkanDevice.h>
 #include <Alryn/Renderer/Vulkan/VulkanInstance.h>
 
+#include <algorithm>
+#include <cmath>
+
 using namespace alryn;
 
 TEST_CASE("Primitives: cube has per-face flat normals") {
@@ -48,6 +51,40 @@ TEST_CASE("Primitives: grid produces a quad per cell") {
     for (const Vertex& v : data.vertices) {
         CHECK(v.position.y == doctest::Approx(0.0f));
         CHECK(v.normal.y == doctest::Approx(1.0f));
+    }
+}
+
+TEST_CASE("Primitives: capsule is a rounded unit shape with valid geometry") {
+    const MeshData data = primitives::capsule(12, 3, Vec3{0.4f, 0.6f, 0.8f});
+    REQUIRE(!data.vertices.empty());
+    CHECK(data.indices.size() % 3 == 0);
+
+    f32 min_y = 1e9f;
+    f32 max_y = -1e9f;
+    f32 max_r = 0.0f;
+    for (const Vertex& v : data.vertices) {
+        CHECK(glm::length(v.normal) == doctest::Approx(1.0f)); // flat-shaded faces
+        min_y = std::min(min_y, v.position.y);
+        max_y = std::max(max_y, v.position.y);
+        max_r = std::max(max_r, std::sqrt(v.position.x * v.position.x + v.position.z * v.position.z));
+    }
+    // Fits the unit shape: total height ~1 (y in -0.5..0.5), radius ~0.5.
+    CHECK(min_y == doctest::Approx(-0.5f).epsilon(0.01));
+    CHECK(max_y == doctest::Approx(0.5f).epsilon(0.01));
+    CHECK(max_r == doctest::Approx(0.5f).epsilon(0.01));
+
+    // The ends taper to a dome (small radius near the poles), unlike a flat-capped cylinder.
+    f32 r_at_top = 0.0f;
+    for (const Vertex& v : data.vertices) {
+        if (v.position.y > 0.48f) {
+            r_at_top = std::max(r_at_top,
+                                std::sqrt(v.position.x * v.position.x + v.position.z * v.position.z));
+        }
+    }
+    CHECK(r_at_top < 0.15f);
+
+    for (u32 index : data.indices) {
+        CHECK(index < data.vertices.size());
     }
 }
 

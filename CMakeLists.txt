@@ -148,6 +148,7 @@ add_subdirectory(engine)
 alryn_compile_shaders(alryn SHADERS
     ${CMAKE_SOURCE_DIR}/shaders/mesh.vert
     ${CMAKE_SOURCE_DIR}/shaders/mesh.frag
+    ${CMAKE_SOURCE_DIR}/shaders/foliage.frag
     ${CMAKE_SOURCE_DIR}/shaders/water.vert
     ${CMAKE_SOURCE_DIR}/shaders/water.frag
     ${CMAKE_SOURCE_DIR}/shaders/shadow.vert

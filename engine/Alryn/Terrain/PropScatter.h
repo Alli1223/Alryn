@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Alryn/Core/Math.h>
+#include <Alryn/Core/Noise.h>
 #include <Alryn/Core/Types.h>
 #include <Alryn/Terrain/RoadNetwork.h>
 #include <Alryn/Terrain/ScatterHash.h> // detail::tree_hash / hash01
@@ -101,44 +102,99 @@ inline std::vector<PropInstance> scatter_props(int cx, int cz, f32 chunk_world, 
         return detail::hash01(h) < 0.5f;
     });
 
-    // Fences + lanterns lining the path edges. A fine grid; accept cells that fall
-    // in the narrow band at the trail's edge, oriented along the path tangent so
-    // segments line up. Lanterns replace a fence post here and there.
+    // Roadside fences as a proper post-and-rail run: march POSTS along each road edge at a
+    // varying spacing and join each kept post to the previous with a RAIL stretched to that
+    // exact gap. The run BREAKS (no rail bridges it) wherever a post is dropped, so fences
+    // never block a crossing road or a town gate, and intermittent noise leaves some
+    // stretches open instead of fencing every road end to end. Posts/rails are placed
+    // deterministically per road segment (independent of the chunk) and each piece is owned
+    // by the chunk containing it, so chunks tile seamlessly without doubling.
     {
-        constexpr f32 cell = 1.3f;
+        constexpr f32 edge_off = roads::road_half_width + 0.45f; // just outside the road
+        constexpr f32 base_gap = 2.5f;                           // nominal post spacing
+        constexpr f32 max_rail = 4.2f;                           // never bridge a wider gap
         const u32 salt = seed + 6700u;
-        const int gx0 = static_cast<int>(std::floor(x0 / cell));
-        const int gz0 = static_cast<int>(std::floor(z0 / cell));
-        const int n = std::max(1, static_cast<int>(chunk_world / cell));
-        for (int j = 0; j < n; ++j) {
-            for (int i = 0; i < n; ++i) {
-                const int gx = gx0 + i;
-                const int gz = gz0 + j;
-                const f32 jx = (detail::hash01(detail::tree_hash(gx, gz, salt + 1u)) - 0.5f) * cell * 0.3f;
-                const f32 jz = (detail::hash01(detail::tree_hash(gx, gz, salt + 2u)) - 0.5f) * cell * 0.3f;
-                const f32 wx = (static_cast<f32>(gx) + 0.5f) * cell + jx;
-                const f32 wz = (static_cast<f32>(gz) + 0.5f) * cell + jz;
-                const f32 gh = worldgen::height(wx, wz, seed);
-                if (gh < worldgen::water_level + 0.6f) continue;
-                const f32 pd = roads::distance(wx, wz, seed);
-                if (pd < roads::road_half_width - 0.05f || pd > roads::road_half_width + 0.55f) {
-                    continue; // only the road's edge
+        const Vec2 cc{x0 + chunk_world * 0.5f, z0 + chunk_world * 0.5f};
+        const std::vector<roads::Segment> segs = roads::gather(cc, chunk_world + base_gap, seed);
+
+        const f32 cx_lo = x0;
+        const f32 cx_hi = x0 + chunk_world;
+        const f32 cz_lo = z0;
+        const f32 cz_hi = z0 + chunk_world;
+        auto in_chunk = [&](const Vec2& p) {
+            return p.x >= cx_lo && p.x < cx_hi && p.y >= cz_lo && p.y < cz_hi;
+        };
+        // A point may host a roadside fence iff it's above water, well clear of any town,
+        // and NOT sitting on another (crossing) road - so we never wall off a junction.
+        auto fence_ok = [&](const Vec2& p) {
+            if (worldgen::height(p.x, p.y, seed) < worldgen::water_level + 0.6f) return false;
+            if (worldgen::inside_village(p.x, p.y, seed, 8.0f)) return false;
+            if (roads::distance(p.x, p.y, seed) < roads::road_half_width + 0.25f) return false;
+            return true;
+        };
+
+        for (const roads::Segment& s : segs) {
+            const Vec2 d = s.b - s.a;
+            const f32 L = glm::length(d);
+            if (L < base_gap) continue;
+            const Vec2 dir = d / L;
+            const Vec2 perp{-dir.y, dir.x};
+            const u32 seg_h = detail::tree_hash(static_cast<int>(std::lround(s.a.x + s.b.x)),
+                                                static_cast<int>(std::lround(s.a.y + s.b.y)), salt);
+
+            for (f32 side : {-1.0f, 1.0f}) {
+                bool have_prev = false;
+                Vec2 prev_pos{0.0f};
+                f32 t = base_gap * 0.5f;
+                int idx = 0;
+                while (t <= L) {
+                    const Vec2 pos = s.a + dir * t + perp * (side * edge_off);
+                    // Intermittent: only fence stretches where a low-frequency band is high,
+                    // so fences come and go along the network rather than lining everything.
+                    const f32 band = noise::fbm2d(pos.x * 0.016f, pos.y * 0.016f, 2, 2.0f, 0.5f,
+                                                  salt + (side < 0.0f ? 31u : 67u));
+                    const bool ok = band > 0.08f && fence_ok(pos);
+                    if (ok) {
+                        const f32 gh = worldgen::height(pos.x, pos.y, seed);
+                        if (in_chunk(pos)) {
+                            PropInstance post;
+                            post.position = Vec3{pos.x, gh, pos.y};
+                            post.yaw = std::atan2(-dir.y, dir.x);
+                            const u32 ph = detail::tree_hash(idx, static_cast<int>(side * 3.0f), seg_h);
+                            if (detail::hash01(ph) < 0.05f) {
+                                post.category = PropCategory::Lantern;
+                                post.variant = 0;
+                            } else {
+                                post.category = PropCategory::Fence;
+                                post.variant = static_cast<u8>(seg_h % 2u);
+                            }
+                            out.push_back(post);
+                        }
+                        // Join to the previous kept post with a rail stretched to the gap.
+                        if (have_prev) {
+                            const Vec2 mid = (prev_pos + pos) * 0.5f;
+                            const f32 gap = glm::length(pos - prev_pos);
+                            if (gap > 0.4f && gap < max_rail && in_chunk(mid)) {
+                                const Vec2 rd = (pos - prev_pos) / gap;
+                                PropInstance rail;
+                                rail.category = PropCategory::FenceRail;
+                                rail.variant = static_cast<u8>(seg_h % 2u);
+                                rail.position = Vec3{mid.x, worldgen::height(mid.x, mid.y, seed), mid.y};
+                                rail.yaw = std::atan2(-rd.y, rd.x);
+                                rail.length = gap; // stretch the unit rail to bridge the gap
+                                out.push_back(rail);
+                            }
+                        }
+                        prev_pos = pos;
+                        have_prev = true;
+                    } else {
+                        have_prev = false; // break the run (junction / town / open stretch)
+                    }
+                    const f32 jitter =
+                        0.78f + detail::hash01(detail::tree_hash(idx, 9, seg_h)) * 0.9f; // 0.78..1.68
+                    t += base_gap * jitter;
+                    ++idx;
                 }
-                if (detail::ground_slope(wx, wz, seed) > 1.5f) continue; // skip steep road bits
-                if (worldgen::inside_village(wx, wz, seed, 2.0f)) continue; // towns have their own walls
-                const Vec2 tan = roads::tangent(wx, wz, seed);
-                PropInstance p;
-                p.position = Vec3{wx, gh, wz};
-                p.yaw = std::atan2(-tan.y, tan.x); // align local +X with the path tangent
-                p.scale = 1.0f;
-                if (detail::hash01(detail::tree_hash(gx, gz, salt + 3u)) < 0.085f) {
-                    p.category = PropCategory::Lantern;
-                    p.variant = 0;
-                } else {
-                    p.category = PropCategory::Fence;
-                    p.variant = static_cast<u8>(detail::tree_hash(gx, gz, salt + 4u) % 2u);
-                }
-                out.push_back(p);
             }
         }
     }
