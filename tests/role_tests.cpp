@@ -2,6 +2,8 @@
 
 #include <Alryn/Game/Roles.h>
 
+#include <string_view>
+
 using namespace alryn;
 
 TEST_CASE("role stats express the tank/damage/healer fantasy") {
@@ -31,6 +33,46 @@ TEST_CASE("every role has three named, cooldown-gated abilities") {
             CHECK(ab.cooldown > 0.0f);
         }
     }
+}
+
+TEST_CASE("knight consecration is the third ability and burns over its life") {
+    CHECK(std::string_view(ability_def(PlayerRole::Knight, 2).name) == "CONSECRATION");
+    CHECK(kConsecrationRadius > 0.0f);
+    CHECK(kConsecrationDuration > 0.0f);
+    CHECK(kConsecrationDPS > 0.0f);                          // it hurts enemies
+    CHECK(kConsecrationDPS < kHealAuraRate * 2.0f);          // but it's a *small* amount
+}
+
+TEST_CASE("every role now has four abilities, incl. the cleric Aegis shield") {
+    for (u8 r = 0; r < kRoleCount; ++r) {
+        for (u8 s = 0; s < kAbilitySlots; ++s) {
+            CHECK(ability_def(static_cast<PlayerRole>(r), s).name[0] != '\0');
+        }
+    }
+    CHECK(kAbilitySlots == 4);
+    CHECK(std::string_view(ability_def(PlayerRole::Cleric, 3).name) == "AEGIS");
+    CHECK(kAegisAmount > 0.0f);   // it absorbs damage
+    CHECK(kAegisDuration > 0.0f); // and lasts a while
+    CHECK(kAegisRange > 0.0f);
+}
+
+TEST_CASE("aura props table drives radius/duration/colour/light for each kind") {
+    const AuraProps heal = aura_props(AuraKind::Heal);
+    const AuraProps con = aura_props(AuraKind::Consecration);
+    CHECK(heal.radius == doctest::Approx(kHealAuraRadius));
+    CHECK(heal.duration == doctest::Approx(kHealAuraDuration));
+    CHECK(con.radius == doctest::Approx(kConsecrationRadius));
+    CHECK(heal.light > 0.0f); // both auras light up at night
+    CHECK(con.light > 0.0f);
+}
+
+TEST_CASE("cleric channelled heal aura tuning is sane") {
+    CHECK(kHealChargeTime > 0.0f);   // it takes time to charge
+    CHECK(kHealAuraDuration > 0.0f); // and lingers
+    CHECK(kHealAuraRadius > 0.0f);
+    CHECK(kHealAuraRate > 0.0f);     // and actually heals
+    // Over its lifetime the aura restores a meaningful chunk of health.
+    CHECK(kHealAuraRate * kHealAuraDuration > 50.0f);
 }
 
 TEST_CASE("mitigation soaks damage by the role + block fraction") {

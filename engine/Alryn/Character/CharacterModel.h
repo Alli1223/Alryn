@@ -71,6 +71,11 @@ public:
     // than bone_count() (missing entries are treated as identity).
     std::vector<Mat4> bone_matrices(const Mat4& root, const std::vector<Quat>& pose) const;
 
+    // World-space JOINT frames (position + orientation, no box scale) for every bone.
+    // This is what you rigidly attach a held prop (sword, shield, bow) to, so it rotates
+    // with the limb - unlike bone_matrices(), whose columns are scaled by box_size.
+    std::vector<Mat4> joint_matrices(const Mat4& root, const std::vector<Quat>& pose) const;
+
 private:
     // Appends face + hair feature bones (parented to the head) per the appearance.
     static void add_features(CharacterModel& model, const CharacterAppearance& appearance);

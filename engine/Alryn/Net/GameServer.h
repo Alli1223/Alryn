@@ -15,6 +15,7 @@
 #include <Alryn/Terrain/WorldSampler.h>
 #include <Alryn/World/PropLibrary.h>
 
+#include <algorithm>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -42,15 +43,33 @@ public:
         f32 ability_cd[kAbilitySlots] = {0.0f, 0.0f, 0.0f}; // per-ability cooldown timers
         f32 bulwark_timer = 0.0f;             // Knight: extra damage reduction while > 0
         f32 dash_timer = 0.0f;                // Hunter: walk-speed boost while > 0
+        f32 heal_charge = 0.0f;               // Cleric: seconds of channelling a heal aura (right mouse)
+        f32 shield_hp = 0.0f;                 // Aegis: damage the shield can still absorb
+        f32 shield_timer = 0.0f;              // seconds before an unspent Aegis shield fades
         u8 cast_fx = 0;                       // ability that fired this tick (for the snapshot's VFX)
         f32 water = 0.0f;                     // bucket fill for firefighting (dormant siege)
         i32 wood = 0;                         // barricades buildable today (dormant siege)
         bool carrying = false;                // hauling a spilled cargo crate back to the cart
 
-        // Incoming damage after role mitigation + any active block buff.
+        // Incoming damage after role mitigation + a held shield block (Knight) + active bulwark.
         f32 mitigated(f32 raw) const {
-            f32 r = role_stats(role).damage_reduction + (bulwark_timer > 0.0f ? kBulwarkReduction : 0.0f);
+            const bool guarding = input.block && role == PlayerRole::Knight; // Cleric block = channel
+            f32 r = role_stats(role).damage_reduction + (guarding ? kBlockReduction : 0.0f) +
+                    (bulwark_timer > 0.0f ? kBulwarkReduction : 0.0f);
             return raw * (1.0f - glm::clamp(r, 0.0f, 0.9f));
+        }
+
+        // Apply `raw` incoming damage: mitigate it, then soak it into the Aegis shield first and
+        // spill the rest onto health. Resets the regen gate.
+        void take_damage(f32 raw) {
+            f32 d = mitigated(raw);
+            if (shield_hp > 0.0f) {
+                const f32 absorbed = std::min(shield_hp, d);
+                shield_hp -= absorbed;
+                d -= absorbed;
+            }
+            health -= d;
+            since_hit = 0.0f;
         }
     };
 
@@ -96,6 +115,16 @@ public:
         f32 health = 0.0f;
     };
 
+    // A ground aura: a disc that affects whoever stands in it until its life runs out.
+    // kind 0 = Cleric heal (heals allies), kind 1 = Knight consecration (taunts + burns enemies).
+    struct Aura {
+        Vec3 position{0.0f};
+        f32 ttl = 0.0f;
+        f32 radius = 0.0f;
+        u8 kind = 0;
+        net::PlayerId owner = 0; // who cast it (consecration taunts enemies toward the owner)
+    };
+
     usize player_count() const { return players_.size(); }
     usize enemy_count() const { return enemies_.size(); }
     // --- Wagon-contract loop (the active game mode; see Game/Contracts.cpp) ---
@@ -138,6 +167,8 @@ private:
     // --- Roles, weapons & abilities (Game/Abilities.cpp) ---
     void sync_player_role(ServerPlayer& player); // adopt the chosen role each tick (stats/speed)
     void update_abilities(Timestep dt, const DensitySampler& density); // tick cooldowns + cast
+    void update_auras(Timestep dt); // Cleric channel charge + ground-aura ticking (heal/consecrate)
+    void spawn_aura(AuraKind kind, const Vec3& pos, net::PlayerId owner); // radius/duration from table
     // --- Dormant night siege (Combat/SiegeMode.cpp; not driven in the transport game) ---
     void player_attack(ServerPlayer& player, const net::PlayerInput& in);
     void player_build(ServerPlayer& player, const net::PlayerInput& in); // place a barricade
@@ -169,6 +200,7 @@ private:
     std::unordered_map<u32, HouseFire> houses_;   // burnable buildings near players
     std::unordered_map<u32, u32> town_house_total_; // vseed -> #houses (for the tally)
     std::vector<Barricade> barricades_;           // player-built defences
+    std::vector<Aura> auras_;                     // ground auras (heal / consecration)
     u32 next_enemy_id_ = 1;
     u32 wave_ = 0;            // = nights survived
     u32 spawn_index_ = 0;     // distinct layout per wave spawn

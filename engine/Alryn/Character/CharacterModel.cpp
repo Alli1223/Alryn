@@ -223,4 +223,16 @@ std::vector<Mat4> CharacterModel::bone_matrices(const Mat4& root,
     return box;
 }
 
+std::vector<Mat4> CharacterModel::joint_matrices(const Mat4& root,
+                                                 const std::vector<Quat>& pose) const {
+    std::vector<Mat4> joint(bones_.size());
+    for (usize i = 0; i < bones_.size(); ++i) {
+        const Bone& b = bones_[i];
+        const Mat4& parent = (b.parent < 0) ? root : joint[static_cast<usize>(b.parent)];
+        const Quat rotation = i < pose.size() ? pose[i] : QuatIdentity;
+        joint[i] = parent * glm::translate(Mat4{1.0f}, b.joint_offset) * glm::mat4_cast(rotation);
+    }
+    return joint;
+}
+
 } // namespace alryn

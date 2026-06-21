@@ -139,8 +139,11 @@ void GameServer::tick(Timestep dt) {
                         pr.velocity = dir * kProjectileSpeed;
                         pr.owner = e.client;
                         pr.damage = role_stats(it->second.role).ranged_damage;
-                        // A Hunter looses an arrow (kind 3); everyone else lobs a rock (kind 0).
-                        pr.kind = it->second.role == PlayerRole::Hunter ? 3 : 0;
+                        // Projectile per role: Hunter looses an arrow (kind 3), Cleric casts an
+                        // arcane bolt (kind 4), everyone else lobs a rock (kind 0).
+                        pr.kind = it->second.role == PlayerRole::Hunter  ? 3
+                                  : it->second.role == PlayerRole::Cleric ? 4
+                                                                          : 0;
                         projectiles_.push_back(pr);
                         if (projectiles_.size() > kMaxProjectiles) {
                             projectiles_.erase(projectiles_.begin());
@@ -216,10 +219,15 @@ void GameServer::tick(Timestep dt) {
             glm::clamp(player.health / player.max_health, 0.0f, 1.0f) * 100.0f);
         const bool seated = active && (riders_.count(id) != 0u || id == pilot_);
         const f32 yaw = seated ? active_.yaw : player.input.yaw; // seated -> face the vehicle
+        // Body action for the animation layer: blocking (held) wins, else a swing while the
+        // attack input is held (the client sends it for one frame per click).
+        const u8 action = player.input.block ? 2u : (player.input.attack ? 1u : 0u);
+        const u8 shield = static_cast<u8>(
+            glm::clamp(player.shield_hp / kAegisAmount, 0.0f, 1.0f) * 255.0f);
         snapshot.players.push_back({id, player.controller.position(), yaw, hp, 0,
                                     static_cast<u8>(seated ? 1 : 0),
                                     static_cast<u8>(player.carrying ? 1 : 0),
-                                    static_cast<u8>(player.role), player.cast_fx,
+                                    static_cast<u8>(player.role), player.cast_fx, action, shield,
                                     player.input.appearance});
     }
     snapshot.projectiles.reserve(projectiles_.size());
@@ -228,19 +236,24 @@ void GameServer::tick(Timestep dt) {
     }
     snapshot.villagers.reserve(villagers_.size() + 1);
     for (const auto& [id, vg] : villagers_) {
-        snapshot.villagers.push_back({id, vg.position, vg.yaw, 255, vg.kind, vg.appearance});
+        const u8 shield = static_cast<u8>(glm::clamp(vg.shield_timer / kAegisDuration, 0.0f, 1.0f) * 255.0f);
+        snapshot.villagers.push_back({id, vg.position, vg.yaw, 255, vg.kind, shield, vg.appearance});
     }
     // The hired teamster pulling the active wagon rides along as a kind-2 villager.
     if (contract_phase_ == ContractPhase::Active && active_mode_ == WagonMode::Driver && driver_) {
-        snapshot.villagers.push_back(
-            {driver_->id, driver_->position, driver_->yaw, 255, driver_->kind, driver_->appearance});
+        snapshot.villagers.push_back({driver_->id, driver_->position, driver_->yaw, 255, driver_->kind,
+                                      0, driver_->appearance});
     }
     // Ambushers ride in the existing enemy list (rendered red by the client).
     snapshot.enemies.reserve(ambush_.size());
     for (const Enemy& en : ambush_) {
         const u8 hp = static_cast<u8>(
             glm::clamp(en.health / enemy_max_health(en.kind), 0.0f, 1.0f) * 255.0f);
-        snapshot.enemies.push_back({en.id, en.position, en.yaw, en.kind, hp});
+        // Flag a swing for the brief window just after the enemy struck (attack_cd was reset),
+        // so the client plays the attack animation in sync with the hit.
+        const u8 action =
+            (en.kind != 3 && en.attack_cd > kEnemyAttackInterval - 0.18f) ? 1u : 0u; // melee only
+        snapshot.enemies.push_back({en.id, en.position, en.yaw, en.kind, hp, action});
     }
     // Wagons: the parked offers while choosing, or the single active cargo en route.
     auto vote_count = [&](u32 wagon_id) {
@@ -294,6 +307,10 @@ void GameServer::tick(Timestep dt) {
     }
     for (const GroundGood& g : goods_) {
         snapshot.goods.push_back({g.id, g.position, 1});
+    }
+    snapshot.auras.reserve(auras_.size());
+    for (const Aura& a : auras_) {
+        snapshot.auras.push_back({a.position, a.radius, a.kind});
     }
     // fires / barricades stay empty (siege dormant); outcome/phase/wave keep defaults.
     server_.broadcast_snapshot(snapshot);

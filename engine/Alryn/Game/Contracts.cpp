@@ -1023,8 +1023,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
         if (e.attack_cd <= 0.0f) {
             const f32 reach = kEnemyAttackRange + kEnemyRadius;
             if (victim != nullptr && best < reach) {
-                victim->health -= victim->mitigated(dmg); // role armour + an active block soak it
-                victim->since_hit = 0.0f;
+                victim->take_damage(dmg); // role armour / block / Aegis shield soak it
                 e.attack_cd = kEnemyAttackInterval;
             } else if (glm::length(w.position - e.position) < reach + 0.7f) {
                 w.health -= kWagonDamage;
@@ -1043,8 +1042,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             for (auto& [id, pl] : players_) {
                 const Vec3 chest = pl.controller.position() + Vec3{0.0f, 0.9f, 0.0f};
                 if (glm::length(chest - pr.position) < pr.radius + 0.55f) {
-                    pl.health -= pl.mitigated(kArrowDamage);
-                    pl.since_hit = 0.0f;
+                    pl.take_damage(kArrowDamage);
                     pr.alive = false;
                 }
             }

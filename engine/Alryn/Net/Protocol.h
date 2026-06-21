@@ -42,6 +42,7 @@ struct PlayerInput {
     f32 steer = 0.0f;    // carriage driving: rein left/right (A/D), used when piloting
     u8 role = 0;         // PlayerRole the player is in (sent each tick)
     u8 ability = 0;      // ability invoked this tick: 0 = none, 1/2/3 = slot+1 (keys 1/2/3)
+    bool block = false;  // holding the shield up (Knight, right mouse) - guard + block pose
     CharacterAppearance appearance; // the player's chosen look (sent each tick)
 };
 
@@ -55,6 +56,8 @@ struct PlayerState {
     u8 carrying = 0;                // 1 = hauling a spilled good back to the cart
     u8 role = 0;                    // PlayerRole, so every client renders the right weapon
     u8 cast = 0;                    // ability fired this snapshot (0 = none, 1/2/3 = slot+1) -> VFX
+    u8 action = 0;                  // body action: 0 none, 1 swinging, 2 blocking (-> animation)
+    u8 shield = 0;                  // Aegis shield strength 0..255 (0 = none) -> shield sphere
     CharacterAppearance appearance; // so every client renders the right avatar
 };
 
@@ -64,7 +67,8 @@ struct EnemyState {
     Vec3 position{0.0f};
     f32 yaw = 0.0f;
     u8 kind = 0;
-    u8 health = 0; // 0..255 scaled from max, for a health bar / death fade
+    u8 health = 0;  // 0..255 scaled from max, for a health bar / death fade
+    u8 action = 0;  // 0 none, 1 swinging (-> attack animation)
 };
 
 // A live villager or town guard, broadcast each tick. Appearance rides along so every
@@ -75,6 +79,7 @@ struct VillagerState {
     f32 yaw = 0.0f;
     u8 health = 0; // 0..255 scaled from max
     u8 kind = 0;   // 0 = villager, 1 = guard
+    u8 shield = 0; // Aegis shield strength 0..255 (0 = none) -> shield sphere
     CharacterAppearance appearance;
 };
 
@@ -137,6 +142,14 @@ struct GoodState {
     u8 loose = 0;
 };
 
+// A ground effect area (currently a Cleric's healing aura): a glowing disc that heals allies
+// standing in it for its lifetime. Broadcast so every client renders it.
+struct AuraState {
+    Vec3 position{0.0f};
+    f32 radius = 0.0f;
+    u8 kind = 0; // 0 = heal
+};
+
 struct Snapshot {
     u32 tick = 0;
     f32 time_of_day = 0.0f; // 0..1, server-authoritative day/night clock
@@ -156,7 +169,8 @@ struct Snapshot {
     std::vector<FireState> fires;
     std::vector<BarricadeState> barricades;
     std::vector<WagonState> wagons;
-    std::vector<GoodState> goods; // crates spilled from a flipped cart
+    std::vector<GoodState> goods;   // crates spilled from a flipped cart
+    std::vector<AuraState> auras;   // ground effects (Cleric heal auras)
 };
 
 struct Welcome {

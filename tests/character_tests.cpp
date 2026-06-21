@@ -164,3 +164,78 @@ TEST_CASE("CharacterAnimator: body_offset bounces (squash/stretch) walking, calm
     }
     CHECK(max_sy - min_sy > 0.03f); // the jelly squash & stretch actually happens
 }
+
+TEST_CASE("CharacterModel: joint_matrices carry orientation (a held weapon follows the arm)") {
+    const CharacterModel m = CharacterModel::generate(3);
+    auto idx = [&](BonePart p) {
+        for (usize i = 0; i < m.bones().size(); ++i) {
+            if (m.bones()[i].part == p) return static_cast<int>(i);
+        }
+        return -1;
+    };
+    const int rh = idx(BonePart::LowerArmR);
+    const int ru = idx(BonePart::UpperArmR);
+    REQUIRE(rh >= 0);
+    REQUIRE(ru >= 0);
+
+    const std::vector<Quat> bind(m.bone_count(), QuatIdentity);
+    const std::vector<Mat4> jb = m.joint_matrices(Mat4{1.0f}, bind);
+
+    std::vector<Quat> pose(m.bone_count(), QuatIdentity);
+    pose[static_cast<usize>(ru)] = glm::angleAxis(1.2f, Vec3{1.0f, 0.0f, 0.0f}); // raise the arm
+    const std::vector<Mat4> jp = m.joint_matrices(Mat4{1.0f}, pose);
+
+    // The forearm joint's world position moved with the raised upper arm...
+    CHECK(glm::length(Vec3{jb[rh][3]} - Vec3{jp[rh][3]}) > 0.05f);
+    // ...and crucially its ORIENTATION changed too (the bone's local +Y axis now points a
+    // different way) - so a weapon attached to this frame rotates WITH the arm, not just slides.
+    const Vec3 yb = glm::normalize(Vec3{jb[rh][1]});
+    const Vec3 yp = glm::normalize(Vec3{jp[rh][1]});
+    CHECK(glm::dot(yb, yp) < 0.99f);
+}
+
+TEST_CASE("CharacterAnimator: actions blend over locomotion (legs keep walking)") {
+    const CharacterModel m = CharacterModel::generate(2);
+    auto bone = [&](const std::vector<Quat>& pose, BonePart part) {
+        for (usize i = 0; i < m.bones().size(); ++i) {
+            if (m.bones()[i].part == part) return pose[i];
+        }
+        return QuatIdentity;
+    };
+    auto same = [](const Quat& a, const Quat& b) { return std::abs(glm::dot(a, b)) > 0.999f; };
+
+    // Two animators stepped identically (same walk cycle); one also swings. The action must
+    // only change the UPPER body - the legs must stay bit-for-bit in step with the plain walker.
+    CharacterAnimator plain, acting;
+    auto step_both = [&](int n) {
+        for (int i = 0; i < n; ++i) {
+            plain.update(6.0f, Timestep{1.0f / 60.0f});
+            acting.update(6.0f, Timestep{1.0f / 60.0f});
+        }
+    };
+    step_both(60);
+    acting.play_swing();
+    CHECK(acting.swinging());
+    step_both(9); // ~0.15s into the swing
+    {
+        const std::vector<Quat> pw = plain.pose(m);
+        const std::vector<Quat> ps = acting.pose(m);
+        CHECK_FALSE(same(bone(pw, BonePart::UpperArmR), bone(ps, BonePart::UpperArmR))); // arm moved
+        CHECK(same(bone(pw, BonePart::UpperLegL), bone(ps, BonePart::UpperLegL)));       // legs in step
+        CHECK(same(bone(pw, BonePart::UpperLegR), bone(ps, BonePart::UpperLegR)));
+    }
+    // The swing is one-shot: it ends and the arm rejoins locomotion.
+    step_both(60);
+    CHECK_FALSE(acting.swinging());
+
+    // Blocking raises the off (left) arm and holds it; the legs still match the plain walker.
+    acting.set_blocking(true);
+    step_both(30);
+    CHECK(acting.blocking());
+    {
+        const std::vector<Quat> pw = plain.pose(m);
+        const std::vector<Quat> pb = acting.pose(m);
+        CHECK_FALSE(same(bone(pw, BonePart::UpperArmL), bone(pb, BonePart::UpperArmL)));
+        CHECK(same(bone(pw, BonePart::UpperLegR), bone(pb, BonePart::UpperLegR)));
+    }
+}

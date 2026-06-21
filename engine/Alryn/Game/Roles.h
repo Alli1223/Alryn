@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Alryn/Core/Math.h>
 #include <Alryn/Core/Types.h>
 
 namespace alryn {
@@ -16,7 +17,7 @@ enum class PlayerRole : u8 {
 };
 
 inline constexpr u8 kRoleCount = 3;
-inline constexpr u8 kAbilitySlots = 3; // abilities per role (keys 1/2/3)
+inline constexpr u8 kAbilitySlots = 4; // abilities per role (keys 1/2/3/4)
 
 // Per-role base stats. `move_speed` overrides the character controller's walk speed;
 // `damage_reduction` is the fraction of incoming damage soaked before any active buff.
@@ -62,19 +63,22 @@ inline AbilityDef ability_def(PlayerRole role, u8 slot) {
             switch (slot) {
                 case 0: return {"SHIELD BASH", 4.0f};
                 case 1: return {"BULWARK", 12.0f};
-                default: return {"TAUNT", 10.0f};
+                case 2: return {"CONSECRATION", 12.0f};
+                default: return {"TAUNT", 8.0f};
             }
         case PlayerRole::Hunter:
             switch (slot) {
                 case 0: return {"POWER SHOT", 3.0f};
                 case 1: return {"VOLLEY", 6.0f};
-                default: return {"DASH", 5.0f};
+                case 2: return {"DASH", 5.0f};
+                default: return {"PIERCING SHOT", 6.0f};
             }
         case PlayerRole::Cleric:
             switch (slot) {
                 case 0: return {"HEAL", 2.5f};
                 case 1: return {"SANCTUARY", 11.0f};
-                default: return {"SMITE", 4.0f};
+                case 2: return {"SMITE", 4.0f};
+                default: return {"AEGIS", 9.0f};
             }
     }
     return {};
@@ -83,11 +87,18 @@ inline AbilityDef ability_def(PlayerRole role, u8 slot) {
 // --- Ability tuning (shared by the server and the headless tests) -----------------
 inline constexpr f32 kBashDamage = 55.0f;       // Knight shield bash, plus knockback
 inline constexpr f32 kBashKnockback = 3.5f;     // metres an enemy is shoved
+inline constexpr f32 kBlockReduction = 0.5f;    // extra damage reduction while a shield is held up
 inline constexpr f32 kBulwarkReduction = 0.55f; // extra damage reduction while raised
 inline constexpr f32 kBulwarkDuration = 5.0f;
-inline constexpr f32 kTauntRadius = 12.0f;
 inline constexpr f32 kTauntDuration = 5.0f;
+inline constexpr f32 kTauntRadius = 12.0f;       // Knight Taunt: pull nearby enemies' aggro
+// Knight Consecration: a holy ground aura at the player's feet that taunts enemies inside it
+// and burns them for a little damage over its lifetime (a taunt-plus-damage zone).
+inline constexpr f32 kConsecrationRadius = 4.5f;
+inline constexpr f32 kConsecrationDuration = 6.0f;
+inline constexpr f32 kConsecrationDPS = 11.0f; // damage/sec to enemies standing in it
 inline constexpr f32 kPowerShotMult = 2.4f;     // x the Hunter's ranged damage
+inline constexpr f32 kPierceMult = 3.4f;        // x ranged damage - Piercing Shot, a heavy bolt
 inline constexpr f32 kVolleyMult = 0.9f;        // per arrow of the 3-arrow spread
 inline constexpr f32 kDashSpeedMult = 1.7f;     // walk-speed multiplier while dashing
 inline constexpr f32 kDashDuration = 1.6f;
@@ -95,5 +106,43 @@ inline constexpr f32 kHealAmount = 45.0f;       // Cleric single-target mend
 inline constexpr f32 kSanctuaryAmount = 30.0f;  // AoE heal to all nearby allies
 inline constexpr f32 kHealRadius = 16.0f;
 inline constexpr f32 kSmiteDamage = 60.0f;      // Cleric holy bolt
+
+// Cleric channelled AOE heal (hold right mouse to charge; auto-casts a ground aura at full).
+inline constexpr f32 kHealChargeTime = 1.6f;    // seconds of channelling to release the aura
+inline constexpr f32 kHealAuraDuration = 6.0f;  // how long the ground aura lingers
+inline constexpr f32 kHealAuraRadius = 5.0f;    // its radius (metres)
+inline constexpr f32 kHealAuraRate = 16.0f;     // hp/sec restored to allies standing in it
+
+// Cleric Aegis: a protective shield placed on a friendly player/NPC that absorbs incoming
+// damage until it's spent or fades. Rendered as a glowing sphere around the target.
+inline constexpr f32 kAegisAmount = 65.0f;      // damage the shield soaks before breaking
+inline constexpr f32 kAegisDuration = 12.0f;    // seconds before an unbroken shield fades
+inline constexpr f32 kAegisRange = 18.0f;       // how far an ally can be shielded
+
+// --- Ground auras (extensible: add a kind + a row in aura_props, plus a server effect) -------
+// A ground area-of-effect that applies a per-tick effect to whoever stands in it. New aura
+// types only need: an enum value, a row here (radius/duration/colour/light), a case in the
+// server's update_auras effect switch, and - since the client is data-driven - nothing else.
+enum class AuraKind : u8 {
+    Heal = 0,         // Cleric: heals allies inside
+    Consecration = 1, // Knight: taunts + burns enemies inside
+};
+
+struct AuraProps {
+    f32 radius = 4.0f;
+    f32 duration = 6.0f;
+    Vec3 color{1.0f}; // VFX + light tint
+    f32 light = 0.0f; // night-time light intensity (0 = casts no light)
+};
+
+inline AuraProps aura_props(AuraKind kind) {
+    switch (kind) {
+        case AuraKind::Heal:
+            return {kHealAuraRadius, kHealAuraDuration, Vec3{0.4f, 1.0f, 0.6f}, 1.6f};
+        case AuraKind::Consecration:
+            return {kConsecrationRadius, kConsecrationDuration, Vec3{1.0f, 0.6f, 0.22f}, 1.8f};
+    }
+    return {};
+}
 
 } // namespace alryn

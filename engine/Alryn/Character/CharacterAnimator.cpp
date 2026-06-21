@@ -26,7 +26,20 @@ void CharacterAnimator::update(f32 speed, Timestep dt) {
     if (wobble_ > TwoPi) {
         wobble_ -= TwoPi;
     }
+
+    // Action layer: advance a one-shot swing to completion, and ease the held-block weight.
+    if (swing_t_ >= 0.0f) {
+        swing_t_ += dts;
+        if (swing_t_ > kSwingDur) {
+            swing_t_ = -1.0f;
+        }
+    }
+    const f32 target_block = blocking_ ? 1.0f : 0.0f;
+    block_w_ += (target_block - block_w_) * std::min(1.0f, dts * 12.0f);
 }
+
+void CharacterAnimator::play_swing() { swing_t_ = 0.0f; }
+void CharacterAnimator::set_blocking(bool blocking) { blocking_ = blocking; }
 
 std::vector<Quat> CharacterAnimator::pose(const CharacterModel& model) const {
     std::vector<Quat> pose(model.bone_count(), QuatIdentity);
@@ -84,7 +97,122 @@ std::vector<Quat> CharacterAnimator::pose(const CharacterModel& model) const {
             default: break;
         }
     }
+
+    // Blend the upper-body action over the locomotion base (a swing takes over from a block).
+    if (swing_t_ >= 0.0f) {
+        overlay_swing(model, pose);
+    } else if (block_w_ > 1e-3f) {
+        overlay_block(model, pose);
+    }
     return pose;
+}
+
+namespace {
+// Slerp the masked bones of `pose` toward `target` by `weight` (0 leaves the base untouched,
+// 1 fully adopts the action). `mask(part)` returns the per-bone influence (0..1).
+template <typename TargetFn, typename MaskFn>
+void blend_overlay(const CharacterModel& model, std::vector<Quat>& pose, f32 weight,
+                   TargetFn target, MaskFn mask) {
+    const std::vector<Bone>& bones = model.bones();
+    for (usize i = 0; i < bones.size(); ++i) {
+        const f32 w = weight * mask(bones[i].part);
+        if (w <= 1e-3f) {
+            continue;
+        }
+        pose[i] = glm::normalize(glm::slerp(pose[i], target(bones[i].part), glm::clamp(w, 0.0f, 1.0f)));
+    }
+}
+} // namespace
+
+// An overhead sword chop. The SWORD arm is on the player's right side, which (the rig's L/R
+// labels are mirrored) is the *L*-suffixed arm; the SHIELD arm is the *R*-suffixed one. The
+// shoulder swings about the body's left-right axis (the bone's local X) on a single smooth,
+// monotonic angle: wind up overhead-and-back (+), sweep down to the FRONT (-), settle to rest.
+// Only the upper body is masked, so the legs keep their walk/idle cycle underneath.
+void CharacterAnimator::overlay_swing(const CharacterModel& model, std::vector<Quat>& pose) const {
+    const f32 t = glm::clamp(swing_t_ / kSwingDur, 0.0f, 1.0f);
+    const f32 env = glm::smoothstep(0.0f, 0.10f, t) * (1.0f - glm::smoothstep(0.86f, 1.0f, t));
+
+    f32 a; // shoulder pitch
+    if (t < 0.30f) {
+        a = glm::mix(0.0f, 2.3f, glm::smoothstep(0.0f, 0.30f, t)); // raise overhead + back
+    } else if (t < 0.60f) {
+        a = glm::mix(2.3f, -1.1f, glm::smoothstep(0.30f, 0.60f, t)); // chop down to the front
+    } else {
+        a = glm::mix(-1.1f, 0.0f, glm::smoothstep(0.60f, 1.0f, t)); // recover to rest
+    }
+    const f32 cock = glm::smoothstep(0.0f, 0.28f, t) * (1.0f - glm::smoothstep(0.30f, 0.56f, t));
+    const f32 lean = glm::smoothstep(0.32f, 0.58f, t) * (1.0f - glm::smoothstep(0.60f, 0.95f, t));
+
+    const Vec3 ax{1.0f, 0.0f, 0.0f};
+    const Vec3 ay{0.0f, 1.0f, 0.0f};
+    const Quat sword_upper = glm::angleAxis(a, ax);
+    const Quat sword_lower = glm::angleAxis(0.8f * cock, ax); // cock the elbow, extend on impact
+    const Quat torso = glm::angleAxis(0.22f * lean, ax) * glm::angleAxis(-0.25f * lean, ay);
+    const Quat head = glm::angleAxis(0.1f * lean, ax);
+    const Quat off_upper = glm::angleAxis(-0.25f * lean, ax); // shield arm counter-swings
+
+    blend_overlay(
+        model, pose, env,
+        [&](BonePart p) -> Quat {
+            switch (p) {
+                case BonePart::UpperArmL: return sword_upper; // sword arm (player's right)
+                case BonePart::LowerArmL: return sword_lower;
+                case BonePart::Torso: return torso;
+                case BonePart::Head: return head;
+                case BonePart::UpperArmR: return off_upper;
+                default: return QuatIdentity;
+            }
+        },
+        [](BonePart p) -> f32 {
+            switch (p) {
+                case BonePart::UpperArmL:
+                case BonePart::LowerArmL: return 1.0f;
+                case BonePart::Torso: return 0.5f;
+                case BonePart::Head: return 0.35f;
+                case BonePart::UpperArmR: return 0.4f;
+                default: return 0.0f; // legs + the rest keep walking
+            }
+        });
+}
+
+// Shield-up guard: the shield arm (player's left = the R-suffixed bones) lifts up and across the
+// chest, the sword arm tucks back, the torso turns to present the shield. Held; weight eases.
+void CharacterAnimator::overlay_block(const CharacterModel& model, std::vector<Quat>& pose) const {
+    const Vec3 ax{1.0f, 0.0f, 0.0f};
+    const Vec3 ay{0.0f, 1.0f, 0.0f};
+    const Vec3 az{0.0f, 0.0f, 1.0f};
+    const Quat upper_r = glm::angleAxis(-1.7f, ax) * glm::angleAxis(-0.5f, az); // raise up + across
+    const Quat lower_r = glm::angleAxis(1.0f, ax) * glm::angleAxis(0.3f, az);   // forearm horizontal
+    const Quat upper_l = glm::angleAxis(0.45f, ax) * glm::angleAxis(-0.3f, az); // sword tucked back
+    const Quat lower_l = glm::angleAxis(0.7f, ax);
+    const Quat torso = glm::angleAxis(-0.28f, ay) * glm::angleAxis(0.1f, ax); // turn shoulder in
+    const Quat head = glm::angleAxis(0.12f, ax);
+
+    blend_overlay(
+        model, pose, block_w_,
+        [&](BonePart p) -> Quat {
+            switch (p) {
+                case BonePart::UpperArmR: return upper_r; // shield arm (player's left)
+                case BonePart::LowerArmR: return lower_r;
+                case BonePart::UpperArmL: return upper_l;
+                case BonePart::LowerArmL: return lower_l;
+                case BonePart::Torso: return torso;
+                case BonePart::Head: return head;
+                default: return QuatIdentity;
+            }
+        },
+        [](BonePart p) -> f32 {
+            switch (p) {
+                case BonePart::UpperArmR:
+                case BonePart::LowerArmR: return 1.0f;
+                case BonePart::UpperArmL:
+                case BonePart::LowerArmL: return 0.6f;
+                case BonePart::Torso: return 0.5f;
+                case BonePart::Head: return 0.3f;
+                default: return 0.0f;
+            }
+        });
 }
 
 Mat4 CharacterAnimator::body_offset() const {
