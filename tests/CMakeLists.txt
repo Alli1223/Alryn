@@ -11,6 +11,7 @@ add_executable(alryn_tests
     net_tests.cpp
     combat_tests.cpp
     contract_tests.cpp
+    role_tests.cpp
     character_tests.cpp
     ui_tests.cpp
     scene_shot_tests.cpp

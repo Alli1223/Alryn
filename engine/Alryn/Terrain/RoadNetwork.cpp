@@ -123,16 +123,27 @@ std::vector<Vec2> route_impl(const Vec2& pa, const Vec2& pb, u32 seed) {
             off[i] = glm::clamp(off[i], -max_off, max_off);
         }
     }
-    // Any point still wet snaps back to the dry path, so the meander can never drown a road.
+    // Smooth the offset profile so the road flows in gentle curves rather than sharp kinks
+    // (the meander + water-avoidance descent can leave angular corners). A low-pass on the
+    // lateral offset, town ends pinned at 0, keeps the shape but rounds the bends.
+    for (int pass = 0; pass < 5; ++pass) {
+        std::vector<f32> sm = off;
+        for (int i = 1; i < road_points; ++i) {
+            sm[i] = 0.5f * off[i] + 0.25f * (off[i - 1] + off[i + 1]);
+        }
+        off.swap(sm);
+    }
+
+    // Any point now in water snaps back to the validated dry path, so smoothing/meander can
+    // never drown a road; if the underlying dry route itself crosses water, drop the edge.
     for (int i = 1; i < road_points; ++i) {
         if (in_water(point_at(i))) {
             off[i] = dry_off[i];
         }
     }
-
     for (int i = 0; i <= road_points; ++i) {
         if (in_water(point_at(i))) {
-            return {}; // the underlying dry route itself crosses water - towns not linked
+            return {};
         }
     }
 

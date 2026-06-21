@@ -297,14 +297,23 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
         occ.emplace_back(Vec2{s.x, s.z}, 2.0f);
     }
 
-    // A fountain on the plaza, just off the market (try a few offsets for clear ground).
+    // A fountain set as a little plaza garden, just off the market on the cross-axis, ringed
+    // with planters so it reads as a deliberate feature rather than a lone basin.
     const Vec2 gate_dir = gates.empty() ? Vec2{0.0f, 1.0f} : glm::normalize(gates[0].pos - v.center);
     const Vec2 gate_perp{-gate_dir.y, gate_dir.x};
-    for (f32 off : {7.0f, -7.0f, 9.0f}) {
+    for (f32 off : {8.0f, -8.0f, 10.0f}) {
         const Vec2 fp = v.center + gate_perp * off;
-        if (!occupied(fp, 2.4f)) {
+        if (!occupied(fp, 2.6f)) {
             push(PropCategory::Fountain, 0, fp.x, fp.y, 0.0f);
-            occ.emplace_back(fp, 2.4f);
+            occ.emplace_back(fp, 2.6f);
+            for (int i = 0; i < 4; ++i) { // a ring of planters around the basin
+                const f32 a = TwoPi * (static_cast<f32>(i) + 0.5f) / 4.0f;
+                const Vec2 pp = fp + Vec2{std::cos(a), std::sin(a)} * 2.4f;
+                if (!occupied(pp, 0.6f)) {
+                    push(PropCategory::Planter, static_cast<u8>(i % 3), pp.x, pp.y, 0.0f);
+                    occ.emplace_back(pp, 0.6f);
+                }
+            }
             break;
         }
     }
@@ -327,30 +336,43 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
 
     // Raised cobblestone streets: tiles along each gate->market avenue and market->house
     // spoke, plus a ring around the plaza. Tiles overlap slightly for a continuous path.
-    auto lay_path = [&](Vec2 a, Vec2 b) {
+    // `rows` lateral lanes (offset by ~1.6 m) make a wide avenue a cart can roll down; the
+    // tiles overlap (spacing 1.7 m, tiles are 2.4 m) so they butt into one continuous street.
+    // Path tiles are 2.3 m square; lay them ~2.3 m apart (and rows 2.3 m apart) so they ABUT
+    // edge-to-edge into one continuous cobbled street with no overlap (overlap = z-fighting).
+    constexpr f32 tile = 2.3f;
+    auto lay_path = [&](Vec2 a, Vec2 b, int rows) {
         const Vec2 d = b - a;
         const f32 L = glm::length(d);
         if (L < 1.5f) {
             return;
         }
         const Vec2 u = d / L;
+        const Vec2 perp{-u.y, u.x};
         const f32 yaw = std::atan2(-u.y, u.x);
-        const int n = std::max(1, static_cast<int>(L / 1.9f));
-        for (int k = 1; k <= n; ++k) {
-            const Vec2 p = a + u * (static_cast<f32>(k) * L / static_cast<f32>(n));
-            push(PropCategory::Path, 0, p.x, p.y, yaw);
+        const int n = std::max(1, static_cast<int>(std::round(L / tile)));
+        for (int r = 0; r < rows; ++r) {
+            const f32 lat = (static_cast<f32>(r) - static_cast<f32>(rows - 1) * 0.5f) * tile;
+            for (int k = 1; k <= n; ++k) {
+                const Vec2 p =
+                    a + u * (static_cast<f32>(k) * L / static_cast<f32>(n)) + perp * lat;
+                push(PropCategory::Path, 0, p.x, p.y, yaw);
+            }
         }
     };
     for (const detail::VillageGate& g : gates) {
-        lay_path(v.center, g.pos);
+        lay_path(v.center, g.pos, 2); // wide avenue from each gate to the market (a cart fits)
     }
     for (const detail::HousePlot& h : plots) {
-        lay_path(v.center, h.pos);
+        lay_path(v.center, h.pos, 1); // a footpath spoke to each house
     }
-    const int ring_n = std::max(8, static_cast<int>(TwoPi * 5.5f / 1.9f));
-    for (int i = 0; i < ring_n; ++i) {
-        const f32 a = TwoPi * static_cast<f32>(i) / static_cast<f32>(ring_n);
-        push(PropCategory::Path, 0, cx + std::cos(a) * 5.5f, cz + std::sin(a) * 5.5f, a);
+    // A paved plaza ring (two concentric rings, spaced a tile apart) around the market.
+    for (f32 rad : {5.2f, 7.5f}) {
+        const int ring_n = std::max(10, static_cast<int>(TwoPi * rad / tile));
+        for (int i = 0; i < ring_n; ++i) {
+            const f32 a = TwoPi * static_cast<f32>(i) / static_cast<f32>(ring_n);
+            push(PropCategory::Path, 0, cx + std::cos(a) * rad, cz + std::sin(a) * rad, a);
+        }
     }
 
     // Greenery: planters ringing the plaza + bushes scattered on open interior ground.
@@ -362,17 +384,19 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
             occ.emplace_back(pp, 0.7f);
         }
     }
-    for (int i = 0; i < 28; ++i) {
+    // Scatter bushes + planters to green up the open ground, biased toward the bare band
+    // between the outer house ring and the wall so the town doesn't read as empty there.
+    for (int i = 0; i < 52; ++i) {
         const f32 a = detail::hash01(detail::tree_hash(vid, i, 7700u)) * TwoPi;
-        const f32 rr = (0.3f + 0.6f * detail::hash01(detail::tree_hash(vid, i, 7701u))) * half;
-        if (rr > worldgen::town_radius(v, a, seed) - 2.0f) {
+        const f32 rr = (0.45f + 0.5f * detail::hash01(detail::tree_hash(vid, i, 7701u))) * half;
+        if (rr > worldgen::town_radius(v, a, seed) - 1.6f) {
             continue; // stay inside the wall
         }
         const Vec2 bp = v.center + Vec2{std::cos(a), std::sin(a)} * rr;
         if (occupied(bp, 1.0f)) {
             continue;
         }
-        const bool planter = detail::hash01(detail::tree_hash(vid, i, 7702u)) < 0.25f;
+        const bool planter = detail::hash01(detail::tree_hash(vid, i, 7702u)) < 0.22f;
         push(planter ? PropCategory::Planter : PropCategory::Bush,
              static_cast<u8>(detail::tree_hash(vid, i, 7703u) % 3u), bp.x, bp.y,
              detail::hash01(detail::tree_hash(vid, i, 7704u)) * TwoPi);

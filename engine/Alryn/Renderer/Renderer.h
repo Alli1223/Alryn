@@ -74,6 +74,10 @@ public:
         // is the expensive part. Setting this false keeps them in the cheap unshadowed
         // pool, so a town full of lanterns costs almost nothing.
         bool cast_shadow = true;
+        // A key light (e.g. the escorted wagon's lantern) claims a shadow atlas tile FIRST,
+        // ahead of all the nearest-distance lights, so it always casts real shadows of the
+        // player + nearby objects no matter how many other lights are around.
+        bool priority = false;
     };
     void add_light(const SpotLight& light);
 
@@ -81,8 +85,8 @@ public:
 
     // Opaque geometry (terrain, characters). tint multiplies the vertex colour.
     void draw(const Mesh& mesh, const Mat4& model, const Vec4& tint = Vec4{1.0f});
-    // Opaque geometry that also obeys the foliage "peek-through" dissolve (tree trunks),
-    // so trunks between the camera and the player melt away like the leaves do.
+    // Opaque trunk/branch geometry (tree trunks). Solid and always rendered - unlike the
+    // canopy foliage, trunks never dissolve, so the tree's wooden frame stays visible.
     void draw_cutout(const Mesh& mesh, const Mat4& model, const Vec4& tint = Vec4{1.0f});
     // Vegetation (grass/ferns/...): opaque + depth-written, but drawn with the wind
     // shader so it sways in the breeze and bends away from the player.
@@ -120,7 +124,7 @@ private:
     // water -> foliage.
     enum class Layer : u8 {
         Opaque = 0,
-        Cutout = 1,     // opaque (tree trunks), but with the foliage peek-through dissolve
+        Cutout = 1,     // opaque tree trunks/branches (solid, never dissolves)
         Vegetation = 2,
         Emissive = 3,
         Water = 4,

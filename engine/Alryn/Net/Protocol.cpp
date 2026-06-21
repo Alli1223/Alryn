@@ -34,6 +34,8 @@ void write(ByteWriter& w, const PlayerInput& in) {
     w.write_u8(in.vote_mode);
     w.write_f32(in.throttle);
     w.write_f32(in.steer);
+    w.write_u8(in.role);
+    w.write_u8(in.ability);
     write_appearance(w, in.appearance);
 }
 
@@ -56,6 +58,8 @@ bool read(ByteReader& r, PlayerInput& in) {
     in.vote_mode = r.read_u8();
     in.throttle = r.read_f32();
     in.steer = r.read_f32();
+    in.role = r.read_u8();
+    in.ability = r.read_u8();
     read_appearance(r, in.appearance);
     return r.ok();
 }
@@ -81,11 +85,14 @@ void write(ByteWriter& w, const Snapshot& s) {
         w.write_u8(p.build_stock);
         w.write_u8(p.seated);
         w.write_u8(p.carrying);
+        w.write_u8(p.role);
+        w.write_u8(p.cast);
         write_appearance(w, p.appearance);
     }
     w.write_u16(static_cast<u16>(s.projectiles.size()));
     for (const ProjectileState& pr : s.projectiles) {
         w.write_vec3(pr.position);
+        w.write_vec3(pr.dir);
         w.write_u8(pr.kind);
     }
     w.write_u16(static_cast<u16>(s.enemies.size()));
@@ -167,6 +174,8 @@ bool read(ByteReader& r, Snapshot& s) {
         p.build_stock = r.read_u8();
         p.seated = r.read_u8();
         p.carrying = r.read_u8();
+        p.role = r.read_u8();
+        p.cast = r.read_u8();
         read_appearance(r, p.appearance);
         s.players.push_back(p);
     }
@@ -176,6 +185,7 @@ bool read(ByteReader& r, Snapshot& s) {
     for (u16 i = 0; i < proj_count && r.ok(); ++i) {
         ProjectileState pr;
         pr.position = r.read_vec3();
+        pr.dir = r.read_vec3();
         pr.kind = r.read_u8();
         s.projectiles.push_back(pr);
     }

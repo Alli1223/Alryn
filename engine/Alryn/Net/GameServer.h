@@ -6,6 +6,7 @@
 #include <Alryn/Core/Types.h>
 #include <Alryn/Game/Contract.h>
 #include <Alryn/Game/GameManager.h>
+#include <Alryn/Game/Roles.h>
 #include <Alryn/Net/NetServer.h>
 #include <Alryn/Net/Protocol.h>
 #include <Alryn/Physics/CharacterController.h>
@@ -33,12 +34,24 @@ public:
     struct ServerPlayer {
         CharacterController controller;
         net::PlayerInput input;
+        PlayerRole role = PlayerRole::Knight;
+        f32 max_health = kPlayerMaxHealth; // from the role; health is clamped to this
         f32 health = kPlayerMaxHealth;
-        f32 since_hit = kPlayerRegenDelay; // seconds since last damaged (regen gate)
-        f32 melee_cd = 0.0f;               // seconds until the next melee swing can land
-        f32 water = 0.0f;                  // bucket fill for firefighting (dormant siege)
-        i32 wood = 0;                      // barricades buildable today (dormant siege)
-        bool carrying = false;             // hauling a spilled cargo crate back to the cart
+        f32 since_hit = kPlayerRegenDelay;    // seconds since last damaged (regen gate)
+        f32 melee_cd = 0.0f;                  // seconds until the next melee swing can land
+        f32 ability_cd[kAbilitySlots] = {0.0f, 0.0f, 0.0f}; // per-ability cooldown timers
+        f32 bulwark_timer = 0.0f;             // Knight: extra damage reduction while > 0
+        f32 dash_timer = 0.0f;                // Hunter: walk-speed boost while > 0
+        u8 cast_fx = 0;                       // ability that fired this tick (for the snapshot's VFX)
+        f32 water = 0.0f;                     // bucket fill for firefighting (dormant siege)
+        i32 wood = 0;                         // barricades buildable today (dormant siege)
+        bool carrying = false;                // hauling a spilled cargo crate back to the cart
+
+        // Incoming damage after role mitigation + any active block buff.
+        f32 mitigated(f32 raw) const {
+            f32 r = role_stats(role).damage_reduction + (bulwark_timer > 0.0f ? kBulwarkReduction : 0.0f);
+            return raw * (1.0f - glm::clamp(r, 0.0f, 0.9f));
+        }
     };
 
     // A cargo crate that bounced out of the bed and is lying on the ground (world position)
@@ -122,6 +135,9 @@ private:
     void append_wagon_colliders(std::vector<Collider>& out) const; // block players from carts
     void seat_occupants(const VehicleType& vt); // place pilot/riders/seated-driver on the vehicle
     void update_ambush(Timestep dt, const DensitySampler& density); // ambushers + player combat
+    // --- Roles, weapons & abilities (Game/Abilities.cpp) ---
+    void sync_player_role(ServerPlayer& player); // adopt the chosen role each tick (stats/speed)
+    void update_abilities(Timestep dt, const DensitySampler& density); // tick cooldowns + cast
     // --- Dormant night siege (Combat/SiegeMode.cpp; not driven in the transport game) ---
     void player_attack(ServerPlayer& player, const net::PlayerInput& in);
     void player_build(ServerPlayer& player, const net::PlayerInput& in); // place a barricade
@@ -185,8 +201,6 @@ private:
     std::vector<CargoBox> cargo_;        // crates riding in the bed (slide around physically)
     std::vector<GroundGood> goods_;      // crates that bounced out onto the ground (pickups)
     u32 next_good_id_ = 1;
-    std::vector<Vec3> tow_trail_;        // breadcrumb of the puller's recent path; the cart
-                                         // trails along it (so it rounds corners, not cuts them)
     std::vector<Vec2> driver_path_;      // A* path the teamster is following (around obstacles)
     usize driver_path_i_ = 0;            // current node in driver_path_
     f32 driver_repath_ = 0.0f;           // seconds until the path is recomputed

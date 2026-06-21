@@ -127,19 +127,21 @@ bool Renderer::create_pipelines() {
 
     vk::PipelineConfig vegetation = opaque; // grass/ferns: opaque, but wind-swayed
     vegetation.vertex_spv = shader_path("grass.vert.spv").string();
-    vegetation.fragment_spv = shader_path("foliage.frag.spv").string(); // peek-through cutout
+    // Plain lit shader (no peek-through): ground vegetation in front of the player
+    // should never dissolve - only the tree canopy does (the foliage pipeline).
     if (!pipeline_vegetation_.create(device_, vegetation)) {
         return false;
     }
 
-    vk::PipelineConfig cutout = opaque; // tree trunks: opaque, but obey the peek-through
-    cutout.fragment_spv = shader_path("foliage.frag.spv").string();
+    vk::PipelineConfig cutout = opaque; // tree trunks + branches: solid, always rendered
+    // Trunks use the plain lit shader too - the peek-through only thins the leafy
+    // canopy, so the trunk and its branches stay visible between camera and player.
     if (!pipeline_cutout_.create(device_, cutout)) {
         return false;
     }
 
     vk::PipelineConfig foliage = base; // alpha-blended tree leaves
-    foliage.fragment_spv = shader_path("foliage.frag.spv").string(); // peek-through cutout
+    foliage.fragment_spv = shader_path("foliage.frag.spv").string(); // peek-through canopy
     foliage.blend = true;
     foliage.depth_write = false;
     if (!pipeline_foliage_.create(device_, foliage)) {
@@ -369,6 +371,11 @@ void Renderer::process_lights() {
     std::iota(order.begin(), order.end(), 0u);
     const Vec3 cam = camera_position_;
     std::sort(order.begin(), order.end(), [&](u32 a, u32 b) {
+        // Priority (key) lights first, then nearest-to-camera. A priority light is guaranteed
+        // a shadow tile before any lantern/house can claim one.
+        if (pending_lights_[a].priority != pending_lights_[b].priority) {
+            return pending_lights_[a].priority;
+        }
         return glm::length(pending_lights_[a].position - cam) <
                glm::length(pending_lights_[b].position - cam);
     });
@@ -413,10 +420,10 @@ void Renderer::process_lights() {
 
     ubo.count[0] = static_cast<i32>(n);
     ubo.count[1] = static_cast<i32>(m);
-    // The foliage/vegetation/trunk shaders dissolve only what sits in a slim tunnel running
-    // straight from the camera to the player (a small radius around the sight line), so the
-    // character is revealed without clearing the whole view. Aim at the torso (feet + ~1.1 m).
-    ubo.player_peek = Vec4{player_position_ + Vec3{0.0f, 1.1f, 0.0f}, 1.7f};
+    // The foliage/vegetation/trunk shaders dissolve what sits in a wide tunnel running from
+    // the camera to the player, so almost the whole view ahead of the character is cleared of
+    // occluding canopy. Aim at the torso (feet + ~1.1 m).
+    ubo.player_peek = Vec4{player_position_ + Vec3{0.0f, 1.1f, 0.0f}, 6.0f};
     ubo.cam_pos = Vec4{camera_position_, 0.0f};
     frames_[frame_index_].light_ubo.upload(&ubo, sizeof(ubo));
 }

@@ -1,10 +1,11 @@
 #version 450
 
-// Foliage / vegetation fragment shader: the same lit + shadowed look as mesh.frag, plus a
-// "peek-through" cutout. Anything growing BETWEEN the camera and the player (i.e. occluding
-// them) dissolves away through an ordered (Bayer) dither, so it looks like the camera is
-// peeking through the leaves to keep the character visible. Used by the alpha-blended tree
-// foliage AND the opaque ground-vegetation pipelines (the dither discard works for both).
+// Tree-canopy fragment shader: the same lit + shadowed look as mesh.frag, plus a
+// "peek-through" cutout. Canopy leaves growing BETWEEN the camera and the player (i.e.
+// occluding them) dissolve away through an ordered (Bayer) dither, so it looks like the
+// camera is peeking through the leaves to keep the character visible. Used ONLY by the
+// alpha-blended tree-foliage pipeline - tree trunks/branches and ground vegetation use
+// mesh.frag and stay solid, so the peek only thins the leafy tops, not the whole scene.
 
 layout(location = 0) in vec3 vWorldNormal;
 layout(location = 1) in vec3 vColor;
@@ -134,11 +135,11 @@ float peekAmount() {
     if (lenCP <= 0.001) return 0.0;
     vec3 dir = cp / lenCP;
     float t = dot(vWorldPos - C, dir);            // distance along the camera->player ray
-    if (t <= 0.6 || t >= lenCP - 0.2) return 0.0; // only what's in front of the player
+    if (t <= 0.4 || t >= lenCP - 0.2) return 0.0; // only what's in front of the player
     vec3 closest = C + dir * t;
     float perp = length(vWorldPos - closest);     // distance from the sight line
-    float r = radius * mix(0.7, 1.15, t / lenCP); // a touch wider near the player
-    return 1.0 - smoothstep(r * 0.65, r, perp);
+    float r = radius * mix(0.9, 1.7, t / lenCP);  // a broad cone, widest near the player
+    return 1.0 - smoothstep(r * 0.8, r, perp);    // mostly full cull, soft only at the rim
 }
 
 // 4x4 ordered (Bayer) dither threshold in (0,1) from the pixel coordinate - stable as the

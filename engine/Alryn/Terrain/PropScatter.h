@@ -34,17 +34,25 @@ inline std::vector<PropInstance> scatter_props(int cx, int cz, f32 chunk_world, 
     const f32 z0 = static_cast<f32>(cz) * chunk_world;
 
     auto place = [&](f32 cell, u32 salt, PropCategory cat, int variants, auto accept) {
-        const int gx0 = static_cast<int>(std::floor(x0 / cell));
-        const int gz0 = static_cast<int>(std::floor(z0 / cell));
-        const int n = std::max(1, static_cast<int>(chunk_world / cell));
-        for (int j = 0; j < n; ++j) {
-            for (int i = 0; i < n; ++i) {
-                const int gx = gx0 + i;
-                const int gz = gz0 + j;
+        // Scan every global grid cell whose (jittered) site could land in this chunk, and emit
+        // it only if its site is actually inside the chunk bounds - so each site is owned by
+        // exactly ONE chunk. This matters when the cell is larger than a chunk (e.g. the 23 m
+        // lantern grid over 8 m chunks): the old code let every chunk that floored to the same
+        // grid cell emit the SAME site, stacking 3x3 identical lanterns (over-bright). It also
+        // removes duplicate/missing props at chunk seams for the finer grids.
+        const int gx0 = static_cast<int>(std::floor(x0 / cell)) - 1;
+        const int gz0 = static_cast<int>(std::floor(z0 / cell)) - 1;
+        const int gx1 = static_cast<int>(std::floor((x0 + chunk_world) / cell)) + 1;
+        const int gz1 = static_cast<int>(std::floor((z0 + chunk_world) / cell)) + 1;
+        for (int gz = gz0; gz <= gz1; ++gz) {
+            for (int gx = gx0; gx <= gx1; ++gx) {
                 const f32 jx = (detail::hash01(detail::tree_hash(gx, gz, salt + 1u)) - 0.5f) * cell * 0.7f;
                 const f32 jz = (detail::hash01(detail::tree_hash(gx, gz, salt + 2u)) - 0.5f) * cell * 0.7f;
                 const f32 wx = (static_cast<f32>(gx) + 0.5f) * cell + jx;
                 const f32 wz = (static_cast<f32>(gz) + 0.5f) * cell + jz;
+                if (wx < x0 || wx >= x0 + chunk_world || wz < z0 || wz >= z0 + chunk_world) {
+                    continue; // this site belongs to a neighbouring chunk
+                }
                 const f32 gh = worldgen::height(wx, wz, seed);
                 const u32 h = detail::tree_hash(gx, gz, salt + 3u);
                 if (!accept(wx, wz, gh, h)) {

@@ -40,6 +40,8 @@ struct PlayerInput {
     u8 vote_mode = 0;    // 0 = none, 1 = hire driver, 2 = haul manually
     f32 throttle = 0.0f; // carriage driving: forward/back (W/S), used when piloting
     f32 steer = 0.0f;    // carriage driving: rein left/right (A/D), used when piloting
+    u8 role = 0;         // PlayerRole the player is in (sent each tick)
+    u8 ability = 0;      // ability invoked this tick: 0 = none, 1/2/3 = slot+1 (keys 1/2/3)
     CharacterAppearance appearance; // the player's chosen look (sent each tick)
 };
 
@@ -47,10 +49,12 @@ struct PlayerState {
     PlayerId id = 0;
     Vec3 position{0.0f};
     f32 yaw = 0.0f;
-    u8 health = 100;                // 0..100, so clients can show a health bar
+    u8 health = 100;                // 0..100 percent of this player's role max, for the bar
     u8 build_stock = 0;             // barricades this player can still raise today
     u8 seated = 0;                  // 1 = riding/driving a wagon -> use the sit pose
     u8 carrying = 0;                // 1 = hauling a spilled good back to the cart
+    u8 role = 0;                    // PlayerRole, so every client renders the right weapon
+    u8 cast = 0;                    // ability fired this snapshot (0 = none, 1/2/3 = slot+1) -> VFX
     CharacterAppearance appearance; // so every client renders the right avatar
 };
 
@@ -115,9 +119,11 @@ enum class MatchOutcome : u8 { Ongoing = 0, Won = 1, Lost = 2 };
 // Which part of the round we're in: a calm prep/repair lull or a live wave.
 enum class MatchPhase : u8 { Prep = 0, Combat = 1 };
 
-// A live projectile, broadcast each tick so clients can render it.
+// A live projectile, broadcast each tick so clients can render it. `dir` is the travel
+// direction (frozen when it lands) so arrows render pointing the way they fly / stuck in.
 struct ProjectileState {
     Vec3 position{0.0f};
+    Vec3 dir{0.0f, 0.0f, 1.0f};
     u8 kind = 0;
 };
 

@@ -60,17 +60,28 @@ inline std::vector<TreeInstance> scatter_trees(int cx, int cz, f32 chunk_world, 
             if (slope > 2.6f) {
                 continue; // too steep
             }
-            if (roads::distance(wx, wz, seed) < roads::road_half_width + 3.5f) {
-                continue; // keep roads clear of the big trunks (canopies may still overhang)
+            if (roads::distance(wx, wz, seed) < roads::road_half_width + 10.0f) {
+                continue; // a broad cleared verge - open sightlines along the road, no canopy roof
             }
-            if (worldgen::inside_village(wx, wz, seed, 4.0f)) {
-                continue; // towns are cleared of forest
+            // Towns sit in a clearing: bare for a ring outside the wall, then the forest
+            // thickens back over a fade band - so you emerge from woods into open ground
+            // around a town instead of it being walled in by giant canopies.
+            if (const auto tv = worldgen::village_containing(wx, wz, seed, 22.0f)) {
+                const Vec2 dv{wx - tv->center.x, wz - tv->center.y};
+                const f32 edge = glm::length(dv) - worldgen::town_radius(*tv, std::atan2(dv.y, dv.x), seed);
+                if (edge < 10.0f) {
+                    continue; // open clearing hugging the town
+                }
+                const f32 thicken = glm::clamp((edge - 10.0f) / 12.0f, 0.0f, 1.0f);
+                if (detail::hash01(h ^ 0x51u) > thicken) {
+                    continue; // forest thins as it nears the clearing
+                }
             }
 
             TreeInstance t;
             t.position = Vec3{wx, gh, wz};
-            // Towering trees (~4x the old size) for a dense, canopied forest.
-            t.scale = 4.6f + detail::hash01(detail::tree_hash(gx, gz, seed + 3u)) * 3.0f;
+            // Big trees for a dense, canopied forest (half the previous towering size).
+            t.scale = 2.3f + detail::hash01(detail::tree_hash(gx, gz, seed + 3u)) * 1.5f;
             t.yaw = detail::hash01(detail::tree_hash(gx, gz, seed + 4u)) * TwoPi;
             t.variant = static_cast<int>(h % 5u); // pine / oak / birch / broad oak / dead
             const f32 cv = 0.85f + detail::hash01(detail::tree_hash(gx, gz, seed + 5u)) * 0.3f;

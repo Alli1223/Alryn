@@ -4,11 +4,20 @@
 
 #include <Alryn/Core/Paths.h>
 #include <Alryn/Renderer/MeshPrimitives.h>
+#include <Alryn/Terrain/MarchingTetra.h>
+#include <Alryn/Terrain/PropScatter.h>
+#include <Alryn/Terrain/RoadNetwork.h>
+#include <Alryn/Terrain/TreeScatter.h>
+#include <Alryn/Terrain/VegetationScatter.h>
+#include <Alryn/Terrain/VoxelField.h>
 #include <Alryn/Terrain/WorldGen.h>
+#include <Alryn/Terrain/WorldSampler.h>
 #include <Alryn/World/PropLibrary.h>
 #include <Alryn/World/VehicleTypes.h>
 #include <Alryn/World/Village.h>
 
+#include <algorithm>
+#include <cmath>
 #include <optional>
 #include <string>
 #include <vector>
@@ -24,6 +33,92 @@ namespace {
 Vec3 pixel(const std::vector<u8>& px, u32 w, u32 x, u32 y) {
     const usize i = (static_cast<usize>(y) * w + x) * 4;
     return Vec3{px[i] / 255.0f, px[i + 1] / 255.0f, px[i + 2] / 255.0f};
+}
+
+// Builds a faithful slice of the LIVE world (the real terrain meshed from the density
+// function with the in-game road/town colouring, plus the same scattered props, trees and
+// ground vegetation) over a square region and renders it from an aerial 3/4 view to `out`.
+// Coarser voxels than the game (1 m) keep the headless mesh cheap; the look is the same.
+// Everything is translated by -focus so coordinates stay small and the camera frames it.
+void render_world(test::OffscreenRenderer& r, u32 seed, const Vec2& focus, f32 radius,
+                  const std::string& out, f32 cam_height_mul = 1.95f, f32 cam_back_mul = 0.85f,
+                  const Vec3* eye_rel = nullptr, const Vec3* target_rel = nullptr) {
+    constexpr f32 voxel = 1.0f;
+    constexpr int cv = 16;                 // voxels per chunk
+    constexpr f32 cw = static_cast<f32>(cv) * voxel; // chunk world size (16 m)
+    constexpr f32 y_min = -14.0f, y_max = 16.0f;
+    const int yv = static_cast<int>((y_max - y_min) / voxel);
+
+    WorldSampler sampler(seed);
+    const DensitySampler density = sampler.snapshot();
+    PropLibrary lib;
+
+    std::vector<test::OffscreenRenderer::Draw> draws;
+    auto add = [&](const MeshData& d, const Mat4& model, const Vec4& tint = Vec4{1.0f}) {
+        if (!d.indices.empty()) {
+            if (Mesh* m = r.upload(d)) {
+                draws.push_back({m, model, tint});
+            }
+        }
+    };
+    const Vec3 shift{-focus.x, 0.0f, -focus.y};
+    auto at = [&](const Vec3& world) { return glm::translate(Mat4{1.0f}, world + shift); };
+
+    const int c0x = static_cast<int>(std::floor((focus.x - radius) / cw));
+    const int c1x = static_cast<int>(std::floor((focus.x + radius) / cw));
+    const int c0z = static_cast<int>(std::floor((focus.y - radius) / cw));
+    const int c1z = static_cast<int>(std::floor((focus.y + radius) / cw));
+
+    for (int cz = c0z; cz <= c1z; ++cz) {
+        for (int cx = c0x; cx <= c1x; ++cx) {
+            const Vec3 origin{static_cast<f32>(cx) * cw, y_min, static_cast<f32>(cz) * cw};
+            VoxelField field(IVec3{cv + 1, yv + 1, cv + 1}, voxel, origin);
+            field.fill([&](const Vec3& wp) { return density(wp); });
+            const MeshData terrain = mc::polygonize(
+                field, IVec3{0}, field.cell_count(), 0.0f, [&](const Vec3& p, const Vec3& n) {
+                    const f32 up = glm::clamp(n.y, 0.0f, 1.0f);
+                    Vec3 c = roads::tint_surface(worldgen::surface_color(p, n, seed), p, up, seed);
+                    return town_path_tint(c, p, up, seed);
+                });
+            add(terrain, at(Vec3{0.0f}));
+            add(build_vegetation(cx, cz, cw, seed), at(Vec3{0.0f}));
+
+            for (const TreeInstance& t : scatter_trees(cx, cz, cw, seed)) {
+                const primitives::TreeMeshData tm = primitives::tree(t.variant);
+                const Mat4 model = at(t.position) *
+                                   glm::rotate(Mat4{1.0f}, t.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
+                                   glm::scale(Mat4{1.0f}, Vec3{t.scale});
+                add(tm.trunk, model);
+                add(tm.foliage, model, Vec4{t.tint, 1.0f});
+            }
+            for (const PropInstance& p : scatter_props(cx, cz, cw, seed)) {
+                const PropDef& def = lib.resolve(p);
+                const Mat4 model = at(p.position) *
+                                   glm::rotate(Mat4{1.0f}, p.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
+                                   glm::scale(Mat4{1.0f}, Vec3{p.scale * p.length, p.scale, p.scale});
+                for (const PropPart& part : def.parts) {
+                    if (part.layer == PropLayer::Glow) {
+                        continue;
+                    }
+                    const Vec4 tint = part.layer == PropLayer::Emissive ? Vec4{1.6f, 1.5f, 1.2f, 1.0f}
+                                                                        : Vec4{1.0f};
+                    add(part.mesh, model, tint);
+                }
+            }
+        }
+    }
+    REQUIRE_FALSE(draws.empty());
+
+    const Vec3 target = target_rel ? *target_rel : Vec3{0.0f, 0.0f, 0.0f};
+    const Vec3 eye =
+        eye_rel ? *eye_rel : Vec3{radius * 0.28f, radius * cam_height_mul, radius * cam_back_mul};
+    const Mat4 view = look_at(eye, target, Vec3{0.0f, 1.0f, 0.0f});
+    const Mat4 proj =
+        perspective(radians(48.0f), static_cast<f32>(r.width()) / r.height(), 0.5f, 2000.0f);
+    const Vec3 sky{0.46f, 0.62f, 0.82f};
+    r.render(draws, view, proj, sky, glm::normalize(Vec3{0.45f, 0.85f, 0.4f}), out);
+    const std::string wrote = "Wrote " + out;
+    MESSAGE(wrote);
 }
 } // namespace
 
@@ -231,6 +326,66 @@ TEST_CASE("Scene shot: medieval village houses render") {
     CHECK(glm::length(mid - sky) > 0.05f); // a house, not empty sky
     const std::string wrote = "Wrote " + path;
     MESSAGE(wrote);
+}
+
+TEST_CASE("Scene shot: real-world towns + the roads between them") {
+    test::OffscreenRenderer renderer;
+    if (!renderer.init(1100, 760)) {
+        MESSAGE("No Vulkan device/shaders - skipping world town shots");
+        return;
+    }
+    const u32 seed = 4242u;
+
+    // Collect a few real towns and a road-connected pair (to frame the road between them).
+    std::vector<worldgen::Village> towns;
+    std::optional<worldgen::Village> pa, pb;
+    for (int vz = -7; vz <= 7; ++vz) {
+        for (int vx = -7; vx <= 7; ++vx) {
+            const auto v = worldgen::village_at(vx, vz, seed);
+            if (!v) {
+                continue;
+            }
+            towns.push_back(*v);
+            for (int dz = -roads::road_max_cells; dz <= roads::road_max_cells && !pb; ++dz) {
+                for (int dx = -roads::road_max_cells; dx <= roads::road_max_cells && !pb; ++dx) {
+                    if (dx == 0 && dz == 0) {
+                        continue;
+                    }
+                    const auto v2 = worldgen::village_at(vx + dx, vz + dz, seed);
+                    if (v2 && !roads::route_polyline(v->center, v2->center, seed).empty()) {
+                        pa = v;
+                        pb = v2;
+                    }
+                }
+            }
+        }
+    }
+    REQUIRE_FALSE(towns.empty());
+
+    // A close overview of three individual towns (varied sizes/shapes).
+    std::sort(towns.begin(), towns.end(),
+              [](const worldgen::Village& a, const worldgen::Village& b) { return a.half > b.half; });
+    const int shots = std::min<int>(3, static_cast<int>(towns.size()));
+    for (int i = 0; i < shots; ++i) {
+        const worldgen::Village& t = towns[static_cast<usize>(i)];
+        render_world(renderer, seed, t.center, t.half + 16.0f,
+                     (executable_dir() / ("world_town" + std::to_string(i) + ".ppm")).string());
+    }
+
+    // A wide shot framing two connected towns with the road running between them.
+    if (pa && pb) {
+        // Frame the road as it leaves town A's gate toward town B: focus a little way out on
+        // the road, camera low and behind looking along it, so the cobble->dirt road and its
+        // cleared forest verge read clearly.
+        const Vec2 d2 = glm::normalize(pb->center - pa->center);
+        const Vec2 fc = pa->center + d2 * (pa->half + 22.0f);
+        const f32 span = 46.0f;
+        const Vec3 dir{d2.x, 0.0f, d2.y};
+        const Vec3 eye = -dir * (span * 0.95f) + Vec3{span * 0.15f, span * 0.85f, 0.0f};
+        const Vec3 tgt = dir * (span * 0.35f) + Vec3{0.0f, 2.0f, 0.0f};
+        render_world(renderer, seed, fc, span, (executable_dir() / "world_road.ppm").string(),
+                     1.0f, 1.0f, &eye, &tgt);
+    }
 }
 
 TEST_CASE("Scene shot: a medieval town overview (walls, houses, market, lanterns)") {

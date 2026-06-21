@@ -31,6 +31,8 @@ TEST_CASE("Net: message serialization round-trips") {
     input.vote_mode = 2;
     input.throttle = 1.0f;
     input.steer = -1.0f;
+    input.role = static_cast<u8>(PlayerRole::Hunter);
+    input.ability = 2; // casting ability slot 2 (key 2)
     input.appearance = CharacterAppearance{3, 5, EyeStyle::Sleepy, EarStyle::Pointed,
                                            HairStyle::Ponytail};
 
@@ -54,6 +56,8 @@ TEST_CASE("Net: message serialization round-trips") {
     CHECK(out.vote_mode == 2);
     CHECK(out.throttle == doctest::Approx(1.0f));
     CHECK(out.steer == doctest::Approx(-1.0f));
+    CHECK(out.role == static_cast<u8>(PlayerRole::Hunter));
+    CHECK(out.ability == 2);
     CHECK(out.appearance == input.appearance); // cosmetics survive the round-trip
 
     Snapshot snapshot;
@@ -65,9 +69,10 @@ TEST_CASE("Net: message serialization round-trips") {
     snapshot.wave = 4;
     snapshot.houses_standing = 9;
     snapshot.houses_total = 12;
-    snapshot.players.push_back({1, Vec3{1.0f, 2.0f, 3.0f}, 0.5f, 100, 8, 0, 0, CharacterAppearance{}});
     snapshot.players.push_back(
-        {2, Vec3{4.0f, 5.0f, 6.0f}, 1.5f, 73, 3, 1, 1, // seated + carrying a crate
+        {1, Vec3{1.0f, 2.0f, 3.0f}, 0.5f, 100, 8, 0, 0, 0, 0, CharacterAppearance{}}); // Knight
+    snapshot.players.push_back(
+        {2, Vec3{4.0f, 5.0f, 6.0f}, 1.5f, 73, 3, 1, 1, 2, 3, // seated+carrying, Cleric, casting slot 3
          CharacterAppearance{2, 0, EyeStyle::Sharp, EarStyle::Small, HairStyle::Spiky}});
     snapshot.enemies.push_back({40u, Vec3{7.0f, 1.0f, -2.0f}, 0.8f, 1, 200});
     snapshot.enemies.push_back({41u, Vec3{9.0f, 1.5f, -4.0f}, 2.0f, 0, 60});
@@ -102,6 +107,10 @@ TEST_CASE("Net: message serialization round-trips") {
     CHECK(decoded.players[1].health == 73);
     CHECK(decoded.players[0].build_stock == 8);
     CHECK(decoded.players[1].build_stock == 3);
+    CHECK(decoded.players[0].role == 0); // Knight
+    CHECK(decoded.players[1].role == 2); // Cleric
+    CHECK(decoded.players[0].cast == 0);
+    CHECK(decoded.players[1].cast == 3); // casting ability slot 3
     CHECK(decoded.time_of_day == doctest::Approx(0.625f));
     CHECK(decoded.outcome == static_cast<u8>(MatchOutcome::Lost));
     CHECK(decoded.phase == static_cast<u8>(MatchPhase::Combat));

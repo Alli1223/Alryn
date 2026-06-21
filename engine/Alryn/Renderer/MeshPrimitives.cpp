@@ -1,5 +1,6 @@
 #include <Alryn/Renderer/MeshPrimitives.h>
 
+#include <algorithm>
 #include <cmath>
 #include <utility>
 #include <vector>
@@ -49,15 +50,24 @@ void emit_tri(MeshData& m, Vec3 a, Vec3 b, Vec3 c, const Vec3& center, const Vec
     m.indices.push_back(base + 2);
 }
 
-// Box from y=0..height, width x width, centred on the axis (a tree trunk).
-MeshData box_column(f32 width, f32 height, const Vec3& color) {
+// Round, slightly tapered trunk: a `sides`-gon frustum from y=0..height (narrower at the
+// top), centred on the axis. Faceted (flat per-face normals) for the low-poly look.
+MeshData round_column(f32 width, f32 height, const Vec3& color, int sides = 7) {
     MeshData m;
-    const f32 r = width * 0.5f;
-    add_quad(m, {r, 0, r}, {r, 0, -r}, {r, height, -r}, {r, height, r}, {1, 0, 0}, color);
-    add_quad(m, {-r, 0, -r}, {-r, 0, r}, {-r, height, r}, {-r, height, -r}, {-1, 0, 0}, color);
-    add_quad(m, {-r, 0, r}, {r, 0, r}, {r, height, r}, {-r, height, r}, {0, 0, 1}, color);
-    add_quad(m, {r, 0, -r}, {-r, 0, -r}, {-r, height, -r}, {r, height, -r}, {0, 0, -1}, color);
-    add_quad(m, {-r, height, r}, {r, height, r}, {r, height, -r}, {-r, height, -r}, {0, 1, 0}, color);
+    const f32 rb = width * 0.5f;          // base radius
+    const f32 rt = width * 0.5f * 0.78f;  // taper in toward the top
+    const Vec3 axis{0.0f, height * 0.5f, 0.0f};
+    for (int i = 0; i < sides; ++i) {
+        const f32 a0 = TwoPi * static_cast<f32>(i) / static_cast<f32>(sides);
+        const f32 a1 = TwoPi * static_cast<f32>(i + 1) / static_cast<f32>(sides);
+        const Vec3 b0{std::cos(a0) * rb, 0.0f, std::sin(a0) * rb};
+        const Vec3 b1{std::cos(a1) * rb, 0.0f, std::sin(a1) * rb};
+        const Vec3 t0{std::cos(a0) * rt, height, std::sin(a0) * rt};
+        const Vec3 t1{std::cos(a1) * rt, height, std::sin(a1) * rt};
+        emit_tri(m, b0, b1, t1, axis, color); // side (two tris, flat-shaded)
+        emit_tri(m, b0, t1, t0, axis, color);
+        emit_tri(m, Vec3{0.0f, height, 0.0f}, t0, t1, axis, color); // top cap
+    }
     return m;
 }
 
@@ -88,6 +98,32 @@ MeshData blob(f32 rxz, f32 ry, f32 cy, const Vec3& color) {
         emit_tri(m, v[f[0]], v[f[1]], v[f[2]], center, color);
     }
     return m;
+}
+
+// A tapered round limb (branch / twig): a `sides`-gon prism from `base` extending along
+// `dir` for `length`, radius r0 at the base tapering to r1 at the tip. Used to grow
+// branches off a trunk up into the canopy and small twigs poking out of the bark.
+void limb(MeshData& m, const Vec3& base, const Vec3& dir, f32 length, f32 r0, f32 r1,
+          const Vec3& color, int sides = 5) {
+    const Vec3 axis = glm::normalize(dir);
+    // An orthonormal frame around the limb axis to lay out the ring of side vertices.
+    const Vec3 ref = std::abs(axis.y) > 0.9f ? Vec3{1.0f, 0.0f, 0.0f} : Vec3{0.0f, 1.0f, 0.0f};
+    const Vec3 u = glm::normalize(glm::cross(ref, axis));
+    const Vec3 v = glm::cross(axis, u);
+    const Vec3 tip = base + axis * length;
+    const Vec3 center = base + axis * (length * 0.5f);
+    for (int i = 0; i < sides; ++i) {
+        const f32 a0 = TwoPi * static_cast<f32>(i) / static_cast<f32>(sides);
+        const f32 a1 = TwoPi * static_cast<f32>(i + 1) / static_cast<f32>(sides);
+        const Vec3 d0 = u * std::cos(a0) + v * std::sin(a0);
+        const Vec3 d1 = u * std::cos(a1) + v * std::sin(a1);
+        const Vec3 b0 = base + d0 * r0;
+        const Vec3 b1 = base + d1 * r0;
+        const Vec3 t0 = tip + d0 * r1;
+        const Vec3 t1 = tip + d1 * r1;
+        emit_tri(m, b0, b1, t1, center, color); // side (two tris, flat-shaded)
+        emit_tri(m, b0, t1, t0, center, color);
+    }
 }
 
 // A tapered, double-sided strip following the polyline `pts` (width w0 -> wT),
@@ -571,10 +607,48 @@ TreeMeshData tree(int variant) {
     const Vec3 leaf{0.16f, 0.40f, 0.19f};  // deep forest green
     const Vec3 leaf2{0.22f, 0.50f, 0.24f}; // lighter highlight green
 
+    // Trunk radius at height y, matching round_column's base->top taper.
+    auto trunk_radius = [](f32 width, f32 th, f32 y) {
+        const f32 rb = width * 0.5f;
+        return glm::mix(rb, rb * 0.78f, glm::clamp(y / th, 0.0f, 1.0f));
+    };
+    // Grow `count` branches up the upper trunk, angling outward + up into the canopy
+    // (bark-coloured, in the opaque trunk mesh, so they stay solid when the leaves fade).
+    auto add_branches = [&](f32 width, f32 th, const Vec3& wood, int count, f32 up_bias,
+                            f32 len, int seed) {
+        for (int i = 0; i < count; ++i) {
+            const f32 frac = 0.5f + 0.45f * (static_cast<f32>(i) + vrnd(seed, i * 5)) /
+                                                static_cast<f32>(count);
+            const f32 y = th * frac;
+            const f32 ang = TwoPi * (0.618f * static_cast<f32>(i) + vrnd(seed, i * 5 + 1));
+            const Vec3 out{std::cos(ang), 0.0f, std::sin(ang)};
+            const Vec3 dir = glm::normalize(out + Vec3{0.0f, up_bias, 0.0f});
+            const f32 r = trunk_radius(width, th, y);
+            const Vec3 base{out.x * r * 0.6f, y, out.z * r * 0.6f};
+            const f32 l = len * (0.7f + 0.5f * vrnd(seed, i * 5 + 2));
+            limb(t.trunk, base, dir, l, r * 0.42f, r * 0.12f, wood);
+        }
+    };
+    // Scatter short twigs poking out of the bark for a rougher, more varied silhouette.
+    auto add_twigs = [&](f32 width, f32 th, const Vec3& wood, int count, int seed) {
+        for (int i = 0; i < count; ++i) {
+            const f32 y = th * (0.3f + 0.6f * vrnd(seed, i * 7));
+            const f32 ang = TwoPi * vrnd(seed, i * 7 + 1);
+            const Vec3 out{std::cos(ang), 0.0f, std::sin(ang)};
+            const Vec3 dir = glm::normalize(out + Vec3{0.0f, 0.3f + 0.5f * vrnd(seed, i * 7 + 2), 0.0f});
+            const f32 r = trunk_radius(width, th, y);
+            const Vec3 base{out.x * r * 0.7f, y, out.z * r * 0.7f};
+            const f32 l = 0.25f + 0.4f * vrnd(seed, i * 7 + 3);
+            limb(t.trunk, base, dir, l, std::max(r * 0.18f, 0.03f), 0.012f, wood, 4);
+        }
+    };
+
     switch (variant % 5) {
         case 0: { // tall pine - stacked cones
             const f32 th = 2.8f;
-            t.trunk = box_column(0.30f, th, bark);
+            t.trunk = round_column(0.30f, th, bark);
+            add_branches(0.30f, th, bark, 5, 1.3f, 0.9f, variant * 17 + 1);
+            add_twigs(0.30f, th, bark, 4, variant * 17 + 2);
             append(t.foliage, cone(1.6f, 2.3f, 7, th - 0.7f, leaf));
             append(t.foliage, cone(1.2f, 2.0f, 7, th + 0.6f, leaf * 1.05f));
             append(t.foliage, cone(0.82f, 1.7f, 7, th + 1.9f, leaf2));
@@ -583,7 +657,9 @@ TreeMeshData tree(int variant) {
         }
         case 1: { // round oak - tall trunk + stacked blobs
             const f32 th = 2.6f;
-            t.trunk = box_column(0.36f, th, bark);
+            t.trunk = round_column(0.36f, th, bark);
+            add_branches(0.36f, th, bark, 5, 0.85f, 1.3f, variant * 17 + 1);
+            add_twigs(0.36f, th, bark, 5, variant * 17 + 2);
             append(t.foliage, blob(1.9f, 1.5f, th + 1.1f, leaf));
             append(t.foliage, blob(1.35f, 1.1f, th + 2.2f, leaf2));
             append(t.foliage, blob(0.85f, 0.75f, th + 3.0f, leaf2 * 1.06f));
@@ -591,14 +667,18 @@ TreeMeshData tree(int variant) {
         }
         case 2: { // tall slender birch - pale trunk, high small canopy
             const f32 th = 3.8f;
-            t.trunk = box_column(0.20f, th, birch);
+            t.trunk = round_column(0.20f, th, birch);
+            add_branches(0.20f, th, birch, 4, 1.1f, 0.8f, variant * 17 + 1);
+            add_twigs(0.20f, th, birch, 4, variant * 17 + 2);
             append(t.foliage, blob(1.0f, 1.4f, th + 0.7f, leaf2));
             append(t.foliage, blob(0.72f, 0.95f, th + 1.8f, leaf2 * 1.08f));
             break;
         }
         case 3: { // big broad oak - thick trunk, wide low canopy
             const f32 th = 2.3f;
-            t.trunk = box_column(0.46f, th, bark2);
+            t.trunk = round_column(0.46f, th, bark2);
+            add_branches(0.46f, th, bark2, 6, 0.7f, 1.5f, variant * 17 + 1);
+            add_twigs(0.46f, th, bark2, 6, variant * 17 + 2);
             append(t.foliage, blob(2.5f, 1.3f, th + 1.0f, leaf));
             append(t.foliage, blob(1.8f, 1.1f, th + 2.0f, leaf2));
             append(t.foliage, blob(1.1f, 0.85f, th + 2.8f, leaf2 * 1.05f));
@@ -606,7 +686,10 @@ TreeMeshData tree(int variant) {
         }
         default: { // weathered dead tree - bare-ish, sparse brown foliage
             const f32 th = 3.2f;
-            t.trunk = box_column(0.26f, th, bark2);
+            t.trunk = round_column(0.26f, th, bark2);
+            // Sparse canopy, so lean on gnarled bare branches + twigs for the dead look.
+            add_branches(0.26f, th, bark2, 6, 0.5f, 1.4f, variant * 17 + 1);
+            add_twigs(0.26f, th, bark2, 7, variant * 17 + 2);
             const Vec3 dead{0.40f, 0.33f, 0.22f};
             append(t.foliage, blob(0.8f, 0.55f, th + 0.5f, dead));
             append(t.foliage, blob(0.55f, 0.45f, th + 1.3f, dead * 1.08f));

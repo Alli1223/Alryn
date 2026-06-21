@@ -138,6 +138,9 @@ void GameServer::tick(Timestep dt) {
                         pr.position = eye + dir * 0.6f;
                         pr.velocity = dir * kProjectileSpeed;
                         pr.owner = e.client;
+                        pr.damage = role_stats(it->second.role).ranged_damage;
+                        // A Hunter looses an arrow (kind 3); everyone else lobs a rock (kind 0).
+                        pr.kind = it->second.role == PlayerRole::Hunter ? 3 : 0;
                         projectiles_.push_back(pr);
                         if (projectiles_.size() > kMaxProjectiles) {
                             projectiles_.erase(projectiles_.begin());
@@ -156,6 +159,10 @@ void GameServer::tick(Timestep dt) {
             }
         }
     }
+
+    // Adopt each player's role (stats + walk speed) and resolve any ability they cast
+    // this tick (against the live ambush enemies / allies) before they move.
+    update_abilities(dt, density);
 
     for (auto& [id, player] : players_) {
         if (riders_.count(id) != 0u || id == pilot_) {
@@ -203,16 +210,21 @@ void GameServer::tick(Timestep dt) {
     snapshot.players.reserve(players_.size());
     const bool active = contract_phase_ == ContractPhase::Active;
     for (const auto& [id, player] : players_) {
-        const u8 hp = static_cast<u8>(glm::clamp(player.health, 0.0f, kPlayerMaxHealth));
+        // Health is broadcast as a 0..100 percent of this player's role max so the bar
+        // reads correctly whatever their role's health pool is.
+        const u8 hp = static_cast<u8>(
+            glm::clamp(player.health / player.max_health, 0.0f, 1.0f) * 100.0f);
         const bool seated = active && (riders_.count(id) != 0u || id == pilot_);
         const f32 yaw = seated ? active_.yaw : player.input.yaw; // seated -> face the vehicle
         snapshot.players.push_back({id, player.controller.position(), yaw, hp, 0,
                                     static_cast<u8>(seated ? 1 : 0),
-                                    static_cast<u8>(player.carrying ? 1 : 0), player.input.appearance});
+                                    static_cast<u8>(player.carrying ? 1 : 0),
+                                    static_cast<u8>(player.role), player.cast_fx,
+                                    player.input.appearance});
     }
     snapshot.projectiles.reserve(projectiles_.size());
     for (const Projectile& pr : projectiles_) {
-        snapshot.projectiles.push_back({pr.position, pr.kind});
+        snapshot.projectiles.push_back({pr.position, pr.heading, pr.kind});
     }
     snapshot.villagers.reserve(villagers_.size() + 1);
     for (const auto& [id, vg] : villagers_) {

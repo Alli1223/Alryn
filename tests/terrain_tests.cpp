@@ -313,6 +313,32 @@ TEST_CASE("Props: library builds geometry, scatter is deterministic & on land") 
     CHECK(rocks > 0);
     CHECK(logs > 0);
     CHECK_FALSE(underwater);
+
+    // Standalone wild lanterns must never stack on top of each other: each global grid cell is
+    // owned by exactly one chunk, so the 23 m lantern grid (over 8 m chunks) is no longer emitted
+    // by several neighbouring chunks at the same spot (which multiplied their light 3x3 = far too
+    // bright). Gather grid lanterns (off the roads, which have their own posts) and check spacing.
+    std::vector<Vec3> lanterns;
+    for (int cz = -20; cz < 20; ++cz) {
+        for (int cx = -20; cx < 20; ++cx) {
+            for (const PropInstance& p : scatter_props(cx, cz, 8.0f, seed)) {
+                if (p.category == PropCategory::Lantern &&
+                    roads::distance(p.position.x, p.position.z, seed) > roads::road_half_width + 2.0f) {
+                    lanterns.push_back(p.position);
+                }
+            }
+        }
+    }
+    REQUIRE(lanterns.size() > 4); // there are wild lanterns in this region
+    int stacked = 0;
+    for (usize i = 0; i < lanterns.size(); ++i) {
+        for (usize j = i + 1; j < lanterns.size(); ++j) {
+            if (glm::length(lanterns[i] - lanterns[j]) < 0.5f) {
+                ++stacked;
+            }
+        }
+    }
+    CHECK(stacked == 0); // none piled on top of another
 }
 
 TEST_CASE("Paths: fences + lanterns line the trail edges; lanterns glow + light") {

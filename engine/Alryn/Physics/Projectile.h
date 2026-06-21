@@ -6,6 +6,7 @@
 #include <Alryn/Core/Types.h>
 #include <Alryn/Physics/Collider.h>
 
+#include <algorithm>
 #include <span>
 
 namespace alryn {
@@ -16,10 +17,12 @@ namespace alryn {
 struct Projectile {
     Vec3 position{0.0f};
     Vec3 velocity{0.0f};
+    Vec3 heading{0.0f, 0.0f, 1.0f}; // last travel direction (frozen on landing) - for arrow facing
     f32 radius = 0.18f;
     f32 life = 6.0f; // seconds remaining
     u32 owner = 0;
-    u8 kind = 0;          // 0 = thrown rock, 1 = enemy arrow
+    f32 damage = 0.0f;    // damage dealt on hitting an enemy (0 = use the default)
+    u8 kind = 0;          // 0 = thrown rock, 1 = enemy arrow, 2 = cleric holy bolt
     bool hostile = false; // an enemy arrow: damages the town side, not enemies
     bool alive = true;
     bool resting = false;
@@ -58,11 +61,24 @@ inline void step_projectile(Projectile& pr, const DensitySampler& density,
         return; // sits where it landed until its life runs out
     }
 
+    // Arrows / bolts (kind != 0) stick where they touch: they don't bounce, they land at the
+    // point of contact and rest there. Only a thrown rock (kind 0) still bounces + rolls.
+    const bool stick = pr.kind != 0;
+
     pr.velocity.y -= gravity * dts;
+    if (glm::length(pr.velocity) > 0.1f) {
+        pr.heading = glm::normalize(pr.velocity); // face the way it travels (frozen on landing)
+    }
     Vec3 next = pr.position + pr.velocity * dts;
 
-    // Terrain bounce: if the step would enter solid, reflect off the surface.
+    // Terrain contact.
     if (density(next) < 0.0f) {
+        if (stick) {
+            pr.velocity = Vec3{0.0f};
+            pr.resting = true;
+            pr.life = std::min(pr.life, 2.0f); // a landed arrow lingers briefly, then clears
+            return;                            // stays at its last airborne point, just on the surface
+        }
         const Vec3 n = detail::density_normal(density, next);
         const f32 vn = glm::dot(pr.velocity, n);
         pr.velocity = (pr.velocity - 2.0f * vn * n) * restitution;
@@ -73,12 +89,21 @@ inline void step_projectile(Projectile& pr, const DensitySampler& density,
         }
     }
 
-    // Prop bounce: reflect off the xz push direction of trees/walls.
+    // Prop contact (trees / walls / wagons).
     for (const Collider& c : colliders) {
         const Vec2 before{next.x, next.z};
         const Vec2 after = resolve_collider(c, before, pr.radius, next.y - pr.radius, pr.radius * 2.0f);
         const Vec2 push = after - before;
         if (glm::length(push) > 1e-4f) {
+            if (stick) {
+                next.x = after.x;
+                next.z = after.y;
+                pr.position = next;
+                pr.velocity = Vec3{0.0f};
+                pr.resting = true;
+                pr.life = std::min(pr.life, 2.0f);
+                return;
+            }
             const Vec2 n2 = glm::normalize(push);
             const Vec3 n{n2.x, 0.0f, n2.y};
             const f32 vn = glm::dot(pr.velocity, n);
