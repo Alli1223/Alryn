@@ -21,6 +21,10 @@ MeshData grid(u32 cells = 16, f32 cell_size = 1.0f, const Vec3& color = Vec3{0.3
 MeshData sphere(int longitude = 10, int latitude = 7, const Vec3& color = Vec3{1.0f});
 MeshData cylinder(int sides = 10, const Vec3& color = Vec3{1.0f});
 
+// A rounded sausage (a cylinder with domed hemispherical caps) of diameter 1 and
+// total height 1, centred. Scale by a bone's dimensions for soft, bubbly limbs.
+MeshData capsule(int sides = 12, int cap_rings = 3, const Vec3& color = Vec3{1.0f});
+
 // Unit box (-0.5..0.5) with its 12 edges and 8 corners chamfered by `bevel` -
 // a rectangular shape with softly rounded (faceted) corners.
 MeshData rounded_box(f32 bevel = 0.12f, const Vec3& color = Vec3{1.0f});

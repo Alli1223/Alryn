@@ -45,6 +45,8 @@ struct Enemy {
     f32 yaw = 0.0f;
     f32 health = kEnemyMaxHealth;
     f32 attack_cd = 0.0f; // seconds until it can swing again
+    f32 taunt_cd = 0.0f;  // seconds it stays fixated on `taunt_by` (Knight taunt)
+    u32 taunt_by = 0;     // player id that taunted it (forces it to target them)
     u8 kind = 0;
     bool alive = true;
 };

@@ -145,8 +145,10 @@ void StreamingTerrain::update(const Vec3& focus, const vk::Device& device) {
     const IVec2 center = chunk_of(focus);
 
     // 2. Enqueue nearby chunks (nearest rings first) that aren't loaded or already in
-    //    flight. The worker thread fills + meshes them off the main thread, so movement
-    //    never stalls the frame.
+    //    flight, then re-sort the whole pending queue by distance to the CURRENT focus so
+    //    the worker always builds the chunk closest to the player next - even after the
+    //    player has moved (stale far requests from a previous position fall to the back).
+    //    The worker fills + meshes them off the main thread, so movement never stalls.
     {
         std::lock_guard<std::mutex> lock(in_mutex_);
         for (int r = 0; r <= view_radius_; ++r) {
@@ -165,6 +167,13 @@ void StreamingTerrain::update(const Vec3& focus, const vk::Device& device) {
                 }
             }
         }
+        auto dist2 = [&](const GenRequest& q) {
+            const i64 ddx = q.cx - center.x;
+            const i64 ddz = q.cz - center.y;
+            return ddx * ddx + ddz * ddz;
+        };
+        std::sort(in_queue_.begin(), in_queue_.end(),
+                  [&](const GenRequest& a, const GenRequest& b) { return dist2(a) < dist2(b); });
     }
     in_cv_.notify_all();
 

@@ -131,6 +131,7 @@ protected:
         shape_box_.create(renderer_->device(), primitives::cube(1.0f, Vec3{1.0f}));
         shape_sphere_.create(renderer_->device(), primitives::sphere(10, 7, Vec3{1.0f}));
         shape_cylinder_.create(renderer_->device(), primitives::cylinder(10, Vec3{1.0f}));
+        shape_capsule_.create(renderer_->device(), primitives::capsule(12, 3, Vec3{1.0f}));
         shape_rounded_.create(renderer_->device(), primitives::rounded_box(0.12f, Vec3{1.0f}));
 
         // Upload the prop catalogue (bushes, rocks, logs, fences, lanterns) to GPU.
@@ -154,6 +155,7 @@ protected:
         upload_props(prop_lib_.rocks(), gpu_rocks_);
         upload_props(prop_lib_.logs(), gpu_logs_);
         upload_props(prop_lib_.fences(), gpu_fences_);
+        upload_props(prop_lib_.fence_rails(), gpu_fence_rails_);
         upload_props(prop_lib_.lanterns(), gpu_lanterns_);
         upload_props(prop_lib_.houses(), gpu_houses_);
         upload_props(prop_lib_.walls(), gpu_walls_);
@@ -442,6 +444,13 @@ protected:
         auto& header = panel.add<ui::Label>("CHARACTER", 30.0f);
         place(header, 38.0f, 18.0f);
 
+        caption("ROLE");
+        place(panel.add<ui::Stepper>(
+                  "ROLE", std::vector<std::string>{"KNIGHT (TANK)", "HUNTER (DMG)", "CLERIC (HEAL)"},
+                  static_cast<usize>(role_),
+                  [this](usize i) { role_ = static_cast<PlayerRole>(i % kRoleCount); }),
+              46.0f);
+
         caption("SKIN TONE");
         place(panel.add<ui::SwatchRow>(
                   std::vector<Vec3>(skin_tones().begin(), skin_tones().end()), appearance_.skin,
@@ -548,6 +557,13 @@ protected:
             } else {
                 update_aim();
             }
+            for (f32& cd : ability_cd_) { // tick the local HUD cooldown estimate
+                if (cd > 0.0f) {
+                    cd -= dt.seconds;
+                }
+            }
+            update_ability_vfx(dt); // buff auras + remote cast VFX
+            update_particles(dt);
             send_input();
             update_visuals(dt);
             update_enemy_visuals(dt);
@@ -604,7 +620,7 @@ protected:
                     // Seated riders attach to the cart's tilt + bob so they ride with it.
                     const Vec3 feet =
                         (p.seated != 0 && aw != nullptr) ? attach_to_wagon(*aw, p.position) : p.position;
-                    draw_character(it->second, feet, p.yaw, p.seated != 0);
+                    draw_character(it->second, feet, p.yaw, p.seated != 0, static_cast<int>(p.role));
                 }
                 if (p.carrying != 0) {
                     draw_carried_good(p.position, p.yaw);
@@ -617,11 +633,14 @@ protected:
         draw_barricades();
         draw_wagons();
         draw_goods();
-        draw_swing();
+        draw_auras();
+        draw_shields();
+        draw_particles();
 
-        // Tree trunks (opaque).
+        // Tree trunks (opaque, but they obey the peek-through dissolve so a trunk between
+        // the camera and the player melts away just like the foliage does).
         terrain_->for_each_tree([&](const TreeInstance& t) {
-            renderer_->draw(tree_library_[tree_index(t)].trunk, tree_model(t));
+            renderer_->draw_cutout(tree_library_[tree_index(t)].trunk, tree_model(t));
         });
 
         // Discrete props: rocks/houses (opaque + emissive), bushes (foliage).
@@ -631,11 +650,29 @@ protected:
         // enemy arrow (a slim dark bolt).
         if (have_snapshot_) {
             for (const net::ProjectileState& pr : snapshot_.projectiles) {
-                if (pr.kind == 1) {
+                if (pr.kind == 4) { // cleric arcane bolt: a violet glowing orb + halo
+                    renderer_->draw_emissive(shape_sphere_,
+                                             glm::translate(Mat4{1.0f}, pr.position) *
+                                                 glm::scale(Mat4{1.0f}, Vec3{0.26f}),
+                                             Vec4{0.72f, 0.5f, 1.0f, 1.0f});
+                    renderer_->draw_glow(shape_sphere_,
+                                         glm::translate(Mat4{1.0f}, pr.position) *
+                                             glm::scale(Mat4{1.0f}, Vec3{0.6f}),
+                                         Vec4{0.6f, 0.4f, 1.0f, 0.5f});
+                } else if (pr.kind == 2) { // cleric holy bolt: a bright glowing mote
+                    renderer_->draw_emissive(shape_sphere_,
+                                             glm::translate(Mat4{1.0f}, pr.position) *
+                                                 glm::scale(Mat4{1.0f}, Vec3{0.3f}),
+                                             Vec4{0.6f, 1.0f, 0.78f, 1.0f});
+                } else if (pr.kind == 1 || pr.kind == 3) {
+                    // An arrow: orient the long (local +Z) axis along its travel direction so it
+                    // always points the way it flies (and the way it's stuck in on landing).
+                    const Vec4 col = pr.kind == 1 ? Vec4{0.3f, 0.22f, 0.14f, 1.0f}  // enemy arrow
+                                                  : Vec4{0.72f, 0.62f, 0.4f, 1.0f}; // friendly arrow
                     renderer_->draw(shape_box_,
-                                    glm::translate(Mat4{1.0f}, pr.position) *
-                                        glm::scale(Mat4{1.0f}, Vec3{0.07f, 0.07f, 0.6f}),
-                                    Vec4{0.3f, 0.22f, 0.14f, 1.0f});
+                                    glm::translate(Mat4{1.0f}, pr.position) * orient_to(pr.dir) *
+                                        glm::scale(Mat4{1.0f}, Vec3{0.06f, 0.06f, 0.6f}),
+                                    col);
                 } else {
                     renderer_->draw(shape_sphere_,
                                     glm::translate(Mat4{1.0f}, pr.position) *
@@ -663,12 +700,17 @@ protected:
         const Vec3 cam_eye = camera_.position();
         terrain_->for_each_tree([&](const TreeInstance& t) {
             const f32 dxz = glm::length(Vec2{t.position.x - feet.x, t.position.z - feet.z});
-            const f32 canopy = 2.6f * t.scale;
-            f32 alpha = dxz < canopy ? glm::mix(0.18f, 1.0f, dxz / canopy) : 1.0f;
-            // Fade canopies close to the camera so they don't block the view.
+            // Clear a generous bubble around the character so you always see them, even in
+            // thick forest (the radius scales with the big canopies).
+            const f32 canopy = std::max(2.6f * t.scale, 7.0f);
+            f32 alpha = glm::mix(0.12f, 1.0f, glm::smoothstep(canopy * 0.35f, canopy, dxz));
+            // Fade canopies near the camera / between it and the player so they don't block
+            // the view - the distance band scales with the tree so big trees clear early.
             const Vec3 cc = t.position + Vec3{0.0f, 3.2f * t.scale, 0.0f};
-            alpha = std::min(alpha, glm::mix(0.06f, 1.0f, glm::smoothstep(2.5f, 7.0f,
-                                                                          glm::length(cc - cam_eye))));
+            const f32 cam_fade = glm::mix(0.05f, 1.0f,
+                                          glm::smoothstep(3.0f, 5.0f + t.scale * 1.6f,
+                                                          glm::length(cc - cam_eye)));
+            alpha = std::min(alpha, cam_fade);
             renderer_->draw_transparent(tree_library_[tree_index(t)].foliage, tree_model(t),
                                         Vec4{t.tint, alpha});
         });
@@ -724,7 +766,8 @@ protected:
         camera_.look_at(eye, target);
         renderer_->set_camera(camera_);
 
-        const Mat4 root = glm::rotate(Mat4{1.0f}, preview_turn_, Vec3{0.0f, 1.0f, 0.0f});
+        const Mat4 root = glm::rotate(Mat4{1.0f}, preview_turn_, Vec3{0.0f, 1.0f, 0.0f}) *
+                          preview_anim_.body_offset(); // soft idle breathe on the turntable
         const std::vector<Quat> pose = preview_anim_.pose(preview_model_);
         draw_rig(preview_model_, preview_model_.bone_matrices(root, pose));
     }
@@ -743,6 +786,7 @@ protected:
                                                                     : pal.eye;
             const Mesh& shape = bones[i].shape == BoneShape::Sphere       ? shape_sphere_
                                 : bones[i].shape == BoneShape::Cylinder   ? shape_cylinder_
+                                : bones[i].shape == BoneShape::Capsule    ? shape_capsule_
                                 : bones[i].shape == BoneShape::RoundedBox ? shape_rounded_
                                                                           : shape_box_;
             renderer_->draw(shape, mats[i], Vec4{color * tint, 1.0f});
@@ -770,6 +814,143 @@ protected:
         const Mat4 head = glm::translate(Mat4{1.0f}, grip + Vec3{0.0f, 1.45f, 0.0f}) *
                           glm::scale(Mat4{1.0f}, Vec3{0.1f, 0.34f, 0.05f});
         renderer_->draw(shape_box_, head, Vec4{0.7f, 0.73f, 0.8f, 1.0f}); // steel spearhead
+    }
+
+    // World position of a hand (the far end of a forearm), in the forearm JOINT frame.
+    static Mat4 hand_frame(const CharacterModel& model, const std::vector<Mat4>& jmats, BonePart arm) {
+        const std::vector<Bone>& bones = model.bones();
+        for (usize i = 0; i < bones.size(); ++i) {
+            if (bones[i].part == arm) {
+                const f32 wrist = bones[i].box_center.y * 2.0f; // far end of the forearm (local -Y)
+                return jmats[i] * glm::translate(Mat4{1.0f}, Vec3{0.0f, wrist, 0.0f});
+            }
+        }
+        return Mat4{1.0f};
+    }
+
+    // The role's weapon, RIGIDLY gripped in the hand JOINT frame so it rotates WITH the arm - a
+    // Knight's sword swings with the attack animation (it IS the blade you hold) and the shield
+    // raises with the block. NOTE: the rig's bone labels are mirrored - the *L* arm is on the
+    // player's RIGHT (the weapon hand), the *R* arm on their LEFT (the shield hand). The Cleric's
+    // staff is handled separately (draw_cleric_staff) so it can behave like a walking stick.
+    void draw_role_weapon(const CharacterModel& model, const std::vector<Mat4>& jmats,
+                          PlayerRole role) {
+        const Mat4 weapon_hand = hand_frame(model, jmats, BonePart::LowerArmL); // player's right
+        switch (role) {
+            case PlayerRole::Knight: {
+                // Sword: blade continues along the forearm (local -Y), tilted slightly forward.
+                const Mat4 grip = weapon_hand * glm::rotate(Mat4{1.0f}, -0.35f, Vec3{1.0f, 0.0f, 0.0f});
+                renderer_->draw(shape_box_,
+                                grip * glm::scale(Mat4{1.0f}, Vec3{0.30f, 0.05f, 0.07f}),
+                                Vec4{0.36f, 0.26f, 0.12f, 1.0f}); // crossguard
+                renderer_->draw(shape_box_,
+                                grip * glm::translate(Mat4{1.0f}, Vec3{0.0f, 0.12f, 0.0f}) *
+                                    glm::scale(Mat4{1.0f}, Vec3{0.05f, 0.22f, 0.05f}),
+                                Vec4{0.3f, 0.2f, 0.1f, 1.0f}); // grip handle (into the fist)
+                renderer_->draw(shape_box_,
+                                grip * glm::translate(Mat4{1.0f}, Vec3{0.0f, -0.62f, 0.0f}) *
+                                    glm::scale(Mat4{1.0f}, Vec3{0.07f, 1.1f, 0.16f}),
+                                Vec4{0.80f, 0.84f, 0.92f, 1.0f}); // blade
+                // Shield on the off (player's left) hand, in FRONT of the forearm (local +Z).
+                const Mat4 shield_hand = hand_frame(model, jmats, BonePart::LowerArmR);
+                renderer_->draw(shape_rounded_,
+                                shield_hand * glm::translate(Mat4{1.0f}, Vec3{0.0f, 0.0f, 0.18f}) *
+                                    glm::scale(Mat4{1.0f}, Vec3{0.58f, 0.74f, 0.13f}),
+                                Vec4{0.46f, 0.33f, 0.2f, 1.0f}); // shield
+                renderer_->draw(shape_sphere_,
+                                shield_hand * glm::translate(Mat4{1.0f}, Vec3{0.0f, 0.0f, 0.25f}) *
+                                    glm::scale(Mat4{1.0f}, Vec3{0.13f}),
+                                Vec4{0.82f, 0.7f, 0.32f, 1.0f}); // boss
+                break;
+            }
+            case PlayerRole::Hunter: {
+                // A vertical bow held in the hand: stave along the forearm axis.
+                renderer_->draw(shape_box_,
+                                weapon_hand * glm::scale(Mat4{1.0f}, Vec3{0.05f, 1.5f, 0.06f}),
+                                Vec4{0.4f, 0.26f, 0.12f, 1.0f}); // stave
+                for (f32 s : {1.0f, -1.0f}) {
+                    renderer_->draw(shape_box_,
+                                    weapon_hand *
+                                        glm::translate(Mat4{1.0f}, Vec3{0.07f, s * 0.66f, 0.0f}) *
+                                        glm::scale(Mat4{1.0f}, Vec3{0.05f, 0.22f, 0.05f}),
+                                    Vec4{0.4f, 0.26f, 0.12f, 1.0f}); // recurved tips
+                }
+                break;
+            }
+            case PlayerRole::Cleric:
+                break; // staff drawn by draw_cleric_staff (walking-stick behaviour)
+        }
+    }
+
+    // The Cleric's staff held VERTICAL like a walking stick: the hand grips the top, the shaft
+    // drops to the ground, and as they walk the tip plants ahead then drifts back (and lifts to
+    // swing forward again), synced to the gait. Idle = a still, upright staff.
+    void draw_cleric_staff(const CharacterModel& model, const std::vector<Mat4>& jmats,
+                           const Vec3& feet, const CharacterAnimator& anim, f32 yaw) {
+        const Mat4 hand = hand_frame(model, jmats, BonePart::LowerArmL);
+        const Vec3 top = Vec3{hand[3]};
+        const Vec3 facing{std::cos(yaw), 0.0f, std::sin(yaw)};
+        const f32 stride = anim.stride();
+        const f32 ph = anim.phase();
+        const f32 swing = std::cos(ph) * 0.42f * stride;             // tip: +ahead .. -behind
+        const f32 reach = std::max(0.6f, top.y - feet.y + 0.05f);    // length down to the ground
+        const Vec3 dir = glm::normalize(Vec3{facing.x * swing, -1.0f, facing.z * swing});
+        const Vec3 bottom = top + dir * reach;
+        const Vec3 mid = (top + bottom) * 0.5f;
+        renderer_->draw(shape_box_,
+                        glm::translate(Mat4{1.0f}, mid) * orient_to(bottom - top) *
+                            glm::scale(Mat4{1.0f}, Vec3{0.05f, 0.05f, reach}),
+                        Vec4{0.46f, 0.31f, 0.16f, 1.0f}); // shaft
+        renderer_->draw_emissive(shape_sphere_,
+                                 glm::translate(Mat4{1.0f}, top + Vec3{0.0f, 0.16f, 0.0f}) *
+                                     glm::scale(Mat4{1.0f}, Vec3{0.18f}),
+                                 Vec4{0.65f, 0.55f, 1.0f, 1.0f}); // glowing orb at the head
+    }
+
+    // Fire ability slot (0/1/2) for the local player: gate on the client cooldown estimate,
+    // queue it for the server, mirror the cooldown for the HUD, and play the cast VFX + any
+    // buff aura instantly so it feels responsive (the server stays authoritative).
+    void cast_ability(u8 slot) {
+        if (slot >= kAbilitySlots || ability_cd_[slot] > 0.0f) {
+            return;
+        }
+        pending_ability_ = static_cast<u8>(slot + 1);
+        ability_cd_[slot] = ability_def(role_, slot).cooldown;
+        spawn_ability_vfx(role_, slot, local_feet(), face_yaw_, aim_valid_ ? aim_ : local_feet());
+        if (role_ == PlayerRole::Knight && slot == 1) {
+            bulwark_fx_ = kBulwarkDuration;
+        } else if (role_ == PlayerRole::Hunter && slot == 2) {
+            dash_fx_ = kDashDuration;
+        }
+    }
+
+    // A quick flourish at the hand for a Hunter/Cleric primary attack (the projectile itself is
+    // server-spawned + networked; this is just the instant local muzzle/cast feedback).
+    void spawn_primary_vfx() {
+        const Vec3 feet = local_feet();
+        const Vec3 facing{std::cos(face_yaw_), 0.0f, std::sin(face_yaw_)};
+        const Vec3 hand = feet + Vec3{0.0f, 1.1f, 0.0f} + facing * 0.5f;
+        Vec3 dir = facing;
+        if (aim_valid_) {
+            Vec3 d = aim_ - hand;
+            if (glm::length(d) > 0.3f) {
+                dir = glm::normalize(d);
+            }
+        }
+        if (role_ == PlayerRole::Hunter) {
+            emit(hand, Vec3{0.0f}, Vec4{0.85f, 1.0f, 0.7f, 1.0f}, 0.12f, 0.3f, 1); // bow flash
+            for (int i = 0; i < 9; ++i) {
+                emit(hand, dir * frand(4.0f, 9.0f) + rand_dir() * 1.0f,
+                     Vec4{0.7f, 1.0f, 0.65f, 0.9f}, 0.3f, 0.1f, 1);
+            }
+        } else if (role_ == PlayerRole::Cleric) {
+            // Arcane motes gather + burst forward in violet.
+            emit(hand, Vec3{0.0f}, Vec4{0.7f, 0.45f, 1.0f, 1.0f}, 0.18f, 0.42f, 1);
+            for (int i = 0; i < 16; ++i) {
+                const Vec3 v = dir * frand(2.5f, 7.0f) + rand_dir() * 1.6f;
+                emit(hand + rand_dir() * 0.25f, v, Vec4{0.78f, 0.5f, 1.0f, 0.95f}, 0.45f, 0.12f, 1);
+            }
+        }
     }
 
     void on_event(Event& event) override {
@@ -825,10 +1006,40 @@ protected:
         // In-game input (not paused).
         dispatcher.dispatch<MouseButtonPressedEvent>([&](MouseButtonPressedEvent& e) {
             if (e.button() == 0) {
-                pending_attack_ = true; // melee swing (or carve terrain if nothing to hit)
-                swing_time_ = 0.22f;    // play the swing-arc effect
+                // A click on the contract panel's ACCEPT / CANCEL buttons takes priority over melee.
+                const Vec2 p = pointer_pos();
+                if (in_rect(p, accept_btn_)) {
+                    selected_wagon_ = panel_wagon_; // accept -> this becomes our vote
+                    return true;
+                }
+                if (in_rect(p, cancel_btn_)) {
+                    selected_wagon_ = 0; // withdraw the offer
+                    return true;
+                }
+                // Primary attack is role-specific: the Knight swings the held sword, the Hunter
+                // looses an arrow, the Cleric casts a damage spell (both fire a role projectile
+                // the server picks). Only the Knight melees + plays the sword swing.
+                if (role_ == PlayerRole::Knight) {
+                    pending_attack_ = true;      // melee swing (carves terrain if nothing to hit)
+                    pending_local_swing_ = true; // swing the actual held sword on our own model
+                } else {
+                    pending_fire_ = true;        // Hunter arrow / Cleric arcane bolt
+                    spawn_primary_vfx();         // muzzle / cast flourish at the hand
+                }
             } else if (e.button() == 1) {
-                pending_add_ = true; // build up terrain
+                // Right mouse is held: a Knight raises their shield, a Cleric channels a heal
+                // aura (charges while held). Everyone else builds terrain.
+                if (role_ == PlayerRole::Knight || role_ == PlayerRole::Cleric) {
+                    blocking_ = true;
+                } else {
+                    pending_add_ = true;
+                }
+            }
+            return false;
+        });
+        dispatcher.dispatch<MouseButtonReleasedEvent>([&](MouseButtonReleasedEvent& e) {
+            if (e.button() == 1) {
+                blocking_ = false; // lower the shield / stop channelling
             }
             return false;
         });
@@ -843,12 +1054,7 @@ protected:
                 vote_mode_ = vote_mode_ == 1 ? 2 : 1; // toggle hire driver / haul manually
             } else if (e.key() == key::Digit1 || e.key() == key::Digit2 ||
                        e.key() == key::Digit3 || e.key() == key::Digit4) {
-                // Vote for the Nth offered wagon.
-                const usize i = static_cast<usize>(e.key() - key::Digit1);
-                if (snapshot_.contract_phase == static_cast<u8>(ContractPhase::Offer) &&
-                    i < snapshot_.wagons.size()) {
-                    selected_wagon_ = snapshot_.wagons[i].id;
-                }
+                cast_ability(static_cast<u8>(e.key() - key::Digit1)); // abilities (wagons start by walking up)
             }
             return false;
         });
@@ -864,6 +1070,7 @@ protected:
         shape_box_.destroy();
         shape_sphere_.destroy();
         shape_cylinder_.destroy();
+        shape_capsule_.destroy();
         shape_rounded_.destroy();
         for (auto& tv : tree_library_) {
             tv.trunk.destroy();
@@ -871,9 +1078,10 @@ protected:
         }
         tree_library_.clear();
         for (std::vector<GpuProp>* set : {&gpu_bushes_, &gpu_rocks_, &gpu_logs_, &gpu_fences_,
-                                          &gpu_lanterns_, &gpu_houses_, &gpu_walls_, &gpu_gates_,
-                                          &gpu_wells_, &gpu_bridges_, &gpu_markets_,
-                                          &gpu_paths_, &gpu_planters_, &gpu_fountains_}) {
+                                          &gpu_fence_rails_, &gpu_lanterns_, &gpu_houses_,
+                                          &gpu_walls_, &gpu_gates_, &gpu_wells_, &gpu_bridges_,
+                                          &gpu_markets_, &gpu_paths_, &gpu_planters_,
+                                          &gpu_fountains_}) {
             for (GpuProp& gp : *set) {
                 for (GpuPropPart& part : gp.parts) {
                     part.mesh.destroy();
@@ -905,6 +1113,7 @@ private:
         Vec3 last_pos{0.0f};
         f32 speed = 0.0f;
         bool has_last = false;
+        u8 last_action = 0; // to fire a swing once on the rising edge of a networked action
     };
 
     // A networked enemy's renderable: one shared hostile model, animated from
@@ -914,6 +1123,7 @@ private:
         CharacterAnimator animator;
         Vec3 last_pos{0.0f};
         f32 speed = 0.0f;
+        u8 last_action = 0;
     };
 
     PlayerVisual& ensure_visual(net::PlayerId id, const CharacterAppearance& appearance) {
@@ -999,8 +1209,22 @@ private:
             v.speed = glm::mix(v.speed, measured, 0.3f);
             v.last_pos = p.position;
             v.has_last = true;
+
+            // Drive the action layer. The local player uses its own input for zero-latency
+            // feedback; remote players follow the networked `action` field.
+            const bool is_local = p.id == my_id_;
+            v.animator.set_blocking(is_local ? blocking_ : (p.action == 2));
+            if (is_local) {
+                if (pending_local_swing_) {
+                    v.animator.play_swing();
+                }
+            } else if (p.action == 1 && v.last_action != 1) {
+                v.animator.play_swing(); // rising edge of a remote swing
+            }
+            v.last_action = p.action;
             v.animator.update(v.speed, dt);
         }
+        pending_local_swing_ = false;
     }
 
     // The local player's health fraction (0..1) from the snapshot.
@@ -1023,24 +1247,313 @@ private:
         }
         last_health_ = hp;
         hit_flash_ = std::max(0.0f, hit_flash_ - dt.seconds * 1.8f);
-        swing_time_ = std::max(0.0f, swing_time_ - dt.seconds);
     }
 
-    // A quick white slash that sweeps in an arc in front of the player when they melee.
-    void draw_swing() {
-        if (renderer_ == nullptr || swing_time_ <= 0.0f || !have_snapshot_) {
+    // ---- Particle VFX ------------------------------------------------------------
+    void emit(const Vec3& pos, const Vec3& vel, const Vec4& color, f32 life, f32 size,
+              u8 style = 0, f32 gravity = 0.0f, f32 drag = 1.6f) {
+        if (particles_.size() > 1400) {
+            return; // hard cap so a busy fight can't run away with the pool
+        }
+        Particle p;
+        p.pos = pos;
+        p.vel = vel;
+        p.color = color;
+        p.life = life;
+        p.max_life = life;
+        p.size = size;
+        p.style = style;
+        p.gravity = gravity;
+        p.drag = drag;
+        particles_.push_back(p);
+    }
+
+    // A spray of `n` motes from `center`, biased upward by `up` (m/s), with random speed.
+    void emit_burst(const Vec3& center, const Vec4& color, int n, f32 speed, f32 life, f32 size,
+                    u8 style = 1, f32 up = 0.0f, f32 gravity = 0.0f) {
+        for (int i = 0; i < n; ++i) {
+            Vec3 d = rand_dir();
+            d.y = std::abs(d.y) * 0.6f;
+            emit(center, d * frand(0.3f, 1.0f) * speed + Vec3{0.0f, up, 0.0f},
+                 Vec4{Vec3{color}, color.a * frand(0.7f, 1.0f)}, life * frand(0.7f, 1.0f),
+                 size * frand(0.7f, 1.2f), style, gravity);
+        }
+    }
+
+    // A flat expanding ring of motes on the ground (radius grows via outward velocity).
+    void emit_ring(const Vec3& center, const Vec4& color, int n, f32 speed, f32 life, f32 size,
+                   u8 style = 1) {
+        for (int i = 0; i < n; ++i) {
+            const f32 a = TwoPi * static_cast<f32>(i) / static_cast<f32>(n) + frand(-0.1f, 0.1f);
+            const Vec3 dir{std::cos(a), 0.0f, std::sin(a)};
+            emit(center + Vec3{0.0f, 0.15f, 0.0f}, dir * speed + Vec3{0.0f, frand(0.3f, 1.0f), 0.0f},
+                 color, life, size, style, 0.0f, 2.4f);
+        }
+    }
+
+    void update_particles(Timestep dt) {
+        const f32 s = dt.seconds;
+        for (Particle& p : particles_) {
+            p.life -= s;
+            p.vel *= std::max(0.0f, 1.0f - p.drag * s);
+            p.vel.y -= p.gravity * s;
+            p.pos += p.vel * s;
+        }
+        std::erase_if(particles_, [](const Particle& p) { return p.life <= 0.0f; });
+
+        // Glowing trails behind in-flight holy bolts / arrows.
+        if (have_snapshot_) {
+            for (const net::ProjectileState& pr : snapshot_.projectiles) {
+                if (pr.kind == 2) {
+                    emit(pr.position, rand_dir() * 0.3f, Vec4{0.55f, 1.0f, 0.8f, 0.9f}, 0.4f, 0.16f, 1);
+                } else if (pr.kind == 4) { // arcane bolt: a swirling violet trail
+                    emit(pr.position, rand_dir() * 0.5f, Vec4{0.72f, 0.45f, 1.0f, 0.95f}, 0.45f, 0.15f, 1);
+                } else if (pr.kind == 3) {
+                    emit(pr.position, Vec3{0.0f}, Vec4{0.85f, 0.95f, 0.7f, 0.5f}, 0.25f, 0.07f, 1);
+                }
+            }
+            // Motes rising out of each ground aura, tinted by its kind (heal = gentle, drifting;
+            // consecration = flickering holy-fire that climbs faster).
+            for (const net::AuraState& a : snapshot_.auras) {
+                const AuraProps props = aura_props(static_cast<AuraKind>(a.kind));
+                const bool fire = static_cast<AuraKind>(a.kind) == AuraKind::Consecration;
+                for (int i = 0; i < (fire ? 3 : 2); ++i) {
+                    const f32 ang = frand(0.0f, TwoPi);
+                    const f32 rr = frand(0.0f, a.radius);
+                    const Vec3 p = a.position + Vec3{std::cos(ang) * rr, 0.05f, std::sin(ang) * rr};
+                    const f32 rise = fire ? frand(1.4f, 3.0f) : frand(0.9f, 2.0f);
+                    emit(p, Vec3{0.0f, rise, 0.0f}, Vec4{props.color, 0.88f}, fire ? 0.5f : 0.8f,
+                         fire ? 0.13f : 0.1f, 1, fire ? -1.4f : -0.8f);
+                }
+            }
+            // Shimmer sparkles orbiting each Aegis shield bubble.
+            auto sparkle = [&](const Vec3& feet, f32 strength) {
+                if (strength > 0.02f) {
+                    const Vec3 d = rand_dir();
+                    emit(feet + Vec3{0.0f, 1.0f, 0.0f} + d * 1.15f, d * 0.2f,
+                         Vec4{0.6f, 0.85f, 1.0f, 0.8f * strength}, 0.4f, 0.08f, 1);
+                }
+            };
+            for (const net::PlayerState& p : snapshot_.players) {
+                sparkle(p.position, static_cast<f32>(p.shield) / 255.0f);
+            }
+            for (const net::VillagerState& v : snapshot_.villagers) {
+                sparkle(v.position, static_cast<f32>(v.shield) / 255.0f);
+            }
+        }
+    }
+
+    // The glowing ground disc + soft dome of each ground aura, plus a soft light at night so the
+    // aura lights its surroundings. Colour comes from the shared aura_props table (data-driven, so
+    // a new aura kind renders + lights itself with no extra client code). Rising motes are emitted
+    // in update_particles. Drawn additively so it brightens the ground without occluding.
+    void draw_auras() {
+        if (renderer_ == nullptr || !have_snapshot_) {
             return;
         }
-        constexpr f32 dur = 0.22f;
-        const f32 t = glm::clamp(1.0f - swing_time_ / dur, 0.0f, 1.0f); // 0..1 sweep
-        const f32 a = face_yaw_ + glm::mix(-1.3f, 1.3f, t);
-        const Vec3 dir{std::cos(a), 0.0f, std::sin(a)};
-        const Vec3 pos = local_feet() + Vec3{0.0f, 1.0f, 0.0f} + dir * 1.0f;
-        const Mat4 m = glm::translate(Mat4{1.0f}, pos) *
-                       glm::rotate(Mat4{1.0f}, -a, Vec3{0.0f, 1.0f, 0.0f}) *
-                       glm::scale(Mat4{1.0f}, Vec3{1.0f, 0.07f, 0.28f});
-        renderer_->draw_transparent(shape_box_, m,
-                                    Vec4{0.95f, 0.97f, 1.0f, swing_time_ / dur * 0.55f});
+        const f32 night = 1.0f - sun_intensity_;
+        for (const net::AuraState& a : snapshot_.auras) {
+            const AuraProps props = aura_props(static_cast<AuraKind>(a.kind));
+            const f32 r = a.radius;
+            renderer_->draw_glow(shape_sphere_,
+                                 glm::translate(Mat4{1.0f}, a.position + Vec3{0.0f, 0.08f, 0.0f}) *
+                                     glm::scale(Mat4{1.0f}, Vec3{r, 0.1f, r}),
+                                 Vec4{props.color, 0.32f}); // ground disc
+            renderer_->draw_glow(shape_sphere_,
+                                 glm::translate(Mat4{1.0f}, a.position + Vec3{0.0f, 0.3f, 0.0f}) *
+                                     glm::scale(Mat4{1.0f}, Vec3{r * 0.95f, r * 0.5f, r * 0.95f}),
+                                 Vec4{props.color, 0.1f}); // soft dome
+            // A gentle (unshadowed) light so the aura illuminates the ground at night.
+            if (props.light > 0.0f && night > 0.12f) {
+                Renderer::SpotLight sl;
+                sl.position = a.position + Vec3{0.0f, 2.0f, 0.0f};
+                sl.direction = Vec3{0.0f, -1.0f, 0.0f};
+                sl.color = props.color * (props.light * night);
+                sl.range = r * 2.4f;
+                sl.cone_outer_cos = std::cos(glm::radians(75.0f));
+                sl.cone_inner_cos = std::cos(glm::radians(45.0f));
+                sl.cast_shadow = false;
+                renderer_->add_light(sl);
+            }
+        }
+    }
+
+    // The Aegis protective bubble around any shielded player / NPC: a softly pulsing translucent
+    // shell + an additive glow, brighter while the shield is strong. (Shimmer motes orbit it from
+    // update_particles.)
+    void draw_shields() {
+        if (renderer_ == nullptr || !have_snapshot_) {
+            return;
+        }
+        const f32 pulse = 1.0f + 0.04f * std::sin(elapsed_ * 6.0f);
+        auto bubble = [&](const Vec3& feet, f32 strength) {
+            if (strength <= 0.02f) {
+                return;
+            }
+            const Vec3 c = feet + Vec3{0.0f, 1.0f, 0.0f};
+            const f32 rad = 1.15f * pulse;
+            renderer_->draw_glow(shape_sphere_,
+                                 glm::translate(Mat4{1.0f}, c) * glm::scale(Mat4{1.0f}, Vec3{rad}),
+                                 Vec4{0.45f, 0.7f, 1.0f, 0.16f * strength});
+            renderer_->draw_transparent(shape_sphere_,
+                                        glm::translate(Mat4{1.0f}, c) *
+                                            glm::scale(Mat4{1.0f}, Vec3{rad * 1.02f}),
+                                        Vec4{0.55f, 0.8f, 1.0f, 0.13f * strength});
+        };
+        for (const net::PlayerState& p : snapshot_.players) {
+            bubble(p.position, static_cast<f32>(p.shield) / 255.0f);
+        }
+        for (const net::VillagerState& v : snapshot_.villagers) {
+            bubble(v.position, static_cast<f32>(v.shield) / 255.0f);
+        }
+    }
+
+    void draw_particles() {
+        if (renderer_ == nullptr) {
+            return;
+        }
+        for (const Particle& p : particles_) {
+            const f32 t = glm::clamp(p.life / p.max_life, 0.0f, 1.0f);
+            const f32 sz = p.size * (0.35f + 0.65f * t);
+            const Mat4 m = glm::translate(Mat4{1.0f}, p.pos) * glm::scale(Mat4{1.0f}, Vec3{sz});
+            const Vec4 col{Vec3{p.color}, p.color.a * t};
+            if (p.style == 1) {
+                renderer_->draw_glow(shape_sphere_, m, col);
+            } else {
+                renderer_->draw_emissive(shape_sphere_, m, col);
+            }
+        }
+    }
+
+    // The showy burst for an ability cast, played for whoever cast it (the local player on
+    // keypress for instant feel; remote players when the snapshot reports their `cast`).
+    void spawn_ability_vfx(PlayerRole role, u8 slot, const Vec3& feet, f32 yaw, const Vec3& aim) {
+        const Vec3 chest = feet + Vec3{0.0f, 1.0f, 0.0f};
+        const Vec3 facing{std::cos(yaw), 0.0f, std::sin(yaw)};
+        Vec3 to_aim = aim - chest;
+        to_aim.y = 0.0f;
+        const Vec3 fwd = glm::length(to_aim) > 0.3f ? glm::normalize(to_aim) : facing;
+        switch (role) {
+            case PlayerRole::Knight:
+                if (slot == 0) { // Shield Bash: a steel shockwave punched forward
+                    const Vec3 c = chest + fwd * 1.2f;
+                    emit(c, Vec3{0.0f}, Vec4{0.9f, 0.95f, 1.0f, 1.0f}, 0.18f, 0.7f, 1);
+                    for (int i = 0; i < 26; ++i) {
+                        const f32 a = yaw + frand(-0.7f, 0.7f);
+                        const Vec3 d{std::cos(a), frand(0.0f, 0.5f), std::sin(a)};
+                        emit(c, d * frand(6.0f, 12.0f), Vec4{0.8f, 0.88f, 1.0f, 0.95f}, 0.4f, 0.16f, 1,
+                             6.0f);
+                    }
+                } else if (slot == 1) { // Bulwark: a golden dome flares up
+                    emit_ring(feet, Vec4{1.0f, 0.85f, 0.4f, 0.95f}, 22, 3.0f, 0.6f, 0.16f);
+                    emit_burst(chest, Vec4{1.0f, 0.82f, 0.35f, 0.9f}, 14, 2.5f, 0.7f, 0.14f, 1, 1.5f);
+                } else if (slot == 2) { // Consecration: a holy-fire ring erupts from the ground
+                    emit_ring(feet, Vec4{1.0f, 0.72f, 0.28f, 0.95f}, 30, kConsecrationRadius * 1.6f,
+                              0.6f, 0.2f);
+                    emit_burst(feet + Vec3{0.0f, 0.2f, 0.0f}, Vec4{1.0f, 0.6f, 0.2f, 0.9f}, 22, 2.5f,
+                               0.7f, 0.16f, 1, 3.0f);
+                } else { // Taunt: a red warcry pulse + upward embers
+                    emit_ring(feet, Vec4{1.0f, 0.3f, 0.25f, 0.95f}, 24, 7.0f, 0.5f, 0.18f);
+                    emit_burst(chest, Vec4{1.0f, 0.4f, 0.3f, 0.9f}, 14, 3.0f, 0.55f, 0.15f, 1, 3.0f);
+                }
+                break;
+            case PlayerRole::Hunter:
+                if (slot == 2) { // Dash: a green backward kick of speed-motes
+                    emit_burst(feet + Vec3{0.0f, 0.4f, 0.0f}, Vec4{0.6f, 1.0f, 0.6f, 0.9f}, 18,
+                               -4.0f, 0.5f, 0.13f, 1);
+                    for (int i = 0; i < 12; ++i) {
+                        emit(chest - facing * frand(0.0f, 0.8f), -facing * frand(2.0f, 5.0f),
+                             Vec4{0.7f, 1.0f, 0.7f, 0.8f}, 0.4f, 0.12f, 1);
+                    }
+                } else { // Power Shot / Volley: a bright muzzle spray along the shot
+                    const Vec3 c = chest + fwd * 0.8f;
+                    emit(c, Vec3{0.0f}, Vec4{0.8f, 1.0f, 0.7f, 1.0f}, 0.14f, 0.4f, 1);
+                    const f32 spread = slot == 1 ? 0.4f : 0.15f;
+                    for (int i = 0; i < (slot == 1 ? 22 : 12); ++i) {
+                        const f32 a = std::atan2(fwd.z, fwd.x) + frand(-spread, spread);
+                        emit(c, Vec3{std::cos(a), frand(-0.1f, 0.2f), std::sin(a)} * frand(5.0f, 11.0f),
+                             Vec4{0.7f, 1.0f, 0.65f, 0.9f}, 0.35f, 0.12f, 1);
+                    }
+                }
+                break;
+            case PlayerRole::Cleric:
+                if (slot == 1) { // Sanctuary: a wide radiant ring + a column of light
+                    emit_ring(feet, Vec4{0.6f, 1.0f, 0.8f, 0.95f}, 30, 6.0f, 0.8f, 0.2f);
+                    for (int i = 0; i < 24; ++i) {
+                        emit(feet + Vec3{frand(-1.2f, 1.2f), frand(0.0f, 0.3f), frand(-1.2f, 1.2f)},
+                             Vec3{0.0f, frand(2.0f, 4.5f), 0.0f}, Vec4{0.7f, 1.0f, 0.85f, 0.9f}, 0.9f,
+                             0.14f, 1, -1.0f);
+                    }
+                } else if (slot == 2) { // Smite: a holy flash punched forward (the bolt travels)
+                    const Vec3 c = chest + fwd * 0.8f;
+                    emit(c, Vec3{0.0f}, Vec4{0.85f, 1.0f, 0.9f, 1.0f}, 0.2f, 0.6f, 1);
+                    emit_burst(c, Vec4{0.7f, 1.0f, 0.85f, 0.95f}, 16, 6.0f, 0.4f, 0.14f, 1);
+                } else if (slot == 3) { // Aegis: a cyan ward flares at the caster (sphere is on the target)
+                    emit(chest, Vec3{0.0f}, Vec4{0.55f, 0.85f, 1.0f, 1.0f}, 0.2f, 0.5f, 1);
+                    emit_ring(feet, Vec4{0.5f, 0.8f, 1.0f, 0.9f}, 18, 3.0f, 0.5f, 0.14f);
+                    emit_burst(chest, Vec4{0.6f, 0.9f, 1.0f, 0.9f}, 14, 2.5f, 0.6f, 0.13f, 1, 1.5f);
+                } else { // Heal: gentle motes rising around the caster
+                    for (int i = 0; i < 18; ++i) {
+                        emit(feet + Vec3{frand(-0.5f, 0.5f), frand(0.1f, 0.4f), frand(-0.5f, 0.5f)},
+                             Vec3{frand(-0.3f, 0.3f), frand(1.6f, 3.2f), frand(-0.3f, 0.3f)},
+                             Vec4{0.55f, 1.0f, 0.7f, 0.9f}, 0.8f, 0.12f, 1, -1.2f);
+                    }
+                    emit_ring(feet, Vec4{0.55f, 1.0f, 0.7f, 0.8f}, 14, 2.0f, 0.5f, 0.13f);
+                }
+                break;
+        }
+    }
+
+    // Decays the local buff auras (emitting trailing motes while active) and plays cast VFX
+    // for remote players from the snapshot's `cast` field (deduped by tick so each fires once).
+    void update_ability_vfx(Timestep dt) {
+        const Vec3 feet = local_feet();
+        if (bulwark_fx_ > 0.0f) { // a golden shield dome orbiting the local Knight
+            bulwark_fx_ -= dt.seconds;
+            const f32 a = elapsed_ * 5.0f;
+            for (int i = 0; i < 3; ++i) {
+                const f32 ang = a + TwoPi * static_cast<f32>(i) / 3.0f;
+                emit(feet + Vec3{std::cos(ang) * 0.9f, 0.9f + 0.4f * std::sin(a * 0.7f), std::sin(ang) * 0.9f},
+                     Vec3{0.0f}, Vec4{1.0f, 0.82f, 0.35f, 0.7f}, 0.25f, 0.13f, 1);
+            }
+        }
+        if (dash_fx_ > 0.0f) { // a green speed-trail behind the local Hunter
+            dash_fx_ -= dt.seconds;
+            emit(feet + Vec3{0.0f, 0.5f, 0.0f}, Vec3{0.0f}, Vec4{0.6f, 1.0f, 0.6f, 0.6f}, 0.3f, 0.12f, 1);
+        }
+        // Cleric heal channel (right mouse held): mirror the server's charge for a charge bar +
+        // gathering VFX; a burst of green motes converges on the staff, and on a full charge it
+        // releases (resets) - the actual aura is server-spawned + networked.
+        if (role_ == PlayerRole::Cleric && blocking_) {
+            heal_charge_fx_ += dt.seconds;
+            const Vec3 head = feet + Vec3{0.0f, 1.5f, 0.0f};
+            for (int i = 0; i < 3; ++i) {
+                const Vec3 from = head + rand_dir() * frand(1.0f, 2.2f);
+                emit(from, (head - from) * frand(2.0f, 4.0f), Vec4{0.5f, 1.0f, 0.7f, 0.9f}, 0.4f, 0.1f, 1);
+            }
+            if (heal_charge_fx_ >= kHealChargeTime) {
+                emit_ring(feet, Vec4{0.5f, 1.0f, 0.7f, 0.95f}, 28, 5.0f, 0.7f, 0.18f);
+                emit_burst(feet + Vec3{0.0f, 0.3f, 0.0f}, Vec4{0.6f, 1.0f, 0.8f, 0.9f}, 20, 3.0f, 0.8f, 0.14f, 1, 2.0f);
+                heal_charge_fx_ = 0.0f;
+            }
+        } else {
+            heal_charge_fx_ = 0.0f;
+        }
+        if (!have_snapshot_) {
+            return;
+        }
+        for (const net::PlayerState& p : snapshot_.players) {
+            if (p.cast == 0 || p.id == my_id_) {
+                continue; // local casts are played instantly on keypress
+            }
+            if (ability_fx_tick_[p.id] == snapshot_.tick) {
+                continue; // already played for this snapshot
+            }
+            ability_fx_tick_[p.id] = snapshot_.tick;
+            const Vec3 facing{std::cos(p.yaw), 0.0f, std::sin(p.yaw)};
+            spawn_ability_vfx(static_cast<PlayerRole>(p.role % kRoleCount),
+                              static_cast<u8>(p.cast - 1), p.position, p.yaw, p.position + facing);
+        }
     }
 
     // A menacing low-poly look shared by all enemies (dark skin, sharp eyes, spiky
@@ -1076,6 +1589,10 @@ private:
             }
             v.speed = glm::mix(v.speed, measured, 0.3f);
             v.last_pos = en.position;
+            if (en.action == 1 && v.last_action != 1) {
+                v.animator.play_swing(); // the enemy just struck - play the swing
+            }
+            v.last_action = en.action;
             v.animator.update(v.speed, dt);
         }
         for (auto it = enemy_visuals_.begin(); it != enemy_visuals_.end();) {
@@ -1100,7 +1617,7 @@ private:
             const f32 scale = en.kind == 2 ? 1.5f : 1.0f;
             const Mat4 root = glm::translate(Mat4{1.0f}, en.position) *
                               glm::rotate(Mat4{1.0f}, HalfPi - en.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
-                              glm::scale(Mat4{1.0f}, Vec3{scale});
+                              glm::scale(Mat4{1.0f}, Vec3{scale}) * v.animator.body_offset();
             const Vec3 tint = en.kind == 1   ? Vec3{1.5f, 0.7f, 0.18f}
                               : en.kind == 2 ? Vec3{1.05f, 0.26f, 0.4f}
                               : en.kind == 3 ? Vec3{0.5f, 0.85f, 0.45f}
@@ -1417,15 +1934,21 @@ private:
                                      glm::translate(Mat4{1.0f}, lampw) *
                                          glm::scale(Mat4{1.0f}, Vec3{0.16f}),
                                      Vec4{glow, glow * 0.82f, glow * 0.5f, 1.0f});
-            if (night > 0.12f && glm::length(lampw - local_feet()) < 38.0f) {
+            const bool is_active_cargo =
+                snapshot_.contract_phase == static_cast<u8>(ContractPhase::Active);
+            if (night > 0.1f && glm::length(lampw - local_feet()) < 40.0f) {
                 Renderer::SpotLight sl;
-                sl.position = lampw;
+                sl.position = lampw + Vec3{0.0f, 0.6f, 0.0f}; // lift it so shadows rake outward
                 sl.direction = Vec3{0.0f, -1.0f, 0.0f};
-                sl.color = Vec3{1.0f, 0.82f, 0.5f} * (1.5f * night);
-                sl.range = 13.0f;
-                sl.cone_outer_cos = std::cos(glm::radians(70.0f));
-                sl.cone_inner_cos = std::cos(glm::radians(45.0f));
-                sl.cast_shadow = false;
+                sl.color = Vec3{1.0f, 0.82f, 0.5f} * (1.7f * night);
+                sl.range = 18.0f;
+                sl.cone_outer_cos = std::cos(glm::radians(74.0f));
+                sl.cone_inner_cos = std::cos(glm::radians(40.0f));
+                // The ACTIVE escorted cargo is the scene's KEY light: a top-priority real
+                // shadow-caster (the most expensive light), throwing crisp shadows of the player
+                // + nearby props/enemies as it rolls. Parked offers are cheap unshadowed lamps.
+                sl.cast_shadow = is_active_cargo;
+                sl.priority = is_active_cargo;
                 renderer_->add_light(sl);
             }
 
@@ -1634,33 +2157,27 @@ private:
                   Vec4{0.96f, 0.86f, 0.4f, 1.0f});
 
         if (phase == static_cast<u8>(ContractPhase::Offer)) {
-            draw.text(Vec2{24.0f, 22.0f}, "CHOOSE A WAGON TO HAUL", ts, Vec4{0.94f, 0.86f, 0.58f, 1.0f});
-            f32 ty = 22.0f + ts * 1.6f;
-            const int total = static_cast<int>(snapshot_.players.size());
-            int idx = 1;
+            draw.text(Vec2{24.0f, 22.0f}, "WALK UP TO A WAGON TO VIEW ITS CONTRACT", ts,
+                      Vec4{0.94f, 0.86f, 0.58f, 1.0f});
+            // A small floating tag over every offered wagon so you can see where they are and
+            // pick which to walk to (gold $ reward; the one you're next to is highlighted).
             for (const net::WagonState& wg : snapshot_.wagons) {
-                const f32 dist = glm::length(Vec2{wg.dest.x - feet.x, wg.dest.z - feet.z});
-                const bool picked = wg.id == selected_wagon_;
-                std::string stars(wg.difficulty, '*');
-                const std::string line = std::format("[{}] {} $ {}   risk {}   ~{}m   ({}/{})", idx,
-                                                      vehicle_type(wg.type).name(), wg.reward, stars,
-                                                      static_cast<int>(dist), wg.votes, total);
-                draw.text(Vec2{24.0f, ty}, line, ts * 0.8f,
-                          picked ? Vec4{1.0f, 0.95f, 0.6f, 1.0f} : Vec4{0.8f, 0.82f, 0.86f, 1.0f});
-                ty += ts * 1.1f;
-                // Floating label over the wagon in the world.
-                Vec2 sp;
-                if (world_to_screen(wg.position + Vec3{0.0f, 2.2f, 0.0f}, W, H, sp)) {
-                    const std::string tag = std::format("[{}] $ {}", idx, wg.reward);
-                    draw.text(Vec2{sp.x - draw.text_width(tag, ts * 0.7f) * 0.5f, sp.y}, tag, ts * 0.7f,
-                              picked ? Vec4{1.0f, 0.95f, 0.6f, 1.0f} : Vec4{0.85f, 0.85f, 0.9f, 1.0f});
+                if (wg.id == selected_wagon_ || wg.id == near_wagon_) {
+                    continue; // the focused wagon gets the full panel instead
                 }
-                ++idx;
+                Vec2 sp;
+                if (world_to_screen(wg.position + Vec3{0.0f, 2.6f, 0.0f}, W, H, sp)) {
+                    const std::string tag = std::format("$ {}", wg.reward);
+                    draw.text(Vec2{sp.x - draw.text_width(tag, ts * 0.7f) * 0.5f, sp.y}, tag, ts * 0.7f,
+                              Vec4{0.9f, 0.82f, 0.45f, 0.95f});
+                }
             }
-            const char* mode = vote_mode_ == 2 ? "HAUL MANUALLY (+pay)" : "HIRE DRIVER";
-            draw.text(Vec2{24.0f, ty + ts * 0.3f},
-                      std::format("1-4 choose   [H] {}   - all must agree to depart", mode),
-                      ts * 0.72f, Vec4{0.66f, 0.78f, 0.7f, 1.0f});
+            // The full contract panel for the focused wagon (the accepted one, else the one in range).
+            accept_btn_ = cancel_btn_ = ui::Rect{};
+            panel_wagon_ = selected_wagon_ != 0 ? selected_wagon_ : near_wagon_;
+            if (const net::WagonState* wg = wagon_by_id(panel_wagon_)) {
+                draw_contract_panel(draw, *wg, selected_wagon_ == panel_wagon_, W, H, ts, feet);
+            }
         } else if (phase == static_cast<u8>(ContractPhase::Active) && !snapshot_.wagons.empty()) {
             const net::WagonState& wg = snapshot_.wagons.front();
             const VehicleType& vt = vehicle_type(wg.type);
@@ -1738,6 +2255,252 @@ private:
                   5.0f);
         const Vec3 col = glm::mix(Vec3{0.85f, 0.2f, 0.18f}, Vec3{0.35f, 0.8f, 0.35f}, hp);
         draw.rect(Vec4{x, y, bw * std::max(hp, 0.0f), bh}, Vec4{col, 0.95f}, 4.0f);
+        // Role label above the health bar.
+        draw.text(Vec2{x, y - ts * 0.95f}, role_name(role_), ts * 0.72f,
+                  Vec4{0.74f, 0.82f, 0.92f, 1.0f});
+
+        // Cleric heal-channel charge bar (centre screen while charging the AOE heal).
+        if (role_ == PlayerRole::Cleric && heal_charge_fx_ > 0.001f) {
+            const f32 frac = glm::clamp(heal_charge_fx_ / kHealChargeTime, 0.0f, 1.0f);
+            const f32 cw = std::min(360.0f, W * 0.32f);
+            const f32 cx = (W - cw) * 0.5f;
+            const f32 cy = H * 0.62f;
+            draw.rect(Vec4{cx - 3.0f, cy - 3.0f, cw + 6.0f, 18.0f + 6.0f},
+                      Vec4{0.04f, 0.06f, 0.05f, 0.8f}, 5.0f);
+            draw.rect(Vec4{cx, cy, cw * frac, 18.0f}, Vec4{0.45f, 1.0f, 0.7f, 0.95f}, 4.0f);
+            draw.text(Vec2{cx, cy - ts * 0.95f}, "CHANNELLING HEAL...", ts * 0.7f,
+                      Vec4{0.7f, 1.0f, 0.85f, 1.0f});
+        }
+
+        draw_ability_bar(draw, W, H, ts);
+    }
+
+    // The floating contract panel shown beside a wagon you've walked up to: where it's bound
+    // (town name), how far, the danger, and the pay - plus ACCEPT / CANCEL buttons (or, once
+    // accepted, a WAITING tally + CANCEL). Stores the button rects for click hit-testing.
+    void draw_contract_panel(ui::DrawList& draw, const net::WagonState& wg, bool accepted, f32 W,
+                             f32 H, f32 ts, const Vec3& feet) {
+        const f32 pw = glm::clamp(W * 0.24f, 280.0f, 380.0f);
+        const f32 ph = ts * 9.6f;
+        // Anchor beside the wagon on screen; clamp on-screen, fall back to centre if off-camera.
+        Vec2 sp;
+        Vec2 anchor{(W - pw) * 0.5f, H * 0.26f};
+        if (world_to_screen(wg.position + Vec3{0.0f, 2.6f, 0.0f}, W, H, sp)) {
+            anchor = Vec2{sp.x - pw * 0.5f, sp.y - ph - 12.0f};
+        }
+        anchor.x = glm::clamp(anchor.x, 12.0f, W - pw - 12.0f);
+        anchor.y = glm::clamp(anchor.y, 12.0f, H - ph - 120.0f);
+        const f32 px = anchor.x, py = anchor.y;
+
+        const Vec3 accent{0.96f, 0.86f, 0.45f};
+        draw.rect(Vec4{px, py, pw, ph}, Vec4{0.05f, 0.06f, 0.09f, 0.92f}, Vec4{accent, 0.85f}, 2.0f,
+                  10.0f);
+        const f32 ix = px + 18.0f;
+        f32 iy = py + 16.0f;
+
+        // Heading: bound-for town name.
+        draw.text(Vec2{ix, iy}, "CARGO CONTRACT", ts * 0.62f, Vec4{0.7f, 0.75f, 0.82f, 1.0f});
+        iy += ts * 1.2f;
+        draw.text(Vec2{ix, iy}, std::format("TO {}", town_name(Vec3{wg.dest.x, 0.0f, wg.dest.z})),
+                  ts * 1.05f, Vec4{0.98f, 0.92f, 0.7f, 1.0f});
+        iy += ts * 1.7f;
+
+        // Distance + danger + pay.
+        const f32 dist = glm::length(Vec2{wg.dest.x - feet.x, wg.dest.z - feet.z});
+        draw.text(Vec2{ix, iy}, std::format("DISTANCE   ~{} m", static_cast<int>(dist)), ts * 0.8f,
+                  Vec4{0.82f, 0.85f, 0.9f, 1.0f});
+        iy += ts * 1.25f;
+        const char* danger = wg.difficulty <= 1 ? "LOW" : wg.difficulty == 2 ? "MODERATE" : "HIGH";
+        const Vec4 dcol = wg.difficulty <= 1 ? Vec4{0.55f, 0.85f, 0.55f, 1.0f}
+                          : wg.difficulty == 2 ? Vec4{0.95f, 0.8f, 0.4f, 1.0f}
+                                               : Vec4{0.95f, 0.45f, 0.4f, 1.0f};
+        draw.text(Vec2{ix, iy}, std::format("DANGER     {} {}", danger,
+                                            std::string(wg.difficulty, '*')),
+                  ts * 0.8f, dcol);
+        iy += ts * 1.25f;
+        draw.text(Vec2{ix, iy}, std::format("PAY        $ {}", wg.reward), ts * 0.9f,
+                  Vec4{0.98f, 0.88f, 0.42f, 1.0f});
+
+        // Mode hint (toggled with H).
+        const char* mode = vote_mode_ == 2 ? "HAUL MANUALLY (+pay)" : "HIRE A DRIVER";
+        draw.text(Vec2{ix, py + ph - ts * 2.9f}, std::format("[H] {}", mode), ts * 0.66f,
+                  Vec4{0.66f, 0.78f, 0.7f, 1.0f});
+
+        // Buttons.
+        const f32 bw = (pw - 18.0f * 2.0f - 12.0f) * 0.5f;
+        const f32 bh = ts * 1.7f;
+        const f32 by = py + ph - bh - 14.0f;
+        if (accepted) {
+            const int total = static_cast<int>(snapshot_.players.size());
+            draw.rect(Vec4{ix, by, bw, bh}, Vec4{0.12f, 0.16f, 0.13f, 0.95f}, 6.0f);
+            draw.text(Vec2{ix + 10.0f, by + bh * 0.5f - ts * 0.34f},
+                      std::format("WAITING {}/{}", wg.votes, total), ts * 0.62f,
+                      Vec4{0.7f, 0.9f, 0.7f, 1.0f});
+            cancel_btn_ = ui::Rect{ix + bw + 12.0f, by, bw, bh};
+            draw.rect(Vec4{cancel_btn_.x, cancel_btn_.y, bw, bh}, Vec4{0.22f, 0.12f, 0.12f, 0.95f},
+                      Vec4{0.8f, 0.4f, 0.4f, 0.8f}, 1.5f, 6.0f);
+            draw.text(Vec2{cancel_btn_.x + bw * 0.5f - draw.text_width("CANCEL", ts * 0.7f) * 0.5f,
+                           by + bh * 0.5f - ts * 0.36f},
+                      "CANCEL", ts * 0.7f, Vec4{0.95f, 0.8f, 0.8f, 1.0f});
+        } else {
+            accept_btn_ = ui::Rect{ix, by, bw, bh};
+            draw.rect(Vec4{accept_btn_.x, accept_btn_.y, bw, bh}, Vec4{0.14f, 0.3f, 0.16f, 0.97f},
+                      Vec4{0.5f, 0.9f, 0.5f, 0.95f}, 2.0f, 6.0f);
+            draw.text(Vec2{accept_btn_.x + bw * 0.5f - draw.text_width("ACCEPT", ts * 0.78f) * 0.5f,
+                           by + bh * 0.5f - ts * 0.4f},
+                      "ACCEPT", ts * 0.78f, Vec4{0.85f, 1.0f, 0.85f, 1.0f});
+            cancel_btn_ = ui::Rect{ix + bw + 12.0f, by, bw, bh};
+            draw.rect(Vec4{cancel_btn_.x, cancel_btn_.y, bw, bh}, Vec4{0.16f, 0.17f, 0.2f, 0.95f},
+                      Vec4{0.6f, 0.62f, 0.66f, 0.8f}, 1.5f, 6.0f);
+            draw.text(Vec2{cancel_btn_.x + bw * 0.5f - draw.text_width("CANCEL", ts * 0.7f) * 0.5f,
+                           by + bh * 0.5f - ts * 0.36f},
+                      "CANCEL", ts * 0.7f, Vec4{0.85f, 0.87f, 0.9f, 1.0f});
+        }
+    }
+
+    // The role's signature accent colour (also tints the ability bar + icons).
+    static Vec3 role_color(PlayerRole role) {
+        switch (role) {
+            case PlayerRole::Knight: return Vec3{0.56f, 0.7f, 0.96f};  // steel blue
+            case PlayerRole::Hunter: return Vec3{0.55f, 0.92f, 0.55f}; // forest green
+            case PlayerRole::Cleric: return Vec3{0.97f, 0.86f, 0.46f}; // holy gold
+        }
+        return Vec3{1.0f};
+    }
+
+    // The three role abilities (keys 1/2/3) as a polished bottom-centre bar: a backing
+    // panel, one rounded slot each with a vector icon, a key badge, the name, and a radial
+    // cooldown wipe (a dark overlay that drains as the ability recovers + the seconds left).
+    void draw_ability_bar(ui::DrawList& draw, f32 W, f32 H, f32 ts) {
+        const Vec3 accent = role_color(role_);
+        const f32 slot = glm::clamp(H * 0.092f, 56.0f, 84.0f);
+        const f32 gap = slot * 0.16f;
+        const f32 pad = slot * 0.16f;
+        const f32 total = slot * kAbilitySlots + gap * (kAbilitySlots - 1);
+        const f32 sy = H - slot - pad - 26.0f;
+        const f32 x0 = (W - total) * 0.5f;
+
+        // Backing panel.
+        draw.rect(Vec4{x0 - pad, sy - pad, total + pad * 2.0f, slot + pad * 2.0f},
+                  Vec4{0.04f, 0.05f, 0.07f, 0.72f}, 10.0f);
+
+        f32 sx = x0;
+        for (u8 i = 0; i < kAbilitySlots; ++i) {
+            const AbilityDef ab = ability_def(role_, i);
+            const f32 frac =
+                ab.cooldown > 0.0f ? glm::clamp(ability_cd_[i] / ab.cooldown, 0.0f, 1.0f) : 0.0f;
+            const bool ready = frac <= 0.0f;
+            const f32 r = slot * 0.16f;
+
+            // Slot face + an accent border that lights up when the ability is ready.
+            draw.rect(Vec4{sx, sy, slot, slot}, Vec4{0.11f, 0.13f, 0.17f, 0.95f},
+                      Vec4{accent, ready ? 0.95f : 0.28f}, ready ? 2.5f : 1.5f, r);
+
+            // Icon, tinted by readiness.
+            const Vec4 icol{ready ? accent : accent * 0.45f, ready ? 1.0f : 0.7f};
+            draw_ability_icon(draw, role_, i, sx + slot * 0.5f, sy + slot * 0.42f, slot * 0.24f, icol);
+
+            // Cooldown wipe: a dark overlay draining from the top + the seconds remaining.
+            if (!ready) {
+                draw.rect(Vec4{sx, sy, slot, slot * frac}, Vec4{0.02f, 0.02f, 0.03f, 0.62f}, r);
+                const std::string secs = std::format("{:.0f}", std::ceil(ability_cd_[i]));
+                draw.text(Vec2{sx + slot * 0.5f - draw.text_width(secs, ts) * 0.5f,
+                               sy + slot * 0.5f - ts * 0.5f},
+                          secs, ts, Vec4{0.95f, 0.96f, 1.0f, 0.95f});
+            }
+
+            // Key badge (top-left) + ability name (bottom).
+            draw.rect(Vec4{sx + 4.0f, sy + 4.0f, slot * 0.26f, slot * 0.26f},
+                      Vec4{accent, 0.9f}, slot * 0.07f);
+            draw.text(Vec2{sx + 4.0f + slot * 0.08f, sy + 4.0f + slot * 0.04f},
+                      std::format("{}", i + 1), slot * 0.18f, Vec4{0.05f, 0.06f, 0.08f, 1.0f});
+            const f32 nsz = slot * 0.155f;
+            draw.text(Vec2{sx + slot * 0.5f - draw.text_width(ab.name, nsz) * 0.5f, sy + slot * 0.76f},
+                      ab.name, nsz, Vec4{ready ? Vec3{0.92f, 0.94f, 0.98f} : Vec3{0.55f, 0.58f, 0.62f}, 1.0f});
+            sx += slot + gap;
+        }
+    }
+
+    // A vector glyph for ability (role, slot), centred at (cx,cy) with ~r radius, drawn from
+    // rounded-cap lines + rects so it reads at a glance (sword / shield / bow / cross / bolt …).
+    void draw_ability_icon(ui::DrawList& draw, PlayerRole role, u8 slot, f32 cx, f32 cy, f32 r,
+                           const Vec4& c) {
+        const f32 th = r * 0.34f;
+        auto L = [&](Vec2 a, Vec2 b) { draw.line(Vec2{cx, cy} + a, Vec2{cx, cy} + b, th, c); };
+        auto arrow = [&](Vec2 tail, Vec2 tip) { // a line with a two-stroke head
+            draw.line(Vec2{cx, cy} + tail, Vec2{cx, cy} + tip, th * 0.8f, c);
+            const Vec2 d = glm::normalize(tip - tail) * (r * 0.45f);
+            const Vec2 p{-d.y, d.x};
+            draw.line(Vec2{cx, cy} + tip, Vec2{cx, cy} + tip - d + p * 0.6f, th * 0.8f, c);
+            draw.line(Vec2{cx, cy} + tip, Vec2{cx, cy} + tip - d - p * 0.6f, th * 0.8f, c);
+        };
+        switch (role) {
+            case PlayerRole::Knight:
+                if (slot == 0) { // sword
+                    L(Vec2{0.0f, -r}, Vec2{0.0f, r * 0.55f});
+                    L(Vec2{-r * 0.5f, r * 0.35f}, Vec2{r * 0.5f, r * 0.35f}); // crossguard
+                    L(Vec2{0.0f, r * 0.55f}, Vec2{0.0f, r});                  // grip
+                } else if (slot == 1) { // shield
+                    draw.rect(Vec4{cx - r * 0.7f, cy - r * 0.8f, r * 1.4f, r * 1.1f},
+                              Vec4{0.0f, 0.0f, 0.0f, 0.0f}, c, th * 0.8f, r * 0.25f);
+                    L(Vec2{-r * 0.7f, r * 0.28f}, Vec2{0.0f, r});             // taper to a point
+                    L(Vec2{r * 0.7f, r * 0.28f}, Vec2{0.0f, r});
+                } else if (slot == 2) { // consecration: a flame over a ground line
+                    L(Vec2{-r, r}, Vec2{r, r}); // ground
+                    L(Vec2{0.0f, r}, Vec2{-r * 0.35f, -r * 0.2f}); // flame left edge
+                    L(Vec2{0.0f, r}, Vec2{r * 0.35f, -r * 0.2f});  // flame right edge
+                    L(Vec2{-r * 0.35f, -r * 0.2f}, Vec2{0.0f, -r}); // tip
+                    L(Vec2{r * 0.35f, -r * 0.2f}, Vec2{0.0f, -r});
+                } else { // taunt: shout waves
+                    for (int k = 0; k < 3; ++k) {
+                        const f32 o = r * (0.1f + 0.4f * static_cast<f32>(k));
+                        L(Vec2{o, -r * 0.6f}, Vec2{o + r * 0.35f, 0.0f});
+                        L(Vec2{o + r * 0.35f, 0.0f}, Vec2{o, r * 0.6f});
+                    }
+                }
+                break;
+            case PlayerRole::Hunter:
+                if (slot == 0) { // single arrow
+                    arrow(Vec2{-r * 0.8f, r * 0.8f}, Vec2{r * 0.8f, -r * 0.8f});
+                } else if (slot == 1) { // volley: three arrows
+                    for (int k = -1; k <= 1; ++k) {
+                        const f32 o = static_cast<f32>(k) * r * 0.55f;
+                        arrow(Vec2{-r * 0.7f + o, r * 0.7f}, Vec2{r * 0.7f + o, -r * 0.7f});
+                    }
+                } else if (slot == 2) { // dash: three forward chevrons
+                    for (int k = 0; k < 3; ++k) {
+                        const f32 o = -r * 0.7f + static_cast<f32>(k) * r * 0.6f;
+                        L(Vec2{o, -r * 0.7f}, Vec2{o + r * 0.5f, 0.0f});
+                        L(Vec2{o + r * 0.5f, 0.0f}, Vec2{o, r * 0.7f});
+                    }
+                } else { // piercing shot: one long bold arrow
+                    arrow(Vec2{-r, r * 0.55f}, Vec2{r, -r * 0.55f});
+                    L(Vec2{-r * 0.5f, -r * 0.55f}, Vec2{-r * 0.5f, r * 0.55f}); // bowstring hint
+                }
+                break;
+            case PlayerRole::Cleric:
+                if (slot == 0 || slot == 1) { // healing cross (sanctuary adds rays)
+                    draw.rect(Vec4{cx - r * 0.24f, cy - r * 0.85f, r * 0.48f, r * 1.7f}, c, r * 0.1f);
+                    draw.rect(Vec4{cx - r * 0.85f, cy - r * 0.24f, r * 1.7f, r * 0.48f}, c, r * 0.1f);
+                    if (slot == 1) {
+                        for (int k = 0; k < 4; ++k) {
+                            const f32 a = TwoPi * (static_cast<f32>(k) + 0.5f) / 4.0f;
+                            const Vec2 d{std::cos(a), std::sin(a)};
+                            L(d * r * 0.7f, d * r * 1.05f);
+                        }
+                    }
+                } else if (slot == 2) { // smite: a lightning bolt
+                    L(Vec2{r * 0.3f, -r}, Vec2{-r * 0.35f, 0.0f});
+                    L(Vec2{-r * 0.35f, 0.0f}, Vec2{r * 0.2f, 0.0f});
+                    L(Vec2{r * 0.2f, 0.0f}, Vec2{-r * 0.3f, r});
+                } else { // aegis: a shield bubble (a ring with a small cross)
+                    draw.rect(Vec4{cx - r * 0.85f, cy - r * 0.85f, r * 1.7f, r * 1.7f},
+                              Vec4{0.0f, 0.0f, 0.0f, 0.0f}, c, th * 0.7f, r * 0.85f); // ring
+                    L(Vec2{0.0f, -r * 0.4f}, Vec2{0.0f, r * 0.4f});
+                    L(Vec2{-r * 0.4f, 0.0f}, Vec2{r * 0.4f, 0.0f});
+                }
+                break;
+        }
     }
 
     // A bold arrow near the top of the screen pointing from the player toward the wagon's
@@ -1844,6 +2607,7 @@ private:
             : p.category == PropCategory::Rock    ? gpu_rocks_
             : p.category == PropCategory::Log     ? gpu_logs_
             : p.category == PropCategory::Fence   ? gpu_fences_
+            : p.category == PropCategory::FenceRail ? gpu_fence_rails_
             : p.category == PropCategory::Lantern ? gpu_lanterns_
             : p.category == PropCategory::House    ? gpu_houses_
             : p.category == PropCategory::Wall     ? gpu_walls_
@@ -1860,7 +2624,7 @@ private:
         const GpuProp& gp = set[p.variant % set.size()];
         const Mat4 m = glm::translate(Mat4{1.0f}, p.position) *
                        glm::rotate(Mat4{1.0f}, p.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
-                       glm::scale(Mat4{1.0f}, Vec3{p.scale});
+                       glm::scale(Mat4{1.0f}, Vec3{p.scale * p.length, p.scale, p.scale});
         const f32 glow = glm::mix(1.0f, 0.45f, sun_intensity_); // emissive dims by day
 
         // Fade a house roof when the local player is inside its footprint.
@@ -1920,24 +2684,54 @@ private:
                 const f32 half = glm::radians(pl.cone_deg * 0.5f);
                 sl.cone_outer_cos = std::cos(half);
                 sl.cone_inner_cos = std::cos(half * 0.65f);
-                // House hearth/lamp/candle light is INDOORS: it must be occluded by the
-                // walls, so it casts a real shadow (or isn't drawn). Lanterns/gate braziers
-                // are open-air and need no shadow - keep them in the cheap unshadowed pool.
+                // House hearth/lamp/candle light is INDOORS: it must be occluded by the walls,
+                // so it casts a real shadow (or isn't drawn). A standalone WILD lantern (one
+                // dotted through the forest, not inside a town) also casts shadows so it grounds
+                // the player + props in the dark woods. Town lanterns / gate braziers stay in
+                // the cheap unshadowed pool (a whole town of them would swamp the shadow budget).
+                const bool wild_lantern =
+                    p.category == PropCategory::Lantern &&
+                    !worldgen::inside_village(p.position.x, p.position.z, world_seed_, 2.0f);
                 sl.indoor = (p.category == PropCategory::House);
-                sl.cast_shadow = (p.category == PropCategory::House);
+                sl.cast_shadow = (p.category == PropCategory::House) || wild_lantern;
                 renderer_->add_light(sl);
             }
         }
     }
 
-    void draw_character(PlayerVisual& v, const Vec3& feet, f32 yaw, bool seated = false) {
+    void draw_character(PlayerVisual& v, const Vec3& feet, f32 yaw, bool seated = false,
+                        int role = -1) {
         // Seated riders sink onto the bench (the sit pose folds the legs forward).
         const Vec3 base = seated ? feet - Vec3{0.0f, 0.42f, 0.0f} : feet;
-        const Mat4 root = glm::translate(Mat4{1.0f}, base) *
-                          glm::rotate(Mat4{1.0f}, HalfPi - yaw, Vec3{0.0f, 1.0f, 0.0f});
+        Mat4 root = glm::translate(Mat4{1.0f}, base) *
+                    glm::rotate(Mat4{1.0f}, HalfPi - yaw, Vec3{0.0f, 1.0f, 0.0f});
+        // The blobby squash/sway/lean wobble rides on the root when on foot (not seated).
+        if (!seated) {
+            root = root * v.animator.body_offset();
+        }
         const std::vector<Quat> pose =
             seated ? CharacterAnimator::sit_pose(v.model) : v.animator.pose(v.model);
-        draw_rig(v.model, v.model.bone_matrices(root, pose));
+        const std::vector<Mat4> mats = v.model.bone_matrices(root, pose);
+        draw_rig(v.model, mats);
+        if (role >= 0) {
+            // Weapons attach to the JOINT frames (orientation + position) so they swing with
+            // the arm, unlike the box mats whose columns are scaled by box_size.
+            const std::vector<Mat4> jmats = v.model.joint_matrices(root, pose);
+            const PlayerRole r = static_cast<PlayerRole>(role % kRoleCount);
+            if (r == PlayerRole::Cleric) {
+                draw_cleric_staff(v.model, jmats, feet, v.animator, yaw);
+            } else {
+                draw_role_weapon(v.model, jmats, r);
+            }
+            // A steel motion trail off the real blade tip while a Knight is mid-swing (the sword
+            // is on the player's right = the L-suffixed bone).
+            if (r == PlayerRole::Knight && v.animator.swinging()) {
+                const Mat4 grip = hand_frame(v.model, jmats, BonePart::LowerArmL) *
+                                  glm::rotate(Mat4{1.0f}, -0.35f, Vec3{1.0f, 0.0f, 0.0f});
+                const Vec3 tip = Vec3{(grip * glm::translate(Mat4{1.0f}, Vec3{0.0f, -1.15f, 0.0f}))[3]};
+                emit(tip, Vec3{0.0f}, Vec4{0.92f, 0.96f, 1.0f, 0.8f}, 0.16f, 0.17f, 1);
+            }
+        }
     }
 
     // ---- Village NPCs (server-authoritative; the player defends them) -------
@@ -1996,8 +2790,11 @@ private:
             const net::WagonState* aw = seated ? active_wagon() : nullptr;
             const Vec3 seat = (aw != nullptr) ? attach_to_wagon(*aw, vl.position) : vl.position;
             const Vec3 base = seated ? seat - Vec3{0.0f, 0.42f, 0.0f} : vl.position;
-            const Mat4 root = glm::translate(Mat4{1.0f}, base) *
-                              glm::rotate(Mat4{1.0f}, HalfPi - vl.yaw, Vec3{0.0f, 1.0f, 0.0f});
+            Mat4 root = glm::translate(Mat4{1.0f}, base) *
+                        glm::rotate(Mat4{1.0f}, HalfPi - vl.yaw, Vec3{0.0f, 1.0f, 0.0f});
+            if (!seated) {
+                root = root * v.animator.body_offset();
+            }
             const std::vector<Quat> pose =
                 seated ? CharacterAnimator::sit_pose(v.model) : v.animator.pose(v.model);
             const std::vector<Mat4> mats = v.model.bone_matrices(root, pose);
@@ -2014,6 +2811,9 @@ private:
     void send_input() {
         if (!client_.connected()) {
             return;
+        }
+        if (paused_ || map_open_) {
+            blocking_ = false; // drop the guard if a release got swallowed by the menu/map
         }
         // Movement is relative to the fixed camera: W goes "into" the screen.
         const f32 cam_yaw = radians(iso::yaw_deg);
@@ -2050,12 +2850,23 @@ private:
         packet.rally = pending_rally_;
         packet.grab = pending_grab_;
         packet.aim = aim_;
-        // Vote only matters while wagons are being offered.
-        packet.vote_wagon =
-            snapshot_.contract_phase == static_cast<u8>(ContractPhase::Offer) ? selected_wagon_ : 0;
+        // A haul starts by walking up to a parked wagon (which pops its info panel) and pressing
+        // ACCEPT. `near_wagon_` is the offer you're standing by; `selected_wagon_` is the one you
+        // accepted (your vote). Drop a stale vote if its offer is gone (town changed).
+        const bool offering = snapshot_.contract_phase == static_cast<u8>(ContractPhase::Offer);
+        near_wagon_ = offering ? nearest_offer_in_range() : 0;
+        if (selected_wagon_ != 0 && (!offering || !wagon_offered(selected_wagon_))) {
+            selected_wagon_ = 0;
+        }
+        packet.vote_wagon = offering ? selected_wagon_ : 0;
         packet.vote_mode = vote_mode_;
+        packet.role = static_cast<u8>(role_);
+        packet.ability = pending_ability_;
+        // Right-mouse hold: Knight shield guard / Cleric heal channel.
+        packet.block = blocking_ && (role_ == PlayerRole::Knight || role_ == PlayerRole::Cleric);
         packet.appearance = appearance_;
         client_.send_input(packet);
+        pending_ability_ = 0;
         pending_add_ = false;
         pending_fire_ = false;
         pending_attack_ = false;
@@ -2073,6 +2884,64 @@ private:
             }
         }
         return Vec3{0.0f, 5.0f, 0.0f};
+    }
+
+    // The id of the offered wagon the local player is standing next to (within
+    // kWagonStartRange), or 0. Walking up to a parked offer is how a haul is started.
+    static constexpr f32 kWagonStartRange = 4.0f;
+    u32 nearest_offer_in_range() const {
+        if (!have_snapshot_ || snapshot_.contract_phase != static_cast<u8>(ContractPhase::Offer)) {
+            return 0;
+        }
+        const Vec3 feet = local_feet();
+        u32 best_id = 0;
+        f32 best = kWagonStartRange;
+        for (const net::WagonState& wg : snapshot_.wagons) {
+            const f32 d = glm::length(Vec2{wg.position.x - feet.x, wg.position.z - feet.z});
+            if (d < best) {
+                best = d;
+                best_id = wg.id;
+            }
+        }
+        return best_id;
+    }
+    bool wagon_offered(u32 id) const {
+        for (const net::WagonState& wg : snapshot_.wagons) {
+            if (wg.id == id) {
+                return true;
+            }
+        }
+        return false;
+    }
+    const net::WagonState* wagon_by_id(u32 id) const {
+        for (const net::WagonState& wg : snapshot_.wagons) {
+            if (wg.id == id) {
+                return &wg;
+            }
+        }
+        return nullptr;
+    }
+    static bool in_rect(const Vec2& p, const ui::Rect& r) {
+        return r.w > 0.0f && p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
+    }
+
+    // A deterministic medieval name for the town centred at `c` (so the contract panel can say
+    // where the wagon is bound). Stable per town because `c` is the town's fixed centre.
+    static std::string town_name(const Vec3& c) {
+        static const char* pre[] = {"Oak",  "Stone", "Black", "White", "Raven", "Wolf",
+                                    "Ash",  "Fern",  "Mill",  "Hart",  "Bram",  "Thorn",
+                                    "Wind", "Frost", "Elder", "Gold"};
+        static const char* suf[] = {"ford",   "ton",  "wick", "field",  "bury", "dale",
+                                    "stead",  "hollow", "gate", "moor", "bridge", "haven",
+                                    "shire",  "mere", "crest", "wood"};
+        u32 h = static_cast<u32>(static_cast<i32>(std::lround(c.x)) * 73856093) ^
+                static_cast<u32>(static_cast<i32>(std::lround(c.z)) * 19349663);
+        h ^= h >> 13;
+        h *= 0x5bd1e995u;
+        h ^= h >> 15;
+        std::string name = pre[h % 16u];
+        name += suf[(h >> 8) % 16u];
+        return name;
     }
 
 
@@ -2101,6 +2970,24 @@ private:
             aim_ = *hit;
             aim_valid_ = true;
         }
+    }
+
+    // A rotation that maps the mesh's local +Z axis onto `dir` (used to point arrows along
+    // their flight). Falls back to identity for a degenerate direction.
+    static Mat4 orient_to(const Vec3& dir) {
+        const f32 len = glm::length(dir);
+        if (len < 1e-4f) {
+            return Mat4{1.0f};
+        }
+        const Vec3 f = dir / len;
+        const Vec3 up = std::abs(f.y) > 0.99f ? Vec3{1.0f, 0.0f, 0.0f} : Vec3{0.0f, 1.0f, 0.0f};
+        const Vec3 r = glm::normalize(glm::cross(up, f));
+        const Vec3 u = glm::cross(f, r);
+        Mat4 m{1.0f};
+        m[0] = Vec4{r, 0.0f};
+        m[1] = Vec4{u, 0.0f};
+        m[2] = Vec4{f, 0.0f};
+        return m;
     }
 
     Mat4 tree_model(const TreeInstance& t) const {
@@ -2145,6 +3032,42 @@ private:
     // Character customisation + its turntable preview.
     static constexpr u32 kPreviewSeed = 7u;
     CharacterAppearance appearance_;
+    PlayerRole role_ = PlayerRole::Knight;          // chosen combat role (weapon + abilities)
+    u8 pending_ability_ = 0;                         // ability invoked this frame (0 = none)
+    f32 ability_cd_[kAbilitySlots] = {0.0f, 0.0f, 0.0f}; // client-side HUD cooldown estimate
+    f32 bulwark_fx_ = 0.0f;                          // local: Knight shield-dome aura timer
+    f32 dash_fx_ = 0.0f;                             // local: Hunter speed-trail aura timer
+    f32 heal_charge_fx_ = 0.0f;                      // local: Cleric heal-channel charge (0..kHealChargeTime)
+    std::unordered_map<net::PlayerId, u32> ability_fx_tick_; // dedupe networked cast VFX
+
+    // A lightweight client-side particle (ability VFX, projectile trails). Drawn as an
+    // emissive or additive-glow sphere that fades + shrinks over its life.
+    struct Particle {
+        Vec3 pos{0.0f};
+        Vec3 vel{0.0f};
+        f32 life = 0.0f;
+        f32 max_life = 1.0f;
+        f32 size = 0.1f;
+        f32 gravity = 0.0f;
+        f32 drag = 1.6f;
+        Vec4 color{1.0f};
+        u8 style = 0; // 0 = emissive, 1 = additive glow
+    };
+    std::vector<Particle> particles_;
+    u32 fx_rng_ = 0x9e3779b9u;
+    f32 frand() { // xorshift32 -> [0,1)
+        fx_rng_ ^= fx_rng_ << 13;
+        fx_rng_ ^= fx_rng_ >> 17;
+        fx_rng_ ^= fx_rng_ << 5;
+        return static_cast<f32>(fx_rng_ & 0xffffffu) / static_cast<f32>(0x1000000u);
+    }
+    f32 frand(f32 a, f32 b) { return a + (b - a) * frand(); }
+    Vec3 rand_dir() {
+        const f32 z = frand(-1.0f, 1.0f);
+        const f32 a = frand(0.0f, TwoPi);
+        const f32 r = std::sqrt(std::max(0.0f, 1.0f - z * z));
+        return Vec3{r * std::cos(a), z, r * std::sin(a)};
+    }
     CharacterModel preview_model_ = CharacterModel::create(kPreviewSeed, CharacterAppearance{});
     CharacterAnimator preview_anim_;
     f32 preview_turn_ = 0.6f;
@@ -2176,6 +3099,7 @@ private:
     std::vector<GpuProp> gpu_rocks_;
     std::vector<GpuProp> gpu_logs_;
     std::vector<GpuProp> gpu_fences_;
+    std::vector<GpuProp> gpu_fence_rails_;
     std::vector<GpuProp> gpu_lanterns_;
     std::vector<GpuProp> gpu_houses_;
     std::vector<GpuProp> gpu_walls_;
@@ -2189,6 +3113,7 @@ private:
     Mesh shape_box_;
     Mesh shape_sphere_;
     Mesh shape_cylinder_;
+    Mesh shape_capsule_;
     Mesh shape_rounded_;
     Mesh marker_;
     Mesh water_mesh_;
@@ -2211,9 +3136,15 @@ private:
     bool pending_fire_ = false;
     bool pending_attack_ = false;
     bool pending_build_ = false;
+    bool pending_local_swing_ = false; // play our own swing animation this frame (left-click)
+    bool blocking_ = false;            // Knight holding the shield up (right mouse held)
     bool pending_rally_ = false;
     bool pending_grab_ = false; // one-shot hitch/unhitch the nearest wagon
-    u32 selected_wagon_ = 0;    // wagon id this client is voting for (0 = none)
+    u32 selected_wagon_ = 0;    // wagon id this client has ACCEPTED (its vote; 0 = none)
+    u32 near_wagon_ = 0;        // offered wagon currently in range (shows its info panel)
+    u32 panel_wagon_ = 0;       // wagon the on-screen Accept/Cancel buttons act on
+    ui::Rect accept_btn_{};     // screen rect of the panel's ACCEPT button (0 = not shown)
+    ui::Rect cancel_btn_{};     // screen rect of the panel's CANCEL button
     u8 vote_mode_ = 1;          // 1 = hire driver, 2 = haul manually
     std::vector<Mesh> vehicle_meshes_; // one body mesh per VehicleType (cart/wagon/carriage)
     Mesh wagon_wheel_mesh_;     // a single wheel, drawn x4 (scaled per type) and spun
@@ -2236,7 +3167,6 @@ private:
     std::unordered_map<u32, std::array<RopeTrace, 2>> wagon_ropes_;
     f32 hit_flash_ = 0.0f;   // red damage-flash intensity (decays)
     f32 last_health_ = 1.0f; // last seen local health fraction (to detect hits)
-    f32 swing_time_ = 0.0f;  // melee swing-arc animation timer (counts down)
     Vec3 aim_{0.0f};
     bool aim_valid_ = false;
 };

@@ -289,10 +289,13 @@ void GameServer::update_contracts(Timestep dt, const DensitySampler& density) {
                 } else if (pilot_ == id) {
                     pilot_ = 0;
                 } else if (glm::length(ppos - active_.position) < kWagonGrabRange + vt.reach()) {
-                    if (active_mode_ == WagonMode::Manual && vt.horse_drawn() && pilot_ == 0) {
+                    // Taking the handles / driver's seat works in EITHER mode: in Driver mode a
+                    // player can grab on to help a hired driver haul a stuck cart free, then let
+                    // go (press again) to hand it back.
+                    if (vt.horse_drawn() && pilot_ == 0) {
                         pilot_ = id; // climb up top to drive the carriage
-                    } else if (active_mode_ == WagonMode::Manual && !vt.horse_drawn() && tower_ == 0) {
-                        tower_ = id; // take the handles to haul
+                    } else if (!vt.horse_drawn() && tower_ == 0) {
+                        tower_ = id; // take the handles to haul (or help the driver)
                     } else {
                         riders_.insert(id); // ride as a passenger
                     }
@@ -344,10 +347,12 @@ void GameServer::generate_offers() {
     // Reserved depot spots (clear of houses/market), one per offer - so a wagon never spawns
     // inside a building.
     const std::vector<Vec3> spots = village_wagon_spots(*origin, seed);
+    // Never offer more wagons than we have distinct depot spots, or two would share a spot.
+    const int max_offers = std::min<int>(static_cast<int>(kMaxOffers), static_cast<int>(spots.size()));
 
     int idx = 0;
-    for (int dz = -roads::road_max_cells; dz <= roads::road_max_cells && idx < static_cast<int>(kMaxOffers); ++dz) {
-        for (int dx = -roads::road_max_cells; dx <= roads::road_max_cells && idx < static_cast<int>(kMaxOffers); ++dx) {
+    for (int dz = -roads::road_max_cells; dz <= roads::road_max_cells && idx < max_offers; ++dz) {
+        for (int dx = -roads::road_max_cells; dx <= roads::road_max_cells && idx < max_offers; ++dx) {
             if (dx == 0 && dz == 0) {
                 continue;
             }
@@ -504,7 +509,9 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
     // obstacles so it never snags. It targets sparse, string-pulled nodes using the LIVE
     // position, skipping any node already reached (so a fresh path never sends it back toward
     // its own cell centre) and easing the heading so it doesn't snap or stutter per node.
-    auto walk_route = [&](Vec3& pos, f32& yaw) {
+    // `gate` (0..1) scales the puller's pace: it eases to 0 as the cart lags past the hitch,
+    // so the puller slows/stops rather than dragging a snagged cart through a wall.
+    auto walk_route = [&](Vec3& pos, f32& yaw, f32 gate) {
         const int ridx = static_cast<int>(w.progress);
         const Vec2 wp = ridx < static_cast<int>(w.route.size()) ? w.route[ridx] : w.dest;
         driver_repath_ -= dt.seconds;
@@ -530,7 +537,7 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
         const f32 d = glm::length(to);
         if (d > 1e-3f) {
             const Vec3 dir = to / d;
-            const f32 stp = std::min(d, kWagonDriverSpeed * dmg * dt.seconds);
+            const f32 stp = std::min(d, kWagonDriverSpeed * dmg * gate * dt.seconds);
             pos.x += dir.x * stp;
             pos.z += dir.z * stp;
             // Ease the heading toward the travel direction (shortest way round) rather than
@@ -542,7 +549,8 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
             yaw += dyaw * std::min(1.0f, dt.seconds * 7.0f);
         }
         pos.y = ground_at(density, pos.x, pos.z);
-        // Advance to (or skip) the current route waypoint.
+        // Advance to (or skip) the current route waypoint. While gated (waiting for the cart)
+        // the puller isn't trying to make progress, so don't count that as being "stuck".
         const f32 dist_wp = glm::length(Vec2{pos.x, pos.z} - wp);
         auto next_waypoint = [&]() {
             w.progress += 1.0f;
@@ -553,6 +561,8 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
         };
         if (dist_wp < 1.4f) {
             next_waypoint(); // reached it
+        } else if (gate < 0.25f) {
+            driver_stuck_ = 0.0f; // waiting for the cart, not snagged
         } else if (dist_wp < driver_best_dist_ - 0.05f) {
             driver_best_dist_ = dist_wp; // still closing in - making progress
             driver_stuck_ = 0.0f;
@@ -573,14 +583,27 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
     f32 speed = 0.0f;
     bool towed = false;
 
-    if (vt.horse_drawn() && active_mode_ == WagonMode::Driver) {
-        walk_route(horse_pos_, horse_yaw_); // a horse pulls the carriage along the route
+    // A hired (NPC) puller must not run off and drag a snagged cart through a wall: as the
+    // cart falls past the hitch (it's stuck / being shoved out of geometry) the puller's pace
+    // eases to 0, so it slows and waits for the cart instead of yanking it through.
+    auto tow_gate = [&]() {
+        const f32 lag = glm::length(Vec2{w.position.x - puller.x, w.position.z - puller.z}) - hitch;
+        return glm::clamp(1.0f - lag / kTowMaxSlack, 0.0f, 1.0f);
+    };
+
+    const bool has_pilot = pilot_ != 0 && players_.count(pilot_) != 0u;
+    const bool has_tower = tower_ != 0 && players_.count(tower_) != 0u;
+
+    if (vt.horse_drawn() && active_mode_ == WagonMode::Driver && !has_pilot) {
+        puller = horse_pos_;
+        walk_route(horse_pos_, horse_yaw_, tow_gate()); // a horse pulls the carriage along the route
         puller = horse_pos_;
         speed = kWagonDriverSpeed * 1.6f * dmg;
         towed = true;
     } else if (vt.horse_drawn()) {
-        // Manual carriage: the pilot drives it like a car - throttle (W/S) + rein (A/D).
-        if (pilot_ != 0 && players_.count(pilot_) != 0u) {
+        // Manual carriage: the pilot drives it like a car - throttle (W/S) + rein (A/D). A
+        // player can climb up and do this even in Driver mode (to drive a stuck carriage out).
+        if (has_pilot) {
             const net::PlayerInput& in = players_.at(pilot_).input;
             const f32 throttle = glm::clamp(in.throttle, -1.0f, 1.0f);
             const f32 steer = glm::clamp(in.steer, -1.0f, 1.0f);
@@ -603,33 +626,63 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
         horse_pos_ = w.position + hdir * hitch;
         horse_pos_.y = ground_at(density, horse_pos_.x, horse_pos_.z);
         horse_yaw_ = w.yaw;
-    } else if (active_mode_ == WagonMode::Driver && driver_) {
-        walk_route(driver_->position, driver_->yaw); // teamster walks in front, pulling
-        puller = driver_->position;
-        speed = kWagonDriverSpeed * 1.6f * dmg;
-        towed = true;
-    } else if (active_mode_ == WagonMode::Manual && tower_ != 0 && players_.count(tower_) != 0u) {
+    } else if (has_tower) {
+        // A player has the handles - they haul, in EITHER mode. In Driver mode this lets a
+        // player grab on and pull a stuck cart free; the hired teamster (if any) stays by the
+        // drawbar (not pulling) and takes over again when the player lets go.
         puller = players_.at(tower_).controller.position();
         speed = kWagonManualSpeed * 1.6f; // the tower's own walk speed already reflects size+damage
+        towed = true;
+        if (driver_) {
+            const Vec2 bar{puller.x, puller.z};
+            Vec2 dp{driver_->position.x, driver_->position.z};
+            dp += (bar - dp) * std::min(1.0f, dt.seconds * 2.0f); // amble to the drawbar
+            driver_->position = Vec3{dp.x, ground_at(density, dp.x, dp.y), dp.y};
+            driver_->yaw = std::atan2(active_.position.z - dp.y, active_.position.x - dp.x);
+        }
+    } else if (active_mode_ == WagonMode::Driver && driver_) {
+        puller = driver_->position;
+        walk_route(driver_->position, driver_->yaw, tow_gate()); // teamster walks in front, pulling
+        puller = driver_->position;
+        speed = kWagonDriverSpeed * 1.6f * dmg;
         towed = true;
     }
 
     if (towed) {
-        // Rope/tongue tow: the cart trails the puller along the line between them at the
-        // hitch distance (following the LINE, not the puller's facing, so it never swings).
-        Vec3 to = puller - w.position;
-        to.y = 0.0f;
-        const f32 dist = glm::length(to);
-        if (dist > 1e-3f) {
-            const Vec3 dir = to / dist;
-            const f32 over = dist - hitch;
-            if (over > 0.0f) {
-                const f32 stp = std::min(over, speed * dt.seconds);
-                w.position.x += dir.x * stp;
-                w.position.z += dir.z * stp;
-            }
-            w.yaw = std::atan2(dir.z, dir.x);
+        // Trailer kinematics: the puller holds the drawbar at the cart's front, so the cart
+        // body trails `hitch` behind and its heading SWINGS to follow the pull (capped turn
+        // rate - a cart can't pivot in place or flip instantly). It eases toward its ideal
+        // trailing spot rather than being snapped there, so collision can hold it back when it
+        // snags (and the puller's pace gate keeps it from being dragged through walls).
+        const Vec2 P{puller.x, puller.z};
+        Vec2 C{w.position.x, w.position.z};
+        const Vec2 toP = P - C;
+        const f32 sep = glm::length(toP);
+        if (sep > 0.15f) {
+            const f32 want = std::atan2(toP.y, toP.x);          // face the pull
+            f32 dyaw = want - w.yaw;
+            while (dyaw > Pi) dyaw -= TwoPi;
+            while (dyaw < -Pi) dyaw += TwoPi;
+            const f32 maxStep = kCartTurnRate * dt.seconds;
+            w.yaw += glm::clamp(dyaw, -maxStep, maxStep);       // capped swing, never an instant flip
         }
+        const Vec2 fwd{std::cos(w.yaw), std::sin(w.yaw)};
+        const Vec2 ideal = P - fwd * hitch;                     // sit hitch behind, along the body
+        const Vec2 d = ideal - C;
+        const f32 dl = glm::length(d);
+        if (dl > 1e-4f) {
+            C += (d / dl) * std::min(dl, speed * dt.seconds);
+        }
+        // The towed cart is a solid body too: push it out of rocks, fences, logs and town
+        // walls instead of sliding through them.
+        if (collision_) {
+            collision_->gather(w.position, collider_scratch_);
+            for (const Collider& c : collider_scratch_) {
+                C = resolve_collider(c, C, vt.reach(), w.position.y, 1.5f);
+            }
+        }
+        w.position.x = C.x;
+        w.position.z = C.y;
         w.position.y = ground_at(density, w.position.x, w.position.z);
     }
 
@@ -907,9 +960,21 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
         if (collision_) {
             collision_->gather(e.position, collider_scratch_);
         }
+        if (e.taunt_cd > 0.0f) {
+            e.taunt_cd -= dt.seconds;
+        }
         Vec3 goal = w.position;
         f32 best = kAggroRadius;
         ServerPlayer* victim = nullptr;
+        // A Knight's taunt overrides target selection: the enemy fixates on the taunter.
+        if (e.taunt_cd > 0.0f) {
+            const auto it = players_.find(e.taunt_by);
+            if (it != players_.end()) {
+                victim = &it->second;
+                goal = it->second.controller.position();
+                best = glm::length(goal - e.position);
+            }
+        }
         for (auto& [id, pl] : players_) {
             const f32 d = glm::length(pl.controller.position() - e.position);
             if (d < best) {
@@ -958,8 +1023,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
         if (e.attack_cd <= 0.0f) {
             const f32 reach = kEnemyAttackRange + kEnemyRadius;
             if (victim != nullptr && best < reach) {
-                victim->health -= dmg;
-                victim->since_hit = 0.0f;
+                victim->take_damage(dmg); // role armour / block / Aegis shield soak it
                 e.attack_cd = kEnemyAttackInterval;
             } else if (glm::length(w.position - e.position) < reach + 0.7f) {
                 w.health -= kWagonDamage;
@@ -968,14 +1032,17 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
         }
     }
 
-    // Thrown rocks hurt ambushers; hostile arrows hurt players.
+    // Thrown rocks hurt ambushers; hostile arrows hurt players. A spent projectile that has
+    // landed (resting) no longer deals damage - it's just stuck in the ground.
     for (Projectile& pr : projectiles_) {
+        if (pr.resting) {
+            continue;
+        }
         if (pr.hostile) {
             for (auto& [id, pl] : players_) {
                 const Vec3 chest = pl.controller.position() + Vec3{0.0f, 0.9f, 0.0f};
                 if (glm::length(chest - pr.position) < pr.radius + 0.55f) {
-                    pl.health -= kArrowDamage;
-                    pl.since_hit = 0.0f;
+                    pl.take_damage(kArrowDamage);
                     pr.alive = false;
                 }
             }
@@ -983,7 +1050,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             for (Enemy& e : ambush_) {
                 const Vec3 chest = e.position + Vec3{0.0f, 0.9f, 0.0f};
                 if (glm::length(chest - pr.position) < pr.radius + kEnemyRadius + 0.3f) {
-                    e.health -= kThrowDamage;
+                    e.health -= pr.damage > 0.0f ? pr.damage : kThrowDamage;
                     pr.alive = false;
                 }
             }
@@ -1013,7 +1080,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             }
         }
         if (hit != nullptr) {
-            hit->health -= kMeleeDamage;
+            hit->health -= role_stats(pl.role).melee_damage; // weapon hits as hard as the role
             pl.melee_cd = 0.35f;
         }
     }
@@ -1024,11 +1091,11 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
     for (auto& [id, pl] : players_) {
         pl.since_hit += dt.seconds;
         if (pl.health > 0.0f && pl.since_hit > kPlayerRegenDelay) {
-            pl.health = std::min(kPlayerMaxHealth, pl.health + kPlayerRegen * dt.seconds);
+            pl.health = std::min(pl.max_health, pl.health + kPlayerRegen * dt.seconds);
         }
         if (pl.health <= 0.0f) {
             pl.controller.set_position(spawn_point(id));
-            pl.health = kPlayerMaxHealth;
+            pl.health = pl.max_health;
             pl.since_hit = kPlayerRegenDelay;
             ALRYN_INFO("Player {} was slain and respawned", id);
         }

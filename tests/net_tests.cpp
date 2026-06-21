@@ -31,6 +31,9 @@ TEST_CASE("Net: message serialization round-trips") {
     input.vote_mode = 2;
     input.throttle = 1.0f;
     input.steer = -1.0f;
+    input.role = static_cast<u8>(PlayerRole::Hunter);
+    input.ability = 2; // casting ability slot 2 (key 2)
+    input.block = true;
     input.appearance = CharacterAppearance{3, 5, EyeStyle::Sleepy, EarStyle::Pointed,
                                            HairStyle::Ponytail};
 
@@ -54,6 +57,9 @@ TEST_CASE("Net: message serialization round-trips") {
     CHECK(out.vote_mode == 2);
     CHECK(out.throttle == doctest::Approx(1.0f));
     CHECK(out.steer == doctest::Approx(-1.0f));
+    CHECK(out.role == static_cast<u8>(PlayerRole::Hunter));
+    CHECK(out.ability == 2);
+    CHECK(out.block);
     CHECK(out.appearance == input.appearance); // cosmetics survive the round-trip
 
     Snapshot snapshot;
@@ -65,17 +71,18 @@ TEST_CASE("Net: message serialization round-trips") {
     snapshot.wave = 4;
     snapshot.houses_standing = 9;
     snapshot.houses_total = 12;
-    snapshot.players.push_back({1, Vec3{1.0f, 2.0f, 3.0f}, 0.5f, 100, 8, 0, 0, CharacterAppearance{}});
     snapshot.players.push_back(
-        {2, Vec3{4.0f, 5.0f, 6.0f}, 1.5f, 73, 3, 1, 1, // seated + carrying a crate
+        {1, Vec3{1.0f, 2.0f, 3.0f}, 0.5f, 100, 8, 0, 0, 0, 0, 2, 0, CharacterAppearance{}}); // Knight blocking
+    snapshot.players.push_back(
+        {2, Vec3{4.0f, 5.0f, 6.0f}, 1.5f, 73, 3, 1, 1, 2, 3, 0, 128, // seated+carrying, Cleric, slot3, shielded
          CharacterAppearance{2, 0, EyeStyle::Sharp, EarStyle::Small, HairStyle::Spiky}});
-    snapshot.enemies.push_back({40u, Vec3{7.0f, 1.0f, -2.0f}, 0.8f, 1, 200});
-    snapshot.enemies.push_back({41u, Vec3{9.0f, 1.5f, -4.0f}, 2.0f, 0, 60});
+    snapshot.enemies.push_back({40u, Vec3{7.0f, 1.0f, -2.0f}, 0.8f, 1, 200, 1}); // swinging
+    snapshot.enemies.push_back({41u, Vec3{9.0f, 1.5f, -4.0f}, 2.0f, 0, 60, 0});
     snapshot.villagers.push_back(
-        {900u, Vec3{2.0f, 0.5f, 8.0f}, 1.1f, 40, 0,
+        {900u, Vec3{2.0f, 0.5f, 8.0f}, 1.1f, 40, 0, 0,
          CharacterAppearance{4, 1, EyeStyle::Round, EarStyle::Pointed, HairStyle::Ponytail}});
     snapshot.villagers.push_back(
-        {901u, Vec3{3.0f, 0.5f, 9.0f}, 0.2f, 200, 1, CharacterAppearance{}}); // a guard (kind 1)
+        {901u, Vec3{3.0f, 0.5f, 9.0f}, 0.2f, 200, 1, 90, CharacterAppearance{}}); // a guard (kind 1), shielded
     snapshot.fires.push_back({Vec3{10.0f, 1.0f, 12.0f}, 0.7f, 180});
     snapshot.barricades.push_back({Vec3{5.0f, 0.3f, -7.0f}, 1.2f, 240});
     snapshot.money = 1234u;
@@ -87,6 +94,7 @@ TEST_CASE("Net: message serialization round-trips") {
                                4 /*aboard*/, 6 /*total*/});
     snapshot.goods.push_back({77u, Vec3{12.0f, 1.0f, 13.0f}, 1});  // a fallen crate (loose)
     snapshot.goods.push_back({78u, Vec3{0.2f, 0.55f, -0.1f}, 0}); // a crate in the bed (local pos)
+    snapshot.auras.push_back({Vec3{3.0f, 1.0f, -5.0f}, 5.0f, 0}); // a Cleric heal aura
     ByteWriter ws;
     write(ws, snapshot);
     ByteReader rs(ws.bytes(), ws.size());
@@ -102,6 +110,16 @@ TEST_CASE("Net: message serialization round-trips") {
     CHECK(decoded.players[1].health == 73);
     CHECK(decoded.players[0].build_stock == 8);
     CHECK(decoded.players[1].build_stock == 3);
+    CHECK(decoded.players[0].role == 0); // Knight
+    CHECK(decoded.players[1].role == 2); // Cleric
+    CHECK(decoded.players[0].cast == 0);
+    CHECK(decoded.players[1].cast == 3); // casting ability slot 3
+    CHECK(decoded.players[0].action == 2); // blocking
+    CHECK(decoded.players[1].action == 0);
+    CHECK(decoded.players[0].shield == 0);
+    CHECK(decoded.players[1].shield == 128); // Aegis shielded
+    CHECK(decoded.enemies[0].action == 1); // swinging
+    CHECK(decoded.enemies[1].action == 0);
     CHECK(decoded.time_of_day == doctest::Approx(0.625f));
     CHECK(decoded.outcome == static_cast<u8>(MatchOutcome::Lost));
     CHECK(decoded.phase == static_cast<u8>(MatchPhase::Combat));
@@ -124,6 +142,8 @@ TEST_CASE("Net: message serialization round-trips") {
     CHECK(decoded.villagers[0].appearance.hair == HairStyle::Ponytail);
     CHECK(decoded.villagers[0].kind == 0);          // a villager
     CHECK(decoded.villagers[1].kind == 1);          // a guard
+    CHECK(decoded.villagers[0].shield == 0);
+    CHECK(decoded.villagers[1].shield == 90);       // Aegis shielded NPC
     CHECK(decoded.villagers[1].health == 200);
     REQUIRE(decoded.barricades.size() == 1);
     CHECK(decoded.barricades[0].health == 240);
@@ -154,6 +174,9 @@ TEST_CASE("Net: message serialization round-trips") {
     CHECK(decoded.goods[0].position.z == doctest::Approx(13.0f));
     CHECK(decoded.goods[1].id == 78u);
     CHECK(decoded.goods[1].loose == 0); // a crate riding in the bed
+    REQUIRE(decoded.auras.size() == 1);
+    CHECK(decoded.auras[0].radius == doctest::Approx(5.0f));
+    CHECK(decoded.auras[0].position.z == doctest::Approx(-5.0f));
 
     Welcome welcome{77, 0xABCDu};
     ByteWriter ww;

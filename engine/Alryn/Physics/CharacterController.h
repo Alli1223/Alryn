@@ -36,6 +36,7 @@ public:
     const Vec3& velocity() const { return velocity_; }
     bool on_ground() const { return on_ground_; }
     const CharacterConfig& config() const { return config_; }
+    void set_walk_speed(f32 s) { config_.walk_speed = s; }
 
     // move_dir: desired world-space horizontal direction (xz; y ignored, length<=1).
     // `colliders` are static props (trees/walls) the capsule is pushed out of.

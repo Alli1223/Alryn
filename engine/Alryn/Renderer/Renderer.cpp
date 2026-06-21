@@ -44,6 +44,8 @@ struct LightUbo {
     i32 count[4]; // x = shadowed spot count, y = unshadowed point count
     GpuSpot spots[9];
     GpuPoint points[48]; // must match kMaxPointLights + mesh.frag
+    Vec4 player_peek;    // xyz = player focus (world), w = tunnel radius (0 = off)
+    Vec4 cam_pos;        // xyz = camera position (world)
 };
 
 // Must match the push_constant block in ui.vert / ui.frag.
@@ -125,11 +127,21 @@ bool Renderer::create_pipelines() {
 
     vk::PipelineConfig vegetation = opaque; // grass/ferns: opaque, but wind-swayed
     vegetation.vertex_spv = shader_path("grass.vert.spv").string();
+    // Plain lit shader (no peek-through): ground vegetation in front of the player
+    // should never dissolve - only the tree canopy does (the foliage pipeline).
     if (!pipeline_vegetation_.create(device_, vegetation)) {
         return false;
     }
 
+    vk::PipelineConfig cutout = opaque; // tree trunks + branches: solid, always rendered
+    // Trunks use the plain lit shader too - the peek-through only thins the leafy
+    // canopy, so the trunk and its branches stay visible between camera and player.
+    if (!pipeline_cutout_.create(device_, cutout)) {
+        return false;
+    }
+
     vk::PipelineConfig foliage = base; // alpha-blended tree leaves
+    foliage.fragment_spv = shader_path("foliage.frag.spv").string(); // peek-through canopy
     foliage.blend = true;
     foliage.depth_write = false;
     if (!pipeline_foliage_.create(device_, foliage)) {
@@ -359,6 +371,11 @@ void Renderer::process_lights() {
     std::iota(order.begin(), order.end(), 0u);
     const Vec3 cam = camera_position_;
     std::sort(order.begin(), order.end(), [&](u32 a, u32 b) {
+        // Priority (key) lights first, then nearest-to-camera. A priority light is guaranteed
+        // a shadow tile before any lantern/house can claim one.
+        if (pending_lights_[a].priority != pending_lights_[b].priority) {
+            return pending_lights_[a].priority;
+        }
         return glm::length(pending_lights_[a].position - cam) <
                glm::length(pending_lights_[b].position - cam);
     });
@@ -403,6 +420,11 @@ void Renderer::process_lights() {
 
     ubo.count[0] = static_cast<i32>(n);
     ubo.count[1] = static_cast<i32>(m);
+    // The foliage/vegetation/trunk shaders dissolve what sits in a wide tunnel running from
+    // the camera to the player, so almost the whole view ahead of the character is cleared of
+    // occluding canopy. Aim at the torso (feet + ~1.1 m).
+    ubo.player_peek = Vec4{player_position_ + Vec3{0.0f, 1.1f, 0.0f}, 6.0f};
+    ubo.cam_pos = Vec4{camera_position_, 0.0f};
     frames_[frame_index_].light_ubo.upload(&ubo, sizeof(ubo));
 }
 
@@ -644,6 +666,7 @@ void Renderer::record_main_pass(VkCommandBuffer cmd) {
                                    : item.layer == Layer::Glow       ? pipeline_glow_
                                    : item.layer == Layer::Emissive   ? pipeline_emissive_
                                    : item.layer == Layer::Vegetation ? pipeline_vegetation_
+                                   : item.layer == Layer::Cutout     ? pipeline_cutout_
                                                                      : pipeline_opaque_;
         if (pipe.handle() != current_pipeline_) {
             pipe.bind(cmd);
@@ -711,6 +734,12 @@ void Renderer::record_ui_pass(VkCommandBuffer cmd) {
 void Renderer::draw(const Mesh& mesh, const Mat4& model, const Vec4& tint) {
     if (frame_active_) {
         draw_items_.push_back({&mesh, model, tint, Layer::Opaque});
+    }
+}
+
+void Renderer::draw_cutout(const Mesh& mesh, const Mat4& model, const Vec4& tint) {
+    if (frame_active_) {
+        draw_items_.push_back({&mesh, model, tint, Layer::Cutout});
     }
 }
 
@@ -852,6 +881,7 @@ void Renderer::on_shutdown() {
         command_pool_ = VK_NULL_HANDLE;
     }
     pipeline_opaque_.destroy();
+    pipeline_cutout_.destroy();
     pipeline_foliage_.destroy();
     pipeline_water_.destroy();
     pipeline_emissive_.destroy();

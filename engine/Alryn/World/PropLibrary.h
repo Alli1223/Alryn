@@ -23,6 +23,7 @@ public:
     const std::vector<PropDef>& rocks() const { return rocks_; }
     const std::vector<PropDef>& logs() const { return logs_; }
     const std::vector<PropDef>& fences() const { return fences_; }
+    const std::vector<PropDef>& fence_rails() const { return fence_rails_; }
     const std::vector<PropDef>& lanterns() const { return lanterns_; }
     const std::vector<PropDef>& houses() const { return houses_; }
     const std::vector<PropDef>& walls() const { return walls_; }
@@ -41,7 +42,8 @@ public:
     static PropDef build_bush(int variant);
     static PropDef build_rock(int variant);
     static PropDef build_log(int variant);
-    static PropDef build_fence(int variant);
+    static PropDef build_fence(int variant);      // a single fence post
+    static PropDef build_fence_rail(int variant); // unit-length rails (stretched to the gap)
     static PropDef build_lantern_post();
     static PropDef build_house(u32 variant); // a village house (style by kHouseStyles)
     static Vec2 house_half_extents(u32 variant); // (w,d) footprint, for collision-free layout
@@ -62,6 +64,7 @@ private:
     std::vector<PropDef> rocks_;
     std::vector<PropDef> logs_;
     std::vector<PropDef> fences_;
+    std::vector<PropDef> fence_rails_;
     std::vector<PropDef> lanterns_;
     std::vector<PropDef> houses_;
     std::vector<PropDef> walls_;

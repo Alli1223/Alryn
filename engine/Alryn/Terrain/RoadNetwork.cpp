@@ -35,11 +35,31 @@ f32 water_cost(const Vec2& p, u32 seed) {
     return below * below;
 }
 
-// Routes a road from town centre A to town centre B as a polyline, bending interior
-// points away from water (greedy gradient descent perpendicular to the road). Returns
-// empty if the road can't be kept on land (e.g. a town across a lake) so the edge is
-// dropped. Ordered A -> B.
-std::vector<Vec2> route(const Vec2& pa, const Vec2& pb, u32 seed) {
+// Order-independent hash of an edge (so route(A,B) and route(B,A) meander identically).
+u32 edge_hash(const Vec2& a, const Vec2& b, u32 seed) {
+    const Vec2& lo = (a.x != b.x ? a.x < b.x : a.y < b.y) ? a : b;
+    const Vec2& hi = (a.x != b.x ? a.x < b.x : a.y < b.y) ? b : a;
+    auto q = [](f32 v) { return static_cast<u32>(static_cast<i32>(std::lround(v * 0.25f))); };
+    u32 h = seed * 2654435761u;
+    h ^= q(lo.x) * 73856093u;
+    h ^= q(lo.y) * 19349663u;
+    h ^= q(hi.x) * 83492791u;
+    h ^= q(hi.y) * 50331653u;
+    h ^= h >> 13;
+    h *= 0x5bd1e995u;
+    h ^= h >> 15;
+    return h;
+}
+f32 hash01u(u32 h) { return static_cast<f32>(h & 0xFFFFFFu) / static_cast<f32>(0xFFFFFFu); }
+
+// Routes a road from town centre A to town centre B as a polyline. The road first bends
+// away from water (greedy gradient descent perpendicular to the line), then gets a
+// deterministic, winding meander (a couple of sine sweeps) added on so trails curve and
+// wander rather than running straight. Any meandered point that lands in water snaps back
+// to the validated dry path, so the meander never costs us a road. Returns empty if the
+// road can't be kept on land. The geometry is canonicalised on the endpoints, so A->B and
+// B->A produce the same curve (just reversed) - keeping the wagon's path on the drawn road.
+std::vector<Vec2> route_impl(const Vec2& pa, const Vec2& pb, u32 seed) {
     const Vec2 along = pb - pa;
     const f32 span = glm::length(along);
     if (span < 1e-3f) {
@@ -52,12 +72,14 @@ std::vector<Vec2> route(const Vec2& pa, const Vec2& pb, u32 seed) {
         const f32 t = static_cast<f32>(i) / static_cast<f32>(road_points);
         return pa + along * t + perp * off[i];
     };
+    auto in_water = [&](const Vec2& p) {
+        return worldgen::height(p.x, p.y, seed) < worldgen::water_level + 0.4f;
+    };
 
-    const f32 max_off = std::min(span * 0.45f, 55.0f);
+    const f32 max_off = std::min(span * 0.5f, 60.0f);
     constexpr f32 eps = 1.5f;
-    constexpr int iterations = 24;
     constexpr f32 step = 8.0f;
-    for (int it = 0; it < iterations; ++it) {
+    for (int it = 0; it < 24; ++it) {
         for (int i = 1; i < road_points; ++i) {
             const Vec2 base = pa + along * (static_cast<f32>(i) / static_cast<f32>(road_points));
             const Vec2 here = base + perp * off[i];
@@ -66,7 +88,45 @@ std::vector<Vec2> route(const Vec2& pa, const Vec2& pb, u32 seed) {
             off[i] -= step * (c1 - c0) / (2.0f * eps);
             off[i] = glm::clamp(off[i], -max_off, max_off);
         }
-        // Smooth so the road curves rather than zig-zags.
+        std::vector<f32> sm = off; // smooth so the road curves rather than zig-zags
+        for (int i = 1; i < road_points; ++i) {
+            sm[i] = 0.5f * off[i] + 0.25f * (off[i - 1] + off[i + 1]);
+        }
+        off.swap(sm);
+    }
+    const std::vector<f32> dry_off = off; // the validated water-avoiding path
+
+    // Add a deterministic winding meander on top (zero at the town ends).
+    const u32 eh = edge_hash(pa, pb, seed);
+    const f32 mamp = std::min(span * 0.22f, 30.0f);
+    const int waves1 = 1 + static_cast<int>(eh % 3u);          // 1..3 broad sweeps
+    const int waves2 = 3 + static_cast<int>((eh >> 4) % 4u);   // 3..6 finer wiggles
+    const f32 ph1 = hash01u(eh ^ 0x9E3779B9u) * TwoPi;
+    const f32 ph2 = hash01u(eh ^ 0x12345679u) * TwoPi;
+    constexpr f32 a2 = 0.35f;
+    for (int i = 1; i < road_points; ++i) {
+        const f32 t = static_cast<f32>(i) / static_cast<f32>(road_points);
+        const f32 env = std::sin(Pi * t);
+        const f32 wig = std::sin(t * static_cast<f32>(waves1) * Pi + ph1) +
+                        a2 * std::sin(t * static_cast<f32>(waves2) * Pi + ph2);
+        off[i] += env * mamp * wig / (1.0f + a2);
+        off[i] = glm::clamp(off[i], -max_off, max_off);
+    }
+    // Nudge meandered points back off water (gradient only; no smoothing, to keep curves).
+    for (int it = 0; it < 8; ++it) {
+        for (int i = 1; i < road_points; ++i) {
+            const Vec2 base = pa + along * (static_cast<f32>(i) / static_cast<f32>(road_points));
+            const Vec2 here = base + perp * off[i];
+            const f32 c0 = water_cost(here - perp * eps, seed);
+            const f32 c1 = water_cost(here + perp * eps, seed);
+            off[i] -= step * (c1 - c0) / (2.0f * eps);
+            off[i] = glm::clamp(off[i], -max_off, max_off);
+        }
+    }
+    // Smooth the offset profile so the road flows in gentle curves rather than sharp kinks
+    // (the meander + water-avoidance descent can leave angular corners). A low-pass on the
+    // lateral offset, town ends pinned at 0, keeps the shape but rounds the bends.
+    for (int pass = 0; pass < 5; ++pass) {
         std::vector<f32> sm = off;
         for (int i = 1; i < road_points; ++i) {
             sm[i] = 0.5f * off[i] + 0.25f * (off[i - 1] + off[i + 1]);
@@ -74,10 +134,15 @@ std::vector<Vec2> route(const Vec2& pa, const Vec2& pb, u32 seed) {
         off.swap(sm);
     }
 
-    // Reject the road if any point still sits in water - those towns just aren't linked.
+    // Any point now in water snaps back to the validated dry path, so smoothing/meander can
+    // never drown a road; if the underlying dry route itself crosses water, drop the edge.
+    for (int i = 1; i < road_points; ++i) {
+        if (in_water(point_at(i))) {
+            off[i] = dry_off[i];
+        }
+    }
     for (int i = 0; i <= road_points; ++i) {
-        const Vec2 p = point_at(i);
-        if (worldgen::height(p.x, p.y, seed) < worldgen::water_level + 0.4f) {
+        if (in_water(point_at(i))) {
             return {};
         }
     }
@@ -87,6 +152,18 @@ std::vector<Vec2> route(const Vec2& pa, const Vec2& pb, u32 seed) {
         pts[i] = point_at(i);
     }
     return pts;
+}
+
+// Canonicalises the endpoint order so the curve is identical regardless of direction
+// (the wagon route + the rendered road must agree), returning it oriented pa -> pb.
+std::vector<Vec2> route(const Vec2& pa, const Vec2& pb, u32 seed) {
+    const bool canonical = pa.x != pb.x ? pa.x < pb.x : pa.y < pb.y;
+    if (canonical) {
+        return route_impl(pa, pb, seed);
+    }
+    std::vector<Vec2> r = route_impl(pb, pa, seed);
+    std::reverse(r.begin(), r.end());
+    return r;
 }
 
 void polyline_to_segments(const std::vector<Vec2>& pts, std::vector<Segment>& out) {

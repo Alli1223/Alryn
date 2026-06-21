@@ -174,7 +174,7 @@ TEST_CASE("Forest props: a fallen log has a collider that blocks along its lengt
     PropLibrary lib;
     REQUIRE_FALSE(lib.logs().empty());
     const PropDef& log = lib.logs()[0];
-    REQUIRE_FALSE(log.colliders.empty()); // logs are solid; bushes/rocks aren't
+    REQUIRE_FALSE(log.colliders.empty()); // logs are solid (bushes are decorative)
 
     // Place the log rotated and build its world collider the way CollisionWorld
     // does. The log lies along local +X; a point along it blocks, while a point well
@@ -196,6 +196,10 @@ TEST_CASE("Forest props: a fallen log has a collider that blocks along its lengt
     // Bushes are decorative (no collider).
     REQUIRE_FALSE(lib.bushes().empty());
     CHECK(lib.bushes()[0].colliders.empty());
+
+    // Rocks are solid - you (and a towed wagon) bump into a boulder.
+    REQUIRE_FALSE(lib.rocks().empty());
+    CHECK_FALSE(lib.rocks()[0].colliders.empty());
 }
 
 TEST_CASE("Projectile: gravity + terrain bounce stays above the floor and settles") {
@@ -233,6 +237,47 @@ TEST_CASE("Projectile: bounces back off a wall collider") {
     }
     CHECK(pr.velocity.x < 0.0f); // reflected off the wall
     CHECK(pr.position.x < 3.0f); // stayed on the near side
+}
+
+TEST_CASE("Projectile: an arrow sticks where it lands (no bounce) and faces its travel") {
+    const DensitySampler density = flat_floor(2.0f);
+    Projectile pr;
+    pr.kind = 3; // a friendly arrow: should stick, not bounce
+    pr.position = Vec3{0.0f, 6.0f, 0.0f};
+    pr.velocity = Vec3{6.0f, 0.0f, 0.0f};
+
+    const std::array<Collider, 0> none{};
+    for (int i = 0; i < 600 && pr.alive && !pr.resting; ++i) {
+        step_projectile(pr, density, none, kStep);
+    }
+    CHECK(pr.resting);                              // landed and stuck
+    CHECK(glm::length(pr.velocity) == doctest::Approx(0.0f)); // did not bounce away
+    CHECK(pr.position.y > 1.0f);                    // came to rest on top of the floor (y = 2)
+    CHECK(pr.position.x > 0.5f);                    // travelled forward before landing
+    CHECK(pr.heading.x > 0.0f);                     // faces the way it flew (forward + down)
+    CHECK(pr.heading.y < 0.0f);
+}
+
+TEST_CASE("Projectile: an arrow sticks into a wall instead of reflecting") {
+    const DensitySampler air = [](const Vec3&) { return 1.0f; };
+    Projectile pr;
+    pr.kind = 1; // an arrow
+    pr.position = Vec3{0.0f, 0.0f, 0.0f};
+    pr.velocity = Vec3{10.0f, 0.0f, 0.0f};
+    Collider wall;
+    wall.shape = Collider::Shape::Box;
+    wall.center = Vec3{3.0f, 0.0f, 0.0f};
+    wall.half = Vec2{0.2f, 4.0f};
+    wall.y_min = -2.0f;
+    wall.y_max = 2.0f;
+    const std::array<Collider, 1> cols{wall};
+
+    for (int i = 0; i < 60 && !pr.resting; ++i) {
+        step_projectile(pr, air, cols, kStep, 0.0f);
+    }
+    CHECK(pr.resting);            // stuck in the wall
+    CHECK(pr.velocity.x >= 0.0f); // never reflected backward
+    CHECK(pr.position.x < 3.2f);  // stopped at the wall face
 }
 
 TEST_CASE("CharacterController: jump leaves the ground then returns") {

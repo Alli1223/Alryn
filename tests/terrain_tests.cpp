@@ -313,6 +313,32 @@ TEST_CASE("Props: library builds geometry, scatter is deterministic & on land") 
     CHECK(rocks > 0);
     CHECK(logs > 0);
     CHECK_FALSE(underwater);
+
+    // Standalone wild lanterns must never stack on top of each other: each global grid cell is
+    // owned by exactly one chunk, so the 23 m lantern grid (over 8 m chunks) is no longer emitted
+    // by several neighbouring chunks at the same spot (which multiplied their light 3x3 = far too
+    // bright). Gather grid lanterns (off the roads, which have their own posts) and check spacing.
+    std::vector<Vec3> lanterns;
+    for (int cz = -20; cz < 20; ++cz) {
+        for (int cx = -20; cx < 20; ++cx) {
+            for (const PropInstance& p : scatter_props(cx, cz, 8.0f, seed)) {
+                if (p.category == PropCategory::Lantern &&
+                    roads::distance(p.position.x, p.position.z, seed) > roads::road_half_width + 2.0f) {
+                    lanterns.push_back(p.position);
+                }
+            }
+        }
+    }
+    REQUIRE(lanterns.size() > 4); // there are wild lanterns in this region
+    int stacked = 0;
+    for (usize i = 0; i < lanterns.size(); ++i) {
+        for (usize j = i + 1; j < lanterns.size(); ++j) {
+            if (glm::length(lanterns[i] - lanterns[j]) < 0.5f) {
+                ++stacked;
+            }
+        }
+    }
+    CHECK(stacked == 0); // none piled on top of another
 }
 
 TEST_CASE("Paths: fences + lanterns line the trail edges; lanterns glow + light") {
@@ -357,18 +383,44 @@ TEST_CASE("Paths: fences + lanterns line the trail edges; lanterns glow + light"
     const int c0x = static_cast<int>(std::floor(rp.x / cw));
     const int c0z = static_cast<int>(std::floor(rp.y / cw));
     int fences = 0, fences_off_edge = 0;
+    std::vector<Vec2> post_pos;
+    std::vector<PropInstance> rails;
     for (int cz = -8; cz <= 8; ++cz) {
         for (int cx = -8; cx <= 8; ++cx) {
             for (const PropInstance& p : scatter_props(c0x + cx, c0z + cz, cw, seed)) {
                 if (p.category == PropCategory::Fence) {
                     ++fences;
                     if (!on_edge(p)) ++fences_off_edge;
+                    post_pos.emplace_back(p.position.x, p.position.z);
+                } else if (p.category == PropCategory::FenceRail) {
+                    rails.push_back(p);
                 }
             }
         }
     }
     CHECK(fences > 0);
     CHECK(fences_off_edge == 0); // fences hug the road edge
+
+    // Posts are now joined by RAILS stretched to the exact gap (varying length), forming a
+    // post-and-rail run. A rail spans from its centre out ±length/2 along its yaw; check
+    // that (almost) every rail lands a post at BOTH ends - i.e. they connect posts up.
+    REQUIRE(rails.size() > 6);
+    int connected = 0;
+    for (const PropInstance& r : rails) {
+        CHECK(r.length > 0.4f); // a real, stretched span
+        const Vec2 mid{r.position.x, r.position.z};
+        const Vec2 dir{std::cos(r.yaw), -std::sin(r.yaw)}; // inverse of atan2(-dir.y,dir.x)
+        const Vec2 e0 = mid - dir * (r.length * 0.5f);
+        const Vec2 e1 = mid + dir * (r.length * 0.5f);
+        auto post_near = [&](const Vec2& e) {
+            for (const Vec2& pp : post_pos) {
+                if (glm::length(pp - e) < 0.5f) return true;
+            }
+            return false;
+        };
+        if (post_near(e0) && post_near(e1)) ++connected;
+    }
+    CHECK(connected >= static_cast<int>(rails.size()) - 4); // essentially every rail links two posts
 
     // Standalone world lanterns are dotted off the roads somewhere in the wider world.
     int world_lanterns = 0;

@@ -1,0 +1,256 @@
+// Roles, weapons & abilities (see Game/Roles.h). Server-authoritative: each tick the
+// server adopts every player's chosen role (applying its stats + walk speed), ticks the
+// per-ability cooldowns + buff timers, and - when a player invokes an ability this tick -
+// resolves it against the live ambush enemies / fellow players / projectile list. Kept in
+// its own translation unit alongside Contracts.cpp / SiegeMode.cpp; the combat state
+// (players_ / ambush_ / projectiles_) lives on GameServer.
+
+#include <Alryn/Core/Log.h>
+#include <Alryn/Game/Roles.h>
+#include <Alryn/Net/GameServer.h>
+
+#include <algorithm>
+#include <cmath>
+
+namespace alryn {
+
+// Adopt the role the client is reporting: switch stats (and heal to full on a change),
+// keep health clamped to the role's max, and drive the controller's walk speed (with the
+// Hunter's dash boost folded in).
+void GameServer::sync_player_role(ServerPlayer& player) {
+    const auto requested = static_cast<PlayerRole>(player.input.role % kRoleCount);
+    if (requested != player.role) {
+        player.role = requested;
+        player.max_health = role_stats(requested).max_health;
+        player.health = player.max_health; // a fresh kit starts whole
+    }
+    player.max_health = role_stats(player.role).max_health;
+    player.health = std::min(player.health, player.max_health);
+    const f32 base = role_stats(player.role).move_speed;
+    player.controller.set_walk_speed(player.dash_timer > 0.0f ? base * kDashSpeedMult : base);
+}
+
+void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
+    const f32 dts = dt.seconds;
+    for (auto& [id, pl] : players_) {
+        sync_player_role(pl);
+        pl.cast_fx = 0; // cleared each tick; set below when an ability actually fires
+        for (f32& cd : pl.ability_cd) {
+            if (cd > 0.0f) {
+                cd -= dts;
+            }
+        }
+        if (pl.bulwark_timer > 0.0f) {
+            pl.bulwark_timer -= dts;
+        }
+        if (pl.dash_timer > 0.0f) {
+            pl.dash_timer -= dts;
+        }
+        if (pl.shield_timer > 0.0f) { // Aegis fades with time, or breaks when fully spent
+            pl.shield_timer -= dts;
+            if (pl.shield_timer <= 0.0f || pl.shield_hp <= 0.0f) {
+                pl.shield_hp = 0.0f;
+                pl.shield_timer = 0.0f;
+            }
+        }
+
+        const u8 slot_one = pl.input.ability; // 0 = none, else slot+1
+        if (slot_one == 0 || slot_one > kAbilitySlots) {
+            continue;
+        }
+        const u8 slot = static_cast<u8>(slot_one - 1);
+        if (pl.ability_cd[slot] > 0.0f) {
+            continue; // still cooling down
+        }
+
+        const Vec3 origin = pl.controller.position() + Vec3{0.0f, 0.9f, 0.0f};
+        const Vec3 eye = pl.controller.eye_position();
+        const f32 yaw = pl.input.yaw;
+        const Vec3 facing{std::cos(yaw), 0.0f, std::sin(yaw)};
+        const RoleStats stats = role_stats(pl.role);
+
+        switch (pl.role) {
+            case PlayerRole::Knight:
+                if (slot == 0) { // Shield Bash: hit every enemy in a frontal cone, knock them back
+                    for (Enemy& e : ambush_) {
+                        const Vec3 chest = e.position + Vec3{0.0f, 0.9f, 0.0f};
+                        if (!in_attack_cone(origin, yaw, chest, kMeleeRange + 0.5f, kMeleeConeCos)) {
+                            continue;
+                        }
+                        e.health -= kBashDamage;
+                        Vec3 push = e.position - pl.controller.position();
+                        push.y = 0.0f;
+                        if (glm::length(push) > 1e-3f) {
+                            push = glm::normalize(push);
+                        } else {
+                            push = facing;
+                        }
+                        e.position += push * kBashKnockback;
+                    }
+                } else if (slot == 1) { // Bulwark: raise the shield for heavy mitigation
+                    pl.bulwark_timer = kBulwarkDuration;
+                } else if (slot == 2) { // Consecration: a holy ground aura that taunts + burns
+                    spawn_aura(AuraKind::Consecration, pl.controller.position(), id);
+                } else { // Taunt: nearby enemies instantly fixate on this Knight
+                    for (Enemy& e : ambush_) {
+                        if (glm::length(e.position - pl.controller.position()) <= kTauntRadius) {
+                            e.taunt_by = id;
+                            e.taunt_cd = kTauntDuration;
+                        }
+                    }
+                }
+                break;
+
+            case PlayerRole::Hunter: {
+                auto loose_arrow = [&](const Vec3& dir, f32 damage) {
+                    Projectile pr;
+                    pr.position = eye + dir * 0.6f;
+                    pr.velocity = dir * 36.0f;
+                    pr.owner = id;
+                    pr.damage = damage;
+                    pr.kind = 3; // friendly arrow (slim bolt + trail on the client)
+                    pr.radius = 0.15f;
+                    pr.life = 3.5f;
+                    projectiles_.push_back(pr);
+                };
+                Vec3 dir = pl.input.aim - eye;
+                dir = glm::length(dir) > 0.2f ? glm::normalize(dir) : facing;
+                if (slot == 0) { // Power Shot: one heavy arrow
+                    loose_arrow(dir, stats.ranged_damage * kPowerShotMult);
+                } else if (slot == 1) { // Volley: a three-arrow spread
+                    for (int k = -1; k <= 1; ++k) {
+                        const f32 a = std::atan2(dir.z, dir.x) + static_cast<f32>(k) * 0.18f;
+                        loose_arrow(Vec3{std::cos(a), dir.y, std::sin(a)}, stats.ranged_damage * kVolleyMult);
+                    }
+                } else if (slot == 2) { // Dash: a burst of speed
+                    pl.dash_timer = kDashDuration;
+                } else { // Piercing Shot: a single heavy bolt
+                    loose_arrow(dir, stats.ranged_damage * kPierceMult);
+                }
+                break;
+            }
+
+            case PlayerRole::Cleric:
+                if (slot == 0) { // Heal: mend the most-injured ally in range (self counts)
+                    ServerPlayer* target = &pl;
+                    f32 worst = pl.health / pl.max_health;
+                    for (auto& [oid, other] : players_) {
+                        if (glm::length(other.controller.position() - pl.controller.position()) > kHealRadius) {
+                            continue;
+                        }
+                        const f32 frac = other.health / other.max_health;
+                        if (frac < worst) {
+                            worst = frac;
+                            target = &other;
+                        }
+                    }
+                    target->health = std::min(target->max_health, target->health + kHealAmount);
+                } else if (slot == 1) { // Sanctuary: heal everyone nearby
+                    for (auto& [oid, other] : players_) {
+                        if (glm::length(other.controller.position() - pl.controller.position()) <= kHealRadius) {
+                            other.health = std::min(other.max_health, other.health + kSanctuaryAmount);
+                        }
+                    }
+                } else if (slot == 2) { // Smite: a holy bolt toward the aim point
+                    Vec3 dir = pl.input.aim - eye;
+                    dir = glm::length(dir) > 0.2f ? glm::normalize(dir) : facing;
+                    Projectile pr;
+                    pr.position = eye + dir * 0.6f;
+                    pr.velocity = dir * 28.0f;
+                    pr.owner = id;
+                    pr.damage = kSmiteDamage;
+                    pr.kind = 2; // holy bolt (rendered bright by the client)
+                    pr.radius = 0.2f;
+                    pr.life = 3.0f;
+                    projectiles_.push_back(pr);
+                } else { // Aegis: shield the nearest friendly player or NPC (prefer the closest)
+                    ServerPlayer* tp = nullptr;
+                    f32 pbest = kAegisRange;
+                    for (auto& [oid, other] : players_) {
+                        const f32 d = glm::length(other.controller.position() - pl.controller.position());
+                        if (d < pbest) {
+                            pbest = d;
+                            tp = &other;
+                        }
+                    }
+                    Villager* tv = nullptr;
+                    f32 vbest = kAegisRange;
+                    for (auto& [vid, vg] : villagers_) {
+                        const f32 d = glm::length(vg.position - pl.controller.position());
+                        if (d < vbest) {
+                            vbest = d;
+                            tv = &vg;
+                        }
+                    }
+                    if (tv != nullptr && vbest < pbest) {
+                        tv->shield_timer = kAegisDuration; // NPCs take no damage here -> visual ward
+                    } else if (tp != nullptr) {
+                        tp->shield_hp = kAegisAmount; // players get a real damage-absorb pool
+                        tp->shield_timer = kAegisDuration;
+                    }
+                }
+                break;
+        }
+
+        pl.ability_cd[slot] = ability_def(pl.role, slot).cooldown;
+        pl.cast_fx = slot_one; // echoed in the snapshot so every client plays the cast VFX
+    }
+
+    update_auras(dt);
+    (void)density;
+}
+
+// Ground auras. A Cleric holds right mouse (input.block) to CHANNEL a heavy heal: the charge
+// builds while held and, when full, drops a heal aura at their feet (then resets). A Knight's
+// Consecration drops a holy aura that taunts + burns enemies. Each tick every live aura applies
+// its effect to whoever stands inside, then expires when its lifetime runs out.
+// Creates a ground aura of `kind`, taking its radius + lifetime from the shared aura_props table.
+void GameServer::spawn_aura(AuraKind kind, const Vec3& pos, net::PlayerId owner) {
+    const AuraProps p = aura_props(kind);
+    auras_.push_back({pos, p.duration, p.radius, static_cast<u8>(kind), owner});
+}
+
+void GameServer::update_auras(Timestep dt) {
+    const f32 dts = dt.seconds;
+    for (auto& [id, pl] : players_) {
+        if (pl.role == PlayerRole::Cleric && pl.input.block) {
+            pl.heal_charge += dts;
+            if (pl.heal_charge >= kHealChargeTime) {
+                spawn_aura(AuraKind::Heal, pl.controller.position(), id);
+                pl.heal_charge = 0.0f;
+            }
+        } else {
+            pl.heal_charge = 0.0f; // releasing early (or any non-Cleric) fizzles the channel
+        }
+    }
+    for (auto& [vid, vg] : villagers_) { // Aegis shields on NPCs fade with time (visual only)
+        if (vg.shield_timer > 0.0f) {
+            vg.shield_timer -= dts;
+        }
+    }
+    for (Aura& a : auras_) {
+        a.ttl -= dts;
+        switch (static_cast<AuraKind>(a.kind)) { // per-kind effect (add a case for a new aura type)
+            case AuraKind::Heal: // mend allies standing in it
+                for (auto& [id, pl] : players_) {
+                    if (pl.health > 0.0f &&
+                        glm::length(pl.controller.position() - a.position) <= a.radius) {
+                        pl.health = std::min(pl.max_health, pl.health + kHealAuraRate * dts);
+                    }
+                }
+                break;
+            case AuraKind::Consecration: // taunt + burn enemies standing in it
+                for (Enemy& e : ambush_) {
+                    if (e.alive && glm::length(e.position - a.position) <= a.radius) {
+                        e.taunt_by = a.owner;
+                        e.taunt_cd = kTauntDuration;
+                        e.health -= kConsecrationDPS * dts;
+                    }
+                }
+                break;
+        }
+    }
+    std::erase_if(auras_, [](const Aura& a) { return a.ttl <= 0.0f; });
+}
+
+} // namespace alryn

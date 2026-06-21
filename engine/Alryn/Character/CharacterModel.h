@@ -27,7 +27,7 @@ enum class BonePart : u8 {
 };
 
 enum class BoneColor : u8 { Skin, Shirt, Pants, Hair, Eye };
-enum class BoneShape : u8 { Box, Sphere, Cylinder, RoundedBox };
+enum class BoneShape : u8 { Box, Sphere, Cylinder, RoundedBox, Capsule };
 
 struct Bone {
     BonePart part = BonePart::None;
@@ -70,6 +70,11 @@ public:
     // transform and a per-bone pose (rotation at each joint). pose may be shorter
     // than bone_count() (missing entries are treated as identity).
     std::vector<Mat4> bone_matrices(const Mat4& root, const std::vector<Quat>& pose) const;
+
+    // World-space JOINT frames (position + orientation, no box scale) for every bone.
+    // This is what you rigidly attach a held prop (sword, shield, bow) to, so it rotates
+    // with the limb - unlike bone_matrices(), whose columns are scaled by box_size.
+    std::vector<Mat4> joint_matrices(const Mat4& root, const std::vector<Quat>& pose) const;
 
 private:
     // Appends face + hair feature bones (parented to the head) per the appearance.

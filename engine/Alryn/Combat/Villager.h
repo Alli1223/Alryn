@@ -45,7 +45,8 @@ struct Villager {
     f32 health = kVillagerMaxHealth;
     f32 water = 0.0f;     // bucket fill 0..1 (for firefighting)
     f32 wait = 0.0f;
-    f32 attack_cd = 0.0f; // guards: time until the next swing
+    f32 attack_cd = 0.0f;   // guards: time until the next swing
+    f32 shield_timer = 0.0f; // Aegis shield placed on this NPC (seconds remaining; visual)
     u32 rng = 1u;
     u8 kind = 0; // 0 = villager, 1 = guard (hunts + fights the enemy)
     CharacterAppearance appearance;

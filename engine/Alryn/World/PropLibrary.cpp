@@ -2,6 +2,8 @@
 
 #include <Alryn/Renderer/MeshPrimitives.h>
 
+#include <utility>
+
 namespace alryn {
 
 PropDef PropLibrary::build_bush(int variant) {
@@ -16,6 +18,13 @@ PropDef PropLibrary::build_rock(int variant) {
     PropDef def;
     def.name = "rock";
     def.parts.push_back({primitives::rock(variant), PropLayer::Opaque});
+    // A boulder you bump into: a box over the squashed sphere's footprint (~±0.45 in xz,
+    // sitting on the ground) so the player and a towed wagon are pushed around it.
+    BoxCollider c;
+    c.center = Vec3{0.0f};
+    c.half_extents = Vec2{0.45f, 0.45f};
+    c.height = 0.6f;
+    def.colliders.push_back(c);
     return def;
 }
 
@@ -55,6 +64,24 @@ void add_quad(MeshData& m, const Vec3& a, const Vec3& b, const Vec3& c, const Ve
     m.vertices.push_back({d, n, color, 0.0f});
     m.indices.insert(m.indices.end(), {base, base + 1, base + 2, base + 2, base + 3, base});
 }
+// Like add_tri, but orients the flat normal away from `center` (winding-independent).
+void emit_tri(MeshData& m, Vec3 a, Vec3 b, Vec3 c, const Vec3& center, const Vec3& color) {
+    Vec3 n = glm::cross(b - a, c - a);
+    const f32 len = glm::length(n);
+    if (len <= 1e-9f) {
+        return;
+    }
+    n /= len;
+    if (glm::dot(n, (a + b + c) / 3.0f - center) < 0.0f) {
+        n = -n;
+        std::swap(b, c);
+    }
+    const u32 base = static_cast<u32>(m.vertices.size());
+    m.vertices.push_back({a, n, color, 0.0f});
+    m.vertices.push_back({b, n, color, 0.0f});
+    m.vertices.push_back({c, n, color, 0.0f});
+    m.indices.insert(m.indices.end(), {base, base + 1, base + 2});
+}
 void add_tri(MeshData& m, const Vec3& a, const Vec3& b, const Vec3& c, const Vec3& color) {
     const Vec3 n = glm::normalize(glm::cross(b - a, c - a));
     const u32 base = static_cast<u32>(m.vertices.size());
@@ -65,19 +92,40 @@ void add_tri(MeshData& m, const Vec3& a, const Vec3& b, const Vec3& c, const Vec
 }
 } // namespace
 
-// A wooden fence segment: a post plus two rails running ALONG local +X (so when the
-// prop is yawed to the path tangent, adjacent segments line the path edge).
+// A single fence POST (a stout little pillar with a chamfer cap). Rails connect one post
+// to the next as a separate, length-stretched prop (build_fence_rail), so a run of posts
+// is joined by rails of whatever length the gap happens to be.
 PropDef PropLibrary::build_fence(int variant) {
     PropDef def;
-    def.name = "fence";
+    def.name = "fence_post";
     const Vec3 wood = variant % 2 == 0 ? Vec3{0.42f, 0.30f, 0.18f} : Vec3{0.36f, 0.26f, 0.16f};
     MeshData m;
-    add_box(m, {-0.05f, 0.0f, -0.05f}, {0.05f, 0.95f, 0.05f}, wood);       // post
-    add_box(m, {-0.85f, 0.30f, -0.03f}, {0.85f, 0.40f, 0.03f}, wood * 1.1f); // lower rail
-    add_box(m, {-0.85f, 0.62f, -0.03f}, {0.85f, 0.72f, 0.03f}, wood * 1.1f); // upper rail
+    add_box(m, {-0.075f, 0.0f, -0.075f}, {0.075f, 1.0f, 0.075f}, wood);        // post
+    add_box(m, {-0.095f, 0.9f, -0.095f}, {0.095f, 1.04f, 0.095f}, wood * 0.85f); // cap
     def.parts.push_back({std::move(m), PropLayer::Opaque});
     BoxCollider c;
-    c.half_extents = Vec2{0.85f, 0.12f};
+    c.half_extents = Vec2{0.1f, 0.1f};
+    c.height = 1.0f;
+    def.colliders.push_back(c);
+    return def;
+}
+
+// A fence RAIL span: two horizontal rails modelled UNIT length along local +X (x in
+// -0.5..0.5). The scatter places it at the midpoint between two posts, yawed along the
+// road, and stretches it (PropInstance::length) to exactly bridge the gap - so rails vary
+// in length and butt onto the posts. The collider stretches with it (CollisionWorld scales
+// the local box along +X by the same length).
+PropDef PropLibrary::build_fence_rail(int variant) {
+    PropDef def;
+    def.name = "fence_rail";
+    const Vec3 wood = (variant % 2 == 0 ? Vec3{0.42f, 0.30f, 0.18f} : Vec3{0.36f, 0.26f, 0.16f}) * 1.1f;
+    MeshData m;
+    add_box(m, {-0.5f, 0.34f, -0.028f}, {0.5f, 0.44f, 0.028f}, wood); // lower rail
+    add_box(m, {-0.5f, 0.66f, -0.028f}, {0.5f, 0.76f, 0.028f}, wood); // upper rail
+    def.parts.push_back({std::move(m), PropLayer::Opaque});
+    BoxCollider c;
+    c.center = Vec3{0.0f, 0.0f, 0.0f};
+    c.half_extents = Vec2{0.5f, 0.08f}; // unit half-length in X; scaled by the gap at scatter
     c.height = 0.85f;
     def.colliders.push_back(c);
     return def;
@@ -705,25 +753,60 @@ PropDef PropLibrary::build_wagon_wheel() {
     return def;
 }
 
-// A raised cobblestone street tile: a flat ~2x2 m slab with a few domed stones, sitting
-// slightly proud of the terrain so the town's paths read as paved streets. Walkable (no
-// collider). The village lays a row of these along its avenues + plaza.
+// A cobblestone street tile, low-poly: a dark mortar bed SUNK into the ground (so it never
+// floats), packed with a jittered grid of individual rounded cobbles - each a little beveled
+// stone raised to its own height in its own grey tone. Because every stone has a distinct
+// height and rises clear of the bed, no two faces are coplanar, so there's no z-fighting; the
+// varied stones read as hand-laid cobblestone rather than flat square blocks. Tiles abut
+// edge-to-edge (no overlap) into one continuous street. NO collider (you walk/drive on it).
 PropDef PropLibrary::build_path_tile() {
     PropDef def;
     def.name = "path_tile";
-    const Vec3 cobble{0.50f, 0.49f, 0.47f};
-    const Vec3 cobble2{0.42f, 0.41f, 0.40f};
+    const Vec3 mortar{0.24f, 0.22f, 0.20f}; // dark earth/mortar between the stones
+    const Vec3 stones[4] = {{0.56f, 0.55f, 0.52f},
+                            {0.48f, 0.47f, 0.45f},
+                            {0.62f, 0.60f, 0.57f},
+                            {0.43f, 0.43f, 0.44f}};
     MeshData m;
-    constexpr f32 hx = 1.05f, hz = 1.05f, h = 0.12f;
-    add_box(m, {-hx, 0.0f, -hz}, {hx, h, hz}, cobble); // the slab (top at +h above ground)
-    // A few darker domed stones for cobble texture.
-    for (int i = 0; i < 5; ++i) {
-        const f32 ox = (static_cast<f32>((i * 53) % 7) / 7.0f - 0.5f) * 1.6f;
-        const f32 oz = (static_cast<f32>((i * 31) % 5) / 5.0f - 0.5f) * 1.6f;
-        add_box(m, {ox - 0.18f, h, oz - 0.18f}, {ox + 0.18f, h + 0.05f, oz + 0.18f}, cobble2);
+    constexpr f32 hx = 1.15f, hz = 1.15f;
+    add_box(m, {-hx, -0.20f, -hz}, {hx, 0.02f, hz}, mortar); // bed, mostly sunk into the ground
+
+    // A jittered grid of cobbles. Each is a 4-sided frustum (wider base, smaller flat top) so
+    // it reads as a domed/beveled stone; height + tone + position jitter make it hand-laid.
+    constexpr int g = 5;
+    const f32 cell = (2.0f * hx) / static_cast<f32>(g);
+    auto rnd = [](int i, int j, int salt) {
+        const u32 h = (static_cast<u32>(i * 73856093) ^ static_cast<u32>(j * 19349663) ^
+                       static_cast<u32>(salt * 83492791));
+        return static_cast<f32>((h >> 9) & 0xFFFFu) / 65535.0f;
+    };
+    for (int j = 0; j < g; ++j) {
+        for (int i = 0; i < g; ++i) {
+            const f32 cx = -hx + (static_cast<f32>(i) + 0.5f) * cell + (rnd(i, j, 1) - 0.5f) * cell * 0.3f;
+            const f32 cz = -hz + (static_cast<f32>(j) + 0.5f) * cell + (rnd(i, j, 2) - 0.5f) * cell * 0.3f;
+            const f32 r = cell * (0.40f + rnd(i, j, 3) * 0.12f); // base half-width
+            const f32 top = 0.06f + rnd(i, j, 4) * 0.06f;        // raised height (each different)
+            const f32 tr = r * 0.62f;                            // smaller flat top (bevel)
+            const Vec3 col = stones[(i + j * 2 + static_cast<int>(rnd(i, j, 5) * 4.0f)) % 4];
+            const Vec3 axis{cx, top * 0.5f, cz};
+            const Vec3 b00{cx - r, 0.0f, cz - r}, b10{cx + r, 0.0f, cz - r};
+            const Vec3 b11{cx + r, 0.0f, cz + r}, b01{cx - r, 0.0f, cz + r};
+            const Vec3 t00{cx - tr, top, cz - tr}, t10{cx + tr, top, cz - tr};
+            const Vec3 t11{cx + tr, top, cz + tr}, t01{cx - tr, top, cz + tr};
+            emit_tri(m, b00, b10, t10, axis, col); // four sloped sides
+            emit_tri(m, b00, t10, t00, axis, col);
+            emit_tri(m, b10, b11, t11, axis, col);
+            emit_tri(m, b10, t11, t10, axis, col);
+            emit_tri(m, b11, b01, t01, axis, col);
+            emit_tri(m, b11, t01, t11, axis, col);
+            emit_tri(m, b01, b00, t00, axis, col);
+            emit_tri(m, b01, t00, t01, axis, col);
+            emit_tri(m, t00, t10, t11, axis, col); // flat top
+            emit_tri(m, t00, t11, t01, axis, col);
+        }
     }
     def.parts.push_back({std::move(m), PropLayer::Opaque});
-    return def; // no collider - you walk on it
+    return def;
 }
 
 // A pot of greenery (stone/wood planter + a leafy bush + a couple of flowers) to green up
@@ -797,6 +880,7 @@ PropLibrary::PropLibrary() {
     }
     for (int i = 0; i < 2; ++i) {
         fences_.push_back(build_fence(i));
+        fence_rails_.push_back(build_fence_rail(i));
     }
     lanterns_.push_back(build_lantern_post());
     for (u32 i = 0; i < kHouseVariants; ++i) {
@@ -821,6 +905,7 @@ const PropDef& PropLibrary::resolve(const PropInstance& inst) const {
         case PropCategory::Rock: return rocks_[inst.variant % rocks_.size()];
         case PropCategory::Log: return logs_[inst.variant % logs_.size()];
         case PropCategory::Fence: return fences_[inst.variant % fences_.size()];
+        case PropCategory::FenceRail: return fence_rails_[inst.variant % fence_rails_.size()];
         case PropCategory::Lantern: return lanterns_[inst.variant % lanterns_.size()];
         case PropCategory::House: return houses_[inst.variant % houses_.size()];
         case PropCategory::Wall: return walls_[inst.variant % walls_.size()];

@@ -25,7 +25,7 @@ struct TreeInstance {
 // Placement is on a global cell grid, so neighbouring chunks never double-place.
 inline std::vector<TreeInstance> scatter_trees(int cx, int cz, f32 chunk_world, u32 seed) {
     std::vector<TreeInstance> trees;
-    constexpr f32 cell = 3.4f; // dense, but with room to walk and see
+    constexpr f32 cell = 2.9f; // very dense woodland (room to weave between trunks)
     const f32 x0 = static_cast<f32>(cx) * chunk_world;
     const f32 z0 = static_cast<f32>(cz) * chunk_world;
     const int gx0 = static_cast<int>(std::floor(x0 / cell));
@@ -50,8 +50,8 @@ inline std::vector<TreeInstance> scatter_trees(int cx, int cz, f32 chunk_world, 
                 continue; // dry desert stays open
             }
             const u32 h = detail::tree_hash(gx, gz, seed + 777u);
-            // Dense canopy where it's wet; thins toward dry/edge ground.
-            const f32 density = 0.12f + glm::clamp(moist, 0.0f, 0.7f) * 0.7f;
+            // Thick canopy where it's wet; still well-wooded toward dry/edge ground.
+            const f32 density = 0.45f + glm::clamp(moist, 0.0f, 0.7f) * 0.5f;
             if (detail::hash01(h) > density) {
                 continue;
             }
@@ -60,16 +60,28 @@ inline std::vector<TreeInstance> scatter_trees(int cx, int cz, f32 chunk_world, 
             if (slope > 2.6f) {
                 continue; // too steep
             }
-            if (roads::distance(wx, wz, seed) < roads::road_half_width + 1.2f) {
-                continue; // keep roads clear of trees
+            if (roads::distance(wx, wz, seed) < roads::road_half_width + 10.0f) {
+                continue; // a broad cleared verge - open sightlines along the road, no canopy roof
             }
-            if (worldgen::inside_village(wx, wz, seed, 2.5f)) {
-                continue; // towns are cleared of forest
+            // Towns sit in a clearing: bare for a ring outside the wall, then the forest
+            // thickens back over a fade band - so you emerge from woods into open ground
+            // around a town instead of it being walled in by giant canopies.
+            if (const auto tv = worldgen::village_containing(wx, wz, seed, 22.0f)) {
+                const Vec2 dv{wx - tv->center.x, wz - tv->center.y};
+                const f32 edge = glm::length(dv) - worldgen::town_radius(*tv, std::atan2(dv.y, dv.x), seed);
+                if (edge < 10.0f) {
+                    continue; // open clearing hugging the town
+                }
+                const f32 thicken = glm::clamp((edge - 10.0f) / 12.0f, 0.0f, 1.0f);
+                if (detail::hash01(h ^ 0x51u) > thicken) {
+                    continue; // forest thins as it nears the clearing
+                }
             }
 
             TreeInstance t;
             t.position = Vec3{wx, gh, wz};
-            t.scale = 1.25f + detail::hash01(detail::tree_hash(gx, gz, seed + 3u)) * 0.95f; // big trees
+            // Big trees for a dense, canopied forest (half the previous towering size).
+            t.scale = 2.3f + detail::hash01(detail::tree_hash(gx, gz, seed + 3u)) * 1.5f;
             t.yaw = detail::hash01(detail::tree_hash(gx, gz, seed + 4u)) * TwoPi;
             t.variant = static_cast<int>(h % 5u); // pine / oak / birch / broad oak / dead
             const f32 cv = 0.85f + detail::hash01(detail::tree_hash(gx, gz, seed + 5u)) * 0.3f;
