@@ -34,6 +34,8 @@ public:
     const std::vector<PropDef>& paths() const { return paths_; }
     const std::vector<PropDef>& planters() const { return planters_; }
     const std::vector<PropDef>& fountains() const { return fountains_; }
+    const std::vector<PropDef>& decor() const { return decor_; }
+    const std::vector<PropDef>& rivers() const { return rivers_; }
 
     // Look up a placed instance's definition.
     const PropDef& resolve(const PropInstance& inst) const;
@@ -58,6 +60,9 @@ public:
     static PropDef build_path_tile();        // a raised cobblestone street tile
     static PropDef build_planter();          // a pot of greenery / flowers
     static PropDef build_fountain();         // a stone plaza fountain
+    static PropDef build_decor(int variant); // medieval town clutter (see kDecorVariants)
+    static PropDef build_river();            // a sunken river-channel tile (banks + water)
+    static PropDef build_stone_bridge();     // an arched stone road bridge across a river
 
 private:
     std::vector<PropDef> bushes_;
@@ -75,6 +80,8 @@ private:
     std::vector<PropDef> paths_;
     std::vector<PropDef> planters_;
     std::vector<PropDef> fountains_;
+    std::vector<PropDef> decor_;
+    std::vector<PropDef> rivers_;
 };
 
 } // namespace alryn

@@ -10,18 +10,28 @@
 
 #include <array>
 #include <cmath>
+#include <mutex>
+#include <unordered_map>
 #include <vector>
 
 namespace alryn {
 
 namespace detail {
 
-inline constexpr f32 kGateHalf = 2.6f; // gate opening half-width
+inline constexpr f32 kGateHalf = 2.6f;        // minimum gate opening half-width (one road)
+inline constexpr f32 kGateMaxHalf = 9.0f;     // cap on a widened opening (several roads at once)
+inline constexpr f32 kGatehouseMargin = 1.4f; // gatehouse offset just outside the opening edge
+inline constexpr f32 kGateClusterDist = 12.0f; // roads crossing within this share one wide gate
+inline constexpr f32 kMarketHalf = 9.0f;     // central market square footprint (stalls + slack)
 
-// A gate opening: its angle from the town centre and its world position on the wall.
+// A gate opening: its angle + world position on the wall, and its half-width along the wall.
+// The half-width WIDENS when several roads leave town near the same spot, so the opening (and
+// its flanking gatehouses) spans them all - one narrow gate could leave divergent roads butting
+// into a wall.
 struct VillageGate {
     f32 ang = 0.0f;
     Vec2 pos{0.0f};
+    f32 half = kGateHalf;
 };
 
 // The boundary point of town v at world-angle `ang` (on its organic outline).
@@ -38,38 +48,119 @@ inline f32 ang_diff(f32 a, f32 b) {
     return d;
 }
 
-// The town's gates - one where each incident road meets the (organic) wall, so roads run
-// straight through the opening. An isolated town gets one default gate (+Z). Shared by
-// village_props + village_gates so gates line up with the roads.
-inline std::vector<VillageGate> village_gate_points(const worldgen::Village& v, u32 seed) {
-    std::vector<VillageGate> gates;
-    const std::vector<roads::Segment> segs =
-        roads::gather(v.center, worldgen::village_cell * roads::road_max_cells, seed);
-    constexpr f32 tol = 1.5f;
-    auto add_gate = [&](Vec2 d) {
-        if (glm::length(d) < 1e-3f) {
-            return;
+// Computes the town's gates: one where each incident road actually CROSSES the (organic) wall.
+// A road meanders on its way out of town, so where it crosses the wall can be well off its
+// initial heading - cutting the gate at the heading (the old bug) left the road butting into a
+// wall. Here we take the road to each neighbouring town, walk it from this centre outward, and
+// open the wall at the first boundary crossing, so the road always runs through the gap. Only
+// incident roads count, so the gate total stays bounded. Isolated town -> one default gate (+Z).
+inline std::vector<VillageGate> compute_gates(const worldgen::Village& v, u32 seed) {
+    // Signed "outside-ness" of a point: <0 inside the organic wall, >0 outside.
+    auto signed_out = [&](const Vec2& p) {
+        const Vec2 d = p - v.center;
+        const f32 r = glm::length(d);
+        if (r < 1e-3f) {
+            return -worldgen::town_radius(v, 0.0f, seed);
         }
-        d = glm::normalize(d);
-        const f32 ang = std::atan2(d.y, d.x);
-        for (const VillageGate& e : gates) {
-            if (std::abs(ang_diff(ang, e.ang)) < 0.4f) {
-                return; // merge near-duplicate gates
+        return r - worldgen::town_radius(v, std::atan2(d.y, d.x), seed);
+    };
+
+    // 1. Collect every incident road's first wall crossing point.
+    std::vector<Vec2> crossings;
+    const int vcx = static_cast<int>(std::floor(v.center.x / worldgen::village_cell));
+    const int vcz = static_cast<int>(std::floor(v.center.y / worldgen::village_cell));
+    for (int dz = -roads::road_max_cells; dz <= roads::road_max_cells; ++dz) {
+        for (int dx = -roads::road_max_cells; dx <= roads::road_max_cells; ++dx) {
+            if (dx == 0 && dz == 0) {
+                continue;
+            }
+            const auto nb = worldgen::village_at(vcx + dx, vcz + dz, seed);
+            if (!nb) {
+                continue;
+            }
+            const std::vector<Vec2> poly = roads::route_polyline(v.center, nb->center, seed);
+            for (usize i = 1; i < poly.size(); ++i) {
+                const f32 fa = signed_out(poly[i - 1]);
+                const f32 fb = signed_out(poly[i]);
+                if ((fa < 0.0f) == (fb < 0.0f)) {
+                    continue; // both ends the same side of the wall - no crossing here
+                }
+                const f32 t = glm::clamp(fa / (fa - fb), 0.0f, 1.0f);
+                const Vec2 cross = glm::mix(poly[i - 1], poly[i], t);
+                if (glm::length(cross - v.center) > 1e-3f) {
+                    crossings.push_back(cross);
+                }
+                break; // the first crossing leaving town is the gate (ignore any re-entries)
             }
         }
-        gates.push_back(VillageGate{ang, town_boundary(v, ang, seed)});
-    };
-    for (const roads::Segment& s : segs) {
-        if (glm::length(s.a - v.center) < tol) {
-            add_gate(s.b - s.a);
-        } else if (glm::length(s.b - v.center) < tol) {
-            add_gate(s.a - s.b);
+    }
+
+    // 2. Cluster crossings that leave near the same spot (within kGateClusterDist). Each cluster
+    //    becomes one gate, its opening WIDENED to span every road in it - so two or three roads
+    //    that exit together all run through a single wide gate instead of butting into a wall.
+    std::vector<std::vector<Vec2>> clusters;
+    for (const Vec2& c : crossings) {
+        int found = -1;
+        for (usize k = 0; k < clusters.size() && found < 0; ++k) {
+            for (const Vec2& p : clusters[k]) {
+                if (glm::length(c - p) < kGateClusterDist) {
+                    found = static_cast<int>(k);
+                    break;
+                }
+            }
+        }
+        if (found < 0) {
+            clusters.push_back({c});
+        } else {
+            clusters[static_cast<usize>(found)].push_back(c);
         }
     }
+
+    std::vector<VillageGate> gates;
+    for (const std::vector<Vec2>& pts : clusters) {
+        Vec2 mean{0.0f};
+        for (const Vec2& p : pts) {
+            mean += p;
+        }
+        mean /= static_cast<f32>(pts.size());
+        const Vec2 dm = mean - v.center;
+        const f32 ang = glm::length(dm) > 1e-3f ? std::atan2(dm.y, dm.x) : HalfPi;
+        const Vec2 gpos = town_boundary(v, ang, seed);
+        // Half-width = how far the cluster's roads spread along the wall + each road's own
+        // half-width + a little margin (clamped to a sane range), so the gap covers them all.
+        Vec2 radial = gpos - v.center;
+        radial = glm::length(radial) > 1e-3f ? glm::normalize(radial) : Vec2{0.0f, 1.0f};
+        const Vec2 tangent{-radial.y, radial.x};
+        f32 spread = 0.0f;
+        for (const Vec2& p : pts) {
+            spread = std::max(spread, std::abs(glm::dot(p - gpos, tangent)));
+        }
+        const f32 half = glm::clamp(spread + roads::road_half_width + 0.4f, kGateHalf, kGateMaxHalf);
+        gates.push_back(VillageGate{ang, gpos, half});
+    }
     if (gates.empty()) {
-        add_gate(Vec2{0.0f, 1.0f}); // isolated town: one default gate (+Z)
+        gates.push_back(VillageGate{HalfPi, town_boundary(v, HalfPi, seed), kGateHalf});
     }
     return gates;
+}
+
+// Cached per town (keyed by its layout seed + world seed), because this runs per terrain
+// vertex while colouring the town paths - computing the road crossings every time would be
+// far too slow. Thread-safe (the terrain mesher runs on a worker thread).
+inline std::vector<VillageGate> village_gate_points(const worldgen::Village& v, u32 seed) {
+    static std::mutex mtx;
+    static std::unordered_map<u64, std::vector<VillageGate>> cache;
+    const u64 key = (static_cast<u64>(v.vseed) << 32) | static_cast<u64>(seed);
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        const auto it = cache.find(key);
+        if (it != cache.end()) {
+            return it->second;
+        }
+    }
+    std::vector<VillageGate> gates = compute_gates(v, seed);
+    std::lock_guard<std::mutex> lock(mtx);
+    return cache.emplace(key, std::move(gates)).first->second;
 }
 
 // One placed house: its ground-plane position, the yaw facing the town centre, and its
@@ -101,6 +192,38 @@ inline f32 house_reach(u8 variant) {
     return std::max(e.x, e.y) + 0.6f;
 }
 
+// A river running across some towns: a straight stone-lined channel offset to one side of the
+// market so it splits the town and is crossed by stone bridges. Only the bigger towns are
+// eligible (a small one has no room), and ~half of those get one - the rest sit on dry land.
+struct RiverInfo {
+    bool present = false;
+    Vec2 dir{1.0f, 0.0f};    // unit direction the river flows
+    Vec2 normal{0.0f, 1.0f}; // unit perpendicular
+    f32 offset = 0.0f;       // signed distance of the centreline from the town centre, along normal
+    f32 half_width = 3.7f;   // channel half-width (water + banks), matches build_river
+};
+
+inline RiverInfo town_river(const worldgen::Village& v, u32 seed) {
+    RiverInfo r;
+    const int vid = static_cast<int>(v.vseed);
+    if (v.half < 36.0f || detail::hash01(detail::tree_hash(vid, 0, 6000u + seed)) > 0.5f) {
+        return r; // small towns + half of the rest stay on dry land
+    }
+    r.present = true;
+    const f32 ang = detail::hash01(detail::tree_hash(vid, 1, 6001u + seed)) * TwoPi;
+    r.dir = Vec2{std::cos(ang), std::sin(ang)};
+    r.normal = Vec2{-r.dir.y, r.dir.x};
+    const f32 side = detail::hash01(detail::tree_hash(vid, 2, 6002u + seed)) < 0.5f ? -1.0f : 1.0f;
+    r.offset = side * (kMarketHalf + 4.5f); // runs just past the market plaza on one side
+    return r;
+}
+
+// Signed perpendicular distance of world point p from the river centreline; |.| < half_width
+// means p is in the water.
+inline f32 river_dist(const RiverInfo& r, const Vec2& center, const Vec2& p) {
+    return glm::dot(p - center, r.normal) - r.offset;
+}
+
 // Deterministically lays out a town's houses: rings of cottages facing the centre, plus
 // (in some towns) a two-storey bridge pair. A candidate is rejected if it sits on uneven
 // ground, would clip the **central market**, cross the **perimeter wall**, or **overlap
@@ -116,17 +239,24 @@ inline void for_each_house(const worldgen::Village& v, u32 seed,
     const f32 cz = v.center.y;
     const f32 half = v.half;
     const int vid = static_cast<int>(v.vseed);
-    constexpr f32 market_reach = 4.8f; // the central market's footprint (stalls) + slack
+    constexpr f32 market_reach = kMarketHalf; // the central market square footprint + slack
     constexpr f32 wall_margin = 1.2f;  // gap kept between a house and the palisade
     constexpr f32 avenue_half = 2.8f;  // keep houses off the gate->market avenues
 
-    std::array<Vec2, 64> placed;
-    std::array<f32, 64> reach;
+    const RiverInfo river = town_river(v, seed);
+
+    std::array<Vec2, 160> placed;
+    std::array<f32, 160> reach;
     int np = 0;
     auto try_place = [&](f32 x, f32 z, f32 yaw, u8 variant) -> bool {
         const f32 r = house_reach(variant);
-        if (std::abs(worldgen::height(x, z, seed) - v.ground) > 1.6f) {
-            return false; // uneven ground
+        const f32 gh = worldgen::height(x, z, seed);
+        if (std::abs(gh - v.ground) > 2.4f || gh < worldgen::water_level + 1.0f) {
+            return false; // too uneven to build on, or it would sit in the water
+        }
+        if (river.present &&
+            std::abs(river_dist(river, v.center, Vec2{x, z})) < river.half_width + r + 1.0f) {
+            return false; // keep houses off the river channel + its banks
         }
         const Vec2 d{x - cx, z - cz};
         const f32 dist = glm::length(d);
@@ -156,25 +286,26 @@ inline void for_each_house(const worldgen::Village& v, u32 seed,
         return true;
     };
 
-    auto ring = [&](f32 radius, int count, u32 rsalt) {
-        for (int i = 0; i < count; ++i) {
-            const f32 a = TwoPi * static_cast<f32>(i) / static_cast<f32>(count) +
-                          detail::hash01(detail::tree_hash(vid, i, rsalt)) * 0.3f;
-            const f32 x = cx + std::cos(a) * radius;
-            const f32 z = cz + std::sin(a) * radius;
-            const f32 yaw = std::atan2(cx - x, cz - z); // front (+Z) faces the centre
-            try_place(x, z, yaw,
-                      static_cast<u8>(detail::tree_hash(vid, i, rsalt + 1u) % kHouseVariants));
-        }
-    };
-    auto ring_for = [&](f32 r, f32 spacing, int min_n, u32 rsalt) {
-        ring(r, std::max(min_n, static_cast<int>(std::round(TwoPi * r / spacing))), rsalt);
-    };
-    // Three loose rings (bigger towns fill all three; small towns drop the outer one to
-    // rejection) so a town reads as a populated, lived-in cluster of homes.
-    ring_for(half * 0.48f, 20.0f, 3, 100u); // inner ring around the market
-    ring_for(half * 0.66f, 22.0f, 4, 200u); // middle ring
-    ring_for(half * 0.83f, 24.0f, 5, 300u); // outer ring near the walls
+    // Houses fill the buildable annulus (outside the market, inside the wall) as a dense,
+    // organic sprawl. We walk a sunflower (phyllotaxis) spiral of candidate sites from the
+    // plaza outward - which fills area evenly without a visible grid - and keep each that
+    // doesn't clip the market, cross the wall, block a gate->market avenue or overlap another
+    // house. So a big town packs in ~40-50 homes and a small one a cosy dozen, never on a
+    // neat ring. The candidate budget scales with the town's area.
+    const f32 inner = kMarketHalf + 6.0f;        // first homes just off the market square
+    const f32 outer = half * 0.94f;              // out to just inside the wall
+    const int budget = glm::clamp(static_cast<int>(std::round(half * 1.1f)), 14, 64);
+    constexpr f32 golden = 2.39996323f;          // golden angle (radians)
+    for (int i = 0; i < budget; ++i) {
+        const f32 frac = (static_cast<f32>(i) + 0.5f) / static_cast<f32>(budget);
+        const f32 jr = (detail::hash01(detail::tree_hash(vid, i, 510u)) - 0.5f) * 5.5f;
+        const f32 radius = glm::clamp(glm::mix(inner, outer, std::sqrt(frac)) + jr, inner, outer);
+        const f32 a = static_cast<f32>(i) * golden + detail::hash01(detail::tree_hash(vid, i, 511u)) * 0.5f;
+        const f32 x = cx + std::cos(a) * radius;
+        const f32 z = cz + std::sin(a) * radius;
+        const f32 yaw = std::atan2(cx - x, cz - z); // front (+Z) faces the centre
+        try_place(x, z, yaw, static_cast<u8>(detail::tree_hash(vid, i, 512u) % kHouseVariants));
+    }
 
     // Some towns have a pair of two-storey houses joined by a raised covered bridge.
     if (detail::hash01(detail::tree_hash(vid, 0, 900u)) < 0.55f) {
@@ -204,7 +335,7 @@ inline std::vector<Vec3> village_wagon_spots(const worldgen::Village& v, u32 see
     detail::for_each_house(v, seed, gates, [&](const detail::HousePlot& h) {
         occ.emplace_back(h.pos, detail::house_reach(h.variant));
     });
-    occ.emplace_back(v.center, 4.8f); // the market
+    occ.emplace_back(v.center, detail::kMarketHalf); // the market square
     const Vec2 dir = gates.empty() ? Vec2{0.0f, 1.0f} : glm::normalize(gates[0].pos - v.center);
     const Vec2 perp{-dir.y, dir.x};
     constexpr f32 kSpotSpacing = 3.4f; // distance between adjacent depot spots
@@ -255,13 +386,25 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
     const auto gates = detail::village_gate_points(v, seed);
 
     auto push = [&](PropCategory cat, u8 var, f32 x, f32 z, f32 yaw) {
+        const f32 gh = worldgen::height(x, z, seed);
+        if (gh < worldgen::water_level + 0.5f) {
+            return; // never place a town prop down in the water
+        }
         PropInstance p;
         p.category = cat;
         p.variant = var;
-        p.position = Vec3{x, worldgen::height(x, z, seed), z};
+        p.position = Vec3{x, gh, z};
         p.yaw = yaw;
         p.scale = 1.0f;
         out.push_back(p);
+    };
+
+    // Some towns have a river running through them (others are on dry land). Streets, decor and
+    // greenery keep out of its channel; stone bridges carry the avenues across it.
+    const detail::RiverInfo river = detail::town_river(v, seed);
+    auto in_river = [&](f32 x, f32 z) {
+        return river.present &&
+               std::abs(detail::river_dist(river, v.center, Vec2{x, z})) < river.half_width + 0.4f;
     };
 
     // Shared occupancy so decor never overlaps a building/market/fountain/wagon spot.
@@ -277,7 +420,7 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
 
     // Market centre.
     push(PropCategory::Market, 0, cx, cz, 0.0f);
-    occ.emplace_back(v.center, 4.8f);
+    occ.emplace_back(v.center, detail::kMarketHalf);
 
     // Houses (+ optional bridge pair), collision-rejected against walls/market/avenues.
     std::vector<detail::HousePlot> plots;
@@ -292,6 +435,43 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
         push(PropCategory::Bridge, 0, bridge.center.x, bridge.center.y, bridge.yaw);
     }
 
+    // The river: stone-lined channel tiles laid along its course (within the town outline),
+    // and arched stone bridges where the gate->market avenues cross it.
+    if (river.present) {
+        const f32 river_yaw = std::atan2(-river.dir.y, river.dir.x); // prop local +X -> river.dir
+        constexpr f32 tile = 4.0f;                                   // build_river tile length
+        for (f32 t = -half * 1.45f; t <= half * 1.45f; t += tile) {
+            const Vec2 c = v.center + river.normal * river.offset + river.dir * t;
+            const Vec2 d = c - v.center;
+            if (glm::length(d) > worldgen::town_radius(v, std::atan2(d.y, d.x), seed) - 0.5f) {
+                continue; // the channel ends at the wall
+            }
+            push(PropCategory::River, 0, c.x, c.y, river_yaw);
+        }
+        bool any_bridge = false;
+        for (const detail::VillageGate& g : gates) {
+            const Vec2 av = g.pos - v.center; // avenue: centre -> gate
+            const f32 denom = glm::dot(av, river.normal);
+            if (std::abs(denom) < 1e-3f) {
+                continue; // avenue runs parallel to the river
+            }
+            const f32 s = river.offset / denom; // where the avenue meets the centreline
+            if (s < 0.05f || s > 1.05f) {
+                continue;
+            }
+            const Vec2 bp = v.center + av * s;
+            const Vec2 bdir = glm::normalize(av);
+            push(PropCategory::Bridge, 1, bp.x, bp.y, std::atan2(-bdir.y, bdir.x));
+            any_bridge = true;
+        }
+        if (!any_bridge) {
+            // No avenue crosses it - bridge the channel from the plaza so the banks still connect.
+            const Vec2 bp = v.center + river.normal * river.offset;
+            const Vec2 bdir = river.normal * (river.offset < 0.0f ? -1.0f : 1.0f);
+            push(PropCategory::Bridge, 1, bp.x, bp.y, std::atan2(-bdir.y, bdir.x));
+        }
+    }
+
     // Reserve the wagon depot spots so nothing decorative lands on them.
     for (const Vec3& s : village_wagon_spots(v, seed)) {
         occ.emplace_back(Vec2{s.x, s.z}, 2.0f);
@@ -301,7 +481,7 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
     // with planters so it reads as a deliberate feature rather than a lone basin.
     const Vec2 gate_dir = gates.empty() ? Vec2{0.0f, 1.0f} : glm::normalize(gates[0].pos - v.center);
     const Vec2 gate_perp{-gate_dir.y, gate_dir.x};
-    for (f32 off : {8.0f, -8.0f, 10.0f}) {
+    for (f32 off : {12.0f, -12.0f, 14.0f}) {
         const Vec2 fp = v.center + gate_perp * off;
         if (!occupied(fp, 2.6f)) {
             push(PropCategory::Fountain, 0, fp.x, fp.y, 0.0f);
@@ -331,7 +511,7 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
     }
     for (int i = 0; i < 6; ++i) {
         const f32 a = TwoPi * static_cast<f32>(i) / 6.0f + 0.4f;
-        push(PropCategory::Lantern, 0, cx + std::cos(a) * 7.0f, cz + std::sin(a) * 7.0f, 0.0f);
+        push(PropCategory::Lantern, 0, cx + std::cos(a) * 11.5f, cz + std::sin(a) * 11.5f, 0.0f);
     }
 
     // Raised cobblestone streets: tiles along each gate->market avenue and market->house
@@ -356,6 +536,9 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
             for (int k = 1; k <= n; ++k) {
                 const Vec2 p =
                     a + u * (static_cast<f32>(k) * L / static_cast<f32>(n)) + perp * lat;
+                if (in_river(p.x, p.y)) {
+                    continue; // the river crosses here - the bridge carries the street over it
+                }
                 push(PropCategory::Path, 0, p.x, p.y, yaw);
             }
         }
@@ -366,34 +549,39 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
     for (const detail::HousePlot& h : plots) {
         lay_path(v.center, h.pos, 1); // a footpath spoke to each house
     }
-    // A paved plaza ring (two concentric rings, spaced a tile apart) around the market.
-    for (f32 rad : {5.2f, 7.5f}) {
+    // A paved plaza ring (two concentric rings, spaced a tile apart) around the market square.
+    for (f32 rad : {11.0f, 13.3f}) {
         const int ring_n = std::max(10, static_cast<int>(TwoPi * rad / tile));
         for (int i = 0; i < ring_n; ++i) {
             const f32 a = TwoPi * static_cast<f32>(i) / static_cast<f32>(ring_n);
-            push(PropCategory::Path, 0, cx + std::cos(a) * rad, cz + std::sin(a) * rad, a);
+            const f32 rx = cx + std::cos(a) * rad, rz = cz + std::sin(a) * rad;
+            if (in_river(rx, rz)) {
+                continue;
+            }
+            push(PropCategory::Path, 0, rx, rz, a);
         }
     }
 
     // Greenery: planters ringing the plaza + bushes scattered on open interior ground.
     for (int i = 0; i < 5; ++i) {
         const f32 a = TwoPi * static_cast<f32>(i) / 5.0f + 1.1f;
-        const Vec2 pp = v.center + Vec2{std::cos(a), std::sin(a)} * 6.2f;
-        if (!occupied(pp, 0.7f)) {
+        const Vec2 pp = v.center + Vec2{std::cos(a), std::sin(a)} * 11.0f;
+        if (!occupied(pp, 0.7f) && !in_river(pp.x, pp.y)) {
             push(PropCategory::Planter, 0, pp.x, pp.y, 0.0f);
             occ.emplace_back(pp, 0.7f);
         }
     }
     // Scatter bushes + planters to green up the open ground, biased toward the bare band
     // between the outer house ring and the wall so the town doesn't read as empty there.
-    for (int i = 0; i < 52; ++i) {
+    const int green_n = static_cast<int>(half * 1.6f);
+    for (int i = 0; i < green_n; ++i) {
         const f32 a = detail::hash01(detail::tree_hash(vid, i, 7700u)) * TwoPi;
         const f32 rr = (0.45f + 0.5f * detail::hash01(detail::tree_hash(vid, i, 7701u))) * half;
         if (rr > worldgen::town_radius(v, a, seed) - 1.6f) {
             continue; // stay inside the wall
         }
         const Vec2 bp = v.center + Vec2{std::cos(a), std::sin(a)} * rr;
-        if (occupied(bp, 1.0f)) {
+        if (occupied(bp, 1.0f) || in_river(bp.x, bp.y)) {
             continue;
         }
         const bool planter = detail::hash01(detail::tree_hash(vid, i, 7702u)) < 0.22f;
@@ -403,43 +591,110 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
         occ.emplace_back(bp, 1.0f);
     }
 
+    // Medieval clutter to fill the town out: stored goods (barrels/crates/woodpiles/sacks)
+    // tucked against house fronts, plus stalls, hay, signposts and troughs scattered along the
+    // streets and plaza. Everything avoids the occupancy list and the gate->market avenues, so
+    // nothing blocks a building or the cart's route.
+    auto on_avenue = [&](const Vec2& p) {
+        for (const detail::VillageGate& g : gates) {
+            if (detail::point_seg_dist(p, v.center, g.pos) < 2.6f) {
+                return true;
+            }
+        }
+        return false;
+    };
+    for (usize hi = 0; hi < plots.size(); ++hi) {
+        if (detail::hash01(detail::tree_hash(vid, static_cast<int>(hi), 8100u)) > 0.5f) {
+            continue; // only ~half the houses get a goods pile out front
+        }
+        const detail::HousePlot& h = plots[hi];
+        Vec2 toward = v.center - h.pos;
+        const f32 len = glm::length(toward);
+        if (len < 0.01f) {
+            continue;
+        }
+        toward /= len;
+        const Vec2 side{-toward.y, toward.x};
+        const f32 soff = (detail::hash01(detail::tree_hash(vid, static_cast<int>(hi), 8101u)) - 0.5f) * 2.6f;
+        const Vec2 dp = h.pos + toward * (detail::house_reach(h.variant) + 0.9f) + side * soff;
+        if (occupied(dp, 0.8f) || on_avenue(dp) || in_river(dp.x, dp.y)) {
+            continue;
+        }
+        const u8 stored[5] = {0, 1, 6, 7, 2}; // barrel, crates, woodpile, sacks, hay
+        push(PropCategory::Decor, stored[detail::tree_hash(vid, static_cast<int>(hi), 8102u) % 5u],
+             dp.x, dp.y, detail::hash01(detail::tree_hash(vid, static_cast<int>(hi), 8103u)) * TwoPi);
+        occ.emplace_back(dp, 0.8f);
+    }
+    const int decor_n = static_cast<int>(half * 1.5f);
+    for (int i = 0; i < decor_n; ++i) {
+        const f32 a = detail::hash01(detail::tree_hash(vid, i, 8200u)) * TwoPi;
+        const f32 rr = (0.3f + 0.64f * detail::hash01(detail::tree_hash(vid, i, 8201u))) * half;
+        if (rr > worldgen::town_radius(v, a, seed) - 1.8f) {
+            continue; // stay inside the wall
+        }
+        const Vec2 dp = v.center + Vec2{std::cos(a), std::sin(a)} * rr;
+        if (occupied(dp, 1.1f) || on_avenue(dp) || in_river(dp.x, dp.y)) {
+            continue;
+        }
+        u8 var;
+        if (rr < half * 0.45f && detail::hash01(detail::tree_hash(vid, i, 8202u)) < 0.4f) {
+            const u8 feature[3] = {3, 4, 5}; // stall, signpost, trough nearer the plaza
+            var = feature[detail::tree_hash(vid, i, 8203u) % 3u];
+        } else {
+            const u8 common[5] = {0, 1, 2, 6, 7}; // barrel, crates, hay, woodpile, sacks
+            var = common[detail::tree_hash(vid, i, 8204u) % 5u];
+        }
+        push(PropCategory::Decor, var, dp.x, dp.y,
+             detail::hash01(detail::tree_hash(vid, i, 8205u)) * TwoPi);
+        occ.emplace_back(dp, 1.1f);
+    }
+
     // Palisade following the organic outline: walls marched around the boundary (skipping
     // gate gaps), towers flanking each gate, and periodic towers around the wall.
     constexpr f32 seg = 3.2f;
     const int N = glm::clamp(static_cast<int>(std::round(TwoPi * half / seg)), 16, 240);
     const int tower_every = std::max(3, N / 10);
+    // True when angle `ang` is within (gate arc + `extra`) of any gate - so we can keep both
+    // wall segments AND periodic towers out of the opening (a tower in the gap blocked the road).
+    auto near_gate = [&](f32 ang, f32 extra) {
+        for (const detail::VillageGate& g : gates) {
+            const f32 r = worldgen::town_radius(v, g.ang, seed);
+            const f32 arc = g.half / r + 0.06f + extra; // a wider gate cuts a wider gap
+            if (std::abs(detail::ang_diff(ang, g.ang)) < arc) {
+                return true;
+            }
+        }
+        return false;
+    };
     for (int i = 0; i < N; ++i) {
         const f32 a0 = TwoPi * static_cast<f32>(i) / static_cast<f32>(N);
         const f32 a1 = TwoPi * static_cast<f32>(i + 1) / static_cast<f32>(N);
         const f32 amid = TwoPi * (static_cast<f32>(i) + 0.5f) / static_cast<f32>(N);
-        bool in_gate = false;
-        for (const detail::VillageGate& g : gates) {
-            const f32 r = worldgen::town_radius(v, g.ang, seed);
-            const f32 arc = detail::kGateHalf / r + 0.06f;
-            if (std::abs(detail::ang_diff(amid, g.ang)) < arc) {
-                in_gate = true;
-                break;
-            }
-        }
         const Vec2 p0 = detail::town_boundary(v, a0, seed);
         const Vec2 p1 = detail::town_boundary(v, a1, seed);
-        if (!in_gate) {
+        if (!near_gate(amid, 0.0f)) {
             const Vec2 mid = (p0 + p1) * 0.5f;
             const Vec2 chord = p1 - p0;
             push(PropCategory::Wall, static_cast<u8>(i % 2), mid.x, mid.y,
                  std::atan2(-chord.y, chord.x));
         }
-        if (i % tower_every == 0) {
-            push(PropCategory::Gate, 1, p0.x, p0.y, 0.0f); // plain (unlit) periodic boundary tower
+        // Periodic boundary tower - kept a little further from the gate so it never stands in
+        // the opening (the flanking gate towers below mark the gate itself).
+        if (i % tower_every == 0 && !near_gate(a0, 0.05f)) {
+            push(PropCategory::Gate, 1, p0.x, p0.y, 0.0f); // plain (unlit) periodic tower
         }
     }
-    // Lit gate towers flanking each gate gap (the only braziers, so the night stays even).
+    // A gatehouse on either side of each gate, facing the town centre (the lit towers + the only
+    // braziers, so the night stays even). Placed just outside the opening edge, so for a WIDE
+    // gate (several roads) they sit further apart and flank the whole span.
     for (const detail::VillageGate& g : gates) {
-        const f32 r = worldgen::town_radius(v, g.ang, seed);
-        const f32 arc = detail::kGateHalf / r + 0.06f;
-        for (f32 e : {-arc, arc}) {
-            const Vec2 tp = detail::town_boundary(v, g.ang + e, seed);
-            push(PropCategory::Gate, 0, tp.x, tp.y, 0.0f);
+        Vec2 radial = g.pos - v.center;
+        radial = glm::length(radial) > 1e-3f ? glm::normalize(radial) : Vec2{0.0f, 1.0f};
+        const Vec2 tangent{-radial.y, radial.x};
+        const f32 yaw = std::atan2(v.center.x - g.pos.x, v.center.y - g.pos.y); // front (+z) -> town
+        for (f32 e : {-1.0f, 1.0f}) {
+            const Vec2 tp = g.pos + tangent * (e * (g.half + detail::kGatehouseMargin));
+            push(PropCategory::Gate, 0, tp.x, tp.y, yaw);
         }
     }
     return out;

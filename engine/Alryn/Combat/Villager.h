@@ -22,6 +22,15 @@ inline constexpr f32 kVillagerFleeSpeed = 2.4f;  // panicked run - slower than a
 inline constexpr f32 kVillagerRadius = 0.35f;
 inline constexpr f32 kVillagerFleeRadius = 9.0f; // notices an enemy within this range
 
+// Town wall guards (Villager.kind == 2): stationary archers stationed on the walls of some
+// towns. They loose friendly arrows (Projectile.kind 3) at enemies that come within range -
+// the town's ranged defence in the transport game.
+inline constexpr int kWallGuardsPerTown = 3;
+inline constexpr f32 kWallGuardRange = 26.0f;        // engages an enemy within this
+inline constexpr f32 kWallGuardInterval = 1.5f;      // seconds between shots
+inline constexpr f32 kWallGuardArrowDamage = 16.0f;
+inline constexpr f32 kWallGuardArrowSpeed = 22.0f;
+
 // Firefighting: villagers (and players) carry water from the town well to douse
 // burning houses. A full bucket is 1.0; pouring drains it while knocking the fire down.
 inline constexpr f32 kWellRange = 2.6f;    // how close to the well to refill

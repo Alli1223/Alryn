@@ -554,6 +554,73 @@ TEST_CASE("Village: towns are placed, laid out deterministically, with houses + 
     CHECK_FALSE(tree_in_town);
 }
 
+TEST_CASE("Gates: every town road runs through a gate gap, not into a wall") {
+    int roads_checked = 0, blocked = 0, merged_gate_towns = 0;
+    for (const u32 seed : {4242u, 777u, 1337u, 99u}) {
+        for (int vz = -8; vz <= 8; ++vz) {
+            for (int vx = -8; vx <= 8; ++vx) {
+                const auto v = worldgen::village_at(vx, vz, seed);
+                if (!v) {
+                    continue;
+                }
+                std::vector<Vec2> walls;
+                for (const PropInstance& p : village_props(*v, seed)) {
+                    if (p.category == PropCategory::Wall || p.category == PropCategory::Gate) {
+                        walls.emplace_back(p.position.x, p.position.z); // walls + towers both block
+                    }
+                }
+                if (walls.empty()) {
+                    continue;
+                }
+                // A town where several roads leave together merges them into fewer (wider) gates
+                // - exactly the case that used to leave divergent roads butting into a wall.
+                int incident = 0;
+                // For each road to a neighbour, walk it where it crosses the wall band and confirm
+                // the nearest wall/tower prop stays clear of the road - i.e. the road runs through
+                // the gate gap, never into a wall or a tower.
+                for (int dz = -roads::road_max_cells; dz <= roads::road_max_cells; ++dz) {
+                    for (int dx = -roads::road_max_cells; dx <= roads::road_max_cells; ++dx) {
+                        if (dx == 0 && dz == 0) {
+                            continue;
+                        }
+                        const auto nb = worldgen::village_at(vx + dx, vz + dz, seed);
+                        if (!nb) {
+                            continue;
+                        }
+                        const auto poly = roads::route_polyline(v->center, nb->center, seed);
+                        if (poly.size() < 2) {
+                            continue;
+                        }
+                        ++incident;
+                        ++roads_checked;
+                        for (const Vec2& pt : poly) {
+                            const Vec2 d = pt - v->center;
+                            const f32 r = glm::length(d);
+                            const f32 tr = worldgen::town_radius(*v, std::atan2(d.y, d.x), seed);
+                            if (std::abs(r - tr) > 4.0f) {
+                                continue; // only the points in the wall band matter
+                            }
+                            f32 nearest = 1e9f;
+                            for (const Vec2& w : walls) {
+                                nearest = std::min(nearest, glm::length(w - pt));
+                            }
+                            if (nearest < roads::road_half_width) {
+                                ++blocked;
+                            }
+                        }
+                    }
+                }
+                if (incident > static_cast<int>(village_gates(*v, seed).size())) {
+                    ++merged_gate_towns; // more roads than gates -> at least one widened gate
+                }
+            }
+        }
+    }
+    CHECK(roads_checked > 0);
+    CHECK(merged_gate_towns > 0);  // the multi-road-share-a-gate case is actually exercised
+    CHECK(blocked == 0); // and even then every road runs through its (widened) gate, not a wall
+}
+
 TEST_CASE("Roads: routed roads connect towns, avoid water, and trees keep off them") {
     const u32 seed = 4242u;
     const auto segs = roads::gather(Vec2{0.0f, 0.0f}, 1400.0f, seed);

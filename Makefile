@@ -4,6 +4,7 @@
 #
 #   make                 configure + build everything
 #   make run             build, then launch the game
+#   make run-release     build an optimised Release build (in build-release/) and launch it
 #   make test            build, then run the whole test suite
 #   make clean           delete the build directory
 #   make rebuild         clean + build
@@ -36,7 +37,11 @@ GAME    := $(BUILD_DIR)/bin/alryn_game
 TESTBIN := $(BUILD_DIR)/bin/alryn_tests
 CACHE   := $(BUILD_DIR)/CMakeCache.txt
 
-.PHONY: all build configure run test clean rebuild ci help \
+# Release lives in its own build dir, so it never clobbers the Debug build's cache.
+RELEASE_DIR  ?= build-release
+RELEASE_GAME := $(RELEASE_DIR)/bin/alryn_game
+
+.PHONY: all build configure run run-release test clean rebuild ci help \
         test-core test-scene test-physics test-render test-terrain \
         test-net test-combat test-character test-ui test-filter list-tests shots
 
@@ -58,6 +63,13 @@ build: configure
 run: build
 	@echo "==> $(GAME)"
 	@./$(GAME)
+
+## run-release: configure + build an optimised Release build (in build-release/), then launch the game
+run-release:
+	$(CMAKE) -S . -B $(RELEASE_DIR) -DCMAKE_BUILD_TYPE=Release
+	@MAKEFLAGS= $(CMAKE) --build $(RELEASE_DIR) -j$(JOBS) --target alryn_game
+	@echo "==> $(RELEASE_GAME)"
+	@./$(RELEASE_GAME)
 
 ## test: build, then run the whole test suite
 test: build

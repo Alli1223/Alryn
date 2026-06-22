@@ -355,6 +355,38 @@ void GameServer::update_townsfolk(Timestep dt, const DensitySampler& density) {
                     vg.rng = id | 1u;
                     villagers_.emplace(id, std::move(vg));
                 });
+
+                // Garrison: ~half the towns post a few archer guards on their walls.
+                if (detail::hash01(detail::tree_hash(static_cast<int>(vv->vseed), 7, 5151u)) < 0.5f) {
+                    for (int gidx = 0; gidx < kWallGuardsPerTown; ++gidx) {
+                        const u32 gid = (vv->vseed * 2654435761u) ^
+                                        ((static_cast<u32>(gidx) + 1u) * 26171u) ^ 0xA5A50000u;
+                        if (villagers_.count(gid) != 0u) {
+                            continue;
+                        }
+                        f32 ang = TwoPi * (static_cast<f32>(gidx) + 0.5f) /
+                                      static_cast<f32>(kWallGuardsPerTown) +
+                                  detail::hash01(detail::tree_hash(static_cast<int>(vv->vseed), gidx,
+                                                                   5152u)) * 0.6f;
+                        for (const detail::VillageGate& g : vgates) {
+                            if (std::abs(detail::ang_diff(ang, g.ang)) < 0.28f) {
+                                ang += 0.45f; // nudge off a gate so the guard stands on solid wall
+                            }
+                        }
+                        const Vec2 bp = detail::town_boundary(*vv, ang, seed);
+                        Villager vg;
+                        vg.id = gid;
+                        vg.kind = 2; // wall archer
+                        vg.appearance = villager_look(gid);
+                        vg.position = Vec3{bp.x, worldgen::height(bp.x, bp.y, seed) + 2.0f, bp.y};
+                        vg.target = vg.position;
+                        vg.home_center = vv->center;
+                        vg.home_half = vv->half;
+                        vg.yaw = ang; // facing outward over the wall
+                        vg.rng = gid | 1u;
+                        villagers_.emplace(gid, std::move(vg));
+                    }
+                }
             }
         }
     }
@@ -377,6 +409,48 @@ void GameServer::update_townsfolk(Timestep dt, const DensitySampler& density) {
         Villager& vg = it->second;
         if (nearest_player(vg.position) > 120.0f) {
             it = villagers_.erase(it); // out of range (respawns deterministically on return)
+            continue;
+        }
+        if (vg.kind == 2) {
+            // Wall archer: stand watch and loose a friendly arrow at the nearest ambusher in
+            // range (the existing ambush resolution applies the damage). Never moves.
+            if (vg.attack_cd > 0.0f) {
+                vg.attack_cd -= dt.seconds;
+            }
+            vg.speed = 0.0f;
+            const Enemy* tgt = nullptr;
+            f32 best = kWallGuardRange;
+            for (const Enemy& e : ambush_) {
+                const f32 d = glm::length(e.position - vg.position);
+                if (d < best) {
+                    best = d;
+                    tgt = &e;
+                }
+            }
+            if (tgt != nullptr) {
+                Vec3 face = tgt->position - vg.position;
+                face.y = 0.0f;
+                if (glm::length(face) > 1e-3f) {
+                    vg.yaw = std::atan2(face.z, face.x);
+                }
+                if (vg.attack_cd <= 0.0f) {
+                    const Vec3 from = vg.position + Vec3{0.0f, 1.4f, 0.0f};
+                    const Vec3 dir = (tgt->position + Vec3{0.0f, 0.7f, 0.0f}) - from;
+                    if (glm::length(dir) > 0.3f) {
+                        Projectile arrow;
+                        arrow.position = from + glm::normalize(dir) * 0.6f;
+                        arrow.velocity = glm::normalize(dir) * kWallGuardArrowSpeed;
+                        arrow.kind = 3;        // friendly arrow (client renders a tan bolt)
+                        arrow.hostile = false; // hurts the ambushers, not the town
+                        arrow.damage = kWallGuardArrowDamage;
+                        arrow.radius = 0.15f;
+                        arrow.life = 3.0f;
+                        projectiles_.push_back(arrow);
+                        vg.attack_cd = kWallGuardInterval;
+                    }
+                }
+            }
+            ++it;
             continue;
         }
         if (collision_) {

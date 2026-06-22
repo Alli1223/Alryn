@@ -64,12 +64,18 @@ struct PropDef {
 // (cottages, perimeter walls and gate towers).
 enum class PropCategory : u8 {
     Bush, Rock, Log, Fence, Lantern, House, Wall, Gate, Well, Bridge, Market,
-    Path, Planter, Fountain, FenceRail
+    Path, Planter, Fountain, FenceRail,
+    Decor, // medieval clutter that fills a town: barrels, crates, hay, stalls, signposts...
+    River  // a sunken water channel tile (banks + water) for river-towns
 };
 
 // How many distinct house variants `PropLibrary` builds (cottages, longhouses, two-
 // storey houses, manors, ...). The village scatter picks `variant % kHouseVariants`.
 inline constexpr u32 kHouseVariants = 8;
+
+// How many distinct Decor props `PropLibrary` builds (barrel, crates, hay, market stall,
+// signpost, trough, woodpile, sacks). The town scatter picks a specific one by index.
+inline constexpr u32 kDecorVariants = 8;
 
 struct PropInstance {
     PropCategory category = PropCategory::Bush;
