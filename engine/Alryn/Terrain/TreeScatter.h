@@ -85,7 +85,21 @@ inline std::vector<TreeInstance> scatter_trees(int cx, int cz, f32 chunk_world, 
             t.yaw = detail::hash01(detail::tree_hash(gx, gz, seed + 4u)) * TwoPi;
             t.variant = static_cast<int>(h % 5u); // pine / oak / birch / broad oak / dead
             const f32 cv = 0.85f + detail::hash01(detail::tree_hash(gx, gz, seed + 5u)) * 0.3f;
-            t.tint = Vec3{cv * 0.95f, cv, cv * 0.9f};
+            // The foliage mesh is baked deep forest green (primitives::tree()); a tint of
+            // target/leaf_base re-colours the whole canopy to that target. Conifers + dead trees
+            // stay green/muted; deciduous trees turn an AUTUMN patchwork - green / gold / orange /
+            // russet by a per-tree hash - matching the reference towns.
+            const Vec3 leaf_base{0.16f, 0.40f, 0.19f};
+            if (t.variant == 0 || t.variant == 4) {
+                t.tint = Vec3{cv * 0.92f, cv, cv * 0.88f}; // pine / dead: stay green-ish
+            } else {
+                const f32 a = detail::hash01(detail::tree_hash(gx, gz, seed + 6u));
+                const Vec3 target = a < 0.30f   ? Vec3{0.34f, 0.52f, 0.22f}  // still green
+                                    : a < 0.60f ? Vec3{0.84f, 0.66f, 0.22f}  // golden yellow
+                                    : a < 0.85f ? Vec3{0.88f, 0.46f, 0.16f}  // orange
+                                                : Vec3{0.74f, 0.30f, 0.16f}; // russet red
+                t.tint = (target / leaf_base) * cv;
+            }
             trees.push_back(t);
         }
     }

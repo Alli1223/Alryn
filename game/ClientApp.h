@@ -264,6 +264,10 @@ private:
     // update_particles.)
     void draw_shields();
 
+    // Co-op buff auras under empowered (fiery ring) / hasted (green ring) players, so allies can
+    // read who the Cleric/Hunter/Mage has buffed. Pulses; driven by PlayerState.buffs bitflags.
+    void draw_buffs();
+
     void draw_particles();
 
     // The showy burst for an ability cast, played for whoever cast it (the local player on
@@ -293,6 +297,11 @@ private:
     // Player-built barricades: a low palisade of wooden stakes + rails, darkening as
     // the enemy hacks it down (health from the snapshot).
     void draw_barricades();
+
+    // Mage rock walls: a row of jagged stone chunks raised across the caster's facing (rendered in
+    // the same rotated frame as the server collider, so the visible wall matches what NPCs route
+    // around). The wall crumbles - shorter + darker - as enemies smash its health down.
+    void draw_walls();
 
     // Floating health bars above combatants (enemies always; guards always; villagers
     // only when hurt), projected from world space into the 2D UI overlay.
@@ -403,6 +412,11 @@ private:
     // Medieval-styled; purely an info overlay (world input is frozen while it's open).
     void draw_skills();
 
+    // Weather overlay: a 2D screen-space rain field (streaks scaled by storminess + wind slant)
+    // and lightning flashes. The sky/sun/fog/wind are modulated in update_day_night; this is the
+    // on-screen precipitation. Driven by the eased `weather_amt_` (from the networked weather).
+    void draw_weather();
+
     void draw_prop(const PropInstance& p);
 
     void draw_character(PlayerVisual& v, const Vec3& feet, f32 yaw, bool seated = false,
@@ -504,6 +518,20 @@ private:
     CharacterAppearance appearance_;
     PlayerRole role_ = PlayerRole::Knight;          // chosen combat role (weapon + abilities)
     u8 pending_ability_ = 0;                         // ability index+1 invoked this frame (0 = none)
+    // Mage elemental combo casting: hold Ctrl (casting_), tap element keys (1-4 or W/A/S/D) to fill
+    // `combo_`, release Ctrl to cast the spell `spell_for_combo` resolves. `pending_spell_` is sent.
+    bool casting_ = false;
+    u8 combo_[kMaxCombo] = {};
+    u8 combo_n_ = 0;
+    u8 pending_spell_ = 0; // SpellId to send this frame (0 = none)
+    f32 mage_cd_ = 0.0f;   // client-side Mage spell-cooldown estimate (for the HUD + cast gating)
+    // Maps an element/digit key to an Element (0..3) while casting, or -1.
+    static int key_to_element(KeyCode k);
+    // Resolve the queued combo into a SpellId (0 = none).
+    u8 resolve_combo() const;
+    // Queue a Mage spell to cast this frame: gate on the client cooldown estimate, send it, mirror
+    // the cooldown for the HUD, and play the instant cast VFX. Used by the hotkeys, combos + click.
+    void cast_mage_spell(SpellId sp);
     f32 ability_cd_[kAbilityCount] = {};             // client-side HUD cooldown estimate (per ability)
 
     // The customisable action bar: which ability index sits in each hotbar slot (keys 1..4);
@@ -607,6 +635,11 @@ private:
     f32 time_of_day_ = daynight::start_time; // 0=midnight, 0.25=sunrise, 0.5=noon, 0.75=sunset
     f32 day_seconds_ = daynight::default_day_seconds;
     f32 sun_intensity_ = 1.0f; // cached from the day/night cycle (0 night .. 1 day)
+    f32 fog_gloom_ = 0.0f;     // eased 0..1 town-gloom factor (denser/cooler fog + grade in towns)
+    f32 fog_patch_ = 0.0f;     // eased 0..1 road fog-bank strength (occasional dense volumetric mist)
+    f32 weather_amt_ = 0.0f;   // eased 0..1 storminess (from the networked weather) - rain/sky/wind
+    f32 lightning_ = 0.0f;     // current lightning-flash brightness (decays)
+    f32 lightning_cd_ = 4.0f;  // seconds until the next storm flash
     f32 cam_distance_ = iso::distance; // scroll-wheel zoom
     Camera camera_;
 
@@ -614,6 +647,22 @@ private:
     u32 world_seed_ = 0;     // shared world seed (from Welcome) - for the map's town/road graph
     bool map_open_ = false;  // full-screen map overlay (M)
     bool skills_open_ = false; // full-screen skills tree overlay (K)
+
+    // World-map view state: a pannable, zoomable terrain minimap. `map_center_` is the world XZ
+    // the map is centred on (set to the player when opened, then moved by dragging); `map_ppm_` is
+    // the current pixels-per-metre (written by draw_map, read by the drag handler in on_update).
+    Vec2 map_center_{0.0f};
+    f32 map_zoom_ = 1.0f;
+    f32 map_ppm_ = 1.0f;
+    bool map_dragging_ = false;
+    Vec2 map_drag_last_{0.0f};
+    // Cached terrain-relief raster (rebuilt only when the view changes): one (rect, colour) tile per
+    // grid cell, so panning/zooming doesn't recompute world noise every frame.
+    std::vector<std::pair<Vec4, Vec4>> map_tiles_;
+    Vec2 map_raster_center_{1e9f, 1e9f};
+    f32 map_raster_zoom_ = -1.0f;
+    UVec2 map_raster_ext_{0, 0};
+    void rebuild_map_raster(const Vec4& panel, f32 ppm);
     net::Snapshot snapshot_;
     bool have_snapshot_ = false;
 

@@ -26,8 +26,14 @@ void GameServer::sync_player_role(ServerPlayer& player) {
     }
     player.max_health = role_stats(player.role).max_health;
     player.health = std::min(player.health, player.max_health);
-    const f32 base = role_stats(player.role).move_speed;
-    player.controller.set_walk_speed(player.dash_timer > 0.0f ? base * kDashSpeedMult : base);
+    f32 speed = role_stats(player.role).move_speed;
+    if (player.dash_timer > 0.0f) {
+        speed *= kDashSpeedMult; // Hunter Dash
+    }
+    if (player.haste_timer > 0.0f) {
+        speed *= kHasteMult; // War Horn (co-op haste)
+    }
+    player.controller.set_walk_speed(speed);
 }
 
 void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
@@ -45,6 +51,12 @@ void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
         }
         if (pl.dash_timer > 0.0f) {
             pl.dash_timer -= dts;
+        }
+        if (pl.damage_boost_timer > 0.0f) { // Empower (co-op damage buff)
+            pl.damage_boost_timer -= dts;
+        }
+        if (pl.haste_timer > 0.0f) { // War Horn (co-op speed buff)
+            pl.haste_timer -= dts;
         }
         if (pl.shield_timer > 0.0f) { // Aegis fades with time, or breaks when fully spent
             pl.shield_timer -= dts;
@@ -109,7 +121,7 @@ void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
                         const Vec3 push = glm::length(d) > 1e-3f ? glm::normalize(d) : facing;
                         e.position += push * kWhirlwindKnockback;
                     }
-                } else { // Rally: heal self + nearby allies and steel them with a brief bulwark
+                } else if (slot == 5) { // Rally: heal self + nearby allies + brief bulwark
                     for (auto& [oid, other] : players_) {
                         if (glm::length(other.controller.position() - pl.controller.position()) <=
                             kHealRadius) {
@@ -117,6 +129,35 @@ void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
                         }
                     }
                     pl.bulwark_timer = kBulwarkDuration;
+                } else { // Guardian Leap: jump to the nearest ally, shield them, pull their attackers
+                    ServerPlayer* ally = nullptr;
+                    f32 best = kGuardLeapRange;
+                    for (auto& [oid, other] : players_) {
+                        if (oid == id) {
+                            continue;
+                        }
+                        const f32 d =
+                            glm::length(other.controller.position() - pl.controller.position());
+                        if (d < best) {
+                            best = d;
+                            ally = &other;
+                        }
+                    }
+                    if (ally != nullptr) {
+                        const Vec3 ap = ally->controller.position();
+                        Vec3 to = pl.controller.position() - ap;
+                        to.y = 0.0f;
+                        to = glm::length(to) > 1e-3f ? glm::normalize(to) : facing;
+                        pl.controller.set_position(ap + to * 1.6f); // land just beside the ally
+                        ally->shield_hp = kGuardShieldAmount; // protect them
+                        ally->shield_timer = kAegisDuration;
+                        for (Enemy& e : ambush_) { // pull their attackers onto the Knight
+                            if (glm::length(e.position - ap) <= kGuardTauntRadius) {
+                                e.taunt_by = id;
+                                e.taunt_cd = kTauntDuration;
+                            }
+                        }
+                    }
                 }
                 break;
 
@@ -153,8 +194,15 @@ void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
                         loose_arrow(Vec3{std::cos(a), dir.y, std::sin(a)},
                                     stats.ranged_damage * kMultishotMult);
                     }
-                } else { // Caltrops: a hazard ground aura at the aim point
+                } else if (slot == 5) { // Caltrops: a hazard ground aura at the aim point
                     spawn_aura(AuraKind::Hazard, pl.input.aim, id);
+                } else { // War Horn: haste self + nearby allies (co-op)
+                    for (auto& [oid, other] : players_) {
+                        if (glm::length(other.controller.position() - pl.controller.position()) <=
+                            kHasteRadius) {
+                            other.haste_timer = kHasteDuration;
+                        }
+                    }
                 }
                 break;
             }
@@ -219,7 +267,7 @@ void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
                     }
                 } else if (slot == 4) { // Renew: lay a lingering heal aura at the caster's feet
                     spawn_aura(AuraKind::Heal, pl.controller.position(), id);
-                } else { // Judgement: a heavy holy bolt toward the aim point
+                } else if (slot == 5) { // Judgement: a heavy holy bolt toward the aim point
                     Vec3 dir = pl.input.aim - eye;
                     dir = glm::length(dir) > 0.2f ? glm::normalize(dir) : facing;
                     Projectile pr;
@@ -231,8 +279,27 @@ void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
                     pr.radius = 0.22f;
                     pr.life = 3.0f;
                     projectiles_.push_back(pr);
+                } else { // Empower: bless the nearest ally so their attacks hit harder (co-op)
+                    ServerPlayer* ally = nullptr;
+                    f32 best = kEmpowerRange;
+                    for (auto& [oid, other] : players_) {
+                        if (oid == id) {
+                            continue;
+                        }
+                        const f32 d =
+                            glm::length(other.controller.position() - pl.controller.position());
+                        if (d < best) {
+                            best = d;
+                            ally = &other;
+                        }
+                    }
+                    ServerPlayer* target = ally != nullptr ? ally : &pl; // solo -> empower self
+                    target->damage_boost_timer = kDamageBoostDuration;
                 }
                 break;
+
+            case PlayerRole::Mage:
+                break; // the Mage casts via combos (input.spell -> update_spells), not the hotbar
         }
 
         pl.ability_cd[slot] = ability_def(pl.role, slot).cooldown;
@@ -301,6 +368,119 @@ void GameServer::update_auras(Timestep dt) {
         }
     }
     std::erase_if(auras_, [](const Aura& a) { return a.ttl <= 0.0f; });
+}
+
+// --- Mage elemental combo spells ------------------------------------------------------------
+// The client resolves the queued element combo into a SpellId and sends it in PlayerInput.spell;
+// here the server gates it on the Mage's single spell cooldown and applies the authoritative
+// effect. Elemental bolts are friendly Projectiles (new kinds the client renders); Meteor is an
+// instant AoE; Healing Bloom mends nearby allies; Rock Wall raises a collider NPCs route around.
+void GameServer::update_spells(Timestep dt, const DensitySampler& density) {
+    for (auto& [id, pl] : players_) {
+        if (pl.spell_cd > 0.0f) {
+            pl.spell_cd -= dt.seconds;
+        }
+        if (pl.role != PlayerRole::Mage) {
+            continue;
+        }
+        const auto sp = static_cast<SpellId>(pl.input.spell);
+        if (sp == SpellId::None || pl.spell_cd > 0.0f) {
+            continue;
+        }
+        cast_spell(pl, id, sp);
+        pl.spell_cd = spell_cooldown(sp);
+        pl.cast_fx = pl.input.spell; // echoed in the snapshot so clients play the spell VFX
+    }
+    update_walls(dt);
+    (void)density;
+}
+
+void GameServer::cast_spell(ServerPlayer& pl, net::PlayerId id, SpellId spell) {
+    const Vec3 eye = pl.controller.eye_position();
+    const f32 yaw = pl.input.yaw;
+    const Vec3 facing{std::cos(yaw), 0.0f, std::sin(yaw)};
+    Vec3 dir = pl.input.aim - eye;
+    dir = glm::length(dir) > 0.2f ? glm::normalize(dir) : facing;
+
+    auto bolt = [&](f32 speed, f32 dmg, u8 kind, f32 radius, f32 life) {
+        Projectile pr;
+        pr.position = eye + dir * 0.6f;
+        pr.velocity = dir * speed;
+        pr.owner = id;
+        pr.damage = dmg;
+        pr.kind = kind; // 5 = fireball, 6 = frost bolt, 7 = boulder (client-rendered)
+        pr.radius = radius;
+        pr.life = life;
+        projectiles_.push_back(pr);
+    };
+
+    switch (spell) {
+        case SpellId::Fireball: bolt(30.0f, kFireballDamage, 5, 0.3f, 3.0f); break;
+        case SpellId::FrostBolt: bolt(34.0f, kFrostBoltDamage, 6, 0.25f, 3.0f); break;
+        case SpellId::Boulder: bolt(22.0f, kBoulderDamage, 7, 0.4f, 3.5f); break;
+        case SpellId::Meteor: // an instant blast at the aim point
+            for (Enemy& e : ambush_) {
+                if (e.alive && glm::length(e.position - pl.input.aim) <= kMeteorRadius) {
+                    e.health -= kMeteorDamage * pl.outgoing_mult();
+                }
+            }
+            break;
+        case SpellId::HealBloom: // mend allies around the caster
+            for (auto& [oid, other] : players_) {
+                if (glm::length(other.controller.position() - pl.controller.position()) <=
+                    kHealBloomRadius) {
+                    other.health = std::min(other.max_health, other.health + kHealBloomAmount);
+                }
+            }
+            break;
+        case SpellId::Empower: // bless nearby allies' attacks (co-op buff)
+            for (auto& [oid, other] : players_) {
+                if (glm::length(other.controller.position() - pl.controller.position()) <=
+                    kHealBloomRadius) {
+                    other.damage_boost_timer = kDamageBoostDuration;
+                }
+            }
+            break;
+        case SpellId::RockWall: { // raise a wall of stone in front, spanning across the facing
+            Wall w;
+            w.position = pl.controller.position() + facing * kRockWallAhead;
+            w.yaw = yaw + 1.5707963f; // the wall SPANS perpendicular to where the Mage faces
+            w.length = kRockWallLength;
+            w.health = kRockWallHealth;
+            w.ttl = kRockWallTtl;
+            walls_.push_back(w);
+            break;
+        }
+        default: break;
+    }
+}
+
+void GameServer::update_walls(Timestep dt) {
+    for (Wall& w : walls_) {
+        w.ttl -= dt.seconds;
+    }
+    std::erase_if(walls_, [](const Wall& w) { return w.ttl <= 0.0f || w.health <= 0.0f; });
+}
+
+// A single box collider spanning the wall (long axis = its span, thin across, tall enough to
+// block a capsule). `yaw` is negated to match the client's translate * rotateY(yaw) * scale.
+void GameServer::wall_colliders(const Wall& w, std::vector<Collider>& out) {
+    Collider c;
+    c.shape = Collider::Shape::Box;
+    c.center = w.position;
+    c.half = Vec2{w.length * 0.5f, kRockWallThick * 0.5f};
+    c.yaw = -w.yaw;
+    c.y_min = w.position.y;
+    c.y_max = w.position.y + kRockWallHeight;
+    out.push_back(c);
+}
+
+void GameServer::append_walls(const Vec3& pos, std::vector<Collider>& out) const {
+    for (const Wall& w : walls_) {
+        if (glm::length(Vec2{w.position.x - pos.x, w.position.z - pos.z}) < 14.0f) {
+            wall_colliders(w, out);
+        }
+    }
 }
 
 } // namespace alryn

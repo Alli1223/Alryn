@@ -49,6 +49,9 @@ public:
     static PropDef build_lantern_post();
     static PropDef build_house(u32 variant); // a village house (style by kHouseStyles)
     static Vec2 house_half_extents(u32 variant); // (w,d) footprint, for collision-free layout
+    static PropDef build_townhouse();  // tall narrow jettied 3-storey (house variant)
+    static PropDef build_pub();        // 2-storey tavern w/ hanging sign + beer garden (house variant)
+    static PropDef build_blacksmith(); // workshop w/ open forge + anvil (house variant)
     static PropDef build_wall(int variant);  // stone perimeter wall segment
     static PropDef build_gate();             // lit stone gate tower (placed at gate gaps)
     static PropDef build_tower();            // plain unlit wall tower (periodic boundary towers)

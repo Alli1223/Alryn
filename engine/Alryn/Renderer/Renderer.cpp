@@ -46,6 +46,9 @@ struct LightUbo {
     GpuPoint points[48]; // must match kMaxPointLights + mesh.frag
     Vec4 player_peek;    // xyz = player focus (world), w = tunnel radius (0 = off)
     Vec4 cam_pos;        // xyz = camera position (world)
+    Vec4 fog_color;      // rgb = atmospheric fog/haze colour, w = density
+    Vec4 screen;         // xy = framebuffer resolution (px), z = town "gloom" 0..1
+    Vec4 fog_volume;     // x = road fog-bank strength 0..1, y = ground reference height
 };
 
 // Must match the push_constant block in ui.vert / ui.frag.
@@ -463,6 +466,10 @@ void Renderer::process_lights() {
     // occluding canopy. Aim at the torso (feet + ~1.1 m).
     ubo.player_peek = Vec4{player_position_ + Vec3{0.0f, 1.1f, 0.0f}, 6.0f};
     ubo.cam_pos = Vec4{camera_position_, 0.0f};
+    ubo.fog_color = Vec4{fog_color_, fog_density_};
+    const VkExtent2D ext = swapchain_.extent();
+    ubo.screen = Vec4{static_cast<f32>(ext.width), static_cast<f32>(ext.height), gloom_, 0.0f};
+    ubo.fog_volume = Vec4{fog_patch_, player_position_.y, 0.0f, 0.0f};
     frames_[frame_index_].light_ubo.upload(&ubo, sizeof(ubo));
 }
 

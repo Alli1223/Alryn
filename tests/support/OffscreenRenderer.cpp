@@ -21,7 +21,27 @@ struct PushConstants {
 
 constexpr VkFormat kColorFormat = VK_FORMAT_R8G8B8A8_UNORM;
 constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
-constexpr VkDeviceSize kLightUboSize = 16 + 4 * 128; // ivec4 count + 4 std140 spots
+
+// Mirrors the renderer's Lights UBO (std140) so the shots exercise the real mesh.frag fog +
+// grading. Lighting arrays stay zeroed (count = 0); only the atmosphere fields are filled.
+struct GpuSpot {
+    Vec4 a, b, c, d;
+    Mat4 vp;
+};
+struct GpuPoint {
+    Vec4 a, b, c;
+};
+struct LightUbo {
+    i32 count[4];
+    GpuSpot spots[9];
+    GpuPoint points[48];
+    Vec4 player_peek;
+    Vec4 cam_pos;
+    Vec4 fog_color;  // rgb = fog colour, w = density
+    Vec4 screen;     // xy = resolution, z = gloom
+    Vec4 fog_volume; // x = road fog-bank strength (0 in shots), y = ground ref
+};
+constexpr VkDeviceSize kLightUboSize = sizeof(LightUbo);
 
 void barrier(VkCommandBuffer cmd, VkImage image, VkImageAspectFlags aspect, VkImageLayout old_layout,
              VkImageLayout new_layout, VkPipelineStageFlags src_stage, VkPipelineStageFlags dst_stage,
@@ -201,6 +221,16 @@ std::vector<u8> OffscreenRenderer::render(const std::vector<Draw>& draws, const 
     std::vector<u8> out(static_cast<usize>(width_) * height_ * 4, 0);
     if (!ready_) {
         return out;
+    }
+
+    // Feed the shared atmosphere UBO so the shots show the real fog + grading: fog fades distant
+    // geometry toward the background colour; the camera position comes from the view matrix.
+    {
+        LightUbo ubo{};
+        ubo.cam_pos = Vec4{Vec3{glm::inverse(view)[3]}, 0.0f};
+        ubo.fog_color = Vec4{background, 0.005f}; // light haze (the shot cameras sit far back)
+        ubo.screen = Vec4{static_cast<f32>(width_), static_cast<f32>(height_), 0.0f, 0.0f};
+        light_ubo_.upload(&ubo, sizeof(ubo));
     }
 
     device_.immediate_submit([&](VkCommandBuffer cmd) {

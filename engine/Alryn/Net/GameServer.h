@@ -46,7 +46,13 @@ public:
         f32 heal_charge = 0.0f;               // Cleric: seconds of channelling a heal aura (right mouse)
         f32 shield_hp = 0.0f;                 // Aegis: damage the shield can still absorb
         f32 shield_timer = 0.0f;              // seconds before an unspent Aegis shield fades
-        u8 cast_fx = 0;                       // ability that fired this tick (for the snapshot's VFX)
+        f32 spell_cd = 0.0f;                  // Mage: seconds until the next combo spell can cast
+        f32 damage_boost_timer = 0.0f;        // Empower: x outgoing damage while > 0 (co-op buff)
+        f32 haste_timer = 0.0f;               // War Horn: x walk speed while > 0 (co-op buff)
+        u8 cast_fx = 0;                       // ability/spell that fired this tick (for the snapshot's VFX)
+
+        // Multiplier applied to this player's outgoing damage (Empower buff).
+        f32 outgoing_mult() const { return damage_boost_timer > 0.0f ? kDamageBoostMult : 1.0f; }
         f32 water = 0.0f;                     // bucket fill for firefighting (dormant siege)
         i32 wood = 0;                         // barricades buildable today (dormant siege)
         bool carrying = false;                // hauling a spilled cargo crate back to the cart
@@ -115,6 +121,16 @@ public:
         f32 health = 0.0f;
     };
 
+    // A Mage-summoned rock wall: a row of stone that times out, and which enemies + the hired
+    // teamster must path AROUND (its colliders are fed into the NPC collision scratch).
+    struct Wall {
+        Vec3 position{0.0f};
+        f32 yaw = 0.0f;
+        f32 length = kRockWallLength;
+        f32 health = kRockWallHealth;
+        f32 ttl = kRockWallTtl;
+    };
+
     // A ground aura: a disc that affects whoever stands in it until its life runs out.
     // kind 0 = Cleric heal (heals allies), kind 1 = Knight consecration (taunts + burns enemies).
     struct Aura {
@@ -148,6 +164,7 @@ public:
     const std::unordered_map<u32, Villager>& villagers() const { return villagers_; }
     const std::unordered_map<u32, HouseFire>& houses() const { return houses_; }
     const std::vector<Barricade>& barricades() const { return barricades_; }
+    const std::vector<Wall>& walls() const { return walls_; }
 
 private:
     Vec3 spawn_point(net::PlayerId id) const;
@@ -169,6 +186,12 @@ private:
     void update_abilities(Timestep dt, const DensitySampler& density); // tick cooldowns + cast
     void update_auras(Timestep dt); // Cleric channel charge + ground-aura ticking (heal/consecrate)
     void spawn_aura(AuraKind kind, const Vec3& pos, net::PlayerId owner); // radius/duration from table
+    // --- Mage elemental combo spells (Game/Abilities.cpp) ---
+    void update_spells(Timestep dt, const DensitySampler& density); // resolve Mage combo casts
+    void cast_spell(ServerPlayer& player, net::PlayerId id, SpellId spell); // apply one spell's effect
+    void update_walls(Timestep dt);                                 // age out raised rock walls
+    static void wall_colliders(const Wall& w, std::vector<Collider>& out); // 1-3 boxes for the span
+    void append_walls(const Vec3& pos, std::vector<Collider>& out) const;  // feed walls to NPC pathing
     // --- Dormant night siege (Combat/SiegeMode.cpp; not driven in the transport game) ---
     void player_attack(ServerPlayer& player, const net::PlayerInput& in);
     void player_build(ServerPlayer& player, const net::PlayerInput& in); // place a barricade
@@ -200,6 +223,7 @@ private:
     std::unordered_map<u32, HouseFire> houses_;   // burnable buildings near players
     std::unordered_map<u32, u32> town_house_total_; // vseed -> #houses (for the tally)
     std::vector<Barricade> barricades_;           // player-built defences
+    std::vector<Wall> walls_;                     // Mage rock walls (NPCs path around them)
     std::vector<Aura> auras_;                     // ground auras (heal / consecration)
     u32 next_enemy_id_ = 1;
     u32 wave_ = 0;            // = nights survived

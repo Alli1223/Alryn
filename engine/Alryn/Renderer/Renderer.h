@@ -57,6 +57,19 @@ public:
     // Sky/background colour the frame is cleared to (drives the day/night sky).
     void set_sky_color(const Vec3& color) { sky_color_ = color; }
 
+    // Atmospheric fog/haze sampled by the scene shaders for cinematic depth. `color` is the
+    // colour distant geometry fades toward (usually a desaturated sky tone), `density` controls
+    // how quickly (exp-squared with distance), and `gloom` (0..1) deepens the grade/vignette in
+    // towns. Set it each frame from the day/night cycle (see ClientApp::update_day_night).
+    // `patch` (0..1) layers an occasional dense, drifting, ground-hugging fog BANK on top - the
+    // road mist; the client ramps it up on foggy road stretches (see ClientApp::update_day_night).
+    void set_fog(const Vec3& color, f32 density, f32 gloom, f32 patch = 0.0f) {
+        fog_color_ = color;
+        fog_density_ = density;
+        gloom_ = gloom;
+        fog_patch_ = patch;
+    }
+
     // A shadow-casting spotlight (e.g. a lantern). Submit each frame before
     // end_frame; the nearest few to the camera get rendered shadow maps.
     struct SpotLight {
@@ -232,6 +245,10 @@ private:
     Vec3 sun_color_{1.0f, 0.97f, 0.9f};
     f32 sun_intensity_ = 1.0f;
     Vec3 sky_color_ = config_.clear_color;
+    Vec3 fog_color_{0.52f, 0.58f, 0.66f}; // atmospheric haze colour (set per-frame by the game)
+    f32 fog_density_ = 0.011f;            // exp-squared distance fog density
+    f32 gloom_ = 0.0f;                    // town gloom 0..1 (deepens grade + vignette)
+    f32 fog_patch_ = 0.0f;                // road fog-bank strength 0..1 (dense volumetric mist)
     Mat4 light_view_proj_{1.0f};
     f32 shadow_strength_ = 0.0f; // 0 until the shadow pass is active
 };

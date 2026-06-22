@@ -110,6 +110,18 @@ shots: build
 	fi
 	@echo "Screenshots in $(BUILD_DIR)/bin/ (*.ppm):"; ls -1 $(BUILD_DIR)/bin/*.ppm 2>/dev/null || echo "  (none - no GPU/shaders on this machine)"
 
+## asset: render one generated asset in isolation -> PNG (e.g. make asset CAT=house V=3).
+##   CAT = house|tree|bush|rock|log|fence|lantern|well|gate|wall|market|decor|... (see asset_preview)
+##   V   = variant index; omit to render EVERY variant of the category.
+asset: configure
+	@MAKEFLAGS= $(CMAKE) --build $(BUILD_DIR) -j$(JOBS) --target asset_preview
+	@cd $(BUILD_DIR)/bin && ./asset_preview $(CAT) $(V)
+	@if command -v magick >/dev/null 2>&1; then \
+	  for f in $(BUILD_DIR)/bin/asset_$(CAT)*.ppm; do [ -e "$$f" ] && magick "$$f" "$${f%.ppm}.png"; done; \
+	fi
+	@echo "Asset preview(s):"; ls -1 $(BUILD_DIR)/bin/asset_$(CAT)*.png 2>/dev/null || \
+	  ls -1 $(BUILD_DIR)/bin/asset_$(CAT)*.ppm 2>/dev/null
+
 ## clean: remove the build directory
 clean:
 	rm -rf $(BUILD_DIR)

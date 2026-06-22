@@ -100,6 +100,19 @@ void ClientApp::draw_role_weapon(const CharacterModel& model, const std::vector<
         }
         case PlayerRole::Cleric:
             break; // staff drawn by draw_cleric_staff (walking-stick behaviour)
+        case PlayerRole::Mage: {
+            // A wizard's staff along the forearm, topped with a glowing arcane orb.
+            renderer_->draw(shape_box_,
+                            weapon_hand * glm::translate(Mat4{1.0f}, Vec3{0.0f, -0.35f, 0.0f}) *
+                                glm::scale(Mat4{1.0f}, Vec3{0.055f, 1.5f, 0.055f}),
+                            Vec4{0.32f, 0.22f, 0.14f, 1.0f}); // shaft
+            const Mat4 orb = weapon_hand * glm::translate(Mat4{1.0f}, Vec3{0.0f, 0.46f, 0.0f});
+            renderer_->draw_emissive(shape_sphere_, orb * glm::scale(Mat4{1.0f}, Vec3{0.13f}),
+                                     Vec4{0.7f, 0.5f, 1.0f, 1.0f}); // orb
+            renderer_->draw_glow(shape_sphere_, orb * glm::scale(Mat4{1.0f}, Vec3{0.28f}),
+                                 Vec4{0.6f, 0.42f, 1.0f, 0.5f});
+            break;
+        }
     }
 }
 

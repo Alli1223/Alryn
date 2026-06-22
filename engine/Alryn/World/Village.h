@@ -304,7 +304,20 @@ inline void for_each_house(const worldgen::Village& v, u32 seed,
         const f32 x = cx + std::cos(a) * radius;
         const f32 z = cz + std::sin(a) * radius;
         const f32 yaw = std::atan2(cx - x, cz - z); // front (+Z) faces the centre
-        try_place(x, z, yaw, static_cast<u8>(detail::tree_hash(vid, i, 512u) % kHouseVariants));
+        // Most plots are ordinary homes; sprinkle in a few landmark buildings - one pub + one
+        // blacksmith near the heart of town, and the odd tall townhouse - for variety.
+        const u32 hh = detail::tree_hash(vid, i, 512u);
+        u8 var;
+        if (i == budget / 2) {
+            var = static_cast<u8>(kHousePub);
+        } else if (i == budget / 3) {
+            var = static_cast<u8>(kHouseBlacksmith);
+        } else if (hh % 6u == 0u) {
+            var = static_cast<u8>(kHouseTownhouse);
+        } else {
+            var = static_cast<u8>(hh % kHouseVariants);
+        }
+        try_place(x, z, yaw, var);
     }
 
     // Some towns have a pair of two-storey houses joined by a raised covered bridge.

@@ -211,7 +211,8 @@ void ClientApp::build_customise(f32 w, f32 h) {
 
     caption("ROLE");
     place(panel.add<ui::Stepper>(
-              "ROLE", std::vector<std::string>{"KNIGHT (TANK)", "HUNTER (DMG)", "CLERIC (HEAL)"},
+              "ROLE",
+              std::vector<std::string>{"KNIGHT (TANK)", "HUNTER (DMG)", "CLERIC (HEAL)", "MAGE (DMG)"},
               static_cast<usize>(role_),
               [this](usize i) { role_ = static_cast<PlayerRole>(i % kRoleCount); }),
           46.0f);
@@ -259,18 +260,19 @@ void ClientApp::build_class(f32 w, f32 h) {
     add_title(w, h, "CHOOSE YOUR CLASS",
               pending_host_local_ ? "HOSTING A NEW GAME" : "JOINING A GAME");
 
-    // Three selectable class cards in a row; the chosen one is highlighted (primary).
-    const f32 cw = std::min(w * 0.84f, 820.0f);
+    // Selectable class cards in a row; the chosen one is highlighted (primary).
+    const f32 cw = std::min(w * 0.9f, 980.0f);
     const f32 ch = 230.0f;
     const ui::Rect card{(w - cw) * 0.5f, h * 0.36f, cw, ch};
     auto& panel = ui_.root().add<ui::Panel>();
     panel.bounds = card;
 
-    static const char* names[kRoleCount] = {"KNIGHT", "HUNTER", "CLERIC"};
-    static const char* tags[kRoleCount] = {"TANK", "RANGED DPS", "HEALER"};
-    static const char* hints[kRoleCount] = {"SWORD + SHIELD", "LONGBOW", "HOLY STAFF"};
-    const f32 pad = 22.0f;
-    const f32 colw = (cw - pad * 4.0f) / 3.0f;
+    static const char* names[kRoleCount] = {"KNIGHT", "HUNTER", "CLERIC", "MAGE"};
+    static const char* tags[kRoleCount] = {"TANK", "RANGED DPS", "HEALER", "ELEMENTAL DPS"};
+    static const char* hints[kRoleCount] = {"SWORD + SHIELD", "LONGBOW", "HOLY STAFF",
+                                            "COMBO SPELLS"};
+    const f32 pad = 20.0f;
+    const f32 colw = (cw - pad * static_cast<f32>(kRoleCount + 1)) / static_cast<f32>(kRoleCount);
     for (int i = 0; i < kRoleCount; ++i) {
         const auto role = static_cast<PlayerRole>(i);
         const f32 x = card.x + pad + static_cast<f32>(i) * (colw + pad);

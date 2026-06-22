@@ -20,8 +20,10 @@ namespace alryn::roads {
 
 // Half-width of the dirt road (fences/lanterns line its edges, like the old paths).
 inline constexpr f32 road_half_width = 2.2f;
-// Connect towns whose village cells are within this Chebyshev distance (~340 m).
-inline constexpr int road_max_cells = 2;
+// Connect towns whose village cells are within this Chebyshev distance (~510 m). Raised from 2
+// so the sparser, further-apart towns (see worldgen::village_at wilderness bands) still get linked
+// by road - longer, lonelier hauls rather than stranded, contract-less towns.
+inline constexpr int road_max_cells = 3;
 // Polyline resolution of a routed road (segments = road_points). Higher now that roads
 // meander, so the curves render + collide smoothly.
 inline constexpr int road_points = 28;

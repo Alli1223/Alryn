@@ -278,6 +278,8 @@ void ClientApp::spawn_ability_vfx(PlayerRole role, u8 slot, const Vec3& feet, f3
                 emit_ring(feet, Vec4{0.55f, 1.0f, 0.7f, 0.8f}, 14, 2.0f, 0.5f, 0.13f);
             }
             break;
+        case PlayerRole::Mage:
+            break; // Mage spells have their own VFX (spawn_spell_vfx); the hotbar only queues elements
     }
 }
 
@@ -343,6 +345,78 @@ Vec3 ClientApp::rand_dir() {
     const f32 a = frand(0.0f, TwoPi);
     const f32 r = std::sqrt(std::max(0.0f, 1.0f - z * z));
     return Vec3{r * std::cos(a), z, r * std::sin(a)};
+}
+
+void ClientApp::draw_buffs() {
+    if (!have_snapshot_ || renderer_ == nullptr) {
+        return;
+    }
+    const net::WagonState* aw = active_wagon();
+    const f32 pulse = 0.65f + 0.35f * std::sin(elapsed_ * 6.0f);
+    for (const net::PlayerState& p : snapshot_.players) {
+        if (p.buffs == 0) {
+            continue;
+        }
+        const Vec3 feet = (p.seated != 0 && aw != nullptr) ? attach_to_wagon(*aw, p.position)
+                                                           : p.position;
+        if ((p.buffs & 1u) != 0u) { // empowered: a fiery ring + rising embers
+            renderer_->draw_glow(shape_cylinder_,
+                                 glm::translate(Mat4{1.0f}, feet + Vec3{0.0f, 0.06f, 0.0f}) *
+                                     glm::scale(Mat4{1.0f}, Vec3{1.15f, 0.05f, 1.15f}),
+                                 Vec4{1.0f, 0.45f, 0.15f, 0.5f * pulse});
+        }
+        if ((p.buffs & 2u) != 0u) { // hasted: a green ring
+            renderer_->draw_glow(shape_cylinder_,
+                                 glm::translate(Mat4{1.0f}, feet + Vec3{0.0f, 0.13f, 0.0f}) *
+                                     glm::scale(Mat4{1.0f}, Vec3{0.92f, 0.05f, 0.92f}),
+                                 Vec4{0.4f, 1.0f, 0.45f, 0.5f * pulse});
+        }
+    }
+}
+
+void ClientApp::draw_weather() {
+    if (renderer_ == nullptr) {
+        return;
+    }
+    const f32 wz = weather_amt_;
+    if (wz < 0.02f && lightning_ < 0.01f) {
+        return; // clear skies - nothing to draw
+    }
+    const VkExtent2D ext = renderer_->extent();
+    const f32 W = static_cast<f32>(ext.width);
+    const f32 H = static_cast<f32>(ext.height);
+    ui::DrawList draw{*renderer_};
+
+    // Screen-space rain: slanted streaks falling + drifting with the wind, count + opacity scaled
+    // by how hard it's raining (rain only sets in past the overcast threshold). Each streak's
+    // position is a deterministic hash of its index + time, so no per-drop state is stored.
+    const f32 rain = glm::smoothstep(0.28f, 0.72f, wz);
+    if (rain > 0.01f) {
+        const int n = static_cast<int>(rain * 460.0f);
+        const f32 t = elapsed_;
+        const f32 slant = 0.30f + 0.30f * wz; // steeper, windier slant in a stronger storm
+        const Vec4 col{0.72f, 0.79f, 0.92f, 0.28f + 0.24f * rain};
+        auto rnd = [](f32 k) {
+            const f32 v = std::sin(k * 12.9898f) * 43758.5453f;
+            return v - std::floor(v);
+        };
+        for (int i = 0; i < n; ++i) {
+            const f32 fi = static_cast<f32>(i);
+            const f32 sp = 0.55f + rnd(fi * 2.1f + 1.0f); // per-streak speed + length
+            const f32 speed = (560.0f + 360.0f * sp) * (0.8f + 0.5f * wz);
+            const f32 y = std::fmod(rnd(fi * 3.3f + 5.0f) * (H + 80.0f) + t * speed, H + 80.0f) - 40.0f;
+            const f32 x =
+                std::fmod(rnd(fi * 1.7f) * (W + 160.0f) + t * speed * 0.22f, W + 160.0f) - 80.0f;
+            const f32 len = 11.0f + 15.0f * sp;
+            draw.line(Vec2{x, y}, Vec2{x + len * slant, y + len}, 1.0f + 0.6f * sp, col);
+        }
+    }
+
+    // Lightning: a brief full-screen bluish-white wash (timed in update_day_night).
+    if (lightning_ > 0.01f) {
+        draw.rect(Vec4{0.0f, 0.0f, W, H},
+                  Vec4{0.88f, 0.92f, 1.0f, lightning_ * 0.45f * std::max(wz, 0.5f)});
+    }
 }
 
 } // namespace alryn::game

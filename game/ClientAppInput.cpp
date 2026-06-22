@@ -19,6 +19,58 @@ void ClientApp::cast_ability(u8 ability) {
     }
 }
 
+int ClientApp::key_to_element(KeyCode k) {
+    // Two ways to queue: number keys (slot order Fire/Water/Earth/Nature) or W/A/S/D. W = Earth so
+    // the classic "CTRL + W,W,W" raises a rock wall, matching the in-game hint.
+    switch (k) {
+        case key::Digit1: case key::S: return static_cast<int>(Element::Fire);
+        case key::Digit2: case key::A: return static_cast<int>(Element::Water);
+        case key::Digit3: case key::W: return static_cast<int>(Element::Earth);
+        case key::Digit4: case key::D: return static_cast<int>(Element::Nature);
+        default: return -1;
+    }
+}
+
+void ClientApp::cast_mage_spell(SpellId sp) {
+    if (sp == SpellId::None || mage_cd_ > 0.0f) {
+        return; // nothing queued, or still cooling down
+    }
+    pending_spell_ = static_cast<u8>(sp);
+    mage_cd_ = spell_cooldown(sp); // mirror the server cooldown for the HUD + to gate spam
+    spawn_primary_vfx();           // a cast flourish at the staff
+    // Projectile spells (fireball/frost/boulder) are visible as the projectile; give the INSTANT
+    // ones (meteor / heal bloom / empower) a burst so the cast reads.
+    const Vec3 feet = local_feet();
+    if (sp == SpellId::Meteor && aim_valid_) {
+        emit_ring(aim_, Vec4{1.0f, 0.4f, 0.1f, 0.95f}, 30, kMeteorRadius * 1.4f, 0.6f, 0.2f);
+        emit_burst(aim_ + Vec3{0.0f, 0.3f, 0.0f}, Vec4{1.0f, 0.55f, 0.15f, 1.0f}, 32, 7.0f, 0.6f,
+                   0.18f, 1, 2.5f);
+    } else if (sp == SpellId::HealBloom) {
+        emit_ring(feet, Vec4{0.5f, 1.0f, 0.6f, 0.9f}, 24, kHealBloomRadius * 0.5f, 0.7f, 0.16f);
+        for (int i = 0; i < 16; ++i) {
+            emit(feet + rand_dir() * frand(0.3f, 1.5f), Vec3{0.0f, frand(1.5f, 3.0f), 0.0f},
+                 Vec4{0.5f, 1.0f, 0.6f, 0.9f}, 0.8f, 0.12f, 1, -1.0f);
+        }
+    } else if (sp == SpellId::Empower) {
+        emit_ring(feet, Vec4{1.0f, 0.5f, 0.2f, 0.9f}, 24, kHealBloomRadius * 0.5f, 0.7f, 0.16f);
+        emit_burst(feet + Vec3{0.0f, 0.5f, 0.0f}, Vec4{1.0f, 0.6f, 0.25f, 0.9f}, 16, 3.0f, 0.7f,
+                   0.13f, 1, 1.5f);
+    }
+}
+
+u8 ClientApp::resolve_combo() const {
+    int f = 0, w = 0, e = 0, n = 0;
+    for (u8 i = 0; i < combo_n_; ++i) {
+        switch (static_cast<Element>(combo_[i])) {
+            case Element::Fire: ++f; break;
+            case Element::Water: ++w; break;
+            case Element::Earth: ++e; break;
+            default: ++n; break;
+        }
+    }
+    return static_cast<u8>(spell_for_combo(f, w, e, n));
+}
+
 void ClientApp::equip_ability(u8 ability) {
     // Already on the bar? clicking again unequips it (clears that slot).
     for (int& slot : bar_) {
@@ -108,6 +160,12 @@ void ClientApp::on_event(Event& event) {
             if (e.key() == key::M) {
                 map_open_ = !map_open_;
                 skills_open_ = false;
+                if (map_open_) { // open centred on the player at the default zoom
+                    const Vec3 f = local_feet();
+                    map_center_ = Vec2{f.x, f.z};
+                    map_zoom_ = 1.0f;
+                    map_dragging_ = false;
+                }
                 consumed = true;
                 return true;
             }
@@ -161,6 +219,8 @@ void ClientApp::on_event(Event& event) {
             if (role_ == PlayerRole::Knight) {
                 pending_attack_ = true;      // melee swing (carves terrain if nothing to hit)
                 pending_local_swing_ = true; // swing the actual held sword on our own model
+            } else if (role_ == PlayerRole::Mage) {
+                cast_mage_spell(SpellId::Fireball); // basic bolt (1-4 = elements, CTRL = combos)
             } else {
                 pending_fire_ = true;        // Hunter arrow / Cleric arcane bolt
                 spawn_primary_vfx();         // muzzle / cast flourish at the hand
@@ -187,6 +247,33 @@ void ClientApp::on_event(Event& event) {
         return false;
     });
     dispatcher.dispatch<KeyPressedEvent>([&](KeyPressedEvent& e) {
+        // Mage casting: tap a number key (1-4) to instantly cast that element's spell; or hold
+        // Ctrl to weave a COMBO (queue several elements, release to cast the advanced spell).
+        if (role_ == PlayerRole::Mage) {
+            if (key::is_ctrl(e.key())) {
+                casting_ = true;
+                combo_n_ = 0;
+                return true;
+            }
+            if (casting_ && !e.is_repeat()) {
+                const int el = key_to_element(e.key());
+                if (el >= 0) {
+                    if (combo_n_ < kMaxCombo) {
+                        combo_[combo_n_++] = static_cast<u8>(el);
+                    }
+                    return true; // swallow the element key while building a combo
+                }
+            }
+            // Not weaving a combo: a number key fires that single element's spell right away.
+            if (!casting_ && !e.is_repeat() &&
+                (e.key() == key::Digit1 || e.key() == key::Digit2 || e.key() == key::Digit3 ||
+                 e.key() == key::Digit4)) {
+                const int el = e.key() - key::Digit1; // 0 Fire / 1 Water / 2 Earth / 3 Nature
+                int f = el == 0, w = el == 1, ea = el == 2, n = el == 3;
+                cast_mage_spell(spell_for_combo(f, w, ea, n));
+                return true;
+            }
+        }
         if (e.key() == key::Escape) {
             escape_pressed(); // opens the pause menu
         } else if (e.key() == key::F) {
@@ -195,9 +282,20 @@ void ClientApp::on_event(Event& event) {
             pending_grab_ = true; // hitch / unhitch the nearest wagon (manual haul)
         } else if (e.key() == key::H) {
             vote_mode_ = vote_mode_ == 1 ? 2 : 1; // toggle hire driver / haul manually
-        } else if (e.key() == key::Digit1 || e.key() == key::Digit2 ||
-                   e.key() == key::Digit3 || e.key() == key::Digit4) {
+        } else if (role_ != PlayerRole::Mage &&
+                   (e.key() == key::Digit1 || e.key() == key::Digit2 || e.key() == key::Digit3 ||
+                    e.key() == key::Digit4)) {
             cast_bar_slot(static_cast<u8>(e.key() - key::Digit1)); // cast the ability equipped there
+        }
+        return false;
+    });
+    dispatcher.dispatch<KeyReleasedEvent>([&](KeyReleasedEvent& e) {
+        // Releasing Ctrl casts the queued combo (the Mage's elemental spell).
+        if (role_ == PlayerRole::Mage && key::is_ctrl(e.key()) && casting_) {
+            casting_ = false;
+            cast_mage_spell(static_cast<SpellId>(resolve_combo())); // cast the woven combo (0 = none)
+            combo_n_ = 0;
+            return true;
         }
         return false;
     });
@@ -210,6 +308,8 @@ void ClientApp::send_input() {
     if (paused_ || map_open_ || skills_open_) {
         blocking_ = false; // drop the guard if a release got swallowed by a menu/overlay
         drag_slot_ = -1;   // and cancel any in-progress action-bar drag
+        casting_ = false;  // and cancel a half-woven Mage spell
+        combo_n_ = 0;
     }
     // Movement is relative to the fixed camera: W goes "into" the screen.
     const f32 cam_yaw = radians(iso::yaw_deg);
@@ -221,7 +321,9 @@ void ClientApp::send_input() {
     f32 steer = 0.0f;    // raw A/D - reins the horses (RDR-style) when piloting
     // While the pause menu is up the player holds still (and ignores WASD/SPACE
     // that would otherwise leak through to movement).
-    if (Input* in = input(); in != nullptr && !paused_ && !map_open_ && !skills_open_) {
+    // A Mage holding Ctrl stands still to weave a spell (W/A/S/D are queuing elements, not moving).
+    if (Input* in = input();
+        in != nullptr && !paused_ && !map_open_ && !skills_open_ && !casting_) {
         if (in->key_down(key::W)) { move += cam_fwd; throttle += 1.0f; }
         if (in->key_down(key::S)) { move -= cam_fwd; throttle -= 1.0f; }
         if (in->key_down(key::D)) { move += cam_right; steer += 1.0f; } // rein right
@@ -258,11 +360,13 @@ void ClientApp::send_input() {
     packet.vote_mode = vote_mode_;
     packet.role = static_cast<u8>(role_);
     packet.ability = pending_ability_;
+    packet.spell = pending_spell_; // Mage combo spell (0 = none)
     // Right-mouse hold: Knight shield guard / Cleric heal channel.
     packet.block = blocking_ && (role_ == PlayerRole::Knight || role_ == PlayerRole::Cleric);
     packet.appearance = appearance_;
     client_.send_input(packet);
     pending_ability_ = 0;
+    pending_spell_ = 0;
     pending_add_ = false;
     pending_fire_ = false;
     pending_attack_ = false;

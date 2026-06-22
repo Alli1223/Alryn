@@ -443,11 +443,13 @@ TEST_CASE("Village: medieval cottage / wall / gate building blocks") {
     REQUIRE_FALSE(lib.walls().empty());
     REQUIRE_FALSE(lib.gates().empty());
 
-    // There are several house variants (cottages, longhouses, two-storey, manors...).
-    CHECK(lib.houses().size() == kHouseVariants);
-    // Each: a roof/shell part (fades when inside) + emissive (hearth fire / candle / lamp
-    // glow) + a real footprint, interior lights, a bed spot inside, and no fake glow.
-    for (const PropDef& house : lib.houses()) {
+    // Ordinary home variants (cottages, longhouses, two-storey, manors...) + the special
+    // landmark buildings (townhouse / pub / blacksmith) at indices kHouseVariants..
+    CHECK(lib.houses().size() == kHouseDefs);
+    // Each ordinary home: a roof/shell part (fades when inside) + emissive (hearth fire / candle /
+    // lamp glow) + a real footprint, interior lights, a bed spot inside, and no fake glow.
+    for (u32 i = 0; i < kHouseVariants; ++i) {
+        const PropDef& house = lib.houses()[i];
         CHECK(house.footprint.x > 0.0f);
         CHECK_FALSE(house.colliders.empty());
         bool has_roof = false, has_fire = false;
@@ -462,6 +464,19 @@ TEST_CASE("Village: medieval cottage / wall / gate building blocks") {
         // The resident's bed spot sits inside the house footprint (so they sleep indoors).
         CHECK(std::abs(house.bed_spot.x) < house.footprint.x);
         CHECK(std::abs(house.bed_spot.z) < house.footprint.y);
+    }
+    // The landmark buildings are solid (no fade-shell), but still have a footprint, colliders, a
+    // warm emissive part (lit windows / forge) and at least one light.
+    for (u32 i = kHouseVariants; i < kHouseDefs; ++i) {
+        const PropDef& b = lib.houses()[i];
+        CHECK(b.footprint.x > 0.0f);
+        CHECK_FALSE(b.colliders.empty());
+        CHECK_FALSE(b.lights.empty());
+        bool has_em = false;
+        for (const PropPart& part : b.parts) {
+            if (part.layer == PropLayer::Emissive && !part.mesh.indices.empty()) has_em = true;
+        }
+        CHECK(has_em);
     }
     // Two-storey variants are taller than single-storey ones.
     CHECK(lib.houses()[2].wall_height > lib.houses()[0].wall_height);

@@ -519,6 +519,7 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
             if (collision_) {
                 collision_->gather(pos, collider_scratch_);
             }
+            append_walls(pos, collider_scratch_); // the teamster A* routes AROUND Mage rock walls
             driver_path_ = astar_path({pos.x, pos.z}, wp, collider_scratch_, vt.reach() + 0.2f, pos.y);
             driver_path_i_ = 0;
             driver_repath_ = 0.6f;
@@ -960,6 +961,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
         if (collision_) {
             collision_->gather(e.position, collider_scratch_);
         }
+        append_walls(e.position, collider_scratch_); // ambushers steer around Mage rock walls too
         if (e.taunt_cd > 0.0f) {
             e.taunt_cd -= dt.seconds;
         }
@@ -1047,10 +1049,13 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                 }
             }
         } else {
+            // A friendly projectile's damage is amplified if its owner is Empowered (co-op buff).
+            const auto ownit = players_.find(pr.owner);
+            const f32 boost = ownit != players_.end() ? ownit->second.outgoing_mult() : 1.0f;
             for (Enemy& e : ambush_) {
                 const Vec3 chest = e.position + Vec3{0.0f, 0.9f, 0.0f};
                 if (glm::length(chest - pr.position) < pr.radius + kEnemyRadius + 0.3f) {
-                    e.health -= pr.damage > 0.0f ? pr.damage : kThrowDamage;
+                    e.health -= (pr.damage > 0.0f ? pr.damage : kThrowDamage) * boost;
                     pr.alive = false;
                 }
             }
@@ -1080,7 +1085,8 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             }
         }
         if (hit != nullptr) {
-            hit->health -= role_stats(pl.role).melee_damage; // weapon hits as hard as the role
+            // weapon hits as hard as the role, amplified while Empowered (co-op buff)
+            hit->health -= role_stats(pl.role).melee_damage * pl.outgoing_mult();
             pl.melee_cd = 0.35f;
         }
     }

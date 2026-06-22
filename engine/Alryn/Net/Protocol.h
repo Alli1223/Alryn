@@ -42,6 +42,7 @@ struct PlayerInput {
     f32 steer = 0.0f;    // carriage driving: rein left/right (A/D), used when piloting
     u8 role = 0;         // PlayerRole the player is in (sent each tick)
     u8 ability = 0;      // ability invoked this tick: 0 = none, 1/2/3 = slot+1 (keys 1/2/3)
+    u8 spell = 0;        // Mage combo spell cast this tick (SpellId; 0 = none) - resolved client-side
     bool block = false;  // holding the shield up (Knight, right mouse) - guard + block pose
     CharacterAppearance appearance; // the player's chosen look (sent each tick)
 };
@@ -58,6 +59,7 @@ struct PlayerState {
     u8 cast = 0;                    // ability fired this snapshot (0 = none, 1/2/3 = slot+1) -> VFX
     u8 action = 0;                  // body action: 0 none, 1 swinging, 2 blocking (-> animation)
     u8 shield = 0;                  // Aegis shield strength 0..255 (0 = none) -> shield sphere
+    u8 buffs = 0;                   // co-op buff bitflags: bit0 = empowered, bit1 = hasted
     CharacterAppearance appearance; // so every client renders the right avatar
 };
 
@@ -150,9 +152,18 @@ struct AuraState {
     u8 kind = 0; // 0 = heal
 };
 
+// A raised rock wall (Mage spell), broadcast so clients render it; a collider NPCs route around.
+struct WallState {
+    Vec3 position{0.0f}; // centre of the wall, on the ground
+    f32 yaw = 0.0f;      // facing (the wall spans perpendicular to this)
+    f32 length = 7.0f;   // span
+    u8 health = 255;     // 0..255 of kRockWallHealth (enemies smash through)
+};
+
 struct Snapshot {
     u32 tick = 0;
     f32 time_of_day = 0.0f; // 0..1, server-authoritative day/night clock
+    u8 weather = 0;          // storminess 0..255 (0 clear .. 255 full storm) -> rain/sky/wind
     u8 outcome = 0;          // MatchOutcome for the defended town
     u8 phase = 0;            // MatchPhase (Prep / Combat)
     f32 phase_timer = 0.0f;  // seconds left in the prep lull (0 during a wave)
@@ -171,6 +182,7 @@ struct Snapshot {
     std::vector<WagonState> wagons;
     std::vector<GoodState> goods;   // crates spilled from a flipped cart
     std::vector<AuraState> auras;   // ground effects (Cleric heal auras)
+    std::vector<WallState> walls;   // raised rock walls (Mage); colliders NPCs route around
 };
 
 struct Welcome {

@@ -166,6 +166,7 @@ void GameServer::tick(Timestep dt) {
     // Adopt each player's role (stats + walk speed) and resolve any ability they cast
     // this tick (against the live ambush enemies / allies) before they move.
     update_abilities(dt, density);
+    update_spells(dt, density); // Mage combo spells + ageing out raised rock walls
 
     for (auto& [id, player] : players_) {
         if (riders_.count(id) != 0u || id == pilot_) {
@@ -207,6 +208,7 @@ void GameServer::tick(Timestep dt) {
     net::Snapshot snapshot;
     snapshot.tick = ++tick_;
     snapshot.time_of_day = manager_.time_of_day();
+    snapshot.weather = static_cast<u8>(glm::clamp(manager_.weather(), 0.0f, 1.0f) * 255.0f);
     snapshot.money = money_;
     snapshot.contract_phase = static_cast<u8>(contract_phase_);
     snapshot.contract_outcome = contract_outcome_;
@@ -224,11 +226,13 @@ void GameServer::tick(Timestep dt) {
         const u8 action = player.input.block ? 2u : (player.input.attack ? 1u : 0u);
         const u8 shield = static_cast<u8>(
             glm::clamp(player.shield_hp / kAegisAmount, 0.0f, 1.0f) * 255.0f);
+        const u8 buffs = static_cast<u8>((player.damage_boost_timer > 0.0f ? 1u : 0u) |
+                                         (player.haste_timer > 0.0f ? 2u : 0u));
         snapshot.players.push_back({id, player.controller.position(), yaw, hp, 0,
                                     static_cast<u8>(seated ? 1 : 0),
                                     static_cast<u8>(player.carrying ? 1 : 0),
                                     static_cast<u8>(player.role), player.cast_fx, action, shield,
-                                    player.input.appearance});
+                                    buffs, player.input.appearance});
     }
     snapshot.projectiles.reserve(projectiles_.size());
     for (const Projectile& pr : projectiles_) {
@@ -311,6 +315,12 @@ void GameServer::tick(Timestep dt) {
     snapshot.auras.reserve(auras_.size());
     for (const Aura& a : auras_) {
         snapshot.auras.push_back({a.position, a.radius, a.kind});
+    }
+    snapshot.walls.reserve(walls_.size());
+    for (const Wall& w : walls_) {
+        snapshot.walls.push_back(
+            {w.position, w.yaw, w.length,
+             static_cast<u8>(glm::clamp(w.health / kRockWallHealth, 0.0f, 1.0f) * 255.0f)});
     }
     // fires / barricades stay empty (siege dormant); outcome/phase/wave keep defaults.
     server_.broadcast_snapshot(snapshot);

@@ -27,6 +27,11 @@ layout(set = 0, binding = 2) uniform Lights {
     ivec4 count; // x = shadow-casting spot count, y = unshadowed point count
     Spot spots[9];
     Point points[48];
+    vec4 playerPeek; // (unused here; kept so the std140 offsets match the shared UBO)
+    vec4 camPos;     // xyz = camera position (world)
+    vec4 fogColor;   // rgb = atmospheric fog/haze colour, w = density
+    vec4 screen;     // xy = framebuffer resolution (px), z = town "gloom" 0..1
+    vec4 fogVolume;  // x = road fog-bank strength 0..1, y = ground reference height (player feet)
 } lights;
 
 layout(push_constant) uniform Push {
@@ -133,6 +138,73 @@ vec3 pointLighting(vec3 N, vec3 wpos) {
     return sum;
 }
 
+// --- Cinematic atmosphere (shared with foliage/water) -------------------------------------
+// Filmic tonemap (ACES approximation) - compresses bright lit/multi-light areas gracefully
+// instead of harsh clipping, the backbone of the moodier, less-flat look.
+vec3 acesFilm(vec3 x) {
+    const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+// Colour grade: push SATURATION up for a vibrant, punchy world (a little less inside the town
+// "gloom"), a gentle warm/cool split-tone, and an S-curve for good contrast. This counteracts the
+// flattening of the ACES tonemap so roofs, ground and foliage read rich rather than greywashed.
+vec3 grade(vec3 col, float gloom) {
+    float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
+    col = mix(vec3(lum), col, 1.28 - 0.24 * gloom);     // >1 = saturate (vibrant)
+    vec3 shadowTint = vec3(0.96, 0.99, 1.05);           // just a hint of cool in shadow
+    vec3 highTint = vec3(1.05, 1.02, 0.94);             // warm highlights
+    col *= mix(shadowTint, highTint, smoothstep(0.0, 0.55, lum));
+    col = mix(col, col * col * (3.0 - 2.0 * col), 0.40); // S-curve contrast (punchier)
+    return col;
+}
+// Cheap value-noise fbm for the drifting fog wisps.
+float hash21(vec2 p) {
+    p = fract(p * vec2(123.34, 345.45));
+    p += dot(p, p + 34.345);
+    return fract(p.x * p.y);
+}
+float vnoise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = hash21(i), b = hash21(i + vec2(1.0, 0.0));
+    float c = hash21(i + vec2(0.0, 1.0)), d = hash21(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+float fbm(vec2 p) {
+    float v = 0.0, a = 0.5;
+    for (int i = 0; i < 3; ++i) { v += a * vnoise(p); p = p * 2.0 + 7.1; a *= 0.5; }
+    return v;
+}
+// Exponential distance haze toward the atmosphere colour - the biggest depth cue - PLUS an
+// optional dense, drifting, ground-hugging fog BANK (the occasional road mist). The bank keeps a
+// clear bubble around the player then walls in fast, modulated by animated wisps for a volumetric
+// feel and height-attenuated so it pools on the ground while tall geometry pokes out of it.
+float fogFactor(vec3 wpos) {
+    float dist = length(wpos - lights.camPos.xyz);
+    float dn = dist * lights.fogColor.w;
+    float f = 1.0 - exp(-dn * dn);
+
+    float bank = lights.fogVolume.x;
+    if (bank > 0.001) {
+        vec2 drift = vec2(0.5, 0.3) * pc.params.x;       // the bank rolls over time
+        float wisp = fbm(wpos.xz * 0.09 + drift * 0.18); // rolling thick/thin wisps
+        float hug = clamp(1.0 - max(wpos.y - lights.fogVolume.y, 0.0) * 0.14, 0.05, 1.0);
+        float pd = lights.fogColor.w * (2.4 + 5.0 * bank) * (0.4 + 1.0 * wisp) * hug;
+        float fd = max(dist - 5.0, 0.0);                 // clear bubble around the camera/player
+        f = max(f, (1.0 - exp(-pow(fd * pd, 2.0))) * bank);
+    }
+    return clamp(f, 0.0, 1.0);
+}
+// Soft radial vignette to pull the eye in and darken the frame edges (cinematic framing).
+float vignette() {
+    if (lights.screen.x < 1.0) {
+        return 1.0; // screen size unset (e.g. headless smoke tests) -> no vignette
+    }
+    float r = length(gl_FragCoord.xy / lights.screen.xy - 0.5);
+    float strength = 0.34 + 0.18 * lights.screen.z; // gloomier towns get a heavier frame
+    return mix(1.0, smoothstep(0.86, 0.32, r), strength);
+}
+
 void main() {
     vec3 N = normalize(vWorldNormal);
     vec3 L = normalize(pc.sun.xyz);
@@ -144,10 +216,12 @@ void main() {
     float lit = 1.0 - pc.sunColor.w * shadow; // sunColor.w = shadow strength
     float diffuse = ndotl * intensity * lit;
 
-    // Sky/ambient term shifts from a bright daytime blue to a dim moonlit blue.
-    vec3 ambientDay = vec3(0.42, 0.49, 0.62);
-    vec3 ambientNight = vec3(0.20, 0.23, 0.33);
-    vec3 ambient = mix(ambientNight, ambientDay, intensity);
+    // Hemispheric ambient: sky-tinted from above, darker/earthier from below, so surfaces
+    // are softly sky-lit on top and fall into shadow underneath (a painterly, grounded look).
+    vec3 skyAmb = mix(vec3(0.10, 0.13, 0.21), vec3(0.36, 0.46, 0.62), intensity);   // up (sky fill)
+    vec3 groundAmb = mix(vec3(0.04, 0.045, 0.06), vec3(0.26, 0.21, 0.14), intensity); // down (warm earth bounce)
+    float hemi = N.y * 0.5 + 0.5;
+    vec3 ambient = mix(groundAmb, skyAmb, hemi);
 
     // A soft cool fill from above at night so the world stays readable (moonlight).
     float night = 1.0 - intensity;
@@ -156,5 +230,11 @@ void main() {
     vec3 base = vColor * pc.tint.rgb;
     vec3 illum = ambient + sunCol * diffuse + vec3(0.55, 0.65, 0.9) * moon +
                  spotLighting(N, vWorldPos) + pointLighting(N, vWorldPos);
-    outColor = vec4(base * illum, pc.tint.a);
+
+    vec3 col = base * illum;
+    col = mix(col, lights.fogColor.rgb, fogFactor(vWorldPos)); // atmospheric haze
+    col = acesFilm(col * 1.05);                                // exposure + filmic tonemap
+    col = grade(col, lights.screen.z);                         // split-tone + contrast
+    col *= vignette();
+    outColor = vec4(col, pc.tint.a);
 }

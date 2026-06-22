@@ -69,9 +69,18 @@ enum class PropCategory : u8 {
     River  // a sunken water channel tile (banks + water) for river-towns
 };
 
-// How many distinct house variants `PropLibrary` builds (cottages, longhouses, two-
-// storey houses, manors, ...). The village scatter picks `variant % kHouseVariants`.
+// How many distinct ordinary house variants `PropLibrary` builds (cottages, longhouses, two-
+// storey houses, manors, ...). The village scatter fills with `variant % kHouseVariants`.
 inline constexpr u32 kHouseVariants = 8;
+
+// Special landmark buildings (a townhouse, a pub, a blacksmith) sit at indices kHouseVariants..
+// kHouseDefs-1 in `PropLibrary::houses()`. The town layout sprinkles a few of these in among the
+// ordinary homes (see Village.h), so a town has a tavern + smithy. `build_house(i)` dispatches to
+// the matching `build_townhouse/pub/blacksmith` for these indices.
+inline constexpr u32 kHouseTownhouse = kHouseVariants + 0; // 8
+inline constexpr u32 kHousePub = kHouseVariants + 1;       // 9
+inline constexpr u32 kHouseBlacksmith = kHouseVariants + 2; // 10
+inline constexpr u32 kHouseDefs = kHouseVariants + 3;      // total entries in houses()
 
 // How many distinct Decor props `PropLibrary` builds (barrel, crates, hay, market stall,
 // signpost, trough, woodpile, sacks). The town scatter picks a specific one by index.
