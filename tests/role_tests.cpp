@@ -66,6 +66,30 @@ TEST_CASE("aura props table drives radius/duration/colour/light for each kind") 
     CHECK(con.light > 0.0f);
 }
 
+TEST_CASE("the skills tree expands each role beyond the four hotbar slots") {
+    // More skills exist than the player can equip, so the action bar is a real choice.
+    CHECK(kAbilityCount > kAbilitySlots);
+    for (u8 r = 0; r < kRoleCount; ++r) {
+        for (u8 a = 0; a < kAbilityCount; ++a) {
+            const AbilityDef ab = ability_def(static_cast<PlayerRole>(r), a);
+            CHECK(ab.name[0] != '\0');
+            CHECK(ab.desc[0] != '\0'); // every skill carries a tree description
+            CHECK(ab.cooldown > 0.0f);
+        }
+    }
+    CHECK(std::string_view(ability_def(PlayerRole::Knight, 4).name) == "WHIRLWIND");
+    CHECK(std::string_view(ability_def(PlayerRole::Hunter, 5).name) == "CALTROPS");
+    CHECK(std::string_view(ability_def(PlayerRole::Cleric, 4).name) == "RENEW");
+}
+
+TEST_CASE("the hunter caltrops hazard aura wounds enemies (no taunt)") {
+    const AuraProps hz = aura_props(AuraKind::Hazard);
+    CHECK(hz.radius == doctest::Approx(kHazardRadius));
+    CHECK(hz.duration == doctest::Approx(kHazardDuration));
+    CHECK(hz.light > 0.0f);
+    CHECK(kHazardDPS > 0.0f);
+}
+
 TEST_CASE("cleric channelled heal aura tuning is sane") {
     CHECK(kHealChargeTime > 0.0f);   // it takes time to charge
     CHECK(kHealAuraDuration > 0.0f); // and lingers

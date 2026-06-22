@@ -13,6 +13,26 @@ void ClientApp::on_init() {
     if (window() != nullptr) {
         window()->set_cursor_captured(false); // free cursor for click-to-dig
     }
+
+    // Medieval restyle of the shared UI theme: stained dark wood panels framed in aged
+    // gold, with warm parchment text - an illuminated-manuscript feel for the menus.
+    // (The theme is mutable by design so games can restyle; see UI/Theme.h.)
+    {
+        ui::Theme& th = ui::theme();
+        th.panel = Vec4{0.13f, 0.10f, 0.07f, 0.96f};
+        th.panel_border = Vec4{0.74f, 0.56f, 0.28f, 0.55f};
+        th.overlay = Vec4{0.04f, 0.03f, 0.02f, 0.62f};
+        th.text = Vec4{0.94f, 0.88f, 0.74f, 1.0f};
+        th.text_muted = Vec4{0.70f, 0.61f, 0.46f, 1.0f};
+        th.accent = Vec4{0.78f, 0.57f, 0.24f, 1.0f};
+        th.accent_hover = Vec4{0.93f, 0.73f, 0.36f, 1.0f};
+        th.button = Vec4{0.22f, 0.16f, 0.10f, 1.0f};
+        th.button_hover = Vec4{0.31f, 0.23f, 0.14f, 1.0f};
+        th.button_press = Vec4{0.16f, 0.11f, 0.07f, 1.0f};
+        th.track = Vec4{0.24f, 0.18f, 0.11f, 1.0f};
+        th.knob = Vec4{0.86f, 0.73f, 0.46f, 1.0f};
+        th.radius = 7.0f;
+    }
     if (const char* t = std::getenv("ALRYN_TIME")) {
         time_of_day_ = glm::clamp(static_cast<f32>(std::atof(t)), 0.0f, 1.0f);
     }
@@ -195,8 +215,8 @@ void ClientApp::on_update(Timestep dt) {
         if (renderer_ != nullptr) {
             renderer_->set_player_position(local_feet()); // bends nearby vegetation
         }
-        if (paused_ || map_open_) {
-            aim_valid_ = false; // no dig-marker while the pause menu / map is up
+        if (paused_ || map_open_ || skills_open_) {
+            aim_valid_ = false; // no dig-marker while a menu / overlay is up
         } else {
             update_aim();
         }
@@ -364,6 +384,9 @@ void ClientApp::on_render() {
     draw_hud();
     if (map_open_) {
         draw_map();
+    }
+    if (skills_open_) {
+        draw_skills();
     }
     }
 

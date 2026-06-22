@@ -73,7 +73,7 @@ protected:
     void settings_back() { show_screen(paused_ ? Screen::Pause : Screen::Main); }
 
     // ---- Menu construction --------------------------------------------------
-    enum class Screen { Main, Join, Settings, Customise, Pause };
+    enum class Screen { Main, Join, Settings, Customise, Class, Pause };
 
     Vec2 pointer_pos() {
         if (Input* in = input()) {
@@ -110,6 +110,11 @@ protected:
     void build_settings(f32 w, f32 h);
 
     void build_customise(f32 w, f32 h);
+
+    // Class-selection screen shown when hosting / joining (the player picks their combat role
+    // "on joining"). Selecting a class re-lays the screen to highlight it; START enters the game
+    // with the pending host/join intent recorded when this screen was opened.
+    void build_class(f32 w, f32 h);
 
     void rebuild_preview() {
         preview_model_ = CharacterModel::create(kPreviewSeed, appearance_);
@@ -153,10 +158,30 @@ protected:
     void draw_cleric_staff(const CharacterModel& model, const std::vector<Mat4>& jmats,
                            const Vec3& feet, const CharacterAnimator& anim, f32 yaw);
 
-    // Fire ability slot (0/1/2) for the local player: gate on the client cooldown estimate,
-    // queue it for the server, mirror the cooldown for the HUD, and play the cast VFX + any
-    // buff aura instantly so it feels responsive (the server stays authoritative).
-    void cast_ability(u8 slot);
+    // Cast an ability by its index (0..kAbilityCount-1) for the local player: gate on the client
+    // cooldown estimate, queue it for the server (as index+1), mirror the cooldown for the HUD, and
+    // play the cast VFX + any buff aura instantly so it feels responsive (server stays authoritative).
+    void cast_ability(u8 ability);
+
+    // Press a hotbar slot (0..kAbilitySlots-1): casts whatever ability the player has equipped there.
+    void cast_bar_slot(u8 slot) {
+        if (slot < kAbilitySlots && bar_[slot] >= 0) {
+            cast_ability(static_cast<u8>(bar_[slot]));
+        }
+    }
+
+    // Equip / unequip an ability (from a skills-tree click): if it's already on the bar, clear that
+    // slot; otherwise drop it into the first empty slot (replacing the last slot if the bar is full).
+    void equip_ability(u8 ability);
+
+    // Mouse interaction with the bottom action bar (hit-tested against ability_slot_rects_): begin a
+    // drag on press, follow the cursor, and on release swap the two slots to reorder the bar. Returns
+    // true if the press/release was on the bar (so the in-game handler can swallow it from melee).
+    bool abilitybar_press(const Vec2& p);
+    bool abilitybar_release(const Vec2& p);
+
+    // A click inside the open skills tree: hit-test the ability nodes and equip/unequip the one hit.
+    void skills_click(const Vec2& p);
 
     // A quick flourish at the hand for a Hunter/Cleric primary attack (the projectile itself is
     // server-spawned + networked; this is just the instant local muzzle/cast feedback).
@@ -373,6 +398,11 @@ private:
     // with the player's position + facing. Toggled with M.
     void draw_map();
 
+    // Full-screen skills tree (toggled with K): the chosen role's crest branching to its
+    // four cooldown-gated abilities, each with its key, icon, cooldown and a description.
+    // Medieval-styled; purely an info overlay (world input is frozen while it's open).
+    void draw_skills();
+
     void draw_prop(const PropInstance& p);
 
     void draw_character(PlayerVisual& v, const Vec3& feet, f32 yaw, bool seated = false,
@@ -473,8 +503,20 @@ private:
     static constexpr u32 kPreviewSeed = 7u;
     CharacterAppearance appearance_;
     PlayerRole role_ = PlayerRole::Knight;          // chosen combat role (weapon + abilities)
-    u8 pending_ability_ = 0;                         // ability invoked this frame (0 = none)
-    f32 ability_cd_[kAbilitySlots] = {0.0f, 0.0f, 0.0f}; // client-side HUD cooldown estimate
+    u8 pending_ability_ = 0;                         // ability index+1 invoked this frame (0 = none)
+    f32 ability_cd_[kAbilityCount] = {};             // client-side HUD cooldown estimate (per ability)
+
+    // The customisable action bar: which ability index sits in each hotbar slot (keys 1..4);
+    // -1 = empty. Defaults to the first four abilities so the bar is populated out of the box.
+    // Edited from the skills tree (click to equip) and by click-dragging slots to reorder.
+    int bar_[kAbilitySlots] = {0, 1, 2, 3};
+    int drag_slot_ = -1;                             // bar slot being click-dragged (-1 = none)
+    ui::Rect ability_slot_rects_[kAbilitySlots] = {}; // bar slot rects (from draw_ability_bar)
+    ui::Rect skill_node_rects_[kAbilityCount] = {};  // tree node rects (from draw_skills)
+
+    // Pending host/join intent recorded when the Class screen opens; START there enters the game.
+    bool pending_host_local_ = true;
+    std::string pending_host_ip_ = "127.0.0.1";
     f32 bulwark_fx_ = 0.0f;                          // local: Knight shield-dome aura timer
     f32 dash_fx_ = 0.0f;                             // local: Hunter speed-trail aura timer
     f32 heal_charge_fx_ = 0.0f;                      // local: Cleric heal-channel charge (0..kHealChargeTime)
@@ -571,6 +613,7 @@ private:
     net::PlayerId my_id_ = 0;
     u32 world_seed_ = 0;     // shared world seed (from Welcome) - for the map's town/road graph
     bool map_open_ = false;  // full-screen map overlay (M)
+    bool skills_open_ = false; // full-screen skills tree overlay (K)
     net::Snapshot snapshot_;
     bool have_snapshot_ = false;
 

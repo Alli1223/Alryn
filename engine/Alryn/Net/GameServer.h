@@ -40,7 +40,7 @@ public:
         f32 health = kPlayerMaxHealth;
         f32 since_hit = kPlayerRegenDelay;    // seconds since last damaged (regen gate)
         f32 melee_cd = 0.0f;                  // seconds until the next melee swing can land
-        f32 ability_cd[kAbilitySlots] = {0.0f, 0.0f, 0.0f}; // per-ability cooldown timers
+        f32 ability_cd[kAbilityCount] = {}; // per-ability cooldown timers (indexed by ability)
         f32 bulwark_timer = 0.0f;             // Knight: extra damage reduction while > 0
         f32 dash_timer = 0.0f;                // Hunter: walk-speed boost while > 0
         f32 heal_charge = 0.0f;               // Cleric: seconds of channelling a heal aura (right mouse)

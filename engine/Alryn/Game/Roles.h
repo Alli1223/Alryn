@@ -17,7 +17,8 @@ enum class PlayerRole : u8 {
 };
 
 inline constexpr u8 kRoleCount = 3;
-inline constexpr u8 kAbilitySlots = 4; // abilities per role (keys 1/2/3/4)
+inline constexpr u8 kAbilitySlots = 4; // action-bar slots / hotkeys (1/2/3/4)
+inline constexpr u8 kAbilityCount = 6; // abilities available per role (the skills tree, K)
 
 // Per-role base stats. `move_speed` overrides the character controller's walk speed;
 // `damage_reduction` is the fraction of incoming damage soaked before any active buff.
@@ -47,38 +48,65 @@ inline const char* role_name(PlayerRole role) {
     return "?";
 }
 
-// A castable ability: a display name and its cooldown (seconds). Slots map to keys 1/2/3.
+// A one-line descriptor of a role's fantasy (shown in the skills tree header).
+inline const char* role_desc(PlayerRole role) {
+    switch (role) {
+        case PlayerRole::Knight: return "TANK - GUARDS ALLIES AND SOAKS DAMAGE";
+        case PlayerRole::Hunter: return "RANGER - FAST, FRAGILE, DEADLY AT RANGE";
+        case PlayerRole::Cleric: return "HEALER - MENDS ALLIES AND SMITES FOES";
+    }
+    return "";
+}
+
+// A castable ability: a display name, its cooldown (seconds), and a one-line
+// description (shown in the skills tree opened with K). Slots map to keys 1/2/3/4.
 struct AbilityDef {
     const char* name = "";
     f32 cooldown = 1.0f;
+    const char* desc = "";
 };
 
-// The three abilities of a role, indexed by slot (0..kAbilitySlots-1).
-//   Knight: Shield Bash (cone burst + knockback) / Bulwark (heavy mitigation) / Taunt (pull aggro)
-//   Hunter: Power Shot (one heavy arrow) / Volley (spread of arrows) / Dash (burst of speed)
-//   Cleric: Heal (mend the nearest ally) / Sanctuary (heal everyone nearby) / Smite (holy bolt)
-inline AbilityDef ability_def(PlayerRole role, u8 slot) {
+// The abilities of a role, indexed 0..kAbilityCount-1. The first four were the original
+// kit; indices 4+ are the expanded skills shown in the tree (K). A player equips any
+// kAbilitySlots of them onto the action bar (keys 1/2/3/4). The wire carries the ability
+// INDEX (not the bar slot), so the server resolves the effect regardless of bar order.
+inline AbilityDef ability_def(PlayerRole role, u8 ability) {
     switch (role) {
         case PlayerRole::Knight:
-            switch (slot) {
-                case 0: return {"SHIELD BASH", 4.0f};
-                case 1: return {"BULWARK", 12.0f};
-                case 2: return {"CONSECRATION", 12.0f};
-                default: return {"TAUNT", 8.0f};
+            switch (ability) {
+                case 0: return {"SHIELD BASH", 4.0f,
+                                "Frontal cone burst that damages and knocks foes back."};
+                case 1: return {"BULWARK", 12.0f,
+                                "Brace for heavy damage reduction for a few seconds."};
+                case 2: return {"CONSECRATION", 12.0f,
+                                "Holy ground that taunts and burns enemies within."};
+                case 3: return {"TAUNT", 8.0f,
+                                "Force nearby enemies to fixate their aggro on you."};
+                case 4: return {"WHIRLWIND", 7.0f,
+                                "A spinning cleave that hits every enemy around you."};
+                default: return {"RALLY", 16.0f,
+                                 "Heal yourself and nearby allies and steel them briefly."};
             }
         case PlayerRole::Hunter:
-            switch (slot) {
-                case 0: return {"POWER SHOT", 3.0f};
-                case 1: return {"VOLLEY", 6.0f};
-                case 2: return {"DASH", 5.0f};
-                default: return {"PIERCING SHOT", 6.0f};
+            switch (ability) {
+                case 0: return {"POWER SHOT", 3.0f, "A single heavy arrow for big damage."};
+                case 1: return {"VOLLEY", 6.0f, "Loose a spread of three arrows at once."};
+                case 2: return {"DASH", 5.0f, "A burst of speed to reposition or escape."};
+                case 3: return {"PIERCING SHOT", 6.0f,
+                                "One bolt that punches through for huge damage."};
+                case 4: return {"MULTISHOT", 9.0f, "A wide fan of five arrows in one draw."};
+                default: return {"CALTROPS", 12.0f,
+                                 "Scatter caltrops that wound enemies who cross them."};
             }
         case PlayerRole::Cleric:
-            switch (slot) {
-                case 0: return {"HEAL", 2.5f};
-                case 1: return {"SANCTUARY", 11.0f};
-                case 2: return {"SMITE", 4.0f};
-                default: return {"AEGIS", 9.0f};
+            switch (ability) {
+                case 0: return {"HEAL", 2.5f, "Mend the most injured ally in range."};
+                case 1: return {"SANCTUARY", 11.0f, "Heal every ally standing nearby."};
+                case 2: return {"SMITE", 4.0f, "Call down a holy bolt that hits foes hard."};
+                case 3: return {"AEGIS", 9.0f, "Shield an ally, absorbing incoming damage."};
+                case 4: return {"RENEW", 9.0f, "Lay a lingering heal aura at your feet."};
+                default: return {"JUDGEMENT", 7.0f,
+                                 "A heavy holy bolt that scorches a single foe."};
             }
     }
     return {};
@@ -119,6 +147,23 @@ inline constexpr f32 kAegisAmount = 65.0f;      // damage the shield soaks befor
 inline constexpr f32 kAegisDuration = 12.0f;    // seconds before an unbroken shield fades
 inline constexpr f32 kAegisRange = 18.0f;       // how far an ally can be shielded
 
+// --- Expanded abilities (skills tree indices 4+) ----------------------------------------
+// Knight Whirlwind: a 360-degree cleave (no cone) around the knight, with a light shove.
+inline constexpr f32 kWhirlwindDamage = 38.0f;
+inline constexpr f32 kWhirlwindRadius = 3.4f;
+inline constexpr f32 kWhirlwindKnockback = 1.6f;
+// Knight Rally: heal self + nearby allies (within kHealRadius) and grant a brief bulwark.
+inline constexpr f32 kRallyHeal = 40.0f;
+// Hunter Multishot: a wide arrow fan (each arrow scaled from ranged damage).
+inline constexpr int kMultishotArrows = 5;
+inline constexpr f32 kMultishotMult = 0.8f;
+// Cleric Judgement: a heavy single holy bolt.
+inline constexpr f32 kJudgementDamage = 95.0f;
+// Hazard ground aura (Hunter Caltrops): wounds enemies standing in it.
+inline constexpr f32 kHazardRadius = 3.6f;
+inline constexpr f32 kHazardDuration = 6.0f;
+inline constexpr f32 kHazardDPS = 20.0f;
+
 // --- Ground auras (extensible: add a kind + a row in aura_props, plus a server effect) -------
 // A ground area-of-effect that applies a per-tick effect to whoever stands in it. New aura
 // types only need: an enum value, a row here (radius/duration/colour/light), a case in the
@@ -126,6 +171,7 @@ inline constexpr f32 kAegisRange = 18.0f;       // how far an ally can be shield
 enum class AuraKind : u8 {
     Heal = 0,         // Cleric: heals allies inside
     Consecration = 1, // Knight: taunts + burns enemies inside
+    Hazard = 2,       // Hunter (Caltrops): wounds enemies inside (no taunt)
 };
 
 struct AuraProps {
@@ -141,6 +187,8 @@ inline AuraProps aura_props(AuraKind kind) {
             return {kHealAuraRadius, kHealAuraDuration, Vec3{0.4f, 1.0f, 0.6f}, 1.6f};
         case AuraKind::Consecration:
             return {kConsecrationRadius, kConsecrationDuration, Vec3{1.0f, 0.6f, 0.22f}, 1.8f};
+        case AuraKind::Hazard:
+            return {kHazardRadius, kHazardDuration, Vec3{0.85f, 0.78f, 0.3f}, 1.2f};
     }
     return {};
 }

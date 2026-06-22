@@ -5,18 +5,70 @@
 
 namespace alryn::game {
 
-void ClientApp::cast_ability(u8 slot) {
-    if (slot >= kAbilitySlots || ability_cd_[slot] > 0.0f) {
+void ClientApp::cast_ability(u8 ability) {
+    if (ability >= kAbilityCount || ability_cd_[ability] > 0.0f) {
         return;
     }
-    pending_ability_ = static_cast<u8>(slot + 1);
-    ability_cd_[slot] = ability_def(role_, slot).cooldown;
-    spawn_ability_vfx(role_, slot, local_feet(), face_yaw_, aim_valid_ ? aim_ : local_feet());
-    if (role_ == PlayerRole::Knight && slot == 1) {
-        bulwark_fx_ = kBulwarkDuration;
-    } else if (role_ == PlayerRole::Hunter && slot == 2) {
+    pending_ability_ = static_cast<u8>(ability + 1); // the wire carries the ability index + 1
+    ability_cd_[ability] = ability_def(role_, ability).cooldown;
+    spawn_ability_vfx(role_, ability, local_feet(), face_yaw_, aim_valid_ ? aim_ : local_feet());
+    if (role_ == PlayerRole::Knight && (ability == 1 || ability == 5)) {
+        bulwark_fx_ = kBulwarkDuration; // Bulwark + Rally both raise the golden dome
+    } else if (role_ == PlayerRole::Hunter && ability == 2) {
         dash_fx_ = kDashDuration;
     }
+}
+
+void ClientApp::equip_ability(u8 ability) {
+    // Already on the bar? clicking again unequips it (clears that slot).
+    for (int& slot : bar_) {
+        if (slot == static_cast<int>(ability)) {
+            slot = -1;
+            return;
+        }
+    }
+    // Otherwise drop it into the first empty slot, replacing the last slot if the bar is full.
+    for (int& slot : bar_) {
+        if (slot < 0) {
+            slot = static_cast<int>(ability);
+            return;
+        }
+    }
+    bar_[kAbilitySlots - 1] = static_cast<int>(ability);
+}
+
+void ClientApp::skills_click(const Vec2& p) {
+    for (u8 a = 0; a < kAbilityCount; ++a) {
+        if (in_rect(p, skill_node_rects_[a])) {
+            equip_ability(a);
+            return;
+        }
+    }
+}
+
+bool ClientApp::abilitybar_press(const Vec2& p) {
+    for (u8 i = 0; i < kAbilitySlots; ++i) {
+        if (bar_[i] >= 0 && in_rect(p, ability_slot_rects_[i])) {
+            drag_slot_ = static_cast<int>(i); // begin reordering this slot
+            return true;
+        }
+    }
+    return false;
+}
+
+bool ClientApp::abilitybar_release(const Vec2& p) {
+    if (drag_slot_ < 0) {
+        return false;
+    }
+    const int from = drag_slot_;
+    drag_slot_ = -1;
+    for (u8 i = 0; i < kAbilitySlots; ++i) {
+        if (in_rect(p, ability_slot_rects_[i])) {
+            std::swap(bar_[from], bar_[static_cast<int>(i)]); // drop onto a slot -> swap/reorder
+            break;
+        }
+    }
+    return true; // released off the bar just cancels the drag (consumed either way)
 }
 
 void ClientApp::on_event(Event& event) {
@@ -47,24 +99,41 @@ void ClientApp::on_event(Event& event) {
         return;
     }
 
-    // Full-screen map overlay (M). While it's open, world input is frozen and all
-    // other in-game input is swallowed.
+    // Full-screen overlays: the world map (M) and the skills tree (K). While either is
+    // open, world input is frozen and all other in-game input is swallowed. Opening one
+    // closes the other; ESC closes whichever is open.
     {
         bool consumed = false;
         dispatcher.dispatch<KeyPressedEvent>([&](KeyPressedEvent& e) {
             if (e.key() == key::M) {
                 map_open_ = !map_open_;
+                skills_open_ = false;
                 consumed = true;
                 return true;
             }
-            if (map_open_ && e.key() == key::Escape) {
+            if (e.key() == key::K) {
+                skills_open_ = !skills_open_;
                 map_open_ = false;
+                consumed = true;
+                return true;
+            }
+            if ((map_open_ || skills_open_) && e.key() == key::Escape) {
+                map_open_ = skills_open_ = false;
                 consumed = true;
                 return true;
             }
             return false;
         });
-        if (map_open_ || consumed) {
+        // Clicks inside the open skills tree equip / unequip the ability node hit.
+        if (skills_open_) {
+            dispatcher.dispatch<MouseButtonPressedEvent>([&](MouseButtonPressedEvent& e) {
+                if (e.button() == 0) {
+                    skills_click(pointer_pos());
+                }
+                return true;
+            });
+        }
+        if (map_open_ || skills_open_ || consumed) {
             return;
         }
     }
@@ -72,8 +141,12 @@ void ClientApp::on_event(Event& event) {
     // In-game input (not paused).
     dispatcher.dispatch<MouseButtonPressedEvent>([&](MouseButtonPressedEvent& e) {
         if (e.button() == 0) {
-            // A click on the contract panel's ACCEPT / CANCEL buttons takes priority over melee.
             const Vec2 p = pointer_pos();
+            // A press on the action bar begins a click-drag to reorder it (not an attack).
+            if (abilitybar_press(p)) {
+                return true;
+            }
+            // A click on the contract panel's ACCEPT / CANCEL buttons takes priority over melee.
             if (in_rect(p, accept_btn_)) {
                 selected_wagon_ = panel_wagon_; // accept -> this becomes our vote
                 return true;
@@ -104,6 +177,10 @@ void ClientApp::on_event(Event& event) {
         return false;
     });
     dispatcher.dispatch<MouseButtonReleasedEvent>([&](MouseButtonReleasedEvent& e) {
+        if (e.button() == 0 && drag_slot_ >= 0) {
+            abilitybar_release(pointer_pos()); // finish reordering the action bar
+            return true;
+        }
         if (e.button() == 1) {
             blocking_ = false; // lower the shield / stop channelling
         }
@@ -120,7 +197,7 @@ void ClientApp::on_event(Event& event) {
             vote_mode_ = vote_mode_ == 1 ? 2 : 1; // toggle hire driver / haul manually
         } else if (e.key() == key::Digit1 || e.key() == key::Digit2 ||
                    e.key() == key::Digit3 || e.key() == key::Digit4) {
-            cast_ability(static_cast<u8>(e.key() - key::Digit1)); // abilities (wagons start by walking up)
+            cast_bar_slot(static_cast<u8>(e.key() - key::Digit1)); // cast the ability equipped there
         }
         return false;
     });
@@ -130,8 +207,9 @@ void ClientApp::send_input() {
     if (!client_.connected()) {
         return;
     }
-    if (paused_ || map_open_) {
-        blocking_ = false; // drop the guard if a release got swallowed by the menu/map
+    if (paused_ || map_open_ || skills_open_) {
+        blocking_ = false; // drop the guard if a release got swallowed by a menu/overlay
+        drag_slot_ = -1;   // and cancel any in-progress action-bar drag
     }
     // Movement is relative to the fixed camera: W goes "into" the screen.
     const f32 cam_yaw = radians(iso::yaw_deg);
@@ -143,7 +221,7 @@ void ClientApp::send_input() {
     f32 steer = 0.0f;    // raw A/D - reins the horses (RDR-style) when piloting
     // While the pause menu is up the player holds still (and ignores WASD/SPACE
     // that would otherwise leak through to movement).
-    if (Input* in = input(); in != nullptr && !paused_ && !map_open_) {
+    if (Input* in = input(); in != nullptr && !paused_ && !map_open_ && !skills_open_) {
         if (in->key_down(key::W)) { move += cam_fwd; throttle += 1.0f; }
         if (in->key_down(key::S)) { move -= cam_fwd; throttle -= 1.0f; }
         if (in->key_down(key::D)) { move += cam_right; steer += 1.0f; } // rein right

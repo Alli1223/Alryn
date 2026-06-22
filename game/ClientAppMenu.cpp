@@ -39,6 +39,7 @@ void ClientApp::rebuild_ui() {
         case Screen::Join: build_join(w, h); break;
         case Screen::Settings: build_settings(w, h); break;
         case Screen::Customise: build_customise(w, h); break;
+        case Screen::Class: build_class(w, h); break;
         case Screen::Pause: build_pause(w, h); break;
     }
 }
@@ -46,6 +47,7 @@ void ClientApp::rebuild_ui() {
 void ClientApp::build_pause(f32 w, f32 h) {
     auto& title = ui_.root().add<ui::Label>("PAUSED", std::min(w, h) * 0.07f, ui::TextAlign::Center);
     title.bounds = ui::Rect{0.0f, h * 0.24f, w, std::min(w, h) * 0.08f};
+    title.color = ui::theme().accent_hover; // aged gold to match the main menu
 
     constexpr f32 cw = 340.0f, pad = 26.0f, rh = 52.0f, gap = 14.0f;
     constexpr int rows = 4;
@@ -69,6 +71,15 @@ void ClientApp::add_title(f32 w, f32 h, const char* heading, const char* sub) {
     const f32 big = std::min(w, h) * 0.11f;
     auto& title = ui_.root().add<ui::Label>(heading, big, ui::TextAlign::Center);
     title.bounds = ui::Rect{0.0f, h * 0.15f, w, big};
+    title.color = ui::theme().accent_hover; // aged gold, illuminated-manuscript feel
+    // A gold rule under the title to frame it like a heraldic banner.
+    auto& rule = ui_.root().add<ui::Panel>();
+    const f32 rw = std::min(w * 0.34f, big * 5.0f);
+    rule.bounds = ui::Rect{(w - rw) * 0.5f, h * 0.15f + big + 4.0f, rw, 2.0f};
+    const Vec4 ac = ui::theme().accent;
+    rule.color = Vec4{ac.r, ac.g, ac.b, 0.7f};
+    rule.border = Vec4{0.0f};
+    rule.radius = 1.0f;
     if (sub != nullptr) {
         auto& s = ui_.root().add<ui::Label>(sub, 15.0f, ui::TextAlign::Center);
         s.bounds = ui::Rect{0.0f, h * 0.15f + big + 10.0f, w, 22.0f};
@@ -77,7 +88,7 @@ void ClientApp::add_title(f32 w, f32 h, const char* heading, const char* sub) {
 }
 
 void ClientApp::build_main(f32 w, f32 h) {
-    add_title(w, h, "ALRYN", "LOW - POLY  MULTIPLAYER  SANDBOX");
+    add_title(w, h, "ALRYN", "A  MEDIEVAL  WAGON - ESCORT  ADVENTURE");
     constexpr f32 cw = 360.0f, pad = 26.0f, rh = 52.0f, gap = 13.0f;
     constexpr int rows = 5;
     const f32 ch = pad * 2.0f + rows * rh + (rows - 1) * gap;
@@ -88,7 +99,11 @@ void ClientApp::build_main(f32 w, f32 h) {
         return ui::Rect{card.x + pad, card.y + pad + static_cast<f32>(i) * (rh + gap),
                         card.w - pad * 2.0f, rh};
     };
-    auto& host = panel.add<ui::Button>("HOST GAME", [this] { enter_game(true, "127.0.0.1"); });
+    auto& host = panel.add<ui::Button>("HOST GAME", [this] {
+        pending_host_local_ = true; // pick a class first, then start the listen server
+        pending_host_ip_ = "127.0.0.1";
+        show_screen(Screen::Class);
+    });
     host.primary = true;
     host.bounds = row(0);
     panel.add<ui::Button>("CUSTOMISE", [this] { show_screen(Screen::Customise); }).bounds = row(1);
@@ -123,7 +138,9 @@ void ClientApp::build_join(f32 w, f32 h) {
     field.on_change = [this](const std::string& s) { host_ip_ = s; };
 
     auto& connect = panel.add<ui::Button>("CONNECT", [this] {
-        enter_game(false, host_ip_.empty() ? std::string{"127.0.0.1"} : host_ip_);
+        pending_host_local_ = false; // pick a class first, then connect to the server
+        pending_host_ip_ = host_ip_.empty() ? std::string{"127.0.0.1"} : host_ip_;
+        show_screen(Screen::Class);
     });
     connect.primary = true;
     connect.bounds = row(2);
@@ -236,6 +253,61 @@ void ClientApp::build_customise(f32 w, f32 h) {
     auto& play = panel.add<ui::Button>("PLAY", [this] { enter_game(true, "127.0.0.1"); });
     play.primary = true;
     play.bounds = ui::Rect{x + half + 12.0f, by, half, 50.0f};
+}
+
+void ClientApp::build_class(f32 w, f32 h) {
+    add_title(w, h, "CHOOSE YOUR CLASS",
+              pending_host_local_ ? "HOSTING A NEW GAME" : "JOINING A GAME");
+
+    // Three selectable class cards in a row; the chosen one is highlighted (primary).
+    const f32 cw = std::min(w * 0.84f, 820.0f);
+    const f32 ch = 230.0f;
+    const ui::Rect card{(w - cw) * 0.5f, h * 0.36f, cw, ch};
+    auto& panel = ui_.root().add<ui::Panel>();
+    panel.bounds = card;
+
+    static const char* names[kRoleCount] = {"KNIGHT", "HUNTER", "CLERIC"};
+    static const char* tags[kRoleCount] = {"TANK", "RANGED DPS", "HEALER"};
+    static const char* hints[kRoleCount] = {"SWORD + SHIELD", "LONGBOW", "HOLY STAFF"};
+    const f32 pad = 22.0f;
+    const f32 colw = (cw - pad * 4.0f) / 3.0f;
+    for (int i = 0; i < kRoleCount; ++i) {
+        const auto role = static_cast<PlayerRole>(i);
+        const f32 x = card.x + pad + static_cast<f32>(i) * (colw + pad);
+        f32 y = card.y + pad;
+        auto& b = panel.add<ui::Button>(names[i], [this, i] {
+            role_ = static_cast<PlayerRole>(i);
+            rebuild_ui(); // re-lay to highlight the new selection
+        });
+        b.primary = (static_cast<int>(role_) == i);
+        b.bounds = ui::Rect{x, y, colw, 60.0f};
+        y += 74.0f;
+        auto add_line = [&](const std::string& text, f32 size, const Vec4& col) {
+            auto& l = panel.add<ui::Label>(text, size, ui::TextAlign::Center);
+            l.bounds = ui::Rect{x, y, colw, size + 6.0f};
+            l.color = col;
+            y += size + 12.0f;
+        };
+        add_line(tags[i], 18.0f, ui::theme().accent_hover);
+        add_line(std::format("{} HP", static_cast<int>(role_stats(role).max_health)), 15.0f,
+                 ui::theme().text);
+        add_line(hints[i], 12.0f, ui::theme().text_muted);
+    }
+
+    // The chosen class's fantasy, centred under the cards.
+    auto& blurb = ui_.root().add<ui::Label>(role_desc(role_), 16.0f, ui::TextAlign::Center);
+    blurb.bounds = ui::Rect{0.0f, card.y + card.h + 18.0f, w, 22.0f};
+    blurb.color = ui::theme().text;
+
+    // BACK + START.
+    const f32 bw = 200.0f, bh = 52.0f, bgap = 16.0f;
+    const f32 by = card.y + card.h + 60.0f;
+    auto& back = ui_.root().add<ui::Button>("BACK", [this] { show_screen(Screen::Main); });
+    back.bounds = ui::Rect{(w - bw * 2.0f - bgap) * 0.5f, by, bw, bh};
+    auto& start = ui_.root().add<ui::Button>(pending_host_local_ ? "START" : "JOIN",
+                                             [this] { enter_game(pending_host_local_, pending_host_ip_); });
+    start.primary = true;
+    start.bounds = ui::Rect{(w - bw * 2.0f - bgap) * 0.5f + bw + bgap, by, bw, bh};
 }
 
 void ClientApp::apply_resolution(usize idx) {

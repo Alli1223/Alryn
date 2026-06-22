@@ -212,7 +212,7 @@ void ClientApp::spawn_ability_vfx(PlayerRole role, u8 slot, const Vec3& feet, f3
                     emit(c, d * frand(6.0f, 12.0f), Vec4{0.8f, 0.88f, 1.0f, 0.95f}, 0.4f, 0.16f, 1,
                          6.0f);
                 }
-            } else if (slot == 1) { // Bulwark: a golden dome flares up
+            } else if (slot == 1 || slot == 5) { // Bulwark / Rally: a golden dome flares up
                 emit_ring(feet, Vec4{1.0f, 0.85f, 0.4f, 0.95f}, 22, 3.0f, 0.6f, 0.16f);
                 emit_burst(chest, Vec4{1.0f, 0.82f, 0.35f, 0.9f}, 14, 2.5f, 0.7f, 0.14f, 1, 1.5f);
             } else if (slot == 2) { // Consecration: a holy-fire ring erupts from the ground
@@ -220,6 +220,10 @@ void ClientApp::spawn_ability_vfx(PlayerRole role, u8 slot, const Vec3& feet, f3
                           0.6f, 0.2f);
                 emit_burst(feet + Vec3{0.0f, 0.2f, 0.0f}, Vec4{1.0f, 0.6f, 0.2f, 0.9f}, 22, 2.5f,
                            0.7f, 0.16f, 1, 3.0f);
+            } else if (slot == 4) { // Whirlwind: a steel ring sweeps around the knight
+                emit_ring(feet + Vec3{0.0f, 0.6f, 0.0f}, Vec4{0.85f, 0.9f, 1.0f, 0.95f}, 30,
+                          kWhirlwindRadius * 1.4f, 0.45f, 0.16f);
+                emit_burst(chest, Vec4{0.8f, 0.88f, 1.0f, 0.9f}, 16, 5.0f, 0.4f, 0.13f, 1, 1.0f);
             } else { // Taunt: a red warcry pulse + upward embers
                 emit_ring(feet, Vec4{1.0f, 0.3f, 0.25f, 0.95f}, 24, 7.0f, 0.5f, 0.18f);
                 emit_burst(chest, Vec4{1.0f, 0.4f, 0.3f, 0.9f}, 14, 3.0f, 0.55f, 0.15f, 1, 3.0f);
@@ -233,11 +237,16 @@ void ClientApp::spawn_ability_vfx(PlayerRole role, u8 slot, const Vec3& feet, f3
                     emit(chest - facing * frand(0.0f, 0.8f), -facing * frand(2.0f, 5.0f),
                          Vec4{0.7f, 1.0f, 0.7f, 0.8f}, 0.4f, 0.12f, 1);
                 }
-            } else { // Power Shot / Volley: a bright muzzle spray along the shot
+            } else if (slot == 5) { // Caltrops: a low scatter ring on the ground at the aim
+                emit_ring(aim, Vec4{0.9f, 0.82f, 0.3f, 0.9f}, 20, kHazardRadius * 1.3f, 0.5f, 0.13f);
+                emit_burst(aim + Vec3{0.0f, 0.15f, 0.0f}, Vec4{0.85f, 0.78f, 0.3f, 0.85f}, 12, 2.0f,
+                           0.5f, 0.11f, 1, 1.2f);
+            } else { // Power Shot / Volley / Multishot: a bright muzzle spray along the shot
                 const Vec3 c = chest + fwd * 0.8f;
                 emit(c, Vec3{0.0f}, Vec4{0.8f, 1.0f, 0.7f, 1.0f}, 0.14f, 0.4f, 1);
-                const f32 spread = slot == 1 ? 0.4f : 0.15f;
-                for (int i = 0; i < (slot == 1 ? 22 : 12); ++i) {
+                const bool wide = slot == 1 || slot == 4; // Volley / Multishot fan wider
+                const f32 spread = wide ? 0.4f : 0.15f;
+                for (int i = 0; i < (wide ? 22 : 12); ++i) {
                     const f32 a = std::atan2(fwd.z, fwd.x) + frand(-spread, spread);
                     emit(c, Vec3{std::cos(a), frand(-0.1f, 0.2f), std::sin(a)} * frand(5.0f, 11.0f),
                          Vec4{0.7f, 1.0f, 0.65f, 0.9f}, 0.35f, 0.12f, 1);
@@ -252,7 +261,7 @@ void ClientApp::spawn_ability_vfx(PlayerRole role, u8 slot, const Vec3& feet, f3
                          Vec3{0.0f, frand(2.0f, 4.5f), 0.0f}, Vec4{0.7f, 1.0f, 0.85f, 0.9f}, 0.9f,
                          0.14f, 1, -1.0f);
                 }
-            } else if (slot == 2) { // Smite: a holy flash punched forward (the bolt travels)
+            } else if (slot == 2 || slot == 5) { // Smite / Judgement: a holy flash punched forward
                 const Vec3 c = chest + fwd * 0.8f;
                 emit(c, Vec3{0.0f}, Vec4{0.85f, 1.0f, 0.9f, 1.0f}, 0.2f, 0.6f, 1);
                 emit_burst(c, Vec4{0.7f, 1.0f, 0.85f, 0.95f}, 16, 6.0f, 0.4f, 0.14f, 1);

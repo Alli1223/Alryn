@@ -54,11 +54,11 @@ void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
             }
         }
 
-        const u8 slot_one = pl.input.ability; // 0 = none, else slot+1
-        if (slot_one == 0 || slot_one > kAbilitySlots) {
+        const u8 ability_one = pl.input.ability; // 0 = none, else ability index + 1
+        if (ability_one == 0 || ability_one > kAbilityCount) {
             continue;
         }
-        const u8 slot = static_cast<u8>(slot_one - 1);
+        const u8 slot = static_cast<u8>(ability_one - 1); // ability index (into ability_def)
         if (pl.ability_cd[slot] > 0.0f) {
             continue; // still cooling down
         }
@@ -91,13 +91,32 @@ void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
                     pl.bulwark_timer = kBulwarkDuration;
                 } else if (slot == 2) { // Consecration: a holy ground aura that taunts + burns
                     spawn_aura(AuraKind::Consecration, pl.controller.position(), id);
-                } else { // Taunt: nearby enemies instantly fixate on this Knight
+                } else if (slot == 3) { // Taunt: nearby enemies instantly fixate on this Knight
                     for (Enemy& e : ambush_) {
                         if (glm::length(e.position - pl.controller.position()) <= kTauntRadius) {
                             e.taunt_by = id;
                             e.taunt_cd = kTauntDuration;
                         }
                     }
+                } else if (slot == 4) { // Whirlwind: a 360 cleave that hits everything around you
+                    for (Enemy& e : ambush_) {
+                        Vec3 d = e.position - pl.controller.position();
+                        d.y = 0.0f;
+                        if (glm::length(d) > kWhirlwindRadius) {
+                            continue;
+                        }
+                        e.health -= kWhirlwindDamage;
+                        const Vec3 push = glm::length(d) > 1e-3f ? glm::normalize(d) : facing;
+                        e.position += push * kWhirlwindKnockback;
+                    }
+                } else { // Rally: heal self + nearby allies and steel them with a brief bulwark
+                    for (auto& [oid, other] : players_) {
+                        if (glm::length(other.controller.position() - pl.controller.position()) <=
+                            kHealRadius) {
+                            other.health = std::min(other.max_health, other.health + kRallyHeal);
+                        }
+                    }
+                    pl.bulwark_timer = kBulwarkDuration;
                 }
                 break;
 
@@ -124,8 +143,18 @@ void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
                     }
                 } else if (slot == 2) { // Dash: a burst of speed
                     pl.dash_timer = kDashDuration;
-                } else { // Piercing Shot: a single heavy bolt
+                } else if (slot == 3) { // Piercing Shot: a single heavy bolt
                     loose_arrow(dir, stats.ranged_damage * kPierceMult);
+                } else if (slot == 4) { // Multishot: a wide five-arrow fan
+                    const f32 base = std::atan2(dir.z, dir.x);
+                    const int half = kMultishotArrows / 2;
+                    for (int k = -half; k <= half; ++k) {
+                        const f32 a = base + static_cast<f32>(k) * 0.16f;
+                        loose_arrow(Vec3{std::cos(a), dir.y, std::sin(a)},
+                                    stats.ranged_damage * kMultishotMult);
+                    }
+                } else { // Caltrops: a hazard ground aura at the aim point
+                    spawn_aura(AuraKind::Hazard, pl.input.aim, id);
                 }
                 break;
             }
@@ -163,7 +192,7 @@ void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
                     pr.radius = 0.2f;
                     pr.life = 3.0f;
                     projectiles_.push_back(pr);
-                } else { // Aegis: shield the nearest friendly player or NPC (prefer the closest)
+                } else if (slot == 3) { // Aegis: shield the nearest friendly player/NPC (closest)
                     ServerPlayer* tp = nullptr;
                     f32 pbest = kAegisRange;
                     for (auto& [oid, other] : players_) {
@@ -188,12 +217,26 @@ void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
                         tp->shield_hp = kAegisAmount; // players get a real damage-absorb pool
                         tp->shield_timer = kAegisDuration;
                     }
+                } else if (slot == 4) { // Renew: lay a lingering heal aura at the caster's feet
+                    spawn_aura(AuraKind::Heal, pl.controller.position(), id);
+                } else { // Judgement: a heavy holy bolt toward the aim point
+                    Vec3 dir = pl.input.aim - eye;
+                    dir = glm::length(dir) > 0.2f ? glm::normalize(dir) : facing;
+                    Projectile pr;
+                    pr.position = eye + dir * 0.6f;
+                    pr.velocity = dir * 30.0f;
+                    pr.owner = id;
+                    pr.damage = kJudgementDamage;
+                    pr.kind = 2; // holy bolt (rendered bright by the client)
+                    pr.radius = 0.22f;
+                    pr.life = 3.0f;
+                    projectiles_.push_back(pr);
                 }
                 break;
         }
 
         pl.ability_cd[slot] = ability_def(pl.role, slot).cooldown;
-        pl.cast_fx = slot_one; // echoed in the snapshot so every client plays the cast VFX
+        pl.cast_fx = ability_one; // echoed in the snapshot so every client plays the cast VFX
     }
 
     update_auras(dt);
@@ -245,6 +288,13 @@ void GameServer::update_auras(Timestep dt) {
                         e.taunt_by = a.owner;
                         e.taunt_cd = kTauntDuration;
                         e.health -= kConsecrationDPS * dts;
+                    }
+                }
+                break;
+            case AuraKind::Hazard: // wound enemies standing in it (Hunter caltrops, no taunt)
+                for (Enemy& e : ambush_) {
+                    if (e.alive && glm::length(e.position - a.position) <= a.radius) {
+                        e.health -= kHazardDPS * dts;
                     }
                 }
                 break;

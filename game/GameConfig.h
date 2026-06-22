@@ -18,7 +18,7 @@ inline constexpr u32 kWorldSeed = 1337u;
 
 // Keyboard scancodes used by the client (GLFW GLFW_KEY_* values).
 namespace key {
-inline constexpr KeyCode W = 87, A = 65, S = 83, D = 68, E = 69, F = 70, H = 72, M = 77,
+inline constexpr KeyCode W = 87, A = 65, S = 83, D = 68, E = 69, F = 70, H = 72, K = 75, M = 77,
                          Space = 32, Escape = 256;
 inline constexpr KeyCode Digit1 = 49, Digit2 = 50, Digit3 = 51, Digit4 = 52;
 } // namespace key
