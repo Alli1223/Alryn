@@ -57,6 +57,44 @@ struct UIPush {
     Vec4 border;
     Vec2 screen;
 };
+
+// A view-frustum extracted from a view-projection matrix (Gribb-Hartmann), used to cull
+// draw items per pass: the camera frustum (main pass), the sun frustum (shadow pass) and
+// each spot light's frustum (atlas pass - a light cannot light/shadow what's outside it).
+struct Frustum {
+    Vec4 planes[6]; // each plane.xyz = normal, plane.w = distance; inside => dot(n,p)+w >= 0
+};
+Frustum make_frustum(const Mat4& m) {
+    // Rows of the (column-major glm) matrix: row(i) = (m[0][i], m[1][i], m[2][i], m[3][i]).
+    auto row = [&](int i) { return Vec4{m[0][i], m[1][i], m[2][i], m[3][i]}; };
+    const Vec4 r0 = row(0), r1 = row(1), r2 = row(2), r3 = row(3);
+    Frustum f;
+    f.planes[0] = r3 + r0; // left
+    f.planes[1] = r3 - r0; // right
+    f.planes[2] = r3 + r1; // bottom
+    f.planes[3] = r3 - r1; // top
+    f.planes[4] = r2;      // near  (Vulkan/zero-to-one clip: z >= 0)
+    f.planes[5] = r3 - r2; // far   (z <= w)
+    for (Vec4& p : f.planes) {
+        const f32 len = glm::length(Vec3{p});
+        if (len > 1e-6f) {
+            p /= len;
+        }
+    }
+    return f;
+}
+// True if the world sphere (xyz centre, w radius) is fully outside the frustum (-> cull it).
+// A small margin keeps casters straddling the boundary, so nothing visibly pops.
+bool sphere_outside(const Frustum& f, const Vec4& sphere) {
+    const Vec3 c{sphere};
+    const f32 r = sphere.w + 0.5f;
+    for (const Vec4& p : f.planes) {
+        if (glm::dot(Vec3{p}, c) + p.w < -r) {
+            return true;
+        }
+    }
+    return false;
+}
 } // namespace
 
 Renderer::Renderer(Window& window, RendererConfig config) : window_(window), config_(config) {}
@@ -534,18 +572,27 @@ void Renderer::record_shadow_pass(VkCommandBuffer cmd) {
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    pipeline_shadow_.bind(cmd);
-    for (const DrawItem& item : draw_items_) {
-        if (item.layer == Layer::Water || item.layer == Layer::Glow) {
-            continue; // the water surface doesn't cast shadows
+    // At night the sun's shadow is faded to nothing (shadow_strength -> 0), so skip rendering
+    // the whole scene into it - the cleared map is sampled but multiplied out. By day, only draw
+    // casters inside the sun's ortho frustum.
+    if (shadow_strength_ > 0.01f) {
+        pipeline_shadow_.bind(cmd);
+        const Frustum sun_frustum = make_frustum(light_view_proj_);
+        for (const DrawItem& item : draw_items_) {
+            if (item.layer == Layer::Water || item.layer == Layer::Glow) {
+                continue; // the water surface doesn't cast shadows
+            }
+            if (sphere_outside(sun_frustum, item.sphere)) {
+                continue;
+            }
+            PushConstants push{};
+            push.mvp = light_view_proj_ * item.model;
+            vkCmdPushConstants(cmd, pipeline_shadow_.layout(),
+                               VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                               sizeof(PushConstants), &push);
+            item.mesh->bind(cmd);
+            item.mesh->draw(cmd);
         }
-        PushConstants push{};
-        push.mvp = light_view_proj_ * item.model;
-        vkCmdPushConstants(cmd, pipeline_shadow_.layout(),
-                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                           sizeof(PushConstants), &push);
-        item.mesh->bind(cmd);
-        item.mesh->draw(cmd);
     }
     vkCmdEndRendering(cmd);
 
@@ -590,8 +637,15 @@ void Renderer::record_light_atlas_pass(VkCommandBuffer cmd) {
                           {tile, tile}};
         vkCmdSetViewport(cmd, 0, 1, &vp);
         vkCmdSetScissor(cmd, 0, 1, &sc);
+        // A spot light only lights/shadows what's inside its frustum (bounded by its range +
+        // cone). Cull everything else - this is what stops a single lantern from re-rendering
+        // the whole town into its tile, the dominant night-time cost.
+        const Frustum light_frustum = make_frustum(active_light_vp_[i]);
         for (const DrawItem& item : draw_items_) {
             if (item.layer == Layer::Water || item.layer == Layer::Glow) {
+                continue;
+            }
+            if (sphere_outside(light_frustum, item.sphere)) {
                 continue;
             }
             PushConstants push{};
@@ -660,7 +714,11 @@ void Renderer::record_main_pass(VkCommandBuffer cmd) {
                             &frame.shadow_set, 0, nullptr);
 
     current_pipeline_ = VK_NULL_HANDLE;
+    const Frustum cam_frustum = make_frustum(projection_ * view_);
     for (const DrawItem& item : draw_items_) {
+        if (sphere_outside(cam_frustum, item.sphere)) {
+            continue; // off-screen: skip (props behind / beside the camera)
+        }
         const vk::Pipeline& pipe = item.layer == Layer::Water        ? pipeline_water_
                                    : item.layer == Layer::Foliage    ? pipeline_foliage_
                                    : item.layer == Layer::Glow       ? pipeline_glow_
@@ -731,46 +789,45 @@ void Renderer::record_ui_pass(VkCommandBuffer cmd) {
                       VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, 0);
 }
 
-void Renderer::draw(const Mesh& mesh, const Mat4& model, const Vec4& tint) {
+Vec4 Renderer::world_sphere(const Mesh& mesh, const Mat4& model) {
+    const Vec3 c = Vec3{model * Vec4{mesh.bounds_center(), 1.0f}};
+    const f32 scale = std::max({glm::length(Vec3{model[0]}), glm::length(Vec3{model[1]}),
+                                glm::length(Vec3{model[2]})});
+    return Vec4{c, mesh.bounds_radius() * scale};
+}
+
+void Renderer::submit(const Mesh& mesh, const Mat4& model, const Vec4& tint, Layer layer) {
     if (frame_active_) {
-        draw_items_.push_back({&mesh, model, tint, Layer::Opaque});
+        draw_items_.push_back({&mesh, model, tint, layer, world_sphere(mesh, model)});
     }
+}
+
+void Renderer::draw(const Mesh& mesh, const Mat4& model, const Vec4& tint) {
+    submit(mesh, model, tint, Layer::Opaque);
 }
 
 void Renderer::draw_cutout(const Mesh& mesh, const Mat4& model, const Vec4& tint) {
-    if (frame_active_) {
-        draw_items_.push_back({&mesh, model, tint, Layer::Cutout});
-    }
+    submit(mesh, model, tint, Layer::Cutout);
 }
 
 void Renderer::draw_vegetation(const Mesh& mesh, const Mat4& model) {
-    if (frame_active_) {
-        draw_items_.push_back({&mesh, model, Vec4{1.0f}, Layer::Vegetation});
-    }
+    submit(mesh, model, Vec4{1.0f}, Layer::Vegetation);
 }
 
 void Renderer::draw_glow(const Mesh& mesh, const Mat4& model, const Vec4& tint) {
-    if (frame_active_) {
-        draw_items_.push_back({&mesh, model, tint, Layer::Glow});
-    }
+    submit(mesh, model, tint, Layer::Glow);
 }
 
 void Renderer::draw_transparent(const Mesh& mesh, const Mat4& model, const Vec4& tint) {
-    if (frame_active_) {
-        draw_items_.push_back({&mesh, model, tint, Layer::Foliage});
-    }
+    submit(mesh, model, tint, Layer::Foliage);
 }
 
 void Renderer::draw_water(const Mesh& mesh, const Mat4& model) {
-    if (frame_active_) {
-        draw_items_.push_back({&mesh, model, Vec4{1.0f}, Layer::Water});
-    }
+    submit(mesh, model, Vec4{1.0f}, Layer::Water);
 }
 
 void Renderer::draw_emissive(const Mesh& mesh, const Mat4& model, const Vec4& tint) {
-    if (frame_active_) {
-        draw_items_.push_back({&mesh, model, tint, Layer::Emissive});
-    }
+    submit(mesh, model, tint, Layer::Emissive);
 }
 
 void Renderer::draw_ui_rect(const Vec4& rect_xywh, const Vec4& color, f32 radius, f32 border,

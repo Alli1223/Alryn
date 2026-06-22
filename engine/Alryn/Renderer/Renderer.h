@@ -136,6 +136,7 @@ private:
         Mat4 model;
         Vec4 tint;
         Layer layer;
+        Vec4 sphere; // world-space bounding sphere (xyz centre, w radius) for culling
     };
 
     // One screen-space UI primitive (matches the ui.* push-constant block).
@@ -172,6 +173,10 @@ private:
     void recreate_swapchain();
     Mat4 compute_light_matrix() const;
     void process_lights(); // pick nearest lights, build atlas matrices + UBO
+    // The world-space bounding sphere of a draw (mesh local sphere transformed by the model),
+    // cached on each DrawItem so the shadow/light/main passes can frustum-cull cheaply.
+    static Vec4 world_sphere(const Mesh& mesh, const Mat4& model);
+    void submit(const Mesh& mesh, const Mat4& model, const Vec4& tint, Layer layer);
     void push_constants(const Mat4& model, const Vec4& tint, bool vegetation = false);
     void record_shadow_pass(VkCommandBuffer cmd);
     void record_light_atlas_pass(VkCommandBuffer cmd);

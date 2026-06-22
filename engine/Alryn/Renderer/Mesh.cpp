@@ -3,6 +3,9 @@
 #include <Alryn/Core/Log.h>
 #include <Alryn/Renderer/Vulkan/VulkanDevice.h>
 
+#include <algorithm>
+#include <cmath>
+
 namespace alryn {
 
 void MeshData::recompute_flat_normals() {
@@ -39,6 +42,20 @@ bool Mesh::create(const vk::Device& device, const MeshData& data) {
     vertex_buffer_.upload(data.vertices.data(), vertex_bytes);
     index_buffer_.upload(data.indices.data(), index_bytes);
     index_count_ = static_cast<u32>(data.indices.size());
+
+    // Local-space bounding sphere from the AABB centre, for frustum / light culling.
+    Vec3 lo = data.vertices[0].position;
+    Vec3 hi = lo;
+    for (const Vertex& v : data.vertices) {
+        lo = glm::min(lo, v.position);
+        hi = glm::max(hi, v.position);
+    }
+    bounds_center_ = (lo + hi) * 0.5f;
+    f32 r2 = 0.0f;
+    for (const Vertex& v : data.vertices) {
+        r2 = std::max(r2, glm::dot(v.position - bounds_center_, v.position - bounds_center_));
+    }
+    bounds_radius_ = std::sqrt(r2);
     return true;
 }
 

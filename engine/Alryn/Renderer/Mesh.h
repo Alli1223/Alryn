@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Alryn/Core/Math.h>
 #include <Alryn/Core/NonCopyable.h>
 #include <Alryn/Core/Types.h>
 #include <Alryn/Renderer/Vertex.h>
@@ -40,10 +41,16 @@ public:
     u32 index_count() const { return index_count_; }
     bool valid() const { return index_count_ > 0; }
 
+    // Local-space bounding sphere (computed in create), used for frustum / light culling.
+    const Vec3& bounds_center() const { return bounds_center_; }
+    f32 bounds_radius() const { return bounds_radius_; }
+
 private:
     vk::Buffer vertex_buffer_;
     vk::Buffer index_buffer_;
     u32 index_count_ = 0;
+    Vec3 bounds_center_{0.0f};
+    f32 bounds_radius_ = 0.0f;
 };
 
 } // namespace alryn
