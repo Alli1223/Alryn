@@ -398,13 +398,22 @@ TEST_CASE("GameServer: no siege - players join, peaceful townsfolk, nothing atta
     CHECK(snap.fires.empty());
     CHECK(snap.outcome == static_cast<u8>(MatchOutcome::Ongoing));
 
-    // Peaceful townsfolk populate the town the player spawned in, and are networked as
-    // kind 0 (plain villagers, not guards).
+    // Peaceful townsfolk populate the town the player spawned in (kind 0); a garrisoned town
+    // also posts kind-2 archer guards up on the walls (elevated above the ground).
     CHECK(server.villager_count() > 0);
     CHECK(snap.villagers.size() == server.villager_count());
+    int wall_guards = 0;
     for (const VillagerState& vs : snap.villagers) {
-        CHECK(vs.kind == 0);
+        CHECK((vs.kind == 0 || vs.kind == 2));
+        if (vs.kind == 2) {
+            ++wall_guards;
+            // Standing up on the wall, well above the terrain at their spot (not on the street).
+            const f32 g = worldgen::height(vs.position.x, vs.position.z, 4242u);
+            CHECK(vs.position.y > g + 1.5f);
+        }
     }
+    const std::string gmsg = "wall guards on the spawn town: " + std::to_string(wall_guards);
+    MESSAGE(gmsg);
 
     // Run a long while (across what used to be dusk): still no enemy/fire siege spawns.
     pump(600);

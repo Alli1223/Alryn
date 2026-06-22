@@ -493,26 +493,66 @@ PropDef PropLibrary::build_wall(int variant) {
 
 // A stone gate tower (placed in pairs flanking each gate gap), with a fire brazier
 // on top that lights the gate at night.
+// A flanking gatehouse: a stout stone tower (taller than the wall) that stands either side of
+// a gate. A battered base, a doorway + a lit window on the town-facing front (+z), arrow slits
+// down the sides, a crenellated battlement, and a brazier on top - the lit gate marker for the
+// night. Detail recesses are boxes buried in the wall with only a proud face showing, so no
+// coplanar z-fighting. Placed in pairs by village_props, facing the town centre.
 PropDef PropLibrary::build_gate() {
     PropDef def;
-    def.name = "gate";
-    const Vec3 stone{0.48f, 0.47f, 0.46f};
+    def.name = "gatehouse";
+    const Vec3 stone{0.50f, 0.49f, 0.47f};
+    const Vec3 dark{0.24f, 0.23f, 0.22f}; // doorway / arrow-slit recesses
+    const Vec3 wood{0.34f, 0.23f, 0.13f};
     const Vec3 fire{1.0f, 0.6f, 0.2f};
+    const Vec3 lit{1.0f, 0.82f, 0.45f}; // warm lit window
     MeshData op;
     MeshData em;
-    constexpr f32 r = 0.45f;
-    constexpr f32 gh = 3.1f;
-    add_box(op, {-r, 0.0f, -r}, {r, gh, r}, stone);
-    add_box(op, {-r - 0.08f, gh, -r - 0.08f}, {r + 0.08f, gh + 0.18f, r + 0.08f}, stone * 1.05f); // cap
-    add_box(em, {-0.22f, gh + 0.18f, -0.22f}, {0.22f, gh + 0.5f, 0.22f}, fire);                   // brazier
+    constexpr f32 r = 1.0f;  // half-width footprint
+    constexpr f32 gh = 4.4f; // tower height (the wall is 2.3)
+
+    add_box(op, {-r - 0.16f, 0.0f, -r - 0.16f}, {r + 0.16f, 0.5f, r + 0.16f}, stone * 0.95f); // battered base
+    add_box(op, {-r, 0.5f, -r}, {r, gh, r}, stone);                                           // body
+    add_box(op, {-r - 0.07f, gh - 1.0f, -r - 0.07f}, {r + 0.07f, gh - 0.86f, r + 0.07f},
+            stone * 1.04f); // string-course band
+
+    // Doorway + a lit upper window on the front (+z), buried so only the face shows.
+    add_box(op, {-0.33f, 0.0f, r - 0.3f}, {0.33f, 1.75f, r + 0.03f}, dark);   // doorway
+    add_box(op, {-0.4f, 1.7f, r - 0.12f}, {0.4f, 1.9f, r + 0.05f}, wood);     // door lintel
+    add_box(em, {-0.22f, 2.7f, r - 0.25f}, {0.22f, 3.2f, r + 0.03f}, lit);    // lit window glow
+    add_box(op, {-0.03f, 2.7f, r - 0.05f}, {0.03f, 3.2f, r + 0.05f}, wood);   // window mullion
+
+    // Arrow slits down the two side faces (buried, proud face only).
+    for (f32 sx : {-1.0f, 1.0f}) {
+        for (f32 sy : {1.5f, 2.7f}) {
+            add_box(op, {sx * r - 0.22f, sy, -0.08f}, {sx * r + 0.03f, sy + 0.7f, 0.08f}, dark);
+        }
+    }
+
+    // Crenellated battlement: an overhanging parapet lip + merlons all round.
+    add_box(op, {-r - 0.14f, gh, -r - 0.14f}, {r + 0.14f, gh + 0.12f, r + 0.14f}, stone * 1.05f);
+    const f32 mt = gh + 0.12f;   // merlon base height
+    const f32 mr = r + 0.14f;    // merlon ring radius
+    for (int i = -1; i <= 1; ++i) {
+        const f32 o = static_cast<f32>(i) * (mr * 0.62f);
+        add_box(op, {o - 0.2f, mt, mr - 0.16f}, {o + 0.2f, mt + 0.36f, mr}, stone);   // +z edge
+        add_box(op, {o - 0.2f, mt, -mr}, {o + 0.2f, mt + 0.36f, -mr + 0.16f}, stone); // -z edge
+        add_box(op, {mr - 0.16f, mt, o - 0.2f}, {mr, mt + 0.36f, o + 0.2f}, stone);   // +x edge
+        add_box(op, {-mr, mt, o - 0.2f}, {-mr + 0.16f, mt + 0.36f, o + 0.2f}, stone); // -x edge
+    }
+
+    // A brazier burning on the battlement.
+    add_box(op, {-0.16f, mt, -0.16f}, {0.16f, mt + 0.28f, 0.16f}, wood);          // basket
+    add_box(em, {-0.24f, mt + 0.28f, -0.24f}, {0.24f, mt + 0.64f, 0.24f}, fire);  // flame
+
     def.parts.push_back({std::move(op), PropLayer::Opaque});
     def.parts.push_back({std::move(em), PropLayer::Emissive});
     PropLight l;
-    l.offset = Vec3{0.0f, gh + 0.3f, 0.0f};
+    l.offset = Vec3{0.0f, mt + 0.5f, 0.0f};
     l.direction = glm::normalize(Vec3{0.0f, -1.0f, 0.0f});
     l.color = Vec3{1.0f, 0.7f, 0.35f};
-    l.range = 13.0f;
-    l.intensity = 1.5f; // match the street lanterns so lit towers aren't over-bright
+    l.range = 15.0f;
+    l.intensity = 1.5f; // match the street lanterns so lit gates aren't over-bright
     l.cone_deg = 130.0f;
     def.lights.push_back(l);
     BoxCollider c;
@@ -618,61 +658,109 @@ PropDef PropLibrary::build_bridge() {
 // The town's central marketplace: a stone market cross in the middle with four
 // timber-and-cloth trading stalls at the corners. Placed at the plaza centre; reads
 // as the heart of the town (where the goods cart will load/unload in a later stage).
+// A big central market SQUARE (the heart of a sprawling town): a tall stepped market cross
+// with a little capped roof, eight striped trading stalls ringing the plaza on its four
+// sides (facing inward), and clusters of market goods - barrels, crates and produce sacks.
+// Footprint ~ kMarketHalf (Village.h reserves it so houses + streets keep clear).
 PropDef PropLibrary::build_market() {
     PropDef def;
     def.name = "market";
     const Vec3 wood{0.40f, 0.28f, 0.16f};
     const Vec3 dark{0.28f, 0.19f, 0.11f};
     const Vec3 stone{0.55f, 0.54f, 0.51f};
-    const Vec3 cloth_a{0.74f, 0.24f, 0.22f}; // red awning
-    const Vec3 cloth_b{0.86f, 0.81f, 0.71f}; // cream stripe
+    const Vec3 crate{0.52f, 0.40f, 0.24f};
+    const Vec3 sack{0.66f, 0.58f, 0.40f};
+    const Vec3 cream{0.86f, 0.81f, 0.71f};
+    const Vec3 cloths[6] = {{0.74f, 0.24f, 0.22f}, {0.25f, 0.45f, 0.62f}, {0.36f, 0.55f, 0.30f},
+                            {0.80f, 0.62f, 0.22f}, {0.55f, 0.34f, 0.58f}, {0.78f, 0.45f, 0.20f}};
     MeshData m;
 
-    // Market cross at the very centre: stepped stone base, a tall post, a small cap.
-    add_box(m, {-1.1f, 0.0f, -1.1f}, {1.1f, 0.25f, 1.1f}, stone);
-    add_box(m, {-0.8f, 0.25f, -0.8f}, {0.8f, 0.5f, 0.8f}, stone * 1.04f);
-    add_box(m, {-0.18f, 0.5f, -0.18f}, {0.18f, 3.0f, 0.18f}, wood);
-    add_box(m, {-0.5f, 3.0f, -0.5f}, {0.5f, 3.22f, 0.5f}, stone);
-    add_quad(m, {-0.6f, 3.22f, 0.6f}, {0.6f, 3.22f, 0.6f}, {0.6f, 3.7f, 0.0f}, {-0.6f, 3.7f, 0.0f},
-             stone * 1.06f);
-    add_quad(m, {0.6f, 3.22f, -0.6f}, {-0.6f, 3.22f, -0.6f}, {-0.6f, 3.7f, 0.0f}, {0.6f, 3.7f, 0.0f},
-             stone * 0.98f);
+    // Market cross at the very centre: a broad stepped stone base, a tall timber post, a
+    // stone cap and a small pyramidal roof - the town's meeting point.
+    add_box(m, {-1.5f, 0.0f, -1.5f}, {1.5f, 0.3f, 1.5f}, stone);
+    add_box(m, {-1.1f, 0.3f, -1.1f}, {1.1f, 0.56f, 1.1f}, stone * 1.04f);
+    add_box(m, {-0.7f, 0.56f, -0.7f}, {0.7f, 0.82f, 0.7f}, stone);
+    add_box(m, {-0.2f, 0.82f, -0.2f}, {0.2f, 3.5f, 0.2f}, wood);
+    add_box(m, {-0.62f, 3.5f, -0.62f}, {0.62f, 3.74f, 0.62f}, stone);
+    const Vec3 apex{0.0f, 4.4f, 0.0f};
+    add_tri(m, {-0.78f, 3.74f, 0.78f}, {0.78f, 3.74f, 0.78f}, apex, stone * 1.07f);
+    add_tri(m, {0.78f, 3.74f, -0.78f}, {-0.78f, 3.74f, -0.78f}, apex, stone * 0.96f);
+    add_tri(m, {0.78f, 3.74f, 0.78f}, {0.78f, 3.74f, -0.78f}, apex, stone * 1.02f);
+    add_tri(m, {-0.78f, 3.74f, -0.78f}, {-0.78f, 3.74f, 0.78f}, apex, stone * 0.99f);
 
-    // Four trading stalls at the corners of the plaza, facing inward.
-    auto stall = [&](f32 cx, f32 cz, const Vec3& cloth) {
-        constexpr f32 hw = 1.1f; // counter half-extent x
-        constexpr f32 hd = 0.65f; // counter half-extent z
-        add_box(m, {cx - hw, 0.0f, cz - hd}, {cx + hw, 0.9f, cz + hd}, wood);       // counter body
-        add_box(m, {cx - hw, 0.9f, cz - hd}, {cx + hw, 1.0f, cz + hd}, dark);       // counter top
-        constexpr f32 ph = 2.0f;
-        for (f32 sx : {cx - hw + 0.08f, cx + hw - 0.08f}) {
-            for (f32 sz : {cz - hd + 0.08f, cz + hd - 0.08f}) {
-                add_box(m, {sx - 0.06f, 0.0f, sz - 0.06f}, {sx + 0.06f, ph, sz + 0.06f}, dark);
+    // A striped trading stall centred at (cx,cz), facing inward. `axis` 0 = counter runs along
+    // x (north/south sides), 1 = along z (east/west); `sdir` is the outward normal so the
+    // awning slopes down toward the plaza and the goods sit on the customer side.
+    auto stall = [&](f32 cx, f32 cz, int axis, f32 sdir, const Vec3& cloth) {
+        const f32 hw = 1.15f; // half-extent along the counter
+        const f32 hd = 0.6f;  // half-depth (toward / away from centre)
+        const Vec3 lo = axis == 0 ? Vec3{cx - hw, 0.0f, cz - hd} : Vec3{cx - hd, 0.0f, cz - hw};
+        const Vec3 hi = axis == 0 ? Vec3{cx + hw, 0.0f, cz + hd} : Vec3{cx + hd, 0.0f, cz + hw};
+        add_box(m, lo, {hi.x, 0.9f, hi.z}, wood);                       // counter body
+        add_box(m, {lo.x, 0.9f, lo.z}, {hi.x, 1.0f, hi.z}, dark);       // counter top
+        constexpr f32 ph = 2.2f;
+        for (f32 ex : {lo.x + 0.08f, hi.x - 0.08f}) {
+            for (f32 ez : {lo.z + 0.08f, hi.z - 0.08f}) {
+                add_box(m, {ex - 0.06f, 0.0f, ez - 0.06f}, {ex + 0.06f, ph, ez + 0.06f}, dark);
             }
         }
-        // Striped sloped awning over the stall (three strips across its width).
-        constexpr int strips = 3;
+        // Striped awning sloping down toward the plaza (the customer side).
+        constexpr int strips = 4;
+        const f32 back = axis == 0 ? cz - sdir * (hd + 0.2f) : cx - sdir * (hd + 0.2f);
+        const f32 front = axis == 0 ? cz + sdir * (hd + 0.55f) : cx + sdir * (hd + 0.55f);
         for (int k = 0; k < strips; ++k) {
-            const f32 x0 = cx - hw + (2.0f * hw) * static_cast<f32>(k) / static_cast<f32>(strips);
-            const f32 x1 = cx - hw + (2.0f * hw) * static_cast<f32>(k + 1) / static_cast<f32>(strips);
-            const Vec3 c = (k % 2 == 0) ? cloth : cloth_b;
-            add_quad(m, {x0, ph, cz - hd - 0.18f}, {x1, ph, cz - hd - 0.18f},
-                     {x1, ph + 0.5f, cz + hd + 0.18f}, {x0, ph + 0.5f, cz + hd + 0.18f}, c);
+            const f32 u0 = -hw + (2.0f * hw) * static_cast<f32>(k) / static_cast<f32>(strips);
+            const f32 u1 = -hw + (2.0f * hw) * static_cast<f32>(k + 1) / static_cast<f32>(strips);
+            const Vec3 c = (k % 2 == 0) ? cloth : cream;
+            if (axis == 0) {
+                add_quad(m, {cx + u0, ph + 0.45f, back}, {cx + u1, ph + 0.45f, back},
+                         {cx + u1, ph, front}, {cx + u0, ph, front}, c);
+            } else {
+                add_quad(m, {back, ph + 0.45f, cz + u0}, {back, ph + 0.45f, cz + u1},
+                         {front, ph, cz + u1}, {front, ph, cz + u0}, c);
+            }
         }
-        BoxCollider c;
-        c.center = Vec3{cx, 0.0f, cz};
-        c.half_extents = Vec2{hw, hd};
-        c.height = 1.0f;
-        def.colliders.push_back(c);
+        BoxCollider col;
+        col.center = Vec3{cx, 0.0f, cz};
+        col.half_extents = axis == 0 ? Vec2{hw, hd} : Vec2{hd, hw};
+        col.height = 1.0f;
+        def.colliders.push_back(col);
     };
-    stall(-3.0f, -3.0f, cloth_a);
-    stall(3.0f, -3.0f, Vec3{0.25f, 0.45f, 0.62f});
-    stall(-3.0f, 3.0f, Vec3{0.36f, 0.55f, 0.30f});
-    stall(3.0f, 3.0f, cloth_a);
+    constexpr f32 R = 6.2f;   // stall ring radius
+    constexpr f32 off = 2.7f; // two stalls per side, offset along it
+    stall(-off, R, 0, 1.0f, cloths[0]);
+    stall(off, R, 0, 1.0f, cloths[1]);   // north side
+    stall(-off, -R, 0, -1.0f, cloths[2]);
+    stall(off, -R, 0, -1.0f, cloths[3]); // south side
+    stall(R, -off, 1, 1.0f, cloths[4]);
+    stall(R, off, 1, 1.0f, cloths[5]);   // east side
+    stall(-R, -off, 1, -1.0f, cloths[1]);
+    stall(-R, off, 1, -1.0f, cloths[0]); // west side
+
+    // Market goods scattered around the plaza: barrels, crate stacks and produce sacks.
+    auto barrel = [&](f32 x, f32 z) {
+        add_box(m, {x - 0.32f, 0.0f, z - 0.32f}, {x + 0.32f, 0.8f, z + 0.32f}, wood * 1.05f);
+        add_box(m, {x - 0.36f, 0.18f, z - 0.36f}, {x + 0.36f, 0.3f, z + 0.36f}, dark);  // hoop
+        add_box(m, {x - 0.36f, 0.5f, z - 0.36f}, {x + 0.36f, 0.62f, z + 0.36f}, dark);  // hoop
+    };
+    auto box_pile = [&](f32 x, f32 z) {
+        add_box(m, {x - 0.34f, 0.0f, z - 0.34f}, {x + 0.34f, 0.6f, z + 0.34f}, crate);
+        add_box(m, {x - 0.1f, 0.6f, z - 0.28f}, {x + 0.4f, 1.1f, z + 0.22f}, crate * 0.9f);
+    };
+    auto sacks = [&](f32 x, f32 z) {
+        add_box(m, {x - 0.28f, 0.0f, z - 0.22f}, {x + 0.28f, 0.42f, z + 0.22f}, sack);
+        add_box(m, {x - 0.1f, 0.0f, z + 0.12f}, {x + 0.34f, 0.36f, z + 0.5f}, sack * 0.92f);
+    };
+    barrel(2.6f, 2.6f);
+    barrel(3.2f, 2.0f);
+    box_pile(-3.0f, 2.4f);
+    sacks(-2.4f, -3.0f);
+    box_pile(2.5f, -2.8f);
+    barrel(-3.2f, -2.0f);
 
     def.parts.push_back({std::move(m), PropLayer::Opaque});
     BoxCollider base; // the market cross blocks the very centre
-    base.half_extents = Vec2{1.1f, 1.1f};
+    base.half_extents = Vec2{1.5f, 1.5f};
     base.height = 0.5f;
     def.colliders.push_back(base);
     return def;
@@ -753,47 +841,57 @@ PropDef PropLibrary::build_wagon_wheel() {
     return def;
 }
 
-// A cobblestone street tile, low-poly: a dark mortar bed SUNK into the ground (so it never
-// floats), packed with a jittered grid of individual rounded cobbles - each a little beveled
-// stone raised to its own height in its own grey tone. Because every stone has a distinct
-// height and rises clear of the bed, no two faces are coplanar, so there's no z-fighting; the
-// varied stones read as hand-laid cobblestone rather than flat square blocks. Tiles abut
+// A worn, muddy cobbled street tile: rough rounded rocks of varied size and earthy tone,
+// packed (some nearly touching, with worn muddy gaps) into a dark mud bed SUNK into the
+// ground. No neat grid, no bright whites - the stones are irregular lumps with jittered,
+// tilted tops so it reads as dirty hand-laid rock, not tiles. Every stone rises to its own
+// height clear of the bed, so no two faces are coplanar (no z-fighting). Tiles abut
 // edge-to-edge (no overlap) into one continuous street. NO collider (you walk/drive on it).
 PropDef PropLibrary::build_path_tile() {
     PropDef def;
     def.name = "path_tile";
-    const Vec3 mortar{0.24f, 0.22f, 0.20f}; // dark earth/mortar between the stones
-    const Vec3 stones[4] = {{0.56f, 0.55f, 0.52f},
-                            {0.48f, 0.47f, 0.45f},
-                            {0.62f, 0.60f, 0.57f},
-                            {0.43f, 0.43f, 0.44f}};
+    const Vec3 mud{0.19f, 0.15f, 0.11f}; // wet muddy earth between the stones
+    // Muted, dirty grey + earthy stone tones (no bright whites).
+    const Vec3 stones[6] = {{0.45f, 0.44f, 0.42f}, {0.39f, 0.38f, 0.36f}, {0.51f, 0.49f, 0.45f},
+                            {0.43f, 0.40f, 0.35f}, {0.36f, 0.35f, 0.34f}, {0.49f, 0.45f, 0.39f}};
     MeshData m;
-    constexpr f32 hx = 1.15f, hz = 1.15f;
-    add_box(m, {-hx, -0.20f, -hz}, {hx, 0.02f, hz}, mortar); // bed, mostly sunk into the ground
+    constexpr f32 hx = 1.18f, hz = 1.18f;
+    add_box(m, {-hx, -0.22f, -hz}, {hx, 0.0f, hz}, mud); // mud bed, sunk in, top at ground
 
-    // A jittered grid of cobbles. Each is a 4-sided frustum (wider base, smaller flat top) so
-    // it reads as a domed/beveled stone; height + tone + position jitter make it hand-laid.
-    constexpr int g = 5;
-    const f32 cell = (2.0f * hx) / static_cast<f32>(g);
     auto rnd = [](int i, int j, int salt) {
         const u32 h = (static_cast<u32>(i * 73856093) ^ static_cast<u32>(j * 19349663) ^
                        static_cast<u32>(salt * 83492791));
         return static_cast<f32>((h >> 9) & 0xFFFFu) / 65535.0f;
     };
+    constexpr int g = 5;
+    const f32 cell = (2.0f * hx) / static_cast<f32>(g);
     for (int j = 0; j < g; ++j) {
         for (int i = 0; i < g; ++i) {
-            const f32 cx = -hx + (static_cast<f32>(i) + 0.5f) * cell + (rnd(i, j, 1) - 0.5f) * cell * 0.3f;
-            const f32 cz = -hz + (static_cast<f32>(j) + 0.5f) * cell + (rnd(i, j, 2) - 0.5f) * cell * 0.3f;
-            const f32 r = cell * (0.40f + rnd(i, j, 3) * 0.12f); // base half-width
-            const f32 top = 0.06f + rnd(i, j, 4) * 0.06f;        // raised height (each different)
-            const f32 tr = r * 0.62f;                            // smaller flat top (bevel)
-            const Vec3 col = stones[(i + j * 2 + static_cast<int>(rnd(i, j, 5) * 4.0f)) % 4];
+            if (rnd(i, j, 11) < 0.12f) {
+                continue; // a worn, trodden-out muddy gap (no stone here)
+            }
+            const f32 cx = -hx + (static_cast<f32>(i) + 0.5f) * cell + (rnd(i, j, 1) - 0.5f) * cell * 0.5f;
+            const f32 cz = -hz + (static_cast<f32>(j) + 0.5f) * cell + (rnd(i, j, 2) - 0.5f) * cell * 0.5f;
+            const f32 r = cell * (0.44f + rnd(i, j, 3) * 0.26f); // varied size; some big, packed close
+            const f32 top = 0.02f + rnd(i, j, 4) * 0.075f;       // worn-flat .. proud, each different
+            const f32 dirt = 0.74f + rnd(i, j, 6) * 0.34f;       // per-stone dirt darkening
+            const Vec3 col = stones[(i + j * 2 + static_cast<int>(rnd(i, j, 5) * 6.0f)) % 6] * dirt;
+            // An irregular rounded rock: 4 jittered base corners sloping up to a small, lumpy,
+            // off-centre top (each corner pushed independently) so the stone looks rough-hewn.
             const Vec3 axis{cx, top * 0.5f, cz};
-            const Vec3 b00{cx - r, 0.0f, cz - r}, b10{cx + r, 0.0f, cz - r};
-            const Vec3 b11{cx + r, 0.0f, cz + r}, b01{cx - r, 0.0f, cz + r};
-            const Vec3 t00{cx - tr, top, cz - tr}, t10{cx + tr, top, cz - tr};
-            const Vec3 t11{cx + tr, top, cz + tr}, t01{cx - tr, top, cz + tr};
-            emit_tri(m, b00, b10, t10, axis, col); // four sloped sides
+            auto bc = [&](f32 sx, f32 sz, int s) {
+                return Vec3{cx + sx * r * (0.78f + rnd(i, j, s) * 0.44f), 0.0f,
+                            cz + sz * r * (0.78f + rnd(i, j, s + 1) * 0.44f)};
+            };
+            const f32 tr = r * 0.52f;
+            auto tc = [&](f32 sx, f32 sz, int s) {
+                return Vec3{cx + sx * tr * (0.6f + rnd(i, j, s) * 0.7f) + (rnd(i, j, s + 2) - 0.5f) * r * 0.2f,
+                            top * (0.62f + rnd(i, j, s + 1) * 0.6f),
+                            cz + sz * tr * (0.6f + rnd(i, j, s) * 0.7f) + (rnd(i, j, s + 3) - 0.5f) * r * 0.2f};
+            };
+            const Vec3 b00 = bc(-1, -1, 20), b10 = bc(1, -1, 22), b11 = bc(1, 1, 24), b01 = bc(-1, 1, 26);
+            const Vec3 t00 = tc(-1, -1, 30), t10 = tc(1, -1, 32), t11 = tc(1, 1, 34), t01 = tc(-1, 1, 36);
+            emit_tri(m, b00, b10, t10, axis, col); // four rough sloped sides
             emit_tri(m, b00, t10, t00, axis, col);
             emit_tri(m, b10, b11, t11, axis, col);
             emit_tri(m, b10, t11, t10, axis, col);
@@ -801,7 +899,7 @@ PropDef PropLibrary::build_path_tile() {
             emit_tri(m, b11, t01, t11, axis, col);
             emit_tri(m, b01, b00, t00, axis, col);
             emit_tri(m, b01, t00, t01, axis, col);
-            emit_tri(m, t00, t10, t11, axis, col); // flat top
+            emit_tri(m, t00, t10, t11, axis, col); // lumpy top
             emit_tri(m, t00, t11, t01, axis, col);
         }
     }
@@ -868,6 +966,190 @@ PropDef PropLibrary::build_fountain() {
     return def;
 }
 
+// Medieval town clutter that fills out a town (see kDecorVariants). Each is a small low-poly
+// prop with a collider where you'd bump into it. Placed by the village layout around houses,
+// along the streets and in the market plaza.
+PropDef PropLibrary::build_decor(int variant) {
+    PropDef def;
+    const Vec3 wood{0.42f, 0.29f, 0.16f};
+    const Vec3 dark{0.27f, 0.18f, 0.10f};
+    const Vec3 stone{0.52f, 0.51f, 0.48f};
+    const Vec3 hay{0.80f, 0.68f, 0.30f};
+    const Vec3 cream{0.85f, 0.80f, 0.70f};
+    const Vec3 water{0.18f, 0.34f, 0.42f};
+    MeshData m;
+    auto collider = [&](f32 hx, f32 hz, f32 h) {
+        BoxCollider c;
+        c.half_extents = Vec2{hx, hz};
+        c.height = h;
+        def.colliders.push_back(c);
+    };
+    switch (variant % static_cast<int>(kDecorVariants)) {
+        case 0: // a barrel
+            def.name = "barrel";
+            add_box(m, {-0.33f, 0.0f, -0.33f}, {0.33f, 0.9f, 0.33f}, wood);
+            add_box(m, {-0.37f, 0.16f, -0.37f}, {0.37f, 0.28f, 0.37f}, dark);  // iron hoop
+            add_box(m, {-0.37f, 0.56f, -0.37f}, {0.37f, 0.68f, 0.37f}, dark);  // iron hoop
+            add_box(m, {-0.29f, 0.9f, -0.29f}, {0.29f, 0.96f, 0.29f}, wood * 0.9f); // lid
+            collider(0.36f, 0.36f, 0.9f);
+            break;
+        case 1: // a stack of crates
+            def.name = "crates";
+            add_box(m, {-0.42f, 0.0f, -0.42f}, {0.42f, 0.72f, 0.42f}, wood * 1.08f);
+            add_box(m, {-0.44f, 0.31f, -0.44f}, {0.44f, 0.4f, 0.44f}, dark); // banding
+            add_box(m, {-0.18f, 0.72f, -0.36f}, {0.5f, 1.34f, 0.3f}, wood);   // crate on top
+            add_box(m, {-0.5f, 0.0f, 0.16f}, {0.04f, 0.52f, 0.66f}, wood * 0.92f); // crate beside
+            collider(0.58f, 0.58f, 0.72f);
+            break;
+        case 2: // hay bales
+            def.name = "hay";
+            add_box(m, {-0.55f, 0.0f, -0.4f}, {0.55f, 0.6f, 0.4f}, hay);
+            add_box(m, {-0.5f, 0.0f, 0.42f}, {0.42f, 0.56f, 1.08f}, hay * 0.95f);
+            add_box(m, {-0.42f, 0.6f, -0.34f}, {0.46f, 1.12f, 0.3f}, hay * 1.04f); // stacked bale
+            add_box(m, {-0.46f, 0.28f, -0.41f}, {0.46f, 0.34f, -0.39f}, dark);     // binding twine
+            collider(0.6f, 0.72f, 0.6f);
+            break;
+        case 3: { // a small standalone market stall with an awning + goods on the counter
+            def.name = "stall";
+            const Vec3 cloth{0.30f, 0.48f, 0.60f};
+            add_box(m, {-1.0f, 0.0f, -0.45f}, {1.0f, 0.82f, 0.45f}, wood);  // counter
+            add_box(m, {-1.0f, 0.82f, -0.45f}, {1.0f, 0.92f, 0.45f}, dark); // counter top
+            for (f32 ex : {-0.92f, 0.92f}) {
+                for (f32 ez : {-0.37f, 0.37f}) {
+                    add_box(m, {ex - 0.05f, 0.0f, ez - 0.05f}, {ex + 0.05f, 2.1f, ez + 0.05f}, dark);
+                }
+            }
+            for (int k = 0; k < 4; ++k) { // striped awning sloping to the front
+                const f32 x0 = -1.0f + 0.5f * static_cast<f32>(k);
+                const f32 x1 = -1.0f + 0.5f * static_cast<f32>(k + 1);
+                const Vec3 c = (k % 2 == 0) ? cloth : cream;
+                add_quad(m, {x0, 2.3f, -0.6f}, {x1, 2.3f, -0.6f}, {x1, 2.0f, 0.7f}, {x0, 2.0f, 0.7f}, c);
+            }
+            add_box(m, {-0.7f, 0.92f, -0.2f}, {-0.3f, 1.2f, 0.2f}, wood * 1.1f);         // crate of goods
+            add_box(m, {0.2f, 0.92f, -0.2f}, {0.6f, 1.12f, 0.2f}, Vec3{0.6f, 0.5f, 0.3f}); // sacks
+            collider(1.0f, 0.45f, 0.85f);
+            break;
+        }
+        case 4: // a signpost with two pointing boards
+            def.name = "signpost";
+            add_box(m, {-0.07f, 0.0f, -0.07f}, {0.07f, 1.85f, 0.07f}, wood);
+            add_box(m, {0.05f, 1.35f, -0.04f}, {0.95f, 1.7f, 0.04f}, cream);          // board (+x)
+            add_box(m, {-0.95f, 0.95f, -0.04f}, {-0.05f, 1.3f, 0.04f}, cream * 0.92f); // board (-x)
+            collider(0.1f, 0.1f, 1.6f);
+            break;
+        case 5: // a stone water trough
+            def.name = "trough";
+            add_box(m, {-0.95f, 0.0f, -0.42f}, {0.95f, 0.5f, 0.42f}, stone);
+            add_box(m, {-0.8f, 0.16f, -0.3f}, {0.8f, 0.46f, 0.3f}, water); // water surface inside
+            collider(0.95f, 0.42f, 0.5f);
+            break;
+        case 6: // a stacked woodpile (split logs)
+            def.name = "woodpile";
+            for (int row = 0; row < 3; ++row) {
+                const f32 y0 = static_cast<f32>(row) * 0.28f;
+                const int n = 5 - row;
+                for (int k = 0; k < n; ++k) {
+                    const f32 x = -0.7f + 0.32f * static_cast<f32>(k) + 0.16f * static_cast<f32>(row);
+                    add_box(m, {x - 0.15f, y0, -0.6f}, {x + 0.15f, y0 + 0.28f, 0.6f},
+                            wood * (0.85f + 0.06f * static_cast<f32>(k % 3)));
+                }
+            }
+            collider(0.85f, 0.62f, 0.85f);
+            break;
+        default: // 7: a cluster of produce sacks + a basket
+            def.name = "sacks";
+            add_box(m, {-0.3f, 0.0f, -0.24f}, {0.3f, 0.46f, 0.24f}, Vec3{0.66f, 0.58f, 0.40f});
+            add_box(m, {0.1f, 0.0f, 0.1f}, {0.56f, 0.38f, 0.56f}, Vec3{0.6f, 0.52f, 0.34f});
+            add_box(m, {-0.5f, 0.0f, 0.12f}, {-0.08f, 0.34f, 0.54f}, Vec3{0.7f, 0.62f, 0.42f});
+            add_box(m, {-0.2f, 0.46f, -0.18f}, {0.2f, 0.6f, 0.18f}, Vec3{0.5f, 0.7f, 0.3f}); // greens on top
+            collider(0.56f, 0.56f, 0.46f);
+            break;
+    }
+    def.parts.push_back({std::move(m), PropLayer::Opaque});
+    return def;
+}
+
+// A sunken river-channel tile for a river-town: a stone-lined canal running along local +X,
+// with a teal water surface set just into the ground between two raised stone embankments
+// (so it reads as a recessed channel without carving the terrain). Tiles abut end-to-end
+// (x = -2..2) into one continuous river. The faint shimmer strip is emissive. No collider -
+// the stream is shallow; the streets cross it on stone bridges.
+PropDef PropLibrary::build_river() {
+    PropDef def;
+    def.name = "river";
+    const Vec3 water{0.16f, 0.33f, 0.44f};
+    const Vec3 stone{0.48f, 0.47f, 0.45f};
+    const Vec3 earth{0.30f, 0.23f, 0.15f};
+    MeshData op;
+    MeshData em;
+    constexpr f32 hl = 2.0f;  // half-length along the river (local x)
+    constexpr f32 wb = 3.0f;  // water half-width
+    constexpr f32 bank = 3.6f; // outer bank half-width
+
+    // Water surface, just above the ground plane (hides the flat terrain beneath it).
+    add_box(op, {-hl, 0.0f, -wb}, {hl, 0.1f, wb}, water);
+    // A brighter shimmer strip down the middle (emissive, so it glints like moving water).
+    add_box(em, {-hl, 0.11f, -0.7f}, {hl, 0.13f, 0.7f}, Vec3{0.32f, 0.55f, 0.62f});
+
+    // Raised stone embankments either side, with an earthy outer slope down to the ground.
+    for (f32 s : {-1.0f, 1.0f}) {
+        const f32 zin = s * wb;
+        const f32 zwall = s * (wb + 0.3f);
+        const f32 zout = s * bank;
+        add_box(op, {-hl, 0.0f, std::min(zin, zwall)}, {hl, 0.55f, std::max(zin, zwall)}, stone); // wall
+        // earthen slope from the wall top-outer down to ground at the bank edge
+        add_quad(op, {-hl, 0.55f, zwall}, {hl, 0.55f, zwall}, {hl, 0.0f, zout}, {-hl, 0.0f, zout}, earth);
+    }
+    def.parts.push_back({std::move(op), PropLayer::Opaque});
+    def.parts.push_back({std::move(em), PropLayer::Emissive});
+    return def;
+}
+
+// An arched stone road bridge spanning a river (local +X = the road across the channel). A
+// gently arched stone deck wide enough for the cart, with low parapets and stone abutments;
+// the arch springs from the banks. Placed where a town avenue crosses the river.
+PropDef PropLibrary::build_stone_bridge() {
+    PropDef def;
+    def.name = "stone_bridge";
+    const Vec3 stone{0.54f, 0.53f, 0.50f};
+    const Vec3 dark{0.40f, 0.39f, 0.37f};
+    MeshData m;
+    constexpr f32 hw = 1.9f; // half-width (across the road, local z) - a cart fits
+    constexpr int seg = 7;   // deck segments arching across
+    constexpr f32 span = 4.6f; // half-span along the road (local x)
+    f32 prev_x = -span;
+    f32 prev_y = 0.0f;
+    auto arch_y = [&](f32 t) { return 0.9f * std::sin(t * Pi); }; // 0..1 -> arch height
+    for (int i = 0; i <= seg; ++i) {
+        const f32 t = static_cast<f32>(i) / static_cast<f32>(seg);
+        const f32 x = glm::mix(-span, span, t);
+        const f32 y = arch_y(t);
+        if (i > 0) {
+            // deck plank between prev and current (a sloped box)
+            const f32 x0 = prev_x, x1 = x;
+            const f32 y0 = prev_y, y1 = y;
+            add_quad(m, {x0, y0 + 0.5f, -hw}, {x1, y1 + 0.5f, -hw}, {x1, y1 + 0.5f, hw}, {x0, y0 + 0.5f, hw},
+                     stone); // deck top
+            add_box(m, {std::min(x0, x1), -0.1f, -hw}, {std::max(x0, x1), std::min(y0, y1) + 0.5f, hw},
+                    stone * 0.96f); // deck body down to the water
+            // parapets
+            for (f32 s : {-1.0f, 1.0f}) {
+                add_quad(m, {x0, y0 + 0.5f, s * hw}, {x1, y1 + 0.5f, s * hw},
+                         {x1, y1 + 0.95f, s * hw}, {x0, y0 + 0.95f, s * hw}, dark);
+            }
+        }
+        prev_x = x;
+        prev_y = y;
+    }
+    // Stone abutments at each bank end.
+    for (f32 s : {-1.0f, 1.0f}) {
+        add_box(m, {s * span - 0.4f, -0.2f, -hw - 0.1f}, {s * span + 0.4f, 0.5f, hw + 0.1f}, stone * 0.92f);
+    }
+    def.parts.push_back({std::move(m), PropLayer::Opaque});
+    // The deck blocks nothing (you drive over it); the parapets are thin - no collider needed.
+    return def;
+}
+
 PropLibrary::PropLibrary() {
     for (int i = 0; i < 3; ++i) {
         bushes_.push_back(build_bush(i));
@@ -892,11 +1174,16 @@ PropLibrary::PropLibrary() {
     gates_.push_back(build_gate());  // variant 0: lit gate tower
     gates_.push_back(build_tower()); // variant 1: plain unlit wall tower
     wells_.push_back(build_well());
-    bridges_.push_back(build_bridge());
+    bridges_.push_back(build_bridge());       // variant 0: covered walkway between houses
+    bridges_.push_back(build_stone_bridge()); // variant 1: arched stone road bridge over a river
     markets_.push_back(build_market());
     paths_.push_back(build_path_tile());
     planters_.push_back(build_planter());
     fountains_.push_back(build_fountain());
+    for (u32 i = 0; i < kDecorVariants; ++i) {
+        decor_.push_back(build_decor(static_cast<int>(i)));
+    }
+    rivers_.push_back(build_river());
 }
 
 const PropDef& PropLibrary::resolve(const PropInstance& inst) const {
@@ -916,6 +1203,8 @@ const PropDef& PropLibrary::resolve(const PropInstance& inst) const {
         case PropCategory::Path: return paths_[inst.variant % paths_.size()];
         case PropCategory::Planter: return planters_[inst.variant % planters_.size()];
         case PropCategory::Fountain: return fountains_[inst.variant % fountains_.size()];
+        case PropCategory::Decor: return decor_[inst.variant % decor_.size()];
+        case PropCategory::River: return rivers_[inst.variant % rivers_.size()];
     }
     return bushes_[0];
 }

@@ -1,0 +1,69 @@
+#pragma once
+
+// Central place for the sample game's tunable constants - the values a maintainer
+// is most likely to want to change, gathered out of the rendering/update code so
+// they are named and discoverable rather than scattered magic numbers.
+
+#include <Alryn/Core/Types.h>
+#include <Alryn/Platform/Events.h>
+
+namespace alryn::game {
+
+// The UDP port the listen/dedicated server binds and clients connect to.
+inline constexpr u16 kPort = 24650;
+
+// Shared world seed used by the dedicated and in-process listen servers (clients
+// receive it in the Welcome and regenerate identical terrain from it).
+inline constexpr u32 kWorldSeed = 1337u;
+
+// Keyboard scancodes used by the client (GLFW GLFW_KEY_* values).
+namespace key {
+inline constexpr KeyCode W = 87, A = 65, S = 83, D = 68, E = 69, F = 70, H = 72, M = 77,
+                         Space = 32, Escape = 256;
+inline constexpr KeyCode Digit1 = 49, Digit2 = 50, Digit3 = 51, Digit4 = 52;
+} // namespace key
+
+// Fixed isometric-style third-person camera angle (the world rotates under it).
+namespace iso {
+inline constexpr f32 yaw_deg = 45.0f;   // compass direction we look from
+inline constexpr f32 pitch_deg = 48.0f; // downward tilt (higher = more top-down)
+inline constexpr f32 distance = 15.0f;  // default camera pull-back (smaller = closer)
+inline constexpr f32 fov_deg = 30.0f;   // low-ish fov -> flatter, more "iso" look
+} // namespace iso
+
+// Third-person camera follow + scroll-wheel zoom.
+namespace cam {
+inline constexpr f32 min_distance = 4.0f;   // closest zoom
+inline constexpr f32 max_distance = 45.0f;  // furthest zoom
+inline constexpr f32 zoom_step = 0.88f;     // distance *= zoom_step^scroll
+inline constexpr f32 target_height = 0.7f;  // look-at lifted above the player's feet
+inline constexpr f32 near_plane = 0.5f;
+inline constexpr f32 far_plane = 400.0f;
+} // namespace cam
+
+// Day/night cycle defaults (overridable via ALRYN_TIME / ALRYN_DAY_SECONDS).
+namespace daynight {
+inline constexpr f32 start_time = 0.35f;          // 0=midnight, 0.25=sunrise, 0.5=noon
+inline constexpr f32 default_day_seconds = 120.0f; // length of a full cycle
+inline constexpr f32 min_day_seconds = 5.0f;       // clamp for ALRYN_DAY_SECONDS
+} // namespace daynight
+
+// Client-side particle pool (ability VFX, projectile trails).
+namespace vfx {
+inline constexpr usize max_particles = 1400; // hard cap so a busy fight can't run away
+} // namespace vfx
+
+// Dynamic lighting cull radii: only sources near the player are submitted at night,
+// keeping a lit-up town cheap.
+namespace light {
+inline constexpr f32 prop_cull_dist = 38.0f;       // house/lantern interior lights
+inline constexpr f32 wagon_lamp_cull_dist = 40.0f; // a wagon's hanging lamp
+} // namespace light
+
+// Full-screen world map overlay (M).
+namespace map {
+inline constexpr f32 view_world = 480.0f; // metres from centre to the shorter edge
+inline constexpr f32 margin_frac = 0.07f; // border around the map panel
+} // namespace map
+
+} // namespace alryn::game

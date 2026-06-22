@@ -63,8 +63,8 @@ inline f32 slope(f32 x, f32 z, u32 seed) {
 // colouring and the scatters can ask "am I in a village?"; the actual buildings are
 // laid out in World/Village.h.
 inline constexpr f32 village_cell = 170.0f;     // grid spacing of candidate towns
-inline constexpr f32 village_half = 30.0f;      // half-width of a typical (medium) town
-inline constexpr f32 village_half_max = 42.0f;  // a large town's half-width
+inline constexpr f32 village_half = 38.0f;      // half-width of a typical (medium) town
+inline constexpr f32 village_half_max = 44.0f;  // a large town's half-width
 
 struct Village {
     Vec2 center{0.0f}; // xz of the town centre
@@ -82,7 +82,10 @@ inline std::optional<Village> village_at(int vcx, int vcz, u32 seed) {
         return std::nullopt; // only some cells grow a town
     }
     const f32 sz = detail::hash01(detail::tree_hash(vcx, vcz, salt + 8u));
-    const f32 half = sz < 0.45f ? 20.0f : (sz < 0.82f ? 30.0f : 42.0f); // small/medium/large
+    // Sprawling medieval towns: small / medium / large half-widths. A bigger town needs a
+    // wider patch of buildable ground, so large towns are rarer. The max is capped so two
+    // adjacent towns can never overlap at the grid spacing + jitter.
+    const f32 half = sz < 0.45f ? 30.0f : (sz < 0.82f ? 38.0f : 44.0f);
     const f32 jx = (detail::hash01(detail::tree_hash(vcx, vcz, salt + 1u)) - 0.5f) * village_cell * 0.3f;
     const f32 jz = (detail::hash01(detail::tree_hash(vcx, vcz, salt + 2u)) - 0.5f) * village_cell * 0.3f;
     const f32 cx = (static_cast<f32>(vcx) + 0.5f) * village_cell + jx;
@@ -189,11 +192,15 @@ inline Vec3 surface_color(const Vec3& p, const Vec3& normal, u32 seed) {
     // (The worn dirt road colour is overlaid separately via roads::tint_surface while
     // meshing, so this base colour stays independent of the road network.)
 
-    // Trampled dirt / cobble inside a town's walls.
+    // Trampled muddy earth inside a town's walls: dirty churned mud blotched with patches of
+    // worn dirt-grey, much dirtier than clean cobble (the streets are laid on top as props).
     if (h > water_level + 0.5f && up > 0.55f && inside_village(p.x, p.z, seed)) {
         const f32 cobble = noise::fbm2d(p.x * 0.7f, p.z * 0.7f, 1, 2.0f, 0.5f, seed + 808u);
-        const Vec3 town_ground = glm::mix(Vec3{0.45f, 0.37f, 0.28f}, Vec3{0.55f, 0.52f, 0.47f},
-                                          glm::smoothstep(0.2f, 0.5f, cobble));
+        const f32 mud = noise::fbm2d(p.x * 0.22f, p.z * 0.22f, 2, 2.0f, 0.5f, seed + 909u);
+        Vec3 town_ground = glm::mix(Vec3{0.30f, 0.23f, 0.15f}, Vec3{0.42f, 0.37f, 0.30f},
+                                    glm::smoothstep(0.1f, 0.5f, cobble));
+        town_ground = glm::mix(town_ground, Vec3{0.24f, 0.18f, 0.12f},
+                               glm::smoothstep(0.1f, 0.45f, mud)); // wet muddy patches
         color = glm::mix(color, town_ground, glm::smoothstep(0.55f, 0.78f, up));
     }
 

@@ -1,0 +1,618 @@
+#pragma once
+
+// Windowed multiplayer client (isometric third-person view). Owns the renderer,
+// the menu/HUD, an optional in-process listen server, the networked snapshot and
+// all of the client-side visuals. The implementation is split across several
+// ClientApp*.cpp translation units grouped by concern (menu, input, character,
+// world, wagons, vfx, hud); this header is the single class declaration they share.
+
+#include <Alryn/Alryn.h>
+
+#include <Alryn/Character/CharacterAnimator.h>
+#include <Alryn/Character/CharacterModel.h>
+#include <Alryn/Combat/Enemy.h>
+#include <Alryn/Net/GameServer.h>
+#include <Alryn/Net/NetClient.h>
+#include <Alryn/Terrain/RoadNetwork.h>
+#include <Alryn/Terrain/StreamingTerrain.h>
+#include <Alryn/Terrain/WorldGen.h>
+#include <Alryn/UI/UI.h>
+#include <Alryn/World/PropLibrary.h>
+#include <Alryn/World/VehicleTypes.h>
+#include <Alryn/World/Village.h>
+
+#include "GameConfig.h"
+
+#include <algorithm>
+#include <array>
+#include <cctype>
+#include <cmath>
+#include <cstdlib>
+#include <format>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+namespace alryn::game {
+
+using namespace alryn; // engine types (Vec3, Renderer, net::, ui::, worldgen:: ...)
+
+// --------------------------------------------------------------------------
+//  Windowed multiplayer client (isometric third-person view).
+// --------------------------------------------------------------------------
+class ClientApp : public Application {
+public:
+    ClientApp(std::string host, bool host_local, u64 max_frames, bool auto_start)
+        : Application(make_config(max_frames)), host_(std::move(host)), host_local_(host_local),
+          auto_start_(auto_start), host_ip_(host_) {}
+
+protected:
+    void on_init() override;
+
+    // Leaves the menu and connects: optionally hosting an in-process listen
+    // server, then connecting the client. Terrain is created once the server's
+    // Welcome arrives (see the SnapshotReceived/WelcomeReceived handling).
+    void enter_game(bool host_local, std::string host);
+
+    // Disconnects and returns to the main menu.
+    void return_to_menu();
+
+    // ---- In-game pause menu --------------------------------------------------
+    void enter_pause() {
+        paused_ = true;
+        show_screen(Screen::Pause);
+    }
+    void resume() {
+        paused_ = false;
+        ui_.root().clear_children();
+    }
+    // ESC: in the main menu it backs out/quits; in-game it toggles the pause menu
+    // (and Settings opened from pause backs out to the pause menu, not the game).
+    void escape_pressed();
+    void settings_back() { show_screen(paused_ ? Screen::Pause : Screen::Main); }
+
+    // ---- Menu construction --------------------------------------------------
+    enum class Screen { Main, Join, Settings, Customise, Pause };
+
+    Vec2 pointer_pos() {
+        if (Input* in = input()) {
+            return in->mouse_position();
+        }
+        return Vec2{0.0f};
+    }
+
+    void menu_escape() {
+        if (current_screen_ == Screen::Main) {
+            close();
+        } else {
+            show_screen(Screen::Main);
+        }
+    }
+
+    void show_screen(Screen screen) {
+        current_screen_ = screen;
+        rebuild_ui();
+    }
+
+    // Rebuilds the current screen's widgets for the live framebuffer size. Called
+    // on navigation and on resize so the menu always stays centred.
+    void rebuild_ui();
+
+    void build_pause(f32 w, f32 h);
+
+    void add_title(f32 w, f32 h, const char* heading, const char* sub);
+
+    void build_main(f32 w, f32 h);
+
+    void build_join(f32 w, f32 h);
+
+    void build_settings(f32 w, f32 h);
+
+    void build_customise(f32 w, f32 h);
+
+    void rebuild_preview() {
+        preview_model_ = CharacterModel::create(kPreviewSeed, appearance_);
+    }
+
+    void apply_resolution(usize idx);
+
+    void on_update(Timestep dt) override;
+
+    void on_render() override;
+
+    // Renders the customisation turntable: the live character centred in the area
+    // left of the controls panel. The camera distance + horizontal offset are
+    // derived from the window aspect and the panel position so the whole avatar
+    // (head to feet) always fits without clipping, in any window shape.
+    void draw_preview();
+
+    // Draws every bone of a posed character with its palette colour (times `tint`)
+    // and shape mesh. The tint lets enemies read as hostile without new models.
+    void draw_rig(const CharacterModel& model, const std::vector<Mat4>& mats,
+                  const Vec3& tint = Vec3{1.0f});
+
+    // Draws a spear gripped in the character's right hand (anchored to the lower-arm
+    // bone so it swings with the animation, not a stick floating beside them).
+    void draw_held_spear(const CharacterModel& model, const std::vector<Mat4>& mats);
+
+    // World position of a hand (the far end of a forearm), in the forearm JOINT frame.
+    static Mat4 hand_frame(const CharacterModel& model, const std::vector<Mat4>& jmats, BonePart arm);
+
+    // The role's weapon, RIGIDLY gripped in the hand JOINT frame so it rotates WITH the arm - a
+    // Knight's sword swings with the attack animation (it IS the blade you hold) and the shield
+    // raises with the block. NOTE: the rig's bone labels are mirrored - the *L* arm is on the
+    // player's RIGHT (the weapon hand), the *R* arm on their LEFT (the shield hand). The Cleric's
+    // staff is handled separately (draw_cleric_staff) so it can behave like a walking stick.
+    void draw_role_weapon(const CharacterModel& model, const std::vector<Mat4>& jmats,
+                          PlayerRole role);
+
+    // The Cleric's staff held VERTICAL like a walking stick: the hand grips the top, the shaft
+    // drops to the ground, and as they walk the tip plants ahead then drifts back (and lifts to
+    // swing forward again), synced to the gait. Idle = a still, upright staff.
+    void draw_cleric_staff(const CharacterModel& model, const std::vector<Mat4>& jmats,
+                           const Vec3& feet, const CharacterAnimator& anim, f32 yaw);
+
+    // Fire ability slot (0/1/2) for the local player: gate on the client cooldown estimate,
+    // queue it for the server, mirror the cooldown for the HUD, and play the cast VFX + any
+    // buff aura instantly so it feels responsive (the server stays authoritative).
+    void cast_ability(u8 slot);
+
+    // A quick flourish at the hand for a Hunter/Cleric primary attack (the projectile itself is
+    // server-spawned + networked; this is just the instant local muzzle/cast feedback).
+    void spawn_primary_vfx();
+
+    void on_event(Event& event) override;
+
+    void on_shutdown() override;
+
+private:
+    struct PlayerVisual {
+        CharacterModel model;
+        CharacterAnimator animator;
+        CharacterAppearance appearance;
+        Vec3 last_pos{0.0f};
+        f32 speed = 0.0f;
+        bool has_last = false;
+        u8 last_action = 0; // to fire a swing once on the rising edge of a networked action
+    };
+
+    // A networked enemy's renderable: one shared hostile model, animated from
+    // snapshot position deltas (no animation data on the wire).
+    struct EnemyVisual {
+        CharacterModel model = CharacterModel::create(0u, enemy_look());
+        CharacterAnimator animator;
+        Vec3 last_pos{0.0f};
+        f32 speed = 0.0f;
+        u8 last_action = 0;
+    };
+
+    PlayerVisual& ensure_visual(net::PlayerId id, const CharacterAppearance& appearance);
+
+    // Advances the time of day and feeds the renderer a moving sun + sky colour.
+    // When connected, the server owns the clock (so lighting matches when villagers
+    // sleep); otherwise we advance it locally. ALRYN_TIME (0..1) pins the starting
+    // time; ALRYN_DAY_SECONDS sets cycle length.
+    void update_day_night(Timestep dt);
+
+    void update_camera();
+
+    void update_visuals(Timestep dt);
+
+    // The local player's health fraction (0..1) from the snapshot.
+    f32 local_health() const {
+        if (have_snapshot_) {
+            for (const net::PlayerState& p : snapshot_.players) {
+                if (p.id == my_id_) {
+                    return static_cast<f32>(p.health) / 100.0f;
+                }
+            }
+        }
+        return 1.0f;
+    }
+
+    // Tracks a damage flash: when the local player's health drops, flare the screen red.
+    void update_feedback(Timestep dt);
+
+    // ---- Particle VFX ------------------------------------------------------------
+    void emit(const Vec3& pos, const Vec3& vel, const Vec4& color, f32 life, f32 size,
+              u8 style = 0, f32 gravity = 0.0f, f32 drag = 1.6f);
+
+    // A spray of `n` motes from `center`, biased upward by `up` (m/s), with random speed.
+    void emit_burst(const Vec3& center, const Vec4& color, int n, f32 speed, f32 life, f32 size,
+                    u8 style = 1, f32 up = 0.0f, f32 gravity = 0.0f);
+
+    // A flat expanding ring of motes on the ground (radius grows via outward velocity).
+    void emit_ring(const Vec3& center, const Vec4& color, int n, f32 speed, f32 life, f32 size,
+                   u8 style = 1);
+
+    void update_particles(Timestep dt);
+
+    // The glowing ground disc + soft dome of each ground aura, plus a soft light at night so the
+    // aura lights its surroundings. Colour comes from the shared aura_props table (data-driven, so
+    // a new aura kind renders + lights itself with no extra client code). Rising motes are emitted
+    // in update_particles. Drawn additively so it brightens the ground without occluding.
+    void draw_auras();
+
+    // The Aegis protective bubble around any shielded player / NPC: a softly pulsing translucent
+    // shell + an additive glow, brighter while the shield is strong. (Shimmer motes orbit it from
+    // update_particles.)
+    void draw_shields();
+
+    void draw_particles();
+
+    // The showy burst for an ability cast, played for whoever cast it (the local player on
+    // keypress for instant feel; remote players when the snapshot reports their `cast`).
+    void spawn_ability_vfx(PlayerRole role, u8 slot, const Vec3& feet, f32 yaw, const Vec3& aim);
+
+    // Decays the local buff auras (emitting trailing motes while active) and plays cast VFX
+    // for remote players from the snapshot's `cast` field (deduped by tick so each fires once).
+    void update_ability_vfx(Timestep dt);
+
+    // A menacing low-poly look shared by all enemies (dark skin, sharp eyes, spiky
+    // hair); a red tint at draw time makes them read as hostile.
+    static CharacterAppearance enemy_look();
+
+    // Animate enemies from snapshot deltas, like remote players, and drop visuals
+    // for enemies that have died / left the snapshot.
+    void update_enemy_visuals(Timestep dt);
+
+    void draw_enemies();
+
+    // Town gates that swing open when a player or NPC approaches. Purely client-side + visual
+    // (the gap is already passable): update_gates rebuilds the nearby-gate list each frame and
+    // eases each gate's open amount toward "someone is near"; draw_gates draws the two leaves.
+    void update_gates(Timestep dt);
+    void draw_gates();
+
+    // Player-built barricades: a low palisade of wooden stakes + rails, darkening as
+    // the enemy hacks it down (health from the snapshot).
+    void draw_barricades();
+
+    // Floating health bars above combatants (enemies always; guards always; villagers
+    // only when hurt), projected from world space into the 2D UI overlay.
+    void draw_health_bars();
+
+    // Burning houses: a cluster of flickering emissive flame tongues that engulf the
+    // whole cottage (spread across its footprint, licking up to the roof), dark smoke
+    // billowing above, an additive firelight bloom and a strong warm light (day or
+    // night). The server sends position + intensity; a low intensity is the smouldering
+    // ember of a burnt-down ruin (small flames, lots of smoke).
+    void draw_fires();
+
+    // The burning intensity (0..1) of the house at world position `p`, from the
+    // server's fire list - used to char the cottage and swap its cosy glow for flames.
+    f32 house_burn(const Vec3& p) const;
+
+    // The cart's terrain-following orientation + bob. It simply sits ON the ground: pitched
+    // along its travel direction and rolled across it to match the slope under the wheels (no
+    // tilt/flip dynamics - any drama is the physical cargo sliding around). Bob is a speed jiggle.
+    void wagon_orient(const net::WagonState& wg, f32 moved, f32& pitch, f32& roll, f32& bob) const;
+
+    Mat4 wagon_model(const net::WagonState& wg, f32 moved) const;
+
+    // Re-applies the cart's lean + bob to a rider's flat (server) seat position, so a seated
+    // player/driver rides with the cart instead of floating above its tilt.
+    Vec3 attach_to_wagon(const net::WagonState& wg, const Vec3& flat_world) const;
+
+    // The single active cargo wagon being hauled (riders attach to it), or nullptr.
+    const net::WagonState* active_wagon() const {
+        if (have_snapshot_ && snapshot_.contract_phase == static_cast<u8>(ContractPhase::Active) &&
+            !snapshot_.wagons.empty()) {
+            return &snapshot_.wagons.front();
+        }
+        return nullptr;
+    }
+
+    // This frame's cart displacement (for the bob), from the position cached in draw_wagons.
+    f32 wagon_frame_move(const net::WagonState& wg) const {
+        const auto it = wagon_prev_.find(wg.id);
+        if (it == wagon_prev_.end()) {
+            return 0.0f;
+        }
+        return glm::length(Vec2{wg.position.x - it->second.x, wg.position.z - it->second.z});
+    }
+
+    // Draws the networked wagons (the parked offers, then the active cargo): the body
+    // plus four wheels that spin as the cart rolls (roll accumulated from its motion). The
+    // wagon you're voting for is tinted gold; a damaged one darkens toward wrecked.
+    void draw_wagons();
+
+    // Cargo crates: in-bed ones (loose==0) ride in the cart (their position is bed-local, so we
+    // place them through the cart transform - they slide + tilt + bob with it); fallen ones
+    // (loose==1) lie on the ground at a world position until picked up (E).
+    void draw_goods();
+
+    // A crate held in front of a player who is carrying a spilled good back to the cart.
+    void draw_carried_good(const Vec3& feet, f32 yaw);
+
+    // Renders a wagon's two verlet harness traces as a chain of short oriented links (the
+    // node positions are simulated in update_ropes from the authoritative endpoints).
+    void draw_ropes(u32 id);
+
+    // Simulates the harness traces: two ropes (left/right) per horse-drawn wagon, each a
+    // verlet chain pinned to the carriage shaft tip and the horse's collar, sagging under
+    // gravity and swinging as the rig moves - so the rope is real physics, not a fixed line.
+    void update_ropes(Timestep dt);
+
+    // Draws the carriage's horse with a simple diagonal leg gait driven by its motion.
+    void draw_horse(const Vec3& pos, f32 yaw);
+
+    // Project a world point to screen pixels; returns false if behind/off camera.
+    bool world_to_screen(const Vec3& world, f32 W, f32 H, Vec2& out) const;
+
+    // The in-game HUD: shared party money, the wagon-contract objective (choose an offer,
+    // or the active delivery + a destination arrow), and the local player's health bar.
+    void draw_hud();
+
+    // The floating contract panel shown beside a wagon you've walked up to: where it's bound
+    // (town name), how far, the danger, and the pay - plus ACCEPT / CANCEL buttons (or, once
+    // accepted, a WAITING tally + CANCEL). Stores the button rects for click hit-testing.
+    void draw_contract_panel(ui::DrawList& draw, const net::WagonState& wg, bool accepted, f32 W,
+                             f32 H, f32 ts, const Vec3& feet);
+
+    // The role's signature accent colour (also tints the ability bar + icons).
+    static Vec3 role_color(PlayerRole role);
+
+    // The three role abilities (keys 1/2/3) as a polished bottom-centre bar: a backing
+    // panel, one rounded slot each with a vector icon, a key badge, the name, and a radial
+    // cooldown wipe (a dark overlay that drains as the ability recovers + the seconds left).
+    void draw_ability_bar(ui::DrawList& draw, f32 W, f32 H, f32 ts);
+
+    // A vector glyph for ability (role, slot), centred at (cx,cy) with ~r radius, drawn from
+    // rounded-cap lines + rects so it reads at a glance (sword / shield / bow / cross / bolt …).
+    void draw_ability_icon(ui::DrawList& draw, PlayerRole role, u8 slot, f32 cx, f32 cy, f32 r,
+                           const Vec4& c);
+
+    // A bold arrow near the top of the screen pointing from the player toward the wagon's
+    // destination (world bearing mapped through the fixed iso camera).
+    void draw_dest_arrow(ui::DrawList& draw, const Vec3& from, const Vec3& to, f32 W);
+
+    // Full-screen world map: the towns near the player and the roads between them
+    // (computed deterministically from the shared seed via roads::gather + village_at),
+    // with the player's position + facing. Toggled with M.
+    void draw_map();
+
+    void draw_prop(const PropInstance& p);
+
+    void draw_character(PlayerVisual& v, const Vec3& feet, f32 yaw, bool seated = false,
+                        int role = -1);
+
+    // ---- Village NPCs (server-authoritative; the player defends them) -------
+    // Villagers are simulated on the server (wander/sleep/flee, killable by enemies)
+    // and arrive in the snapshot; the client just renders + animates them, rebuilding
+    // a model when its appearance first appears, and culls visuals that have died /
+    // left the snapshot.
+    void update_villager_visuals(Timestep dt);
+
+    PlayerVisual& ensure_villager_visual(u32 id, const CharacterAppearance& appearance);
+
+    void draw_villagers();
+
+    void send_input();
+
+    Vec3 local_feet() const {
+        if (have_snapshot_) {
+            for (const net::PlayerState& p : snapshot_.players) {
+                if (p.id == my_id_) {
+                    return p.position;
+                }
+            }
+        }
+        return Vec3{0.0f, 5.0f, 0.0f};
+    }
+
+    // The id of the offered wagon the local player is standing next to (within
+    // kWagonStartRange), or 0. Walking up to a parked offer is how a haul is started.
+    static constexpr f32 kWagonStartRange = 4.0f;
+    u32 nearest_offer_in_range() const;
+    bool wagon_offered(u32 id) const {
+        for (const net::WagonState& wg : snapshot_.wagons) {
+            if (wg.id == id) {
+                return true;
+            }
+        }
+        return false;
+    }
+    const net::WagonState* wagon_by_id(u32 id) const {
+        for (const net::WagonState& wg : snapshot_.wagons) {
+            if (wg.id == id) {
+                return &wg;
+            }
+        }
+        return nullptr;
+    }
+    static bool in_rect(const Vec2& p, const ui::Rect& r) {
+        return r.w > 0.0f && p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
+    }
+
+    // A deterministic medieval name for the town centred at `c` (so the contract panel can say
+    // where the wagon is bound). Stable per town because `c` is the town's fixed centre.
+    static std::string town_name(const Vec3& c);
+
+
+    // Unproject the cursor through the iso camera onto the terrain (for digging).
+    void update_aim();
+
+    // A rotation that maps the mesh's local +Z axis onto `dir` (used to point arrows along
+    // their flight). Falls back to identity for a degenerate direction.
+    static Mat4 orient_to(const Vec3& dir);
+
+    Mat4 tree_model(const TreeInstance& t) const {
+        return glm::translate(Mat4{1.0f}, t.position) *
+               glm::rotate(Mat4{1.0f}, t.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
+               glm::scale(Mat4{1.0f}, Vec3{t.scale});
+    }
+    usize tree_index(const TreeInstance& t) const {
+        return tree_library_.empty() ? 0 : static_cast<usize>(t.variant) % tree_library_.size();
+    }
+
+    static ApplicationConfig make_config(u64 max_frames);
+
+    enum class AppState { Menu, Playing };
+
+    std::string host_;
+    bool host_local_ = true;
+    bool auto_start_ = false;
+    AppState state_ = AppState::Menu;
+    GameServer local_server_;
+    Renderer* renderer_ = nullptr;
+
+    // Menu / settings.
+    ui::UIContext ui_;
+    Screen current_screen_ = Screen::Main;
+    bool paused_ = false;   // in-game pause menu (overlaid on the live game)
+    UVec2 ui_extent_{0, 0}; // last framebuffer size the menu was laid out for
+    std::string host_ip_ = "127.0.0.1";
+    Vec3 menu_sky_{0.05f, 0.06f, 0.09f};
+    bool vsync_ = true;
+    usize res_index_ = 0;
+    int render_distance_ = 4;
+
+    // Character customisation + its turntable preview.
+    static constexpr u32 kPreviewSeed = 7u;
+    CharacterAppearance appearance_;
+    PlayerRole role_ = PlayerRole::Knight;          // chosen combat role (weapon + abilities)
+    u8 pending_ability_ = 0;                         // ability invoked this frame (0 = none)
+    f32 ability_cd_[kAbilitySlots] = {0.0f, 0.0f, 0.0f}; // client-side HUD cooldown estimate
+    f32 bulwark_fx_ = 0.0f;                          // local: Knight shield-dome aura timer
+    f32 dash_fx_ = 0.0f;                             // local: Hunter speed-trail aura timer
+    f32 heal_charge_fx_ = 0.0f;                      // local: Cleric heal-channel charge (0..kHealChargeTime)
+    std::unordered_map<net::PlayerId, u32> ability_fx_tick_; // dedupe networked cast VFX
+
+    // A lightweight client-side particle (ability VFX, projectile trails). Drawn as an
+    // emissive or additive-glow sphere that fades + shrinks over its life.
+    struct Particle {
+        Vec3 pos{0.0f};
+        Vec3 vel{0.0f};
+        f32 life = 0.0f;
+        f32 max_life = 1.0f;
+        f32 size = 0.1f;
+        f32 gravity = 0.0f;
+        f32 drag = 1.6f;
+        Vec4 color{1.0f};
+        u8 style = 0; // 0 = emissive, 1 = additive glow
+    };
+    std::vector<Particle> particles_;
+    u32 fx_rng_ = 0x9e3779b9u;
+    f32 frand();
+    f32 frand(f32 a, f32 b) { return a + (b - a) * frand(); }
+    Vec3 rand_dir();
+    CharacterModel preview_model_ = CharacterModel::create(kPreviewSeed, CharacterAppearance{});
+    CharacterAnimator preview_anim_;
+    f32 preview_turn_ = 0.6f;
+    ui::Rect customise_panel_{}; // the controls card; the preview fills the area left of it
+    net::NetClient client_;
+    std::unique_ptr<StreamingTerrain> terrain_;
+    struct TreeVisual {
+        Mesh trunk;
+        Mesh foliage;
+    };
+
+    struct GpuPropPart {
+        Mesh mesh;
+        PropLayer layer = PropLayer::Opaque;
+    };
+    struct GpuProp {
+        std::vector<GpuPropPart> parts;
+        std::vector<PropLight> lights; // lantern / hearth / brazier spot lights
+        Vec2 footprint{0.0f};          // house interior half-extents (0 = not a house)
+        f32 wall_height = 0.0f;
+    };
+
+    std::unordered_map<net::PlayerId, PlayerVisual> visuals_;
+    std::unordered_map<u32, EnemyVisual> enemy_visuals_;     // networked hostile NPCs
+    std::unordered_map<u32, PlayerVisual> villager_visuals_; // networked town NPCs
+    std::vector<TreeVisual> tree_library_;
+    PropLibrary prop_lib_;
+    std::vector<GpuProp> gpu_bushes_;
+    std::vector<GpuProp> gpu_rocks_;
+    std::vector<GpuProp> gpu_logs_;
+    std::vector<GpuProp> gpu_fences_;
+    std::vector<GpuProp> gpu_fence_rails_;
+    std::vector<GpuProp> gpu_lanterns_;
+    std::vector<GpuProp> gpu_houses_;
+    std::vector<GpuProp> gpu_walls_;
+    std::vector<GpuProp> gpu_gates_;
+    std::vector<GpuProp> gpu_wells_;
+    std::vector<GpuProp> gpu_bridges_;
+    std::vector<GpuProp> gpu_markets_;
+    std::vector<GpuProp> gpu_paths_;
+    std::vector<GpuProp> gpu_planters_;
+    std::vector<GpuProp> gpu_fountains_;
+    std::vector<GpuProp> gpu_decor_;
+    std::vector<GpuProp> gpu_rivers_;
+    Mesh shape_box_;
+    Mesh shape_sphere_;
+    Mesh shape_cylinder_;
+    Mesh shape_capsule_;
+    Mesh shape_rounded_;
+    Mesh marker_;
+    Mesh water_mesh_;
+    Mesh gate_door_mesh_; // a unit gate-door leaf (x:0..1 hinge->free), drawn x2 per town gate
+
+    // Town gates near the player, rebuilt each frame (open: 0 closed .. 1 swung open).
+    struct GateVisual {
+        Vec3 pos;     // gate opening centre, on the ground
+        Vec2 radial;  // outward radial direction (xz)
+        f32 half = 2.6f; // opening half-width (matches the wall gap; wider gates span more roads)
+        f32 open = 0.0f;
+    };
+    std::vector<GateVisual> gates_;
+    std::unordered_map<u64, f32> gate_open_; // eased open amount, keyed by gate position hash
+
+    f32 elapsed_ = 0.0f;
+    f32 time_of_day_ = daynight::start_time; // 0=midnight, 0.25=sunrise, 0.5=noon, 0.75=sunset
+    f32 day_seconds_ = daynight::default_day_seconds;
+    f32 sun_intensity_ = 1.0f; // cached from the day/night cycle (0 night .. 1 day)
+    f32 cam_distance_ = iso::distance; // scroll-wheel zoom
+    Camera camera_;
+
+    net::PlayerId my_id_ = 0;
+    u32 world_seed_ = 0;     // shared world seed (from Welcome) - for the map's town/road graph
+    bool map_open_ = false;  // full-screen map overlay (M)
+    net::Snapshot snapshot_;
+    bool have_snapshot_ = false;
+
+    f32 face_yaw_ = 0.0f;
+    u32 sequence_ = 0;
+    bool pending_add_ = false;
+    bool pending_fire_ = false;
+    bool pending_attack_ = false;
+    bool pending_build_ = false;
+    bool pending_local_swing_ = false; // play our own swing animation this frame (left-click)
+    bool blocking_ = false;            // Knight holding the shield up (right mouse held)
+    bool pending_rally_ = false;
+    bool pending_grab_ = false; // one-shot hitch/unhitch the nearest wagon
+    u32 selected_wagon_ = 0;    // wagon id this client has ACCEPTED (its vote; 0 = none)
+    u32 near_wagon_ = 0;        // offered wagon currently in range (shows its info panel)
+    u32 panel_wagon_ = 0;       // wagon the on-screen Accept/Cancel buttons act on
+    ui::Rect accept_btn_{};     // screen rect of the panel's ACCEPT button (0 = not shown)
+    ui::Rect cancel_btn_{};     // screen rect of the panel's CANCEL button
+    u8 vote_mode_ = 1;          // 1 = hire driver, 2 = haul manually
+    std::vector<Mesh> vehicle_meshes_; // one body mesh per VehicleType (cart/wagon/carriage)
+    Mesh wagon_wheel_mesh_;     // a single wheel, drawn x4 (scaled per type) and spun
+    Mesh horse_body_mesh_;      // the carriage puller
+    Mesh horse_leg_mesh_;       // a single leg, drawn x4 with a gait swing
+    Mesh rope_mesh_;            // a unit harness-trace link, drawn per rope segment
+    Mesh goods_mesh_;           // a cargo crate (spilled on the ground / carried by a player)
+    std::unordered_map<u32, f32> wagon_roll_;  // accumulated wheel spin per wagon id
+    std::unordered_map<u32, Vec3> wagon_prev_; // last wagon position (to derive roll)
+    f32 horse_gait_ = 0.0f;     // horse leg-swing phase (from its motion)
+    Vec3 horse_prev_{0.0f};
+    // Verlet harness traces: two ropes (left/right) per horse-drawn wagon, simulated each
+    // frame between the carriage shaft tips and the horse's collar so they sag + swing.
+    static constexpr int kRopeNodes = 7;
+    struct RopeTrace {
+        Vec3 pos[kRopeNodes];
+        Vec3 prev[kRopeNodes];
+        bool init = false;
+    };
+    std::unordered_map<u32, std::array<RopeTrace, 2>> wagon_ropes_;
+    f32 hit_flash_ = 0.0f;   // red damage-flash intensity (decays)
+    f32 last_health_ = 1.0f; // last seen local health fraction (to detect hits)
+    Vec3 aim_{0.0f};
+    bool aim_valid_ = false;
+};
+
+} // namespace alryn::game
