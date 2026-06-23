@@ -162,8 +162,8 @@ vec3 acesFilm(vec3 x) {
 vec3 grade(vec3 col, float gloom) {
     float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
     col = mix(vec3(lum), col, 1.28 - 0.24 * gloom);     // >1 = saturate (vibrant foliage)
-    col *= mix(vec3(0.96, 0.99, 1.05), vec3(1.05, 1.02, 0.94), smoothstep(0.0, 0.55, lum));
-    col = mix(col, col * col * (3.0 - 2.0 * col), 0.40); // S-curve contrast (punchier)
+    col *= mix(vec3(0.90, 0.96, 1.13), vec3(1.12, 1.03, 0.84), smoothstep(0.0, 0.6, lum)); // warm/cool split
+    col = mix(col, col * col * (3.0 - 2.0 * col), 0.42); // S-curve contrast (punchier)
     return col;
 }
 float hash21(vec2 p) {
@@ -224,16 +224,16 @@ void main() {
     float lit = 1.0 - pc.sunColor.w * shadow;
     float diffuse = ndotl * intensity * lit;
 
-    // Hemispheric ambient: sky-tinted from above, earthy/dark from below (matches mesh.frag).
-    vec3 skyAmb = mix(vec3(0.10, 0.13, 0.21), vec3(0.36, 0.46, 0.62), intensity);
-    vec3 groundAmb = mix(vec3(0.04, 0.045, 0.06), vec3(0.26, 0.21, 0.14), intensity);
+    // Hemispheric ambient: low in daylight so shadows stay dark + the key sun gives form (matches mesh.frag).
+    vec3 skyAmb = mix(vec3(0.10, 0.13, 0.21), vec3(0.19, 0.26, 0.40), intensity);
+    vec3 groundAmb = mix(vec3(0.04, 0.045, 0.06), vec3(0.11, 0.085, 0.055), intensity);
     vec3 ambient = mix(groundAmb, skyAmb, N.y * 0.5 + 0.5);
 
     float night = 1.0 - intensity;
     float moon = max(N.y, 0.0) * 0.24 * night;
 
     vec3 base = vColor * pc.tint.rgb;
-    vec3 illum = ambient + sunCol * diffuse + vec3(0.55, 0.65, 0.9) * moon +
+    vec3 illum = ambient + sunCol * diffuse * 1.35 + vec3(0.55, 0.65, 0.9) * moon +
                  spotLighting(N, vWorldPos) + pointLighting(N, vWorldPos);
 
     // A cool aqua rim on the surviving fringe of the hole, so the cut reads as the camera

@@ -545,8 +545,8 @@ void ClientApp::update_day_night(Timestep dt) {
     const f32 intensity = glm::smoothstep(-0.04f, 0.18f, h);
     sun_intensity_ = intensity;
 
-    const Vec3 horizon{1.0f, 0.5f, 0.28f};
-    const Vec3 noon{1.0f, 0.96f, 0.88f};
+    const Vec3 horizon{1.0f, 0.46f, 0.24f}; // deep warm gold at the horizon (golden hour)
+    const Vec3 noon{1.0f, 0.93f, 0.78f};    // warm daylight (not a clinical white)
     const Vec3 sun_color = glm::mix(horizon, noon, glm::smoothstep(0.0f, 0.32f, h));
 
     const Vec3 sky_night{0.03f, 0.04f, 0.09f};
@@ -591,11 +591,11 @@ void ClientApp::update_day_night(Timestep dt) {
         worldgen::inside_village(feet.x, feet.z, world_seed_, 6.0f) ? 1.0f : 0.0f;
     fog_gloom_ += (gloom_target - fog_gloom_) * std::min(1.0f, dt.seconds * 2.0f); // eased
     const f32 sky_lum = glm::dot(sky, Vec3{0.2126f, 0.7152f, 0.0722f});
-    Vec3 fog_color = glm::mix(sky, Vec3{sky_lum}, 0.30f);                  // desaturate the haze
+    Vec3 fog_color = glm::mix(sky, Vec3{sky_lum}, 0.18f);                  // keep the haze coloured (atmospheric)
     fog_color = glm::mix(fog_color, Vec3{0.10f, 0.12f, 0.16f}, fog_gloom_ * 0.35f); // town gloom
     fog_color = glm::mix(fog_color, Vec3{sky_lum * 0.9f}, wz * 0.4f);                // grey storm haze
     const f32 density =
-        0.0050f + night * 0.0035f + fog_gloom_ * 0.003f + wz * 0.008f; // lighter haze -> vibrant distance
+        0.0058f + night * 0.0035f + fog_gloom_ * 0.003f + wz * 0.008f; // a touch more distance haze (depth)
 
     // Occasional dense fog banks on the roads: near a road, a slow noise along the way decides
     // which stretches are socked in. Eased slowly so you walk smoothly into and out of a bank.

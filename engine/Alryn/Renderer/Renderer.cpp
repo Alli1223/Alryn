@@ -377,7 +377,7 @@ void Renderer::set_sun(const Vec3& direction, const Vec3& color, f32 intensity) 
     sun_direction_ = len > 1e-4f ? direction / len : Vec3{0.0f, 1.0f, 0.0f};
     sun_color_ = color;
     sun_intensity_ = intensity;
-    shadow_strength_ = 0.55f * glm::clamp(intensity, 0.0f, 1.0f); // fade out at dusk/night
+    shadow_strength_ = 0.72f * glm::clamp(intensity, 0.0f, 1.0f); // deep daytime shadows, fade out at dusk/night
 }
 
 // Orthographic light frustum centred on what the camera looks at, so the shadow

@@ -551,22 +551,34 @@ TEST_CASE("Village: towns are placed, laid out deterministically, with houses + 
     CHECK(market_pos.x == doctest::Approx(found->center.x));
     CHECK(market_pos.z == doctest::Approx(found->center.y));
 
-    // No tree spawns inside the town walls.
-    bool tree_in_town = false;
+    // Decorative trees MAY spawn inside the town walls now, but only in open spots: never on the
+    // market plaza, never overlapping a building, and not crammed in (just a scattered few).
+    const auto gate_pts = detail::village_gate_points(*found, seed);
+    int trees_in_town = 0;
     const int cw = 8;
     for (int cz = -10; cz < 10; ++cz) {
         for (int cx = -10; cx < 10; ++cx) {
             const int bx = static_cast<int>(std::floor(found->center.x / cw)) + cx;
             const int bz = static_cast<int>(std::floor(found->center.y / cw)) + cz;
             for (const TreeInstance& t : scatter_trees(bx, bz, 8.0f, seed)) {
-                const Vec2 d{t.position.x - found->center.x, t.position.z - found->center.y};
-                if (glm::length(d) < worldgen::town_radius(*found, std::atan2(d.y, d.x), seed)) {
-                    tree_in_town = true; // inside the town's organic wall
+                const Vec2 tp{t.position.x, t.position.z};
+                const Vec2 d = tp - found->center;
+                if (glm::length(d) >= worldgen::town_radius(*found, std::atan2(d.y, d.x), seed)) {
+                    continue; // outside the wall - not a town tree
                 }
+                ++trees_in_town;
+                CHECK(glm::length(d) > detail::kMarketHalf); // off the central plaza
+                bool clips_building = false;
+                detail::for_each_house(*found, seed, gate_pts, [&](const detail::HousePlot& hp) {
+                    if (glm::length(hp.pos - tp) < detail::house_reach(hp.variant)) {
+                        clips_building = true;
+                    }
+                });
+                CHECK_FALSE(clips_building); // never grows through a house
             }
         }
     }
-    CHECK_FALSE(tree_in_town);
+    CHECK(trees_in_town < 30); // sparse, decorative - not a forest inside the walls
 }
 
 TEST_CASE("Gates: every town road runs through a gate gap, not into a wall") {

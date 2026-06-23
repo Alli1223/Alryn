@@ -199,15 +199,14 @@ inline Vec3 surface_color(const Vec3& p, const Vec3& normal, u32 seed) {
     // (The worn dirt road colour is overlaid separately via roads::tint_surface while
     // meshing, so this base colour stays independent of the road network.)
 
-    // Trampled muddy earth inside a town's walls: dirty churned mud blotched with patches of
-    // worn dirt-grey, much dirtier than clean cobble (the streets are laid on top as props).
+    // Town ground: GRASSY open areas (so the town has green, not all mud) with worn bare-earth
+    // patches trampled through it. The dirt streets + light flagstones are overlaid on top as the
+    // road network (town_path_tint + Path props), so the green sits between the paths.
     if (h > water_level + 0.5f && up > 0.55f && inside_village(p.x, p.z, seed)) {
-        const f32 cobble = noise::fbm2d(p.x * 0.7f, p.z * 0.7f, 1, 2.0f, 0.5f, seed + 808u);
-        const f32 mud = noise::fbm2d(p.x * 0.22f, p.z * 0.22f, 2, 2.0f, 0.5f, seed + 909u);
-        Vec3 town_ground = glm::mix(Vec3{0.44f, 0.33f, 0.21f}, Vec3{0.56f, 0.48f, 0.38f},
-                                    glm::smoothstep(0.1f, 0.5f, cobble));
-        town_ground = glm::mix(town_ground, Vec3{0.36f, 0.27f, 0.18f},
-                               glm::smoothstep(0.1f, 0.45f, mud)); // wet muddy patches
+        const f32 worn = noise::fbm2d(p.x * 0.13f, p.z * 0.13f, 2, 2.0f, 0.5f, seed + 909u);
+        const Vec3 town_grass{0.30f, 0.5f, 0.22f}; // lush green over most of the open ground
+        const Vec3 town_dirt{0.47f, 0.36f, 0.23f}; // warm bare earth only on the most-trodden spots
+        Vec3 town_ground = glm::mix(town_grass, town_dirt, glm::smoothstep(0.62f, 0.95f, worn));
         color = glm::mix(color, town_ground, glm::smoothstep(0.55f, 0.78f, up));
     }
 

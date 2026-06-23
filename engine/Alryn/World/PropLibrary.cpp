@@ -612,7 +612,7 @@ PropDef PropLibrary::build_lantern_post() {
     def.name = "lantern";
     const Vec3 wood{0.30f, 0.22f, 0.14f};
     const Vec3 frame{0.13f, 0.13f, 0.15f};
-    const Vec3 glow{1.0f, 0.85f, 0.5f};
+    const Vec3 glow{1.0f, 0.78f, 0.4f}; // warm amber flame
     MeshData op;
     MeshData em;
     add_box(op, {-0.05f, 0.0f, -0.05f}, {0.05f, 1.7f, 0.05f}, wood);          // post
@@ -624,10 +624,10 @@ PropDef PropLibrary::build_lantern_post() {
     PropLight l;
     l.offset = Vec3{0.0f, 1.55f, 0.0f};
     l.direction = glm::normalize(Vec3{0.0f, -1.0f, 0.0f});
-    l.color = Vec3{1.0f, 0.80f, 0.48f};
-    l.range = 13.0f;
-    l.intensity = 1.6f;
-    l.cone_deg = 130.0f;
+    l.color = Vec3{1.0f, 0.74f, 0.42f};
+    l.range = 14.0f;
+    l.intensity = 2.1f; // a warmer, brighter pool on the street (the reference's lit torches)
+    l.cone_deg = 135.0f;
     def.lights.push_back(l);
     BoxCollider c;
     c.half_extents = Vec2{0.1f, 0.1f};
@@ -1903,57 +1903,54 @@ PropDef PropLibrary::build_wagon_wheel() {
 PropDef PropLibrary::build_path_tile() {
     PropDef def;
     def.name = "path_tile";
-    const Vec3 mud{0.19f, 0.15f, 0.11f}; // wet muddy earth between the stones
-    // Muted, dirty grey + earthy stone tones (no bright whites).
-    const Vec3 stones[6] = {{0.45f, 0.44f, 0.42f}, {0.39f, 0.38f, 0.36f}, {0.51f, 0.49f, 0.45f},
-                            {0.43f, 0.40f, 0.35f}, {0.36f, 0.35f, 0.34f}, {0.49f, 0.45f, 0.39f}};
+    // Light, warm grey-tan flagstones (clean and pale like the reference - NOT dark muddy rocks),
+    // laid as flat irregular slabs over warm packed earth.
+    const Vec3 earth{0.4f, 0.31f, 0.2f}; // warm dirt showing between the slabs
+    const Vec3 stones[6] = {{0.68f, 0.66f, 0.62f}, {0.62f, 0.6f, 0.56f}, {0.72f, 0.69f, 0.63f},
+                            {0.66f, 0.62f, 0.55f}, {0.58f, 0.57f, 0.55f}, {0.7f, 0.65f, 0.57f}};
     MeshData m;
     constexpr f32 hx = 1.18f, hz = 1.18f;
-    add_box(m, {-hx, -0.22f, -hz}, {hx, 0.0f, hz}, mud); // mud bed, sunk in, top at ground
+    add_box(m, {-hx, -0.12f, -hz}, {hx, 0.02f, hz}, earth); // earth bed, top ~ at ground
 
     auto rnd = [](int i, int j, int salt) {
         const u32 h = (static_cast<u32>(i * 73856093) ^ static_cast<u32>(j * 19349663) ^
                        static_cast<u32>(salt * 83492791));
         return static_cast<f32>((h >> 9) & 0xFFFFu) / 65535.0f;
     };
-    constexpr int g = 5;
+    constexpr int g = 4;
     const f32 cell = (2.0f * hx) / static_cast<f32>(g);
     for (int j = 0; j < g; ++j) {
         for (int i = 0; i < g; ++i) {
-            if (rnd(i, j, 11) < 0.12f) {
-                continue; // a worn, trodden-out muddy gap (no stone here)
+            if (rnd(i, j, 11) < 0.14f) {
+                continue; // a worn, trodden-out gap (bare earth shows through)
             }
-            const f32 cx = -hx + (static_cast<f32>(i) + 0.5f) * cell + (rnd(i, j, 1) - 0.5f) * cell * 0.5f;
-            const f32 cz = -hz + (static_cast<f32>(j) + 0.5f) * cell + (rnd(i, j, 2) - 0.5f) * cell * 0.5f;
-            const f32 r = cell * (0.44f + rnd(i, j, 3) * 0.26f); // varied size; some big, packed close
-            const f32 top = 0.02f + rnd(i, j, 4) * 0.075f;       // worn-flat .. proud, each different
-            const f32 dirt = 0.74f + rnd(i, j, 6) * 0.34f;       // per-stone dirt darkening
-            const Vec3 col = stones[(i + j * 2 + static_cast<int>(rnd(i, j, 5) * 6.0f)) % 6] * dirt;
-            // An irregular rounded rock: 4 jittered base corners sloping up to a small, lumpy,
-            // off-centre top (each corner pushed independently) so the stone looks rough-hewn.
+            const f32 cx = -hx + (static_cast<f32>(i) + 0.5f) * cell + (rnd(i, j, 1) - 0.5f) * cell * 0.4f;
+            const f32 cz = -hz + (static_cast<f32>(j) + 0.5f) * cell + (rnd(i, j, 2) - 0.5f) * cell * 0.4f;
+            const f32 r = cell * (0.56f + rnd(i, j, 3) * 0.16f); // varied size, packed close
+            const f32 top = 0.07f + rnd(i, j, 4) * 0.04f;        // a low FLAT slab, slightly proud
+            const f32 base = top - (0.05f + rnd(i, j, 7) * 0.03f);
+            const f32 shade = 0.9f + rnd(i, j, 6) * 0.2f;
+            const Vec3 col = stones[(i + j * 2 + static_cast<int>(rnd(i, j, 5) * 6.0f)) % 6] * shade;
+            // A flat irregular paving slab: 4 jittered corners, FLAT top (corners all at `top`),
+            // short straight sides down to `base` - reads as a clean rounded flagstone, not a rock.
+            auto corner = [&](f32 sx, f32 sz, int s) {
+                return Vec2{cx + sx * r * (0.82f + rnd(i, j, s) * 0.32f),
+                            cz + sz * r * (0.82f + rnd(i, j, s + 1) * 0.32f)};
+            };
+            const Vec2 c00 = corner(-1, -1, 20), c10 = corner(1, -1, 22), c11 = corner(1, 1, 24),
+                       c01 = corner(-1, 1, 26);
             const Vec3 axis{cx, top * 0.5f, cz};
-            auto bc = [&](f32 sx, f32 sz, int s) {
-                return Vec3{cx + sx * r * (0.78f + rnd(i, j, s) * 0.44f), 0.0f,
-                            cz + sz * r * (0.78f + rnd(i, j, s + 1) * 0.44f)};
-            };
-            const f32 tr = r * 0.52f;
-            auto tc = [&](f32 sx, f32 sz, int s) {
-                return Vec3{cx + sx * tr * (0.6f + rnd(i, j, s) * 0.7f) + (rnd(i, j, s + 2) - 0.5f) * r * 0.2f,
-                            top * (0.62f + rnd(i, j, s + 1) * 0.6f),
-                            cz + sz * tr * (0.6f + rnd(i, j, s) * 0.7f) + (rnd(i, j, s + 3) - 0.5f) * r * 0.2f};
-            };
-            const Vec3 b00 = bc(-1, -1, 20), b10 = bc(1, -1, 22), b11 = bc(1, 1, 24), b01 = bc(-1, 1, 26);
-            const Vec3 t00 = tc(-1, -1, 30), t10 = tc(1, -1, 32), t11 = tc(1, 1, 34), t01 = tc(-1, 1, 36);
-            emit_tri(m, b00, b10, t10, axis, col); // four rough sloped sides
-            emit_tri(m, b00, t10, t00, axis, col);
-            emit_tri(m, b10, b11, t11, axis, col);
-            emit_tri(m, b10, t11, t10, axis, col);
-            emit_tri(m, b11, b01, t01, axis, col);
-            emit_tri(m, b11, t01, t11, axis, col);
-            emit_tri(m, b01, b00, t00, axis, col);
-            emit_tri(m, b01, t00, t01, axis, col);
-            emit_tri(m, t00, t10, t11, axis, col); // lumpy top
-            emit_tri(m, t00, t11, t01, axis, col);
+            auto T = [&](const Vec2& c) { return Vec3{c.x, top, c.y}; };
+            auto B = [&](const Vec2& c) { return Vec3{c.x, base, c.y}; };
+            emit_tri(m, T(c00), T(c10), T(c11), axis, col); // flat top
+            emit_tri(m, T(c00), T(c11), T(c01), axis, col);
+            const Vec2 e[4] = {c00, c10, c11, c01};
+            for (int k = 0; k < 4; ++k) { // short straight sides
+                const Vec2& a = e[k];
+                const Vec2& b = e[(k + 1) % 4];
+                emit_tri(m, B(a), B(b), T(b), axis, col * 0.85f);
+                emit_tri(m, B(a), T(b), T(a), axis, col * 0.85f);
+            }
         }
     }
     def.parts.push_back({std::move(m), PropLayer::Opaque});

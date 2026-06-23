@@ -151,10 +151,12 @@ vec3 acesFilm(vec3 x) {
 vec3 grade(vec3 col, float gloom) {
     float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
     col = mix(vec3(lum), col, 1.28 - 0.24 * gloom);     // >1 = saturate (vibrant)
-    vec3 shadowTint = vec3(0.96, 0.99, 1.05);           // just a hint of cool in shadow
-    vec3 highTint = vec3(1.05, 1.02, 0.94);             // warm highlights
-    col *= mix(shadowTint, highTint, smoothstep(0.0, 0.55, lum));
-    col = mix(col, col * col * (3.0 - 2.0 * col), 0.40); // S-curve contrast (punchier)
+    // A stronger warm/cool split-tone: golden sunlit highlights, cool blue shadows. The warm-vs-cool
+    // contrast both warms the image and reads as depth (aerial-perspective cue).
+    vec3 shadowTint = vec3(0.90, 0.96, 1.13);           // cool blue shadows
+    vec3 highTint = vec3(1.12, 1.03, 0.84);             // warm golden highlights
+    col *= mix(shadowTint, highTint, smoothstep(0.0, 0.6, lum));
+    col = mix(col, col * col * (3.0 - 2.0 * col), 0.42); // S-curve contrast (punchier)
     return col;
 }
 // Cheap value-noise fbm for the drifting fog wisps.
@@ -216,10 +218,12 @@ void main() {
     float lit = 1.0 - pc.sunColor.w * shadow; // sunColor.w = shadow strength
     float diffuse = ndotl * intensity * lit;
 
-    // Hemispheric ambient: sky-tinted from above, darker/earthier from below, so surfaces
-    // are softly sky-lit on top and fall into shadow underneath (a painterly, grounded look).
-    vec3 skyAmb = mix(vec3(0.10, 0.13, 0.21), vec3(0.36, 0.46, 0.62), intensity);   // up (sky fill)
-    vec3 groundAmb = mix(vec3(0.04, 0.045, 0.06), vec3(0.26, 0.21, 0.14), intensity); // down (warm earth bounce)
+    // Hemispheric ambient: sky-tinted from above, darker/earthier from below. Kept LOW in daylight
+    // so shadowed + downward faces and cast shadows fall genuinely dark (the strong key sun below
+    // does the lifting) - that ambient/sun contrast is what gives form + depth instead of a flat,
+    // evenly-filled look.
+    vec3 skyAmb = mix(vec3(0.10, 0.13, 0.21), vec3(0.19, 0.26, 0.40), intensity);   // up (cool sky fill)
+    vec3 groundAmb = mix(vec3(0.04, 0.045, 0.06), vec3(0.11, 0.085, 0.055), intensity); // down (dim earth bounce)
     float hemi = N.y * 0.5 + 0.5;
     vec3 ambient = mix(groundAmb, skyAmb, hemi);
 
@@ -228,7 +232,7 @@ void main() {
     float moon = max(N.y, 0.0) * 0.24 * night;
 
     vec3 base = vColor * pc.tint.rgb;
-    vec3 illum = ambient + sunCol * diffuse + vec3(0.55, 0.65, 0.9) * moon +
+    vec3 illum = ambient + sunCol * diffuse * 1.35 + vec3(0.55, 0.65, 0.9) * moon +
                  spotLighting(N, vWorldPos) + pointLighting(N, vWorldPos);
 
     vec3 col = base * illum;

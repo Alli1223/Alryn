@@ -7,6 +7,7 @@
 #include <Alryn/Terrain/RoadNetwork.h>
 #include <Alryn/Terrain/TreeScatter.h> // detail::tree_hash / hash01
 #include <Alryn/Terrain/WorldGen.h>
+#include <Alryn/World/Village.h> // town_path_amount (grass grows in the town's green areas, off streets)
 
 #include <algorithm>
 #include <cmath>
@@ -43,7 +44,7 @@ namespace detail {
 // Common gate for ground vegetation: above water, not bare desert, not too steep.
 // Returns the local moisture (or NaN-ish sentinel via the bool) for the caller.
 inline bool veg_ground(f32 wx, f32 wz, u32 seed, f32 gh, f32 max_slope, f32 min_moist,
-                       f32& out_moist) {
+                       f32& out_moist, bool town_ok = false) {
     if (gh < worldgen::water_level + 0.6f) {
         return false;
     }
@@ -51,7 +52,12 @@ inline bool veg_ground(f32 wx, f32 wz, u32 seed, f32 gh, f32 max_slope, f32 min_
         return false; // bare dirt on the road itself (grass grows up to the edge)
     }
     if (worldgen::inside_village(wx, wz, seed)) {
-        return false; // trampled town ground, not meadow
+        if (!town_ok) {
+            return false; // most plants don't grow on the trampled town ground...
+        }
+        if (town_path_amount(Vec3{wx, gh, wz}, 1.0f, seed) > 0.1f) {
+            return false; // ...but grass does, in the green areas - just keep it off the streets
+        }
     }
     out_moist = worldgen::moisture(wx, wz, seed);
     if (out_moist < min_moist) {
@@ -104,7 +110,7 @@ inline MeshData build_vegetation(int cx, int cz, f32 chunk_world, u32 seed) {
     for_cells(0.6f, seed + 5000u, [&](int gx, int gz, f32 wx, f32 wz) {
         f32 moist;
         const f32 gh = worldgen::height(wx, wz, seed);
-        if (!detail::veg_ground(wx, wz, seed, gh, 2.4f, -0.08f, moist)) return;
+        if (!detail::veg_ground(wx, wz, seed, gh, 2.4f, -0.08f, moist, true)) return; // grows in town too
         const f32 density = 0.4f + glm::clamp(moist, 0.0f, 0.7f) * 0.5f;
         if (detail::hash01(detail::tree_hash(gx, gz, seed + 5003u)) > density) return;
         const Vec3 dry{0.55f, 0.50f, 0.26f};
@@ -135,7 +141,7 @@ inline MeshData build_vegetation(int cx, int cz, f32 chunk_world, u32 seed) {
     for_cells(1.4f, seed + 5200u, [&](int gx, int gz, f32 wx, f32 wz) {
         f32 moist;
         const f32 gh = worldgen::height(wx, wz, seed);
-        if (!detail::veg_ground(wx, wz, seed, gh, 2.2f, -0.02f, moist)) return;
+        if (!detail::veg_ground(wx, wz, seed, gh, 2.2f, -0.02f, moist, true)) return; // grows in town too
         if (detail::hash01(detail::tree_hash(gx, gz, seed + 5203u)) > 0.3f) return;
         const Vec3 g = glm::mix(Vec3{0.45f, 0.46f, 0.24f}, Vec3{0.30f, 0.54f, 0.26f},
                                 glm::smoothstep(-0.05f, 0.3f, moist));

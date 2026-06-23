@@ -5,6 +5,7 @@
 #include <Alryn/Terrain/RoadNetwork.h>
 #include <Alryn/Terrain/ScatterHash.h>
 #include <Alryn/Terrain/WorldGen.h>
+#include <Alryn/World/Village.h> // a few decorative trees inside towns, clear of streets/buildings
 
 #include <cmath>
 #include <vector>
@@ -68,13 +69,38 @@ inline std::vector<TreeInstance> scatter_trees(int cx, int cz, f32 chunk_world, 
             // around a town instead of it being walled in by giant canopies.
             if (const auto tv = worldgen::village_containing(wx, wz, seed, 22.0f)) {
                 const Vec2 dv{wx - tv->center.x, wz - tv->center.y};
-                const f32 edge = glm::length(dv) - worldgen::town_radius(*tv, std::atan2(dv.y, dv.x), seed);
-                if (edge < 10.0f) {
-                    continue; // open clearing hugging the town
-                }
-                const f32 thicken = glm::clamp((edge - 10.0f) / 12.0f, 0.0f, 1.0f);
-                if (detail::hash01(h ^ 0x51u) > thicken) {
-                    continue; // forest thins as it nears the clearing
+                const f32 distc = glm::length(dv);
+                const f32 edge = distc - worldgen::town_radius(*tv, std::atan2(dv.y, dv.x), seed);
+                if (edge < 0.0f) {
+                    // INSIDE the town: a few decorative trees in the open green spots - off the
+                    // plaza, off the dirt streets/flagstones, and clear of any building.
+                    if (distc < detail::kMarketHalf + 4.0f) {
+                        continue; // keep the market plaza open
+                    }
+                    if (town_path_amount(Vec3{wx, gh, wz}, 1.0f, seed) > 0.05f) {
+                        continue; // off the streets
+                    }
+                    if (detail::hash01(h ^ 0x99u) > 0.14f) {
+                        continue; // sparse - just a scattered few
+                    }
+                    bool near_building = false;
+                    const auto gates = detail::village_gate_points(*tv, seed);
+                    detail::for_each_house(*tv, seed, gates, [&](const detail::HousePlot& hp) {
+                        if (glm::length(hp.pos - Vec2{wx, wz}) < detail::house_reach(hp.variant) + 2.0f) {
+                            near_building = true;
+                        }
+                    });
+                    if (near_building) {
+                        continue; // don't grow a tree through a house
+                    }
+                    // else: fall through and place a tree here
+                } else if (edge < 4.0f) {
+                    continue; // a thin clearing right at the wall, so trees hug the town edge
+                } else {
+                    const f32 thicken = glm::clamp((edge - 4.0f) / 11.0f, 0.0f, 1.0f);
+                    if (detail::hash01(h ^ 0x51u) > thicken) {
+                        continue; // forest thickens back over a fade band beyond the wall
+                    }
                 }
             }
 
