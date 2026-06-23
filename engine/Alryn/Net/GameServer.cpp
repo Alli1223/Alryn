@@ -275,6 +275,7 @@ void GameServer::tick(Timestep dt) {
         s.position = w.position;
         s.yaw = w.yaw;
         s.dest = Vec3{w.dest.x, 0.0f, w.dest.y};
+        s.source = Vec3{w.source.x, 0.0f, w.source.y};
         s.reward = w.reward;
         s.type = w.type;
         s.health = static_cast<u8>(glm::clamp(w.health / kWagonHealth, 0.0f, 1.0f) * 255.0f);

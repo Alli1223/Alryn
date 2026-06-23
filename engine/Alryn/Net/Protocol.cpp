@@ -140,6 +140,7 @@ void write(ByteWriter& w, const Snapshot& s) {
         w.write_vec3(wg.position);
         w.write_f32(wg.yaw);
         w.write_vec3(wg.dest);
+        w.write_vec3(wg.source);
         w.write_vec3(wg.horse_pos);
         w.write_f32(wg.horse_yaw);
         w.write_u32(wg.reward);
@@ -272,6 +273,7 @@ bool read(ByteReader& r, Snapshot& s) {
         wg.position = r.read_vec3();
         wg.yaw = r.read_f32();
         wg.dest = r.read_vec3();
+        wg.source = r.read_vec3();
         wg.horse_pos = r.read_vec3();
         wg.horse_yaw = r.read_f32();
         wg.reward = r.read_u32();

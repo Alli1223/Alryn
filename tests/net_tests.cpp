@@ -94,9 +94,9 @@ TEST_CASE("Net: message serialization round-trips") {
     snapshot.contract_phase = static_cast<u8>(ContractPhase::Active);
     snapshot.contract_outcome = 1;
     snapshot.wagons.push_back({55u, Vec3{2.0f, 0.5f, 3.0f}, 0.9f, Vec3{40.0f, 0.0f, 60.0f},
-                               Vec3{6.0f, 0.5f, 4.0f}, 1.2f, 500u, 2 /*carriage*/, 200,
-                               static_cast<u8>(WagonMode::Manual), 3, 1, 1 /*has_horse*/,
-                               4 /*aboard*/, 6 /*total*/});
+                               Vec3{8.0f, 0.0f, 9.0f} /*source*/, Vec3{6.0f, 0.5f, 4.0f}, 1.2f, 500u,
+                               2 /*carriage*/, 200, static_cast<u8>(WagonMode::Manual), 3, 1,
+                               1 /*has_horse*/, 4 /*aboard*/, 6 /*total*/});
     snapshot.goods.push_back({77u, Vec3{12.0f, 1.0f, 13.0f}, 1});  // a fallen crate (loose)
     snapshot.goods.push_back({78u, Vec3{0.2f, 0.55f, -0.1f}, 0}); // a crate in the bed (local pos)
     snapshot.auras.push_back({Vec3{3.0f, 1.0f, -5.0f}, 5.0f, 0}); // a Cleric heal aura
@@ -165,6 +165,8 @@ TEST_CASE("Net: message serialization round-trips") {
     CHECK(decoded.wagons[0].id == 55u);
     CHECK(decoded.wagons[0].reward == 500u);
     CHECK(decoded.wagons[0].dest.z == doctest::Approx(60.0f));
+    CHECK(decoded.wagons[0].source.x == doctest::Approx(8.0f));
+    CHECK(decoded.wagons[0].source.z == doctest::Approx(9.0f));
     CHECK(decoded.wagons[0].mode == static_cast<u8>(WagonMode::Manual));
     CHECK(decoded.wagons[0].difficulty == 3);
     CHECK(decoded.wagons[0].type == 2);            // carriage

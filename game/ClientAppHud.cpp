@@ -610,7 +610,7 @@ void ClientApp::rebuild_map_raster(const Vec4& panel, f32 ppm) {
     const f32 top = panel.y + 38.0f, left = panel.x + 5.0f;
     const f32 right = panel.x + panel.z - 5.0f, bot = panel.y + panel.w - 5.0f;
     const f32 area_w = right - left, area_h = bot - top;
-    const int cols = glm::clamp(static_cast<int>(area_w / 13.0f), 24, 96);
+    const int cols = glm::clamp(static_cast<int>(area_w / 10.0f), 30, 110); // finer terrain detail
     const f32 cell = area_w / static_cast<f32>(cols);
     const int rows = std::max(1, static_cast<int>(std::ceil(area_h / cell)));
     const u32 seed = world_seed_;
@@ -630,6 +630,20 @@ void ClientApp::rebuild_map_raster(const Vec4& panel, f32 ppm) {
         const f32 hz = worldgen::height(wx, wz + step, seed);
         const Vec3 n = glm::normalize(Vec3{h - hx, step, h - hz});
         Vec3 c = worldgen::surface_color(Vec3{wx, h, wz}, Vec3{0.0f, 1.0f, 0.0f}, seed);
+        // Lean each cell toward a clear canonical BIOME colour, so deserts / bogs / mountains /
+        // snow read distinctly on the map (the in-world surface tints are deliberately subtle).
+        auto biome_key = [](worldgen::Biome b) -> Vec3 {
+            switch (b) {
+                case worldgen::Biome::Desert: return {0.86f, 0.75f, 0.47f};
+                case worldgen::Biome::Bog: return {0.27f, 0.31f, 0.20f};
+                case worldgen::Biome::Mountains: return {0.55f, 0.54f, 0.57f};
+                case worldgen::Biome::Snow: return {0.93f, 0.95f, 0.99f};
+                case worldgen::Biome::Plains: return {0.56f, 0.63f, 0.34f};
+                case worldgen::Biome::Beach: return {0.84f, 0.77f, 0.55f};
+                default: return {0.28f, 0.46f, 0.22f}; // forest
+            }
+        };
+        c = glm::mix(c, biome_key(worldgen::biome_at(wx, wz, seed)), 0.42f);
         if (h < worldgen::water_level + 0.7f) {
             c = glm::mix(c, Vec3{0.80f, 0.74f, 0.54f}, 0.55f); // beach band
         }
@@ -694,17 +708,37 @@ void ClientApp::draw_map() {
                p.y > panel.y + 36.0f && p.y < panel.y + panel.w - pad;
     };
 
-    // Roads.
+    // Roads, coloured by the difficulty of the biome each stretch crosses (tan = easy lowland,
+    // amber = moderate, red = a hard slog over mountains / through bog or desert).
     for (const roads::Segment& s : roads::gather(map_center_, view_world * 1.7f, world_seed_)) {
         const Vec2 a = to_screen(s.a.x, s.a.y), b = to_screen(s.b.x, s.b.y);
-        if (in_panel(a) || in_panel(b)) {
-            draw.line(a, b, 2.5f, Vec4{0.66f, 0.55f, 0.36f, 0.95f});
+        if (!in_panel(a) && !in_panel(b)) {
+            continue;
         }
+        const f32 haz = roads::route_hazard(std::vector<Vec2>{s.a, s.b}, world_seed_);
+        const Vec4 rc = haz < 0.25f  ? Vec4{0.66f, 0.55f, 0.36f, 0.95f}
+                        : haz < 0.6f ? Vec4{0.86f, 0.62f, 0.26f, 0.95f}
+                                     : Vec4{0.87f, 0.34f, 0.24f, 0.97f};
+        draw.line(a, b, 2.5f, rc);
     }
 
     // The destination town (if a haul is active) gets highlighted.
     const net::WagonState* aw = active_wagon();
     const Vec2 dest = aw != nullptr ? Vec2{aw->dest.x, aw->dest.z} : Vec2{1e9f};
+
+    // The active haul's full planned route, threaded through any intermediate towns, drawn bold gold
+    // on top of the roads so you can read where the cart is headed.
+    if (aw != nullptr) {
+        const std::vector<Vec2> route = roads::route_through_towns(
+            Vec2{aw->source.x, aw->source.z}, Vec2{aw->dest.x, aw->dest.z}, world_seed_);
+        for (usize i = 1; i < route.size(); ++i) {
+            const Vec2 a = to_screen(route[i - 1].x, route[i - 1].y);
+            const Vec2 b = to_screen(route[i].x, route[i].y);
+            if (in_panel(a) || in_panel(b)) {
+                draw.line(a, b, 4.5f, Vec4{0.98f, 0.82f, 0.32f, 0.95f});
+            }
+        }
+    }
 
     // Towns: a marker sized by the town's extent, its name above, the destination ringed gold.
     const int reach =
@@ -728,6 +762,14 @@ void ClientApp::draw_map() {
             if (is_dest) {
                 draw.outline(Vec4{c.x - r - 4.0f, c.y - r - 4.0f, 2.0f * r + 8.0f, 2.0f * r + 8.0f},
                              Vec4{0.98f, 0.82f, 0.32f, 1.0f}, 2.5f, r * 0.4f);
+                // Danger pips (1..3) for the haul's difficulty, under the destination marker.
+                const int dd = aw != nullptr ? glm::clamp<int>(aw->difficulty, 1, 3) : 1;
+                for (int k = 0; k < dd; ++k) {
+                    draw.rect(Vec4{c.x - static_cast<f32>(dd) * 4.5f + static_cast<f32>(k) * 9.0f,
+                                   c.y + r + 4.0f, 6.0f, 6.0f},
+                              Vec4{0.92f, 0.32f, 0.24f, 1.0f}, Vec4{0.1f, 0.05f, 0.05f, 1.0f}, 1.0f,
+                              1.5f);
+                }
             }
             const std::string name = town_name(Vec3{v->center.x, 0.0f, v->center.y});
             const f32 ns = glm::clamp(r * 0.9f, 12.0f, 18.0f);
@@ -770,11 +812,12 @@ void ClientApp::draw_map() {
         }
     }
 
-    // Legend (bottom-left).
+    // Legend (bottom-left): map symbols, the road-difficulty key, and the biome palette.
+    constexpr int nleg = 14;
     const f32 lx = panel.x + 16.0f;
-    f32 ly = panel.y + panel.w - 16.0f - 8.0f * 18.0f;
-    draw.rect(Vec4{lx - 8.0f, ly - 10.0f, 168.0f, 8.0f * 18.0f + 14.0f},
-              Vec4{0.05f, 0.06f, 0.09f, 0.86f}, Vec4{0.3f, 0.28f, 0.22f, 0.8f}, 1.5f, 6.0f);
+    f32 ly = panel.y + panel.w - 16.0f - static_cast<f32>(nleg) * 18.0f;
+    draw.rect(Vec4{lx - 8.0f, ly - 10.0f, 186.0f, static_cast<f32>(nleg) * 18.0f + 14.0f},
+              Vec4{0.05f, 0.06f, 0.09f, 0.88f}, Vec4{0.3f, 0.28f, 0.22f, 0.8f}, 1.5f, 6.0f);
     auto legend = [&](const Vec4& sw, const char* label, bool ring) {
         draw.rect(Vec4{lx, ly, 12.0f, 12.0f}, sw, ring ? Vec4{1.0f, 1.0f, 1.0f, 1.0f} : Vec4{0.0f},
                   ring ? 2.0f : 0.0f, 6.0f);
@@ -784,11 +827,17 @@ void ClientApp::draw_map() {
     legend(Vec4{0.55f, 0.7f, 0.95f, 1.0f}, "YOU", true);
     legend(Vec4{0.74f, 0.24f, 0.13f, 1.0f}, "PLAYER", false);
     legend(Vec4{0.80f, 0.70f, 0.48f, 1.0f}, "TOWN", false);
-    legend(Vec4{0.98f, 0.80f, 0.28f, 1.0f}, "WAGON", false);
-    legend(Vec4{0.66f, 0.55f, 0.36f, 1.0f}, "ROAD", false);
+    legend(Vec4{0.98f, 0.80f, 0.28f, 1.0f}, "WAGON / ROUTE", false);
+    legend(Vec4{0.66f, 0.55f, 0.36f, 1.0f}, "ROAD - EASY", false);
+    legend(Vec4{0.87f, 0.34f, 0.24f, 1.0f}, "ROAD - HARD", false);
     legend(Vec4{0.10f, 0.30f, 0.46f, 1.0f}, "WATER", false);
-    legend(Vec4{0.30f, 0.45f, 0.22f, 1.0f}, "FOREST", false);
-    legend(Vec4{0.62f, 0.60f, 0.58f, 1.0f}, "MOUNTAIN", false);
+    legend(Vec4{0.28f, 0.46f, 0.22f, 1.0f}, "FOREST", false);
+    legend(Vec4{0.56f, 0.63f, 0.34f, 1.0f}, "PLAINS", false);
+    legend(Vec4{0.86f, 0.75f, 0.47f, 1.0f}, "DESERT", false);
+    legend(Vec4{0.27f, 0.31f, 0.20f, 1.0f}, "BOG", false);
+    legend(Vec4{0.55f, 0.54f, 0.57f, 1.0f}, "MOUNTAIN", false);
+    legend(Vec4{0.93f, 0.95f, 0.99f, 1.0f}, "SNOW", false);
+    legend(Vec4{0.92f, 0.32f, 0.24f, 1.0f}, "DANGER", false);
 
     draw.text(Vec2{panel.x + panel.z - 360.0f, panel.y + panel.w - 28.0f},
               "DRAG TO PAN   SCROLL ZOOM   M / ESC CLOSE", 15.0f, Vec4{0.72f, 0.74f, 0.8f, 1.0f});

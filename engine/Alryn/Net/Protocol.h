@@ -99,6 +99,7 @@ struct WagonState {
     Vec3 position{0.0f};
     f32 yaw = 0.0f;
     Vec3 dest{0.0f};      // destination town centre
+    Vec3 source{0.0f};    // origin town centre (so the map can draw the planned route)
     Vec3 horse_pos{0.0f}; // the pulling horse (carriages), if has_horse
     f32 horse_yaw = 0.0f;
     u32 reward = 0;
