@@ -5,6 +5,7 @@
 #include <Alryn/Terrain/RoadNetwork.h>
 #include <Alryn/Terrain/ScatterHash.h>
 #include <Alryn/Terrain/WorldGen.h>
+#include <Alryn/World/Village.h> // a few decorative trees inside towns, clear of streets/buildings
 
 #include <cmath>
 #include <vector>
@@ -68,13 +69,38 @@ inline std::vector<TreeInstance> scatter_trees(int cx, int cz, f32 chunk_world, 
             // around a town instead of it being walled in by giant canopies.
             if (const auto tv = worldgen::village_containing(wx, wz, seed, 22.0f)) {
                 const Vec2 dv{wx - tv->center.x, wz - tv->center.y};
-                const f32 edge = glm::length(dv) - worldgen::town_radius(*tv, std::atan2(dv.y, dv.x), seed);
-                if (edge < 10.0f) {
-                    continue; // open clearing hugging the town
-                }
-                const f32 thicken = glm::clamp((edge - 10.0f) / 12.0f, 0.0f, 1.0f);
-                if (detail::hash01(h ^ 0x51u) > thicken) {
-                    continue; // forest thins as it nears the clearing
+                const f32 distc = glm::length(dv);
+                const f32 edge = distc - worldgen::town_radius(*tv, std::atan2(dv.y, dv.x), seed);
+                if (edge < 0.0f) {
+                    // INSIDE the town: a few decorative trees in the open green spots - off the
+                    // plaza, off the dirt streets/flagstones, and clear of any building.
+                    if (distc < detail::kMarketHalf + 4.0f) {
+                        continue; // keep the market plaza open
+                    }
+                    if (town_path_amount(Vec3{wx, gh, wz}, 1.0f, seed) > 0.05f) {
+                        continue; // off the streets
+                    }
+                    if (detail::hash01(h ^ 0x99u) > 0.14f) {
+                        continue; // sparse - just a scattered few
+                    }
+                    bool near_building = false;
+                    const auto gates = detail::village_gate_points(*tv, seed);
+                    detail::for_each_house(*tv, seed, gates, [&](const detail::HousePlot& hp) {
+                        if (glm::length(hp.pos - Vec2{wx, wz}) < detail::house_reach(hp.variant) + 2.0f) {
+                            near_building = true;
+                        }
+                    });
+                    if (near_building) {
+                        continue; // don't grow a tree through a house
+                    }
+                    // else: fall through and place a tree here
+                } else if (edge < 4.0f) {
+                    continue; // a thin clearing right at the wall, so trees hug the town edge
+                } else {
+                    const f32 thicken = glm::clamp((edge - 4.0f) / 11.0f, 0.0f, 1.0f);
+                    if (detail::hash01(h ^ 0x51u) > thicken) {
+                        continue; // forest thickens back over a fade band beyond the wall
+                    }
                 }
             }
 
@@ -85,7 +111,21 @@ inline std::vector<TreeInstance> scatter_trees(int cx, int cz, f32 chunk_world, 
             t.yaw = detail::hash01(detail::tree_hash(gx, gz, seed + 4u)) * TwoPi;
             t.variant = static_cast<int>(h % 5u); // pine / oak / birch / broad oak / dead
             const f32 cv = 0.85f + detail::hash01(detail::tree_hash(gx, gz, seed + 5u)) * 0.3f;
-            t.tint = Vec3{cv * 0.95f, cv, cv * 0.9f};
+            // The foliage mesh is baked deep forest green (primitives::tree()); a tint of
+            // target/leaf_base re-colours the whole canopy to that target. Conifers + dead trees
+            // stay green/muted; deciduous trees turn an AUTUMN patchwork - green / gold / orange /
+            // russet by a per-tree hash - matching the reference towns.
+            const Vec3 leaf_base{0.16f, 0.40f, 0.19f};
+            if (t.variant == 0 || t.variant == 4) {
+                t.tint = Vec3{cv * 0.92f, cv, cv * 0.88f}; // pine / dead: stay green-ish
+            } else {
+                const f32 a = detail::hash01(detail::tree_hash(gx, gz, seed + 6u));
+                const Vec3 target = a < 0.30f   ? Vec3{0.34f, 0.52f, 0.22f}  // still green
+                                    : a < 0.60f ? Vec3{0.84f, 0.66f, 0.22f}  // golden yellow
+                                    : a < 0.85f ? Vec3{0.88f, 0.46f, 0.16f}  // orange
+                                                : Vec3{0.74f, 0.30f, 0.16f}; // russet red
+                t.tint = (target / leaf_base) * cv;
+            }
             trees.push_back(t);
         }
     }

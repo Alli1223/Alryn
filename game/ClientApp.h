@@ -264,7 +264,19 @@ private:
     // update_particles.)
     void draw_shields();
 
+    // Co-op buff auras under empowered (fiery ring) / hasted (green ring) players, so allies can
+    // read who the Cleric/Hunter/Mage has buffed. Pulses; driven by PlayerState.buffs bitflags.
+    void draw_buffs();
+
+    void draw_oxen(const Vec3& pos, f32 yaw); // a yoked pair of draft oxen pulling the wagon
+    void update_deer(Timestep dt);            // wander/graze/flee the ambient deer (client-side)
+    void draw_deer();
     void draw_particles();
+    // Ambient wildlife VFX (no networking): a flock of birds drifting across the sky by day, and
+    // at night a slow gliding owl plus fireflies. The fireflies are anchored to fixed WORLD cells
+    // (each drifts gently about its own spot), so the player walks past them through the world
+    // rather than carrying a screen-locked swarm.
+    void draw_ambient_life();
 
     // The showy burst for an ability cast, played for whoever cast it (the local player on
     // keypress for instant feel; remote players when the snapshot reports their `cast`).
@@ -293,6 +305,11 @@ private:
     // Player-built barricades: a low palisade of wooden stakes + rails, darkening as
     // the enemy hacks it down (health from the snapshot).
     void draw_barricades();
+
+    // Mage rock walls: a row of jagged stone chunks raised across the caster's facing (rendered in
+    // the same rotated frame as the server collider, so the visible wall matches what NPCs route
+    // around). The wall crumbles - shorter + darker - as enemies smash its health down.
+    void draw_walls();
 
     // Floating health bars above combatants (enemies always; guards always; villagers
     // only when hurt), projected from world space into the 2D UI overlay.
@@ -403,6 +420,15 @@ private:
     // Medieval-styled; purely an info overlay (world input is frozen while it's open).
     void draw_skills();
 
+    // Weather: precipitation + lightning, driven by the eased `weather_amt_` (from the networked
+    // weather). `draw_rain` is the WORLD-SPACE rain - a column of falling streaks anchored to world
+    // cells around the player (so the camera sees real parallax) at a constant fall speed (so fading
+    // rain never appears to run backwards); drawn in the 3D scene pass. `draw_weather` is just the
+    // genuinely screen-space part: the full-screen lightning flash. The sky/sun/fog/wind are
+    // modulated in update_day_night.
+    void draw_rain();
+    void draw_weather();
+
     void draw_prop(const PropInstance& p);
 
     void draw_character(PlayerVisual& v, const Vec3& feet, f32 yaw, bool seated = false,
@@ -504,6 +530,20 @@ private:
     CharacterAppearance appearance_;
     PlayerRole role_ = PlayerRole::Knight;          // chosen combat role (weapon + abilities)
     u8 pending_ability_ = 0;                         // ability index+1 invoked this frame (0 = none)
+    // Mage elemental combo casting: hold Ctrl (casting_), tap element keys (1-4 or W/A/S/D) to fill
+    // `combo_`, release Ctrl to cast the spell `spell_for_combo` resolves. `pending_spell_` is sent.
+    bool casting_ = false;
+    u8 combo_[kMaxCombo] = {};
+    u8 combo_n_ = 0;
+    u8 pending_spell_ = 0; // SpellId to send this frame (0 = none)
+    f32 mage_cd_ = 0.0f;   // client-side Mage spell-cooldown estimate (for the HUD + cast gating)
+    // Maps an element/digit key to an Element (0..3) while casting, or -1.
+    static int key_to_element(KeyCode k);
+    // Resolve the queued combo into a SpellId (0 = none).
+    u8 resolve_combo() const;
+    // Queue a Mage spell to cast this frame: gate on the client cooldown estimate, send it, mirror
+    // the cooldown for the HUD, and play the instant cast VFX. Used by the hotkeys, combos + click.
+    void cast_mage_spell(SpellId sp);
     f32 ability_cd_[kAbilityCount] = {};             // client-side HUD cooldown estimate (per ability)
 
     // The customisable action bar: which ability index sits in each hotbar slot (keys 1..4);
@@ -584,6 +624,11 @@ private:
     std::vector<GpuProp> gpu_fountains_;
     std::vector<GpuProp> gpu_decor_;
     std::vector<GpuProp> gpu_rivers_;
+    std::vector<GpuProp> gpu_crystals_;
+    std::vector<GpuProp> gpu_glow_shrooms_;
+    std::vector<GpuProp> gpu_campfires_;
+    std::vector<GpuProp> gpu_monuments_;
+    std::vector<GpuProp> gpu_watchtowers_;
     Mesh shape_box_;
     Mesh shape_sphere_;
     Mesh shape_cylinder_;
@@ -607,6 +652,11 @@ private:
     f32 time_of_day_ = daynight::start_time; // 0=midnight, 0.25=sunrise, 0.5=noon, 0.75=sunset
     f32 day_seconds_ = daynight::default_day_seconds;
     f32 sun_intensity_ = 1.0f; // cached from the day/night cycle (0 night .. 1 day)
+    f32 fog_gloom_ = 0.0f;     // eased 0..1 town-gloom factor (denser/cooler fog + grade in towns)
+    f32 fog_patch_ = 0.0f;     // eased 0..1 road fog-bank strength (occasional dense volumetric mist)
+    f32 weather_amt_ = 0.0f;   // eased 0..1 storminess (from the networked weather) - rain/sky/wind
+    f32 lightning_ = 0.0f;     // current lightning-flash brightness (decays)
+    f32 lightning_cd_ = 4.0f;  // seconds until the next storm flash
     f32 cam_distance_ = iso::distance; // scroll-wheel zoom
     Camera camera_;
 
@@ -614,6 +664,22 @@ private:
     u32 world_seed_ = 0;     // shared world seed (from Welcome) - for the map's town/road graph
     bool map_open_ = false;  // full-screen map overlay (M)
     bool skills_open_ = false; // full-screen skills tree overlay (K)
+
+    // World-map view state: a pannable, zoomable terrain minimap. `map_center_` is the world XZ
+    // the map is centred on (set to the player when opened, then moved by dragging); `map_ppm_` is
+    // the current pixels-per-metre (written by draw_map, read by the drag handler in on_update).
+    Vec2 map_center_{0.0f};
+    f32 map_zoom_ = 1.0f;
+    f32 map_ppm_ = 1.0f;
+    bool map_dragging_ = false;
+    Vec2 map_drag_last_{0.0f};
+    // Cached terrain-relief raster (rebuilt only when the view changes): one (rect, colour) tile per
+    // grid cell, so panning/zooming doesn't recompute world noise every frame.
+    std::vector<std::pair<Vec4, Vec4>> map_tiles_;
+    Vec2 map_raster_center_{1e9f, 1e9f};
+    f32 map_raster_zoom_ = -1.0f;
+    UVec2 map_raster_ext_{0, 0};
+    void rebuild_map_raster(const Vec4& panel, f32 ppm);
     net::Snapshot snapshot_;
     bool have_snapshot_ = false;
 
@@ -637,6 +703,20 @@ private:
     Mesh wagon_wheel_mesh_;     // a single wheel, drawn x4 (scaled per type) and spun
     Mesh horse_body_mesh_;      // the carriage puller
     Mesh horse_leg_mesh_;       // a single leg, drawn x4 with a gait swing
+    Mesh ox_body_mesh_;         // a draft ox (the cargo wagon is pulled by a yoked pair)
+    Mesh ox_leg_mesh_;
+    Mesh deer_body_mesh_;       // ambient wildlife: deer that graze + flee near the player
+    Mesh deer_leg_mesh_;
+    // A client-side ambient deer (not networked - pure ambiance: wander, graze, flee the player).
+    struct Deer {
+        Vec3 pos{0.0f};
+        f32 yaw = 0.0f;
+        f32 gait = 0.0f;
+        Vec3 target{0.0f};
+        f32 retarget = 0.0f;
+        bool fleeing = false;
+    };
+    std::vector<Deer> deer_;
     Mesh rope_mesh_;            // a unit harness-trace link, drawn per rope segment
     Mesh goods_mesh_;           // a cargo crate (spilled on the ground / carried by a player)
     std::unordered_map<u32, f32> wagon_roll_;  // accumulated wheel spin per wagon id

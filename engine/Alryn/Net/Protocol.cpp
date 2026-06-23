@@ -36,6 +36,7 @@ void write(ByteWriter& w, const PlayerInput& in) {
     w.write_f32(in.steer);
     w.write_u8(in.role);
     w.write_u8(in.ability);
+    w.write_u8(in.spell);
     w.write_u8(in.block ? 1 : 0);
     write_appearance(w, in.appearance);
 }
@@ -61,6 +62,7 @@ bool read(ByteReader& r, PlayerInput& in) {
     in.steer = r.read_f32();
     in.role = r.read_u8();
     in.ability = r.read_u8();
+    in.spell = r.read_u8();
     in.block = r.read_u8() != 0;
     read_appearance(r, in.appearance);
     return r.ok();
@@ -69,6 +71,7 @@ bool read(ByteReader& r, PlayerInput& in) {
 void write(ByteWriter& w, const Snapshot& s) {
     w.write_u32(s.tick);
     w.write_f32(s.time_of_day);
+    w.write_u8(s.weather);
     w.write_u8(s.outcome);
     w.write_u8(s.phase);
     w.write_f32(s.phase_timer);
@@ -91,6 +94,7 @@ void write(ByteWriter& w, const Snapshot& s) {
         w.write_u8(p.cast);
         w.write_u8(p.action);
         w.write_u8(p.shield);
+        w.write_u8(p.buffs);
         write_appearance(w, p.appearance);
     }
     w.write_u16(static_cast<u16>(s.projectiles.size()));
@@ -160,11 +164,19 @@ void write(ByteWriter& w, const Snapshot& s) {
         w.write_f32(a.radius);
         w.write_u8(a.kind);
     }
+    w.write_u16(static_cast<u16>(s.walls.size()));
+    for (const WallState& wl : s.walls) {
+        w.write_vec3(wl.position);
+        w.write_f32(wl.yaw);
+        w.write_f32(wl.length);
+        w.write_u8(wl.health);
+    }
 }
 
 bool read(ByteReader& r, Snapshot& s) {
     s.tick = r.read_u32();
     s.time_of_day = r.read_f32();
+    s.weather = r.read_u8();
     s.outcome = r.read_u8();
     s.phase = r.read_u8();
     s.phase_timer = r.read_f32();
@@ -190,6 +202,7 @@ bool read(ByteReader& r, Snapshot& s) {
         p.cast = r.read_u8();
         p.action = r.read_u8();
         p.shield = r.read_u8();
+        p.buffs = r.read_u8();
         read_appearance(r, p.appearance);
         s.players.push_back(p);
     }
@@ -291,6 +304,17 @@ bool read(ByteReader& r, Snapshot& s) {
         a.radius = r.read_f32();
         a.kind = r.read_u8();
         s.auras.push_back(a);
+    }
+    const u16 wall_count = r.read_u16();
+    s.walls.clear();
+    s.walls.reserve(wall_count);
+    for (u16 i = 0; i < wall_count && r.ok(); ++i) {
+        WallState wl;
+        wl.position = r.read_vec3();
+        wl.yaw = r.read_f32();
+        wl.length = r.read_f32();
+        wl.health = r.read_u8();
+        s.walls.push_back(wl);
     }
     return r.ok();
 }

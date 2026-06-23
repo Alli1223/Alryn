@@ -5,6 +5,27 @@
 
 namespace alryn::game {
 
+namespace {
+// A smooth low-frequency value noise (0..1) over the world XZ plane, used to decide WHICH
+// stretches of road are socked in with a dense fog bank (so the mist is occasional, not on
+// every road). Features are ~50 m across, so banks come and go as you travel.
+f32 fog_bank_noise(f32 x, f32 z) {
+    auto vhash = [](i32 ix, i32 iz) {
+        u32 h = static_cast<u32>(ix) * 374761393u + static_cast<u32>(iz) * 668265263u;
+        h = (h ^ (h >> 13)) * 1274126177u;
+        return static_cast<f32>((h ^ (h >> 16)) & 0xffffu) / 65535.0f;
+    };
+    constexpr f32 freq = 0.02f;
+    const f32 fx = x * freq, fz = z * freq;
+    const i32 ix = static_cast<i32>(std::floor(fx)), iz = static_cast<i32>(std::floor(fz));
+    f32 tx = fx - static_cast<f32>(ix), tz = fz - static_cast<f32>(iz);
+    tx = tx * tx * (3.0f - 2.0f * tx);
+    tz = tz * tz * (3.0f - 2.0f * tz);
+    return glm::mix(glm::mix(vhash(ix, iz), vhash(ix + 1, iz), tx),
+                    glm::mix(vhash(ix, iz + 1), vhash(ix + 1, iz + 1), tx), tz);
+}
+} // namespace
+
 void ClientApp::on_init() {
     renderer_ = renderer();
     if (renderer_ == nullptr) {
@@ -47,6 +68,10 @@ void ClientApp::on_init() {
     wagon_wheel_mesh_.create(renderer_->device(), PropLibrary::build_wagon_wheel().parts[0].mesh);
     horse_body_mesh_.create(renderer_->device(), build_horse_body());
     horse_leg_mesh_.create(renderer_->device(), build_horse_leg());
+    ox_body_mesh_.create(renderer_->device(), build_ox_body());
+    ox_leg_mesh_.create(renderer_->device(), build_ox_leg());
+    deer_body_mesh_.create(renderer_->device(), build_deer_body());
+    deer_leg_mesh_.create(renderer_->device(), build_deer_leg());
     // A unit rope segment (along +Y, 0..1) for the verlet harness traces; scaled per link.
     rope_mesh_.create(renderer_->device(),
                       primitives::box(Vec3{-0.5f, 0.0f, -0.5f}, Vec3{0.5f, 1.0f, 0.5f},
@@ -124,6 +149,11 @@ void ClientApp::on_init() {
     upload_props(prop_lib_.fountains(), gpu_fountains_);
     upload_props(prop_lib_.decor(), gpu_decor_);
     upload_props(prop_lib_.rivers(), gpu_rivers_);
+    upload_props(prop_lib_.crystals(), gpu_crystals_);
+    upload_props(prop_lib_.glow_shrooms(), gpu_glow_shrooms_);
+    upload_props(prop_lib_.campfires(), gpu_campfires_);
+    upload_props(prop_lib_.monuments(), gpu_monuments_);
+    upload_props(prop_lib_.watchtowers(), gpu_watchtowers_);
 
     // Skip the menu when launched for scripted/CI runs (--host=... or a fixed
     // frame count); otherwise open the main menu and let the player choose.
@@ -215,6 +245,25 @@ void ClientApp::on_update(Timestep dt) {
         if (renderer_ != nullptr) {
             renderer_->set_player_position(local_feet()); // bends nearby vegetation
         }
+        // World map: drag to pan, scroll to zoom (the camera ignores scroll while it's open).
+        if (map_open_) {
+            if (Input* in = input()) {
+                const Vec2 m = in->mouse_position();
+                if (in->mouse_down(0)) {
+                    if (map_dragging_) {
+                        map_center_ -= (m - map_drag_last_) / std::max(map_ppm_, 1e-4f);
+                    }
+                    map_dragging_ = true;
+                    map_drag_last_ = m;
+                } else {
+                    map_dragging_ = false;
+                }
+                const f32 s = in->scroll_delta();
+                if (s != 0.0f) {
+                    map_zoom_ = glm::clamp(map_zoom_ * std::pow(1.18f, s), 0.4f, 4.0f);
+                }
+            }
+        }
         if (paused_ || map_open_ || skills_open_) {
             aim_valid_ = false; // no dig-marker while a menu / overlay is up
         } else {
@@ -225,6 +274,9 @@ void ClientApp::on_update(Timestep dt) {
                 cd -= dt.seconds;
             }
         }
+        if (mage_cd_ > 0.0f) { // Mage spell-cooldown estimate
+            mage_cd_ -= dt.seconds;
+        }
         update_ability_vfx(dt); // buff auras + remote cast VFX
         update_particles(dt);
         send_input();
@@ -234,6 +286,7 @@ void ClientApp::on_update(Timestep dt) {
         update_gates(dt);
         update_feedback(dt);
         update_ropes(dt);
+        update_deer(dt);
 
         if (terrain_ != nullptr && renderer_ != nullptr) {
             terrain_->update(local_feet(), renderer_->device());
@@ -296,11 +349,15 @@ void ClientApp::on_render() {
     draw_gates();
     draw_fires();
     draw_barricades();
+    draw_walls();
     draw_wagons();
     draw_goods();
     draw_auras();
     draw_shields();
+    draw_buffs();
     draw_particles();
+    draw_deer();         // ambient wildlife grazing in the meadows
+    draw_ambient_life(); // flock of birds by day, fireflies + an owl by night
 
     // Tree trunks (opaque, but they obey the peek-through dissolve so a trunk between
     // the camera and the player melts away just like the foliage does).
@@ -329,6 +386,30 @@ void ClientApp::on_render() {
                                          glm::translate(Mat4{1.0f}, pr.position) *
                                              glm::scale(Mat4{1.0f}, Vec3{0.3f}),
                                          Vec4{0.6f, 1.0f, 0.78f, 1.0f});
+            } else if (pr.kind == 5) { // Mage fireball: a blazing orange orb + glow
+                renderer_->draw_emissive(shape_sphere_,
+                                         glm::translate(Mat4{1.0f}, pr.position) *
+                                             glm::scale(Mat4{1.0f}, Vec3{0.34f}),
+                                         Vec4{1.0f, 0.55f, 0.18f, 1.0f});
+                renderer_->draw_glow(shape_sphere_,
+                                     glm::translate(Mat4{1.0f}, pr.position) *
+                                         glm::scale(Mat4{1.0f}, Vec3{0.85f}),
+                                     Vec4{1.0f, 0.45f, 0.15f, 0.55f});
+            } else if (pr.kind == 6) { // Mage frost bolt: a pale cyan shard + glow
+                renderer_->draw_emissive(shape_sphere_,
+                                         glm::translate(Mat4{1.0f}, pr.position) *
+                                             glm::scale(Mat4{1.0f}, Vec3{0.28f}),
+                                         Vec4{0.6f, 0.86f, 1.0f, 1.0f});
+                renderer_->draw_glow(shape_sphere_,
+                                     glm::translate(Mat4{1.0f}, pr.position) *
+                                         glm::scale(Mat4{1.0f}, Vec3{0.6f}),
+                                     Vec4{0.5f, 0.8f, 1.0f, 0.45f});
+            } else if (pr.kind == 7) { // Mage boulder: a tumbling grey rock
+                renderer_->draw(shape_sphere_,
+                                glm::translate(Mat4{1.0f}, pr.position) *
+                                    glm::rotate(Mat4{1.0f}, elapsed_ * 6.0f, Vec3{0.3f, 1.0f, 0.2f}) *
+                                    glm::scale(Mat4{1.0f}, Vec3{0.45f}),
+                                Vec4{0.4f, 0.37f, 0.34f, 1.0f});
             } else if (pr.kind == 1 || pr.kind == 3) {
                 // An arrow: orient the long (local +Z) axis along its travel direction so it
                 // always points the way it flies (and the way it's stuck in on landing).
@@ -380,6 +461,8 @@ void ClientApp::on_render() {
                                     Vec4{t.tint, alpha});
     });
 
+    draw_rain();    // world-space falling streaks (depth-tested against the scene)
+    draw_weather(); // screen-space lightning flash, behind the HUD
     draw_health_bars();
     draw_hud();
     if (map_open_) {
@@ -418,7 +501,9 @@ void ClientApp::on_shutdown() {
                                       &gpu_fence_rails_, &gpu_lanterns_, &gpu_houses_,
                                       &gpu_walls_, &gpu_gates_, &gpu_wells_, &gpu_bridges_,
                                       &gpu_markets_, &gpu_paths_, &gpu_planters_,
-                                      &gpu_fountains_, &gpu_decor_, &gpu_rivers_}) {
+                                      &gpu_fountains_, &gpu_decor_, &gpu_rivers_, &gpu_crystals_,
+                                      &gpu_glow_shrooms_, &gpu_campfires_,
+                                      &gpu_monuments_, &gpu_watchtowers_}) {
         for (GpuProp& gp : *set) {
             for (GpuPropPart& part : gp.parts) {
                 part.mesh.destroy();
@@ -434,6 +519,10 @@ void ClientApp::on_shutdown() {
     wagon_wheel_mesh_.destroy();
     horse_body_mesh_.destroy();
     horse_leg_mesh_.destroy();
+    ox_body_mesh_.destroy();
+    ox_leg_mesh_.destroy();
+    deer_body_mesh_.destroy();
+    deer_leg_mesh_.destroy();
     rope_mesh_.destroy();
     goods_mesh_.destroy();
     water_mesh_.destroy();
@@ -475,24 +564,72 @@ void ClientApp::update_day_night(Timestep dt) {
     const f32 intensity = glm::smoothstep(-0.04f, 0.18f, h);
     sun_intensity_ = intensity;
 
-    const Vec3 horizon{1.0f, 0.5f, 0.28f};
-    const Vec3 noon{1.0f, 0.96f, 0.88f};
+    const Vec3 horizon{1.0f, 0.46f, 0.24f}; // deep warm gold at the horizon (golden hour)
+    const Vec3 noon{1.0f, 0.93f, 0.78f};    // warm daylight (not a clinical white)
     const Vec3 sun_color = glm::mix(horizon, noon, glm::smoothstep(0.0f, 0.32f, h));
 
-    const Vec3 sky_night{0.03f, 0.04f, 0.08f};
-    const Vec3 sky_day{0.46f, 0.62f, 0.82f};
-    const Vec3 sky_dusk{0.85f, 0.45f, 0.30f};
+    const Vec3 sky_night{0.03f, 0.04f, 0.09f};
+    const Vec3 sky_day{0.34f, 0.55f, 0.82f}; // a clear, vibrant daytime blue
+    const Vec3 sky_dusk{0.92f, 0.44f, 0.26f};
     Vec3 sky = glm::mix(sky_night, sky_day, intensity);
     const f32 dusk = glm::clamp(1.0f - std::abs(h) * 3.5f, 0.0f, 1.0f) * intensity;
     sky = glm::mix(sky, sky_dusk, dusk * 0.6f);
 
-    renderer_->set_sun(sun_dir, sun_color, intensity);
+    // Weather: a rolling storm (networked, server-authoritative) greys + darkens the sky, dims +
+    // cools the sun, whips up the wind (plants thrash), and - in a heavy storm - flickers
+    // lightning. Eased so it builds in smoothly as you travel into it.
+    const f32 weather_target = have_snapshot_ ? static_cast<f32>(snapshot_.weather) / 255.0f : 0.0f;
+    weather_amt_ += (weather_target - weather_amt_) * std::min(1.0f, dt.seconds * 0.5f);
+    const f32 wz = weather_amt_;
+    const Vec3 storm_sky = glm::mix(Vec3{0.10f, 0.11f, 0.14f}, Vec3{0.32f, 0.34f, 0.39f}, intensity);
+    sky = glm::mix(sky, storm_sky, wz * 0.85f);
+    const f32 storm_intensity = intensity * (1.0f - 0.6f * wz); // sun smothered by cloud
+    sun_intensity_ = storm_intensity;                           // so lanterns/windows light up
+    const Vec3 storm_sun = glm::mix(sun_color, Vec3{0.62f, 0.64f, 0.70f}, wz * 0.7f);
+
+    renderer_->set_sun(sun_dir, storm_sun, storm_intensity);
     renderer_->set_sky_color(sky);
+    renderer_->set_wind(0.12f + wz * 0.7f);
+
+    // Lightning flashes in a heavy storm (decays fast; thunder would need an audio system).
+    if (wz > 0.55f) {
+        lightning_cd_ -= dt.seconds;
+        if (lightning_cd_ <= 0.0f) {
+            lightning_ = 1.0f;
+            lightning_cd_ = frand(2.5f, 7.0f) / std::max(wz, 0.5f);
+        }
+    }
+    lightning_ = std::max(0.0f, lightning_ - dt.seconds * 3.5f);
+
+    // Atmospheric fog (the V-Rising/Valheim depth haze). The fog colour tracks the sky but
+    // desaturated, so distant land melts into the horizon; nights + dawn carry more mist, and
+    // a town wraps the player in a gloomier, denser, slightly cooler haze.
+    const f32 night = 1.0f - intensity;
+    const Vec3 feet = local_feet();
+    const f32 gloom_target =
+        worldgen::inside_village(feet.x, feet.z, world_seed_, 6.0f) ? 1.0f : 0.0f;
+    fog_gloom_ += (gloom_target - fog_gloom_) * std::min(1.0f, dt.seconds * 2.0f); // eased
+    const f32 sky_lum = glm::dot(sky, Vec3{0.2126f, 0.7152f, 0.0722f});
+    Vec3 fog_color = glm::mix(sky, Vec3{sky_lum}, 0.18f);                  // keep the haze coloured (atmospheric)
+    fog_color = glm::mix(fog_color, Vec3{0.10f, 0.12f, 0.16f}, fog_gloom_ * 0.35f); // town gloom
+    fog_color = glm::mix(fog_color, Vec3{sky_lum * 0.9f}, wz * 0.4f);                // grey storm haze
+    const f32 density =
+        0.0058f + night * 0.0035f + fog_gloom_ * 0.003f + wz * 0.008f; // a touch more distance haze (depth)
+
+    // Occasional dense fog banks on the roads: near a road, a slow noise along the way decides
+    // which stretches are socked in. Eased slowly so you walk smoothly into and out of a bank.
+    const f32 road_dist = roads::distance(feet.x, feet.z, world_seed_);
+    const f32 near_road = 1.0f - glm::smoothstep(4.0f, 16.0f, road_dist); // 1 on the road
+    const f32 bank = glm::smoothstep(0.58f, 0.82f, fog_bank_noise(feet.x, feet.z));
+    const f32 patch_target = near_road * bank;
+    fog_patch_ += (patch_target - fog_patch_) * std::min(1.0f, dt.seconds * 0.7f);
+    renderer_->set_fog(fog_color, density, fog_gloom_, fog_patch_);
 }
 
 void ClientApp::update_camera() {
-    // Scroll wheel zooms by scaling the camera pull-back distance.
-    if (Input* in = input()) {
+    // Scroll wheel zooms by scaling the camera pull-back distance (the map consumes scroll instead
+    // while it's open, so the camera doesn't lurch behind the overlay).
+    if (Input* in = input(); in != nullptr && !map_open_) {
         const f32 s = in->scroll_delta();
         if (s != 0.0f) {
             cam_distance_ = glm::clamp(cam_distance_ * std::pow(cam::zoom_step, s),

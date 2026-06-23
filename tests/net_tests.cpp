@@ -33,6 +33,7 @@ TEST_CASE("Net: message serialization round-trips") {
     input.steer = -1.0f;
     input.role = static_cast<u8>(PlayerRole::Hunter);
     input.ability = 2; // casting ability slot 2 (key 2)
+    input.spell = static_cast<u8>(SpellId::RockWall); // a queued Mage combo spell
     input.block = true;
     input.appearance = CharacterAppearance{3, 5, EyeStyle::Sleepy, EarStyle::Pointed,
                                            HairStyle::Ponytail};
@@ -59,12 +60,14 @@ TEST_CASE("Net: message serialization round-trips") {
     CHECK(out.steer == doctest::Approx(-1.0f));
     CHECK(out.role == static_cast<u8>(PlayerRole::Hunter));
     CHECK(out.ability == 2);
+    CHECK(out.spell == static_cast<u8>(SpellId::RockWall));
     CHECK(out.block);
     CHECK(out.appearance == input.appearance); // cosmetics survive the round-trip
 
     Snapshot snapshot;
     snapshot.tick = 7;
     snapshot.time_of_day = 0.625f;
+    snapshot.weather = 180;
     snapshot.outcome = static_cast<u8>(MatchOutcome::Lost);
     snapshot.phase = static_cast<u8>(MatchPhase::Combat);
     snapshot.phase_timer = 7.5f;
@@ -72,9 +75,11 @@ TEST_CASE("Net: message serialization round-trips") {
     snapshot.houses_standing = 9;
     snapshot.houses_total = 12;
     snapshot.players.push_back(
-        {1, Vec3{1.0f, 2.0f, 3.0f}, 0.5f, 100, 8, 0, 0, 0, 0, 2, 0, CharacterAppearance{}}); // Knight blocking
+        {1, Vec3{1.0f, 2.0f, 3.0f}, 0.5f, 100, 8, 0, 0, 0, 0, 2, 0, 0,
+         CharacterAppearance{}}); // Knight blocking
     snapshot.players.push_back(
-        {2, Vec3{4.0f, 5.0f, 6.0f}, 1.5f, 73, 3, 1, 1, 2, 3, 0, 128, // seated+carrying, Cleric, slot3, shielded
+        {2, Vec3{4.0f, 5.0f, 6.0f}, 1.5f, 73, 3, 1, 1, 2, 3, 0, 128,
+         3, // seated+carrying, Cleric, slot3, shielded, empowered+hasted
          CharacterAppearance{2, 0, EyeStyle::Sharp, EarStyle::Small, HairStyle::Spiky}});
     snapshot.enemies.push_back({40u, Vec3{7.0f, 1.0f, -2.0f}, 0.8f, 1, 200, 1}); // swinging
     snapshot.enemies.push_back({41u, Vec3{9.0f, 1.5f, -4.0f}, 2.0f, 0, 60, 0});
@@ -95,6 +100,7 @@ TEST_CASE("Net: message serialization round-trips") {
     snapshot.goods.push_back({77u, Vec3{12.0f, 1.0f, 13.0f}, 1});  // a fallen crate (loose)
     snapshot.goods.push_back({78u, Vec3{0.2f, 0.55f, -0.1f}, 0}); // a crate in the bed (local pos)
     snapshot.auras.push_back({Vec3{3.0f, 1.0f, -5.0f}, 5.0f, 0}); // a Cleric heal aura
+    snapshot.walls.push_back({Vec3{15.0f, 0.5f, 9.0f}, 0.7f, 7.0f, 200}); // a Mage rock wall
     ByteWriter ws;
     write(ws, snapshot);
     ByteReader rs(ws.bytes(), ws.size());
@@ -118,9 +124,12 @@ TEST_CASE("Net: message serialization round-trips") {
     CHECK(decoded.players[1].action == 0);
     CHECK(decoded.players[0].shield == 0);
     CHECK(decoded.players[1].shield == 128); // Aegis shielded
+    CHECK(decoded.players[0].buffs == 0);
+    CHECK(decoded.players[1].buffs == 3); // empowered + hasted (co-op buffs)
     CHECK(decoded.enemies[0].action == 1); // swinging
     CHECK(decoded.enemies[1].action == 0);
     CHECK(decoded.time_of_day == doctest::Approx(0.625f));
+    CHECK(decoded.weather == 180);
     CHECK(decoded.outcome == static_cast<u8>(MatchOutcome::Lost));
     CHECK(decoded.phase == static_cast<u8>(MatchPhase::Combat));
     CHECK(decoded.phase_timer == doctest::Approx(7.5f));
@@ -177,6 +186,11 @@ TEST_CASE("Net: message serialization round-trips") {
     REQUIRE(decoded.auras.size() == 1);
     CHECK(decoded.auras[0].radius == doctest::Approx(5.0f));
     CHECK(decoded.auras[0].position.z == doctest::Approx(-5.0f));
+    REQUIRE(decoded.walls.size() == 1);
+    CHECK(decoded.walls[0].position.x == doctest::Approx(15.0f));
+    CHECK(decoded.walls[0].yaw == doctest::Approx(0.7f));
+    CHECK(decoded.walls[0].length == doctest::Approx(7.0f));
+    CHECK(decoded.walls[0].health == 200);
 
     Welcome welcome{77, 0xABCDu};
     ByteWriter ww;
@@ -279,6 +293,47 @@ TEST_CASE("Net: client/server loopback exchange over localhost") {
 
 // The full server-authoritative loop: two clients join a GameServer, the server
 // simulates both, and each client's snapshot shows the other player moving.
+TEST_CASE("GameServer: a Mage's spell casts end-to-end (a rock wall is raised + networked)") {
+    GameServer server;
+    if (!server.start(24675, 909u)) {
+        MESSAGE("Could not bind game server - skipping");
+        return;
+    }
+    NetClient c;
+    REQUIRE(c.connect("127.0.0.1", 24675));
+    PlayerId id = 0;
+    Snapshot snap{};
+    auto pump = [&](int n, const PlayerInput* in) {
+        for (int i = 0; i < n; ++i) {
+            if (in != nullptr && id != 0) {
+                c.send_input(*in);
+            }
+            server.tick(Timestep{1.0f / 60.0f});
+            for (const ClientEvent& e : c.poll(1)) {
+                if (e.type == ClientEventType::WelcomeReceived) {
+                    id = e.welcome.your_id;
+                } else if (e.type == ClientEventType::SnapshotReceived) {
+                    snap = e.snapshot;
+                }
+            }
+        }
+    };
+    pump(120, nullptr); // join + settle
+    REQUIRE(id != 0);
+    CHECK(server.walls().empty());
+
+    // As a Mage, cast EARTH x3 -> Rock Wall (the resolved spell id the client would send).
+    PlayerInput cast;
+    cast.role = static_cast<u8>(PlayerRole::Mage);
+    cast.spell = static_cast<u8>(SpellId::RockWall);
+    cast.aim = Vec3{5.0f, 0.0f, 0.0f};
+    pump(10, &cast);
+    CHECK(server.walls().size() >= 1); // the wall actually went up (input -> update_spells -> cast)
+
+    pump(6, nullptr); // and it reaches the client in the snapshot
+    CHECK_FALSE(snap.walls.empty());
+}
+
 TEST_CASE("GameServer: two clients join and see each other move") {
     GameServer server;
     if (!server.start(24656, 777u)) {

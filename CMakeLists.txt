@@ -163,6 +163,10 @@ endif()
 if(ALRYN_BUILD_TESTS)
     add_subdirectory(tests)
 endif()
+# Art-iteration tools (asset_preview); needs the renderer stack, so it follows the game flag.
+if(ALRYN_BUILD_GAME)
+    add_subdirectory(tools)
+endif()
 
 # --------------------------------------------------------------------------
 #  Configuration summary

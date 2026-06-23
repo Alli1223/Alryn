@@ -78,8 +78,15 @@ struct Village {
 // wider patch of flat ground, so large towns are rarer.
 inline std::optional<Village> village_at(int vcx, int vcz, u32 seed) {
     const u32 salt = seed + 313u;
-    if (detail::hash01(detail::tree_hash(vcx, vcz, salt)) > 0.5f) {
-        return std::nullopt; // only some cells grow a town
+    // Settlement density varies across the world: a low-frequency field carves out WILDERNESS
+    // bands where towns are far rarer, so some towns sit way out on their own (longer, lonelier
+    // hauls) instead of every region being evenly dotted. `keep` is ~1 in settled land, ~0 in the
+    // wild; the per-cell hash must fall under it to grow a town.
+    const f32 settle = noise::fbm2d(static_cast<f32>(vcx) * 0.16f, static_cast<f32>(vcz) * 0.16f,
+                                    2, 2.0f, 0.5f, seed + 777u);
+    const f32 keep = glm::smoothstep(-0.40f, 0.18f, settle);
+    if (detail::hash01(detail::tree_hash(vcx, vcz, salt)) > 0.5f * (0.35f + 0.65f * keep)) {
+        return std::nullopt; // only some cells grow a town (sparser out in the wild)
     }
     const f32 sz = detail::hash01(detail::tree_hash(vcx, vcz, salt + 8u));
     // Sprawling medieval towns: small / medium / large half-widths. A bigger town needs a
@@ -160,13 +167,13 @@ inline Vec3 surface_color(const Vec3& p, const Vec3& normal, u32 seed) {
     const f32 m = moisture(p.x, p.z, seed);
     const f32 h = p.y;
 
-    const Vec3 grass{0.22f, 0.40f, 0.19f};  // deep forest green
-    const Vec3 grass2{0.31f, 0.47f, 0.23f}; // lighter clearing green
-    const Vec3 dirt{0.33f, 0.26f, 0.17f};   // leaf litter / bare soil
-    const Vec3 sand{0.78f, 0.71f, 0.47f};
-    const Vec3 wet_sand{0.42f, 0.40f, 0.32f};
-    const Vec3 rock{0.42f, 0.42f, 0.46f};
-    const Vec3 snow{0.92f, 0.93f, 0.97f};
+    const Vec3 grass{0.27f, 0.52f, 0.21f};  // lush vibrant green
+    const Vec3 grass2{0.40f, 0.64f, 0.26f}; // bright clearing green
+    const Vec3 dirt{0.40f, 0.29f, 0.17f};   // warm leaf litter / bare soil
+    const Vec3 sand{0.84f, 0.74f, 0.46f};
+    const Vec3 wet_sand{0.46f, 0.42f, 0.32f};
+    const Vec3 rock{0.44f, 0.44f, 0.48f};
+    const Vec3 snow{0.93f, 0.94f, 0.98f};
 
     // Forest floor: blend two greens by a mid-frequency field, with patches of
     // bare earth / leaf-litter, so the ground reads varied rather than flat green.
@@ -192,15 +199,14 @@ inline Vec3 surface_color(const Vec3& p, const Vec3& normal, u32 seed) {
     // (The worn dirt road colour is overlaid separately via roads::tint_surface while
     // meshing, so this base colour stays independent of the road network.)
 
-    // Trampled muddy earth inside a town's walls: dirty churned mud blotched with patches of
-    // worn dirt-grey, much dirtier than clean cobble (the streets are laid on top as props).
+    // Town ground: GRASSY open areas (so the town has green, not all mud) with worn bare-earth
+    // patches trampled through it. The dirt streets + light flagstones are overlaid on top as the
+    // road network (town_path_tint + Path props), so the green sits between the paths.
     if (h > water_level + 0.5f && up > 0.55f && inside_village(p.x, p.z, seed)) {
-        const f32 cobble = noise::fbm2d(p.x * 0.7f, p.z * 0.7f, 1, 2.0f, 0.5f, seed + 808u);
-        const f32 mud = noise::fbm2d(p.x * 0.22f, p.z * 0.22f, 2, 2.0f, 0.5f, seed + 909u);
-        Vec3 town_ground = glm::mix(Vec3{0.30f, 0.23f, 0.15f}, Vec3{0.42f, 0.37f, 0.30f},
-                                    glm::smoothstep(0.1f, 0.5f, cobble));
-        town_ground = glm::mix(town_ground, Vec3{0.24f, 0.18f, 0.12f},
-                               glm::smoothstep(0.1f, 0.45f, mud)); // wet muddy patches
+        const f32 worn = noise::fbm2d(p.x * 0.13f, p.z * 0.13f, 2, 2.0f, 0.5f, seed + 909u);
+        const Vec3 town_grass{0.30f, 0.5f, 0.22f}; // lush green over most of the open ground
+        const Vec3 town_dirt{0.47f, 0.36f, 0.23f}; // warm bare earth only on the most-trodden spots
+        Vec3 town_ground = glm::mix(town_grass, town_dirt, glm::smoothstep(0.62f, 0.95f, worn));
         color = glm::mix(color, town_ground, glm::smoothstep(0.55f, 0.78f, up));
     }
 

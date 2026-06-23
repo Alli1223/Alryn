@@ -443,11 +443,13 @@ TEST_CASE("Village: medieval cottage / wall / gate building blocks") {
     REQUIRE_FALSE(lib.walls().empty());
     REQUIRE_FALSE(lib.gates().empty());
 
-    // There are several house variants (cottages, longhouses, two-storey, manors...).
-    CHECK(lib.houses().size() == kHouseVariants);
-    // Each: a roof/shell part (fades when inside) + emissive (hearth fire / candle / lamp
-    // glow) + a real footprint, interior lights, a bed spot inside, and no fake glow.
-    for (const PropDef& house : lib.houses()) {
+    // Ordinary home variants (cottages, longhouses, two-storey, manors...) + the special
+    // landmark buildings (townhouse / pub / blacksmith) at indices kHouseVariants..
+    CHECK(lib.houses().size() == kHouseDefs);
+    // Each ordinary home: a roof/shell part (fades when inside) + emissive (hearth fire / candle /
+    // lamp glow) + a real footprint, interior lights, a bed spot inside, and no fake glow.
+    for (u32 i = 0; i < kHouseVariants; ++i) {
+        const PropDef& house = lib.houses()[i];
         CHECK(house.footprint.x > 0.0f);
         CHECK_FALSE(house.colliders.empty());
         bool has_roof = false, has_fire = false;
@@ -462,6 +464,19 @@ TEST_CASE("Village: medieval cottage / wall / gate building blocks") {
         // The resident's bed spot sits inside the house footprint (so they sleep indoors).
         CHECK(std::abs(house.bed_spot.x) < house.footprint.x);
         CHECK(std::abs(house.bed_spot.z) < house.footprint.y);
+    }
+    // The landmark buildings are solid (no fade-shell), but still have a footprint, colliders, a
+    // warm emissive part (lit windows / forge) and at least one light.
+    for (u32 i = kHouseVariants; i < kHouseDefs; ++i) {
+        const PropDef& b = lib.houses()[i];
+        CHECK(b.footprint.x > 0.0f);
+        CHECK_FALSE(b.colliders.empty());
+        CHECK_FALSE(b.lights.empty());
+        bool has_em = false;
+        for (const PropPart& part : b.parts) {
+            if (part.layer == PropLayer::Emissive && !part.mesh.indices.empty()) has_em = true;
+        }
+        CHECK(has_em);
     }
     // Two-storey variants are taller than single-storey ones.
     CHECK(lib.houses()[2].wall_height > lib.houses()[0].wall_height);
@@ -536,22 +551,34 @@ TEST_CASE("Village: towns are placed, laid out deterministically, with houses + 
     CHECK(market_pos.x == doctest::Approx(found->center.x));
     CHECK(market_pos.z == doctest::Approx(found->center.y));
 
-    // No tree spawns inside the town walls.
-    bool tree_in_town = false;
+    // Decorative trees MAY spawn inside the town walls now, but only in open spots: never on the
+    // market plaza, never overlapping a building, and not crammed in (just a scattered few).
+    const auto gate_pts = detail::village_gate_points(*found, seed);
+    int trees_in_town = 0;
     const int cw = 8;
     for (int cz = -10; cz < 10; ++cz) {
         for (int cx = -10; cx < 10; ++cx) {
             const int bx = static_cast<int>(std::floor(found->center.x / cw)) + cx;
             const int bz = static_cast<int>(std::floor(found->center.y / cw)) + cz;
             for (const TreeInstance& t : scatter_trees(bx, bz, 8.0f, seed)) {
-                const Vec2 d{t.position.x - found->center.x, t.position.z - found->center.y};
-                if (glm::length(d) < worldgen::town_radius(*found, std::atan2(d.y, d.x), seed)) {
-                    tree_in_town = true; // inside the town's organic wall
+                const Vec2 tp{t.position.x, t.position.z};
+                const Vec2 d = tp - found->center;
+                if (glm::length(d) >= worldgen::town_radius(*found, std::atan2(d.y, d.x), seed)) {
+                    continue; // outside the wall - not a town tree
                 }
+                ++trees_in_town;
+                CHECK(glm::length(d) > detail::kMarketHalf); // off the central plaza
+                bool clips_building = false;
+                detail::for_each_house(*found, seed, gate_pts, [&](const detail::HousePlot& hp) {
+                    if (glm::length(hp.pos - tp) < detail::house_reach(hp.variant)) {
+                        clips_building = true;
+                    }
+                });
+                CHECK_FALSE(clips_building); // never grows through a house
             }
         }
     }
-    CHECK_FALSE(tree_in_town);
+    CHECK(trees_in_town < 30); // sparse, decorative - not a forest inside the walls
 }
 
 TEST_CASE("Gates: every town road runs through a gate gap, not into a wall") {

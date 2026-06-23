@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include <Alryn/Game/Roles.h>
+#include <Alryn/Physics/Collider.h>
 
 #include <string_view>
 
@@ -88,6 +89,64 @@ TEST_CASE("the hunter caltrops hazard aura wounds enemies (no taunt)") {
     CHECK(hz.duration == doctest::Approx(kHazardDuration));
     CHECK(hz.light > 0.0f);
     CHECK(kHazardDPS > 0.0f);
+}
+
+TEST_CASE("the mage is a fourth, elemental combo-casting damage role") {
+    CHECK(kRoleCount == 4);
+    CHECK(std::string_view(role_name(PlayerRole::Mage)) == "MAGE");
+    const RoleStats m = role_stats(PlayerRole::Mage);
+    CHECK(m.ranged_damage > m.melee_damage); // a caster, not a brawler
+    CHECK(m.max_health < role_stats(PlayerRole::Knight).max_health); // fragile
+
+    // Combo recognition: the headline EARTH x3 -> rock wall, then dominant-element fallbacks.
+    CHECK(spell_for_combo(0, 0, 3, 0) == SpellId::RockWall);
+    CHECK(spell_for_combo(2, 0, 0, 0) == SpellId::Meteor);   // fire x2
+    CHECK(spell_for_combo(1, 0, 0, 0) == SpellId::Fireball);
+    CHECK(spell_for_combo(0, 1, 0, 0) == SpellId::FrostBolt);
+    CHECK(spell_for_combo(0, 0, 1, 0) == SpellId::Boulder);
+    CHECK(spell_for_combo(0, 0, 0, 1) == SpellId::HealBloom);
+    CHECK(spell_for_combo(0, 0, 0, 0) == SpellId::None);
+    for (int s = 1; s <= static_cast<int>(SpellId::RockWall); ++s) {
+        CHECK(spell_cooldown(static_cast<SpellId>(s)) > 0.0f);
+        CHECK(spell_name(static_cast<SpellId>(s))[0] != '\0');
+    }
+    CHECK(kRockWallHealth > 0.0f);
+    CHECK(kRockWallTtl > 0.0f);
+    CHECK(kRockWallLength > kRockWallThick); // a wall, not a pillar
+}
+
+TEST_CASE("co-op team abilities buff allies (empower / war horn / guardian leap)") {
+    CHECK(kAbilityCount == 7); // a 7th, co-op ability per role
+    CHECK(std::string_view(ability_def(PlayerRole::Knight, 6).name) == "GUARDIAN LEAP");
+    CHECK(std::string_view(ability_def(PlayerRole::Hunter, 6).name) == "WAR HORN");
+    CHECK(std::string_view(ability_def(PlayerRole::Cleric, 6).name) == "EMPOWER");
+    // The Mage empowers allies with a double-nature combo (single nature still just heals).
+    CHECK(spell_for_combo(0, 0, 0, 2) == SpellId::Empower);
+    CHECK(spell_for_combo(0, 0, 0, 1) == SpellId::HealBloom);
+    CHECK(kDamageBoostMult > 1.0f);      // empower actually boosts damage
+    CHECK(kHasteMult > 1.0f);            // war horn actually speeds allies
+    CHECK(kGuardShieldAmount > 0.0f);    // guardian leap shields the ally
+    CHECK(kEmpowerRange > 0.0f);
+    CHECK(kDamageBoostDuration > 0.0f);
+}
+
+TEST_CASE("a rock wall is a solid collider with clear ends (so NPCs route around it)") {
+    // The same box collider GameServer::wall_colliders raises (a span along local x, thin in z).
+    Collider c;
+    c.shape = Collider::Shape::Box;
+    c.center = Vec3{0.0f, 0.0f, 0.0f};
+    c.half = Vec2{kRockWallLength * 0.5f, kRockWallThick * 0.5f};
+    c.yaw = 0.0f;
+    c.y_min = 0.0f;
+    c.y_max = kRockWallHeight;
+
+    // A walker standing in the wall's footprint is pushed out (the wall blocks the path).
+    const Vec2 inside = resolve_collider(c, Vec2{0.0f, 0.0f}, 0.4f, 0.5f, 1.7f);
+    CHECK(glm::length(inside) > 0.1f);
+    // ...but a walker past the END of the span is untouched, so a route exists around it.
+    const Vec2 beyond{kRockWallLength * 0.5f + 1.5f, 0.0f};
+    const Vec2 around = resolve_collider(c, beyond, 0.4f, 0.5f, 1.7f);
+    CHECK(glm::length(around - beyond) < 0.01f);
 }
 
 TEST_CASE("cleric channelled heal aura tuning is sane") {

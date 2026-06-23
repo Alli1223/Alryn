@@ -196,6 +196,42 @@ void ClientApp::draw_hud() {
                   Vec4{0.7f, 1.0f, 0.85f, 1.0f});
     }
 
+    // Mage combo casting: while holding Ctrl, show the queued elements + the spell they'll cast,
+    // plus a hint. Element colours: fire/water/earth/nature.
+    if (role_ == PlayerRole::Mage && (casting_ || combo_n_ > 0)) {
+        static const Vec4 ecol[4] = {{1.0f, 0.5f, 0.2f, 1.0f},
+                                     {0.4f, 0.65f, 1.0f, 1.0f},
+                                     {0.6f, 0.45f, 0.3f, 1.0f},
+                                     {0.45f, 0.85f, 0.45f, 1.0f}};
+        const f32 sz = 34.0f, gap = 10.0f;
+        const f32 total = kMaxCombo * sz + (kMaxCombo - 1) * gap;
+        const f32 bx = (W - total) * 0.5f;
+        const f32 by = H * 0.66f;
+        draw.text(Vec2{(W - draw.text_width("WEAVING SPELL", ts * 0.72f)) * 0.5f, by - ts * 1.4f},
+                  "WEAVING SPELL", ts * 0.72f, Vec4{0.8f, 0.7f, 1.0f, 1.0f});
+        for (int i = 0; i < kMaxCombo; ++i) {
+            const f32 sx = bx + static_cast<f32>(i) * (sz + gap);
+            const bool filled = i < combo_n_;
+            const Vec4 c = filled ? ecol[combo_[i] & 3] : Vec4{0.15f, 0.16f, 0.2f, 0.8f};
+            draw.rect(Vec4{sx, by, sz, sz}, c, Vec4{0.7f, 0.6f, 1.0f, filled ? 0.95f : 0.4f}, 2.0f,
+                      6.0f);
+        }
+        const auto spell = static_cast<SpellId>(resolve_combo());
+        const char* sn = spell == SpellId::None ? "..." : spell_name(spell);
+        draw.text(Vec2{(W - draw.text_width(sn, ts * 0.9f)) * 0.5f, by + sz + 8.0f}, sn, ts * 0.9f,
+                  Vec4{0.95f, 0.88f, 1.0f, 1.0f});
+        draw.text(Vec2{(W - draw.text_width("HOLD CTRL + 1-4 / WASD, RELEASE TO CAST", ts * 0.6f)) *
+                           0.5f,
+                       by + sz + 8.0f + ts},
+                  "HOLD CTRL + 1-4 / WASD, RELEASE TO CAST", ts * 0.6f, Vec4{0.6f, 0.6f, 0.7f, 1.0f});
+    } else if (role_ == PlayerRole::Mage) {
+        // A standing hint so casting is discoverable (the bar keys do something for the Mage too).
+        const char* hint = "TAP 1-4 TO CAST  -  HOLD CTRL FOR COMBOS (EARTH x3 = WALL, FIRE x2 = METEOR)";
+        const f32 bar_top = H - glm::clamp(H * 0.092f, 56.0f, 84.0f) - 26.0f;
+        draw.text(Vec2{(W - draw.text_width(hint, ts * 0.58f)) * 0.5f, bar_top - ts * 1.4f}, hint,
+                  ts * 0.58f, Vec4{0.7f, 0.62f, 0.85f, 0.9f});
+    }
+
     draw_ability_bar(draw, W, H, ts);
 }
 
@@ -283,6 +319,7 @@ Vec3 ClientApp::role_color(PlayerRole role) {
         case PlayerRole::Knight: return Vec3{0.56f, 0.7f, 0.96f};  // steel blue
         case PlayerRole::Hunter: return Vec3{0.55f, 0.92f, 0.55f}; // forest green
         case PlayerRole::Cleric: return Vec3{0.97f, 0.86f, 0.46f}; // holy gold
+        case PlayerRole::Mage: return Vec3{0.7f, 0.5f, 0.98f};     // arcane violet
     }
     return Vec3{1.0f};
 }
@@ -319,8 +356,13 @@ void ClientApp::draw_ability_bar(ui::DrawList& draw, f32 W, f32 H, f32 ts) {
         }
 
         const AbilityDef ab = ability_def(role_, static_cast<u8>(a));
-        const f32 frac =
-            ab.cooldown > 0.0f ? glm::clamp(ability_cd_[a] / ab.cooldown, 0.0f, 1.0f) : 0.0f;
+        // The Mage shares ONE spell cooldown (mage_cd_) across its element slots; the slot's element
+        // single-spell cooldown is the reference for the sweep. Other roles use the per-ability cd.
+        const bool is_mage = role_ == PlayerRole::Mage;
+        const f32 cd_now = is_mage ? mage_cd_ : ability_cd_[a];
+        const f32 cd_ref =
+            is_mage ? spell_cooldown(spell_for_combo(a == 0, a == 1, a == 2, a == 3)) : ab.cooldown;
+        const f32 frac = cd_ref > 0.0f ? glm::clamp(cd_now / cd_ref, 0.0f, 1.0f) : 0.0f;
         const bool ready = frac <= 0.0f;
 
         // Slot face + an accent border that lights up when the ability is ready.
@@ -335,7 +377,7 @@ void ClientApp::draw_ability_bar(ui::DrawList& draw, f32 W, f32 H, f32 ts) {
         // Cooldown wipe: a dark overlay draining from the top + the seconds remaining.
         if (!ready) {
             draw.rect(Vec4{sx, sy, slot, slot * frac}, Vec4{0.02f, 0.02f, 0.03f, 0.62f}, r);
-            const std::string secs = std::format("{:.0f}", std::ceil(ability_cd_[a]));
+            const std::string secs = std::format("{:.0f}", std::ceil(cd_now));
             draw.text(Vec2{sx + slot * 0.5f - draw.text_width(secs, ts) * 0.5f,
                            sy + slot * 0.5f - ts * 0.5f},
                       secs, ts, Vec4{0.95f, 0.96f, 1.0f, 0.95f});
@@ -404,10 +446,15 @@ void ClientApp::draw_ability_icon(ui::DrawList& draw, PlayerRole role, u8 slot, 
                     L(d * (r * 0.2f), d * r);
                     L(d * r, d * r + t * (r * 0.45f));
                 }
-            } else { // rally: a banner raised on a pole
+            } else if (slot == 5) { // rally: a banner raised on a pole
                 L(Vec2{-r * 0.45f, -r}, Vec2{-r * 0.45f, r});
                 L(Vec2{-r * 0.45f, -r}, Vec2{r * 0.65f, -r * 0.7f});
                 L(Vec2{r * 0.65f, -r * 0.7f}, Vec2{-r * 0.45f, -r * 0.4f});
+            } else { // guardian leap: a leaping arc landing on a shield
+                L(Vec2{-r, r}, Vec2{0.0f, -r});            // leap arc up
+                L(Vec2{0.0f, -r}, Vec2{r, r * 0.2f});      // ... and down
+                draw.rect(Vec4{cx + r * 0.4f, cy + r * 0.1f, r * 0.7f, r * 0.7f},
+                          Vec4{0.0f, 0.0f, 0.0f, 0.0f}, c, th * 0.7f, r * 0.2f); // shield
             }
             break;
         case PlayerRole::Hunter:
@@ -438,11 +485,20 @@ void ClientApp::draw_ability_icon(ui::DrawList& draw, PlayerRole role, u8 slot, 
                     L(tip, tip - d + pp * 0.5f);
                     L(tip, tip - d - pp * 0.5f);
                 }
-            } else { // caltrops: a three-spoke jack of spikes
+            } else if (slot == 5) { // caltrops: a three-spoke jack of spikes
                 for (int k = 0; k < 3; ++k) {
                     const f32 a = TwoPi * static_cast<f32>(k) / 6.0f;
                     const Vec2 d{std::cos(a), std::sin(a)};
                     L(d * -r, d * r);
+                }
+            } else { // war horn: a curved horn with sound waves
+                L(Vec2{-r, -r * 0.4f}, Vec2{r * 0.2f, -r * 0.4f});
+                L(Vec2{r * 0.2f, -r * 0.4f}, Vec2{r * 0.6f, r * 0.3f});
+                L(Vec2{-r, -r * 0.4f}, Vec2{-r * 0.7f, r * 0.5f});
+                for (int k = 0; k < 2; ++k) {
+                    const f32 o = r * (0.55f + 0.3f * static_cast<f32>(k));
+                    L(Vec2{o, -r * 0.7f}, Vec2{o + r * 0.25f, -r * 0.2f});
+                    L(Vec2{o + r * 0.25f, -r * 0.2f}, Vec2{o, r * 0.3f});
                 }
             }
             break;
@@ -471,12 +527,56 @@ void ClientApp::draw_ability_icon(ui::DrawList& draw, PlayerRole role, u8 slot, 
                 draw.rect(Vec4{cx - r * 0.55f, cy - r * 0.2f, r * 1.1f, r * 0.4f}, c, r * 0.1f);
                 draw.rect(Vec4{cx - r * 0.95f, cy - r * 0.95f, r * 0.22f, r * 0.22f}, c, r * 0.1f);
                 draw.rect(Vec4{cx + r * 0.72f, cy - r * 0.78f, r * 0.22f, r * 0.22f}, c, r * 0.1f);
-            } else { // judgement: stacked downward strike chevrons
+            } else if (slot == 5) { // judgement: stacked downward strike chevrons
                 for (int k = 0; k < 3; ++k) {
                     const f32 o = -r * 0.7f + static_cast<f32>(k) * r * 0.6f;
                     L(Vec2{-r * 0.7f, o}, Vec2{0.0f, o + r * 0.5f});
                     L(Vec2{0.0f, o + r * 0.5f}, Vec2{r * 0.7f, o});
                 }
+            } else { // empower: an upward power chevron + a spark
+                L(Vec2{-r * 0.7f, r * 0.2f}, Vec2{0.0f, -r * 0.5f});
+                L(Vec2{0.0f, -r * 0.5f}, Vec2{r * 0.7f, r * 0.2f});
+                L(Vec2{-r * 0.7f, r * 0.7f}, Vec2{0.0f, 0.0f});
+                L(Vec2{0.0f, 0.0f}, Vec2{r * 0.7f, r * 0.7f});
+                L(Vec2{0.0f, -r}, Vec2{0.0f, -r * 0.55f}); // spark
+            }
+            break;
+        case PlayerRole::Mage:
+            if (slot == 0) { // fire: a flame
+                L(Vec2{0.0f, r}, Vec2{-r * 0.4f, -r * 0.1f});
+                L(Vec2{0.0f, r}, Vec2{r * 0.4f, -r * 0.1f});
+                L(Vec2{-r * 0.4f, -r * 0.1f}, Vec2{0.0f, -r});
+                L(Vec2{r * 0.4f, -r * 0.1f}, Vec2{0.0f, -r});
+            } else if (slot == 1) { // water: a droplet
+                L(Vec2{0.0f, -r}, Vec2{-r * 0.6f, r * 0.3f});
+                L(Vec2{0.0f, -r}, Vec2{r * 0.6f, r * 0.3f});
+                L(Vec2{-r * 0.6f, r * 0.3f}, Vec2{0.0f, r});
+                L(Vec2{r * 0.6f, r * 0.3f}, Vec2{0.0f, r});
+            } else if (slot == 2) { // earth: a stack of stones (diamond)
+                L(Vec2{0.0f, -r}, Vec2{r, 0.0f});
+                L(Vec2{r, 0.0f}, Vec2{0.0f, r});
+                L(Vec2{0.0f, r}, Vec2{-r, 0.0f});
+                L(Vec2{-r, 0.0f}, Vec2{0.0f, -r});
+            } else if (slot == 3) { // nature: a leaf/sprig
+                L(Vec2{0.0f, r}, Vec2{0.0f, -r * 0.6f});
+                L(Vec2{0.0f, 0.0f}, Vec2{-r * 0.7f, -r * 0.5f});
+                L(Vec2{0.0f, -r * 0.2f}, Vec2{r * 0.7f, -r * 0.7f});
+            } else if (slot == 4) { // rock wall: a brick wall
+                draw.rect(Vec4{cx - r, cy - r * 0.7f, r * 2.0f, r * 0.55f}, Vec4{0.0f}, c, th * 0.7f, 0.0f);
+                draw.rect(Vec4{cx - r, cy + r * 0.15f, r * 2.0f, r * 0.55f}, Vec4{0.0f}, c, th * 0.7f, 0.0f);
+                L(Vec2{0.0f, -r * 0.7f}, Vec2{0.0f, -r * 0.15f}); // brick joints
+                L(Vec2{-r * 0.5f, r * 0.15f}, Vec2{-r * 0.5f, r * 0.7f});
+                L(Vec2{r * 0.5f, r * 0.15f}, Vec2{r * 0.5f, r * 0.7f});
+            } else if (slot == 5) { // meteor: a ball with motion streaks
+                draw.rect(Vec4{cx - r * 0.45f, cy - r * 0.05f, r * 0.9f, r * 0.9f}, c, r * 0.45f);
+                L(Vec2{-r * 0.2f, -r * 0.5f}, Vec2{-r * 0.8f, -r}); // streak
+                L(Vec2{r * 0.2f, -r * 0.45f}, Vec2{-r * 0.3f, -r});
+            } else { // rune of vigour: a circular rune with an inner spark (co-op buff)
+                draw.rect(Vec4{cx - r * 0.85f, cy - r * 0.85f, r * 1.7f, r * 1.7f},
+                          Vec4{0.0f, 0.0f, 0.0f, 0.0f}, c, th * 0.7f, r * 0.85f); // ring
+                L(Vec2{0.0f, -r * 0.5f}, Vec2{0.0f, r * 0.5f});
+                L(Vec2{-r * 0.45f, -r * 0.25f}, Vec2{r * 0.45f, -r * 0.25f});
+                L(Vec2{-r * 0.45f, r * 0.25f}, Vec2{r * 0.45f, r * 0.25f});
             }
             break;
     }
@@ -504,6 +604,53 @@ void ClientApp::draw_dest_arrow(ui::DrawList& draw, const Vec3& from, const Vec3
               "DESTINATION", 16.0f, amber);
 }
 
+void ClientApp::rebuild_map_raster(const Vec4& panel, f32 ppm) {
+    map_tiles_.clear();
+    const Vec2 mc{panel.x + panel.z * 0.5f, panel.y + panel.w * 0.5f};
+    const f32 top = panel.y + 38.0f, left = panel.x + 5.0f;
+    const f32 right = panel.x + panel.z - 5.0f, bot = panel.y + panel.w - 5.0f;
+    const f32 area_w = right - left, area_h = bot - top;
+    const int cols = glm::clamp(static_cast<int>(area_w / 13.0f), 24, 96);
+    const f32 cell = area_w / static_cast<f32>(cols);
+    const int rows = std::max(1, static_cast<int>(std::ceil(area_h / cell)));
+    const u32 seed = world_seed_;
+    map_tiles_.reserve(static_cast<usize>(cols) * static_cast<usize>(rows));
+
+    // A top-down terrain colour with relief hill-shading, so the map reads as the real landscape:
+    // ocean/shallows by depth, beach, then the surface palette (grass/dirt/rock/snow), lit by a
+    // soft directional shade computed from the local height gradient.
+    auto terrain_color = [&](f32 wx, f32 wz) -> Vec4 {
+        const f32 h = worldgen::height(wx, wz, seed);
+        if (h < worldgen::water_level) {
+            const f32 depth = glm::clamp((worldgen::water_level - h) / 8.0f, 0.0f, 1.0f);
+            return Vec4{glm::mix(Vec3{0.24f, 0.46f, 0.56f}, Vec3{0.04f, 0.12f, 0.28f}, depth), 1.0f};
+        }
+        const f32 step = 4.0f;
+        const f32 hx = worldgen::height(wx + step, wz, seed);
+        const f32 hz = worldgen::height(wx, wz + step, seed);
+        const Vec3 n = glm::normalize(Vec3{h - hx, step, h - hz});
+        Vec3 c = worldgen::surface_color(Vec3{wx, h, wz}, Vec3{0.0f, 1.0f, 0.0f}, seed);
+        if (h < worldgen::water_level + 0.7f) {
+            c = glm::mix(c, Vec3{0.80f, 0.74f, 0.54f}, 0.55f); // beach band
+        }
+        const f32 shade =
+            glm::clamp(glm::dot(n, glm::normalize(Vec3{0.5f, 0.85f, 0.35f})), 0.45f, 1.18f);
+        return Vec4{glm::clamp(c * shade, Vec3{0.0f}, Vec3{1.0f}), 1.0f};
+    };
+
+    for (int j = 0; j < rows; ++j) {
+        for (int i = 0; i < cols; ++i) {
+            const f32 rx = left + static_cast<f32>(i) * cell;
+            const f32 ry = top + static_cast<f32>(j) * cell;
+            const f32 wx = map_center_.x + (rx + cell * 0.5f - mc.x) / ppm;
+            const f32 wz = map_center_.y + (ry + cell * 0.5f - mc.y) / ppm;
+            map_tiles_.emplace_back(Vec4{rx, ry, cell + 1.0f, cell + 1.0f}, terrain_color(wx, wz));
+        }
+    }
+    map_raster_center_ = map_center_;
+    map_raster_zoom_ = map_zoom_;
+}
+
 void ClientApp::draw_map() {
     if (renderer_ == nullptr) {
         return;
@@ -513,42 +660,57 @@ void ClientApp::draw_map() {
     const f32 H = static_cast<f32>(ext.height);
     ui::DrawList draw{*renderer_};
 
-    // Dim the world, then a framed map panel.
     draw.rect(Vec4{0.0f, 0.0f, W, H}, Vec4{0.03f, 0.04f, 0.06f, 0.86f});
     const f32 mg = std::min(W, H) * map::margin_frac;
     const Vec4 panel{mg, mg, W - 2.0f * mg, H - 2.0f * mg};
-    draw.rect(panel, Vec4{0.09f, 0.10f, 0.13f, 0.97f}, Vec4{0.35f, 0.34f, 0.3f, 1.0f}, 2.0f, 10.0f);
-    draw.text(Vec2{panel.x + 22.0f, panel.y + 18.0f}, "WORLD MAP", 30.0f,
-              Vec4{0.92f, 0.9f, 0.96f, 1.0f});
+    draw.rect(panel, Vec4{0.07f, 0.08f, 0.10f, 0.98f}, 10.0f);
 
-    // Map projection: centre on the player, a fixed world span across the panel.
     const f32 inner = std::min(panel.z, panel.w) * 0.5f - 28.0f;
-    const f32 view_world = map::view_world; // metres from centre to edge of the shorter side
+    const f32 view_world = map::view_world / map_zoom_; // zoom in -> smaller span -> more detail
     const f32 ppm = inner / view_world;
+    map_ppm_ = ppm;
     const Vec2 mc{panel.x + panel.z * 0.5f, panel.y + panel.w * 0.5f};
-    const Vec3 feet = local_feet();
+
+    // Rebuild the cached terrain raster only when the view actually moved (so panning stays cheap).
+    if (map_center_ != map_raster_center_ || map_zoom_ != map_raster_zoom_ ||
+        ext.width != map_raster_ext_.x || ext.height != map_raster_ext_.y) {
+        rebuild_map_raster(panel, ppm);
+        map_raster_ext_ = UVec2{ext.width, ext.height};
+    }
+    for (const auto& [rect, col] : map_tiles_) {
+        draw.rect(rect, col);
+    }
+
+    // Title strip + frame on top of the raster.
+    draw.rect(Vec4{panel.x, panel.y, panel.z, 34.0f}, Vec4{0.06f, 0.07f, 0.10f, 0.96f}, 10.0f);
+    draw.outline(panel, Vec4{0.40f, 0.36f, 0.28f, 1.0f}, 2.0f, 10.0f);
+    draw.text(Vec2{panel.x + 22.0f, panel.y + 18.0f}, "WORLD MAP", 24.0f, Vec4{0.94f, 0.9f, 0.8f, 1.0f});
+
     auto to_screen = [&](f32 wx, f32 wz) {
-        return Vec2{mc.x + (wx - feet.x) * ppm, mc.y + (wz - feet.z) * ppm};
+        return Vec2{mc.x + (wx - map_center_.x) * ppm, mc.y + (wz - map_center_.y) * ppm};
     };
-    auto in_panel = [&](const Vec2& p) {
-        return p.x > panel.x + 4.0f && p.x < panel.x + panel.z - 4.0f &&
-               p.y > panel.y + 36.0f && p.y < panel.y + panel.w - 4.0f;
+    auto in_panel = [&](const Vec2& p, f32 pad = 4.0f) {
+        return p.x > panel.x + pad && p.x < panel.x + panel.z - pad &&
+               p.y > panel.y + 36.0f && p.y < panel.y + panel.w - pad;
     };
 
-    // Roads between towns.
-    const Vec2 origin{feet.x, feet.z};
-    for (const roads::Segment& s : roads::gather(origin, view_world * 1.6f, world_seed_)) {
-        const Vec2 a = to_screen(s.a.x, s.a.y);
-        const Vec2 b = to_screen(s.b.x, s.b.y);
+    // Roads.
+    for (const roads::Segment& s : roads::gather(map_center_, view_world * 1.7f, world_seed_)) {
+        const Vec2 a = to_screen(s.a.x, s.a.y), b = to_screen(s.b.x, s.b.y);
         if (in_panel(a) || in_panel(b)) {
-            draw.line(a, b, 2.5f, Vec4{0.62f, 0.52f, 0.36f, 1.0f});
+            draw.line(a, b, 2.5f, Vec4{0.66f, 0.55f, 0.36f, 0.95f});
         }
     }
 
-    // Towns (markers sized by town extent).
-    const int reach = static_cast<int>(view_world * 1.4f / worldgen::village_cell) + 1;
-    const int ccx = static_cast<int>(std::floor(feet.x / worldgen::village_cell));
-    const int ccz = static_cast<int>(std::floor(feet.z / worldgen::village_cell));
+    // The destination town (if a haul is active) gets highlighted.
+    const net::WagonState* aw = active_wagon();
+    const Vec2 dest = aw != nullptr ? Vec2{aw->dest.x, aw->dest.z} : Vec2{1e9f};
+
+    // Towns: a marker sized by the town's extent, its name above, the destination ringed gold.
+    const int reach =
+        static_cast<int>(view_world * 1.7f / worldgen::village_cell) + 1;
+    const int ccx = static_cast<int>(std::floor(map_center_.x / worldgen::village_cell));
+    const int ccz = static_cast<int>(std::floor(map_center_.y / worldgen::village_cell));
     for (int dz = -reach; dz <= reach; ++dz) {
         for (int dx = -reach; dx <= reach; ++dx) {
             const auto v = worldgen::village_at(ccx + dx, ccz + dz, world_seed_);
@@ -556,23 +718,80 @@ void ClientApp::draw_map() {
                 continue;
             }
             const Vec2 c = to_screen(v->center.x, v->center.y);
-            if (!in_panel(c)) {
+            if (!in_panel(c, 0.0f)) {
                 continue;
             }
-            const f32 r = glm::clamp(v->half * ppm, 5.0f, 26.0f);
-            draw.rect(Vec4{c.x - r, c.y - r, 2.0f * r, 2.0f * r}, Vec4{0.78f, 0.7f, 0.5f, 0.95f},
-                      Vec4{0.25f, 0.22f, 0.16f, 1.0f}, 1.5f, 3.0f);
+            const bool is_dest = glm::length(v->center - dest) < 6.0f;
+            const f32 r = glm::clamp(v->half * ppm, 4.0f, 50.0f);
+            draw.rect(Vec4{c.x - r, c.y - r, 2.0f * r, 2.0f * r}, Vec4{0.80f, 0.70f, 0.48f, 0.95f},
+                      Vec4{0.22f, 0.18f, 0.12f, 1.0f}, 2.0f, r * 0.35f);
+            if (is_dest) {
+                draw.outline(Vec4{c.x - r - 4.0f, c.y - r - 4.0f, 2.0f * r + 8.0f, 2.0f * r + 8.0f},
+                             Vec4{0.98f, 0.82f, 0.32f, 1.0f}, 2.5f, r * 0.4f);
+            }
+            const std::string name = town_name(Vec3{v->center.x, 0.0f, v->center.y});
+            const f32 ns = glm::clamp(r * 0.9f, 12.0f, 18.0f);
+            draw.text(Vec2{c.x - draw.text_width(name, ns) * 0.5f, c.y - r - ns - 3.0f}, name, ns,
+                      is_dest ? Vec4{1.0f, 0.88f, 0.45f, 1.0f} : Vec4{0.96f, 0.92f, 0.82f, 1.0f});
         }
     }
 
-    // The player: a bright dot with a facing tick.
-    const Vec2 me = to_screen(feet.x, feet.z);
-    const Vec2 dir{std::cos(face_yaw_), std::sin(face_yaw_)};
-    draw.line(me, me + dir * 14.0f, 3.0f, Vec4{0.55f, 0.85f, 1.0f, 1.0f});
-    draw.rect(Vec4{me.x - 5.0f, me.y - 5.0f, 10.0f, 10.0f}, Vec4{0.4f, 0.7f, 1.0f, 1.0f}, 5.0f);
+    // Wagons: parked offers as small gold dots, the active cargo wagon prominently.
+    if (have_snapshot_) {
+        for (const net::WagonState& wg : snapshot_.wagons) {
+            const Vec2 p = to_screen(wg.position.x, wg.position.z);
+            if (!in_panel(p)) {
+                continue;
+            }
+            const bool active = aw != nullptr && wg.id == aw->id;
+            const f32 r = active ? 7.0f : 3.5f;
+            draw.rect(Vec4{p.x - r, p.y - r, 2.0f * r, 2.0f * r},
+                      Vec4{0.98f, 0.80f, 0.28f, 1.0f}, Vec4{0.25f, 0.18f, 0.05f, 1.0f}, 1.5f, 2.0f);
+        }
+    }
 
-    draw.text(Vec2{panel.x + 22.0f, panel.y + panel.w - 30.0f}, "M / ESC  CLOSE", 18.0f,
-              Vec4{0.7f, 0.72f, 0.78f, 1.0f});
+    // Players: each in the hair colour they chose; the local player is ringed white with a facing
+    // tick. Drawn even when panned away, so you can always see where everyone is.
+    if (have_snapshot_) {
+        for (const net::PlayerState& pl : snapshot_.players) {
+            const Vec2 p = to_screen(pl.position.x, pl.position.z);
+            if (!in_panel(p)) {
+                continue;
+            }
+            const Vec3 col = hair_color_of(pl.appearance.hair_color);
+            const bool me = pl.id == my_id_;
+            const f32 r = me ? 6.0f : 5.0f;
+            if (me) {
+                const Vec2 d{std::cos(face_yaw_), std::sin(face_yaw_)};
+                draw.line(p, p + d * 15.0f, 3.0f, Vec4{1.0f, 1.0f, 1.0f, 0.95f});
+            }
+            draw.rect(Vec4{p.x - r, p.y - r, 2.0f * r, 2.0f * r}, Vec4{col, 1.0f},
+                      Vec4{me ? Vec3{1.0f} : Vec3{0.05f}, 1.0f}, me ? 2.5f : 1.5f, r);
+        }
+    }
+
+    // Legend (bottom-left).
+    const f32 lx = panel.x + 16.0f;
+    f32 ly = panel.y + panel.w - 16.0f - 8.0f * 18.0f;
+    draw.rect(Vec4{lx - 8.0f, ly - 10.0f, 168.0f, 8.0f * 18.0f + 14.0f},
+              Vec4{0.05f, 0.06f, 0.09f, 0.86f}, Vec4{0.3f, 0.28f, 0.22f, 0.8f}, 1.5f, 6.0f);
+    auto legend = [&](const Vec4& sw, const char* label, bool ring) {
+        draw.rect(Vec4{lx, ly, 12.0f, 12.0f}, sw, ring ? Vec4{1.0f, 1.0f, 1.0f, 1.0f} : Vec4{0.0f},
+                  ring ? 2.0f : 0.0f, 6.0f);
+        draw.text(Vec2{lx + 20.0f, ly}, label, 13.0f, Vec4{0.86f, 0.86f, 0.9f, 1.0f});
+        ly += 18.0f;
+    };
+    legend(Vec4{0.55f, 0.7f, 0.95f, 1.0f}, "YOU", true);
+    legend(Vec4{0.74f, 0.24f, 0.13f, 1.0f}, "PLAYER", false);
+    legend(Vec4{0.80f, 0.70f, 0.48f, 1.0f}, "TOWN", false);
+    legend(Vec4{0.98f, 0.80f, 0.28f, 1.0f}, "WAGON", false);
+    legend(Vec4{0.66f, 0.55f, 0.36f, 1.0f}, "ROAD", false);
+    legend(Vec4{0.10f, 0.30f, 0.46f, 1.0f}, "WATER", false);
+    legend(Vec4{0.30f, 0.45f, 0.22f, 1.0f}, "FOREST", false);
+    legend(Vec4{0.62f, 0.60f, 0.58f, 1.0f}, "MOUNTAIN", false);
+
+    draw.text(Vec2{panel.x + panel.z - 360.0f, panel.y + panel.w - 28.0f},
+              "DRAG TO PAN   SCROLL ZOOM   M / ESC CLOSE", 15.0f, Vec4{0.72f, 0.74f, 0.8f, 1.0f});
 }
 
 void ClientApp::draw_skills() {

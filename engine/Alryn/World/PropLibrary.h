@@ -36,6 +36,11 @@ public:
     const std::vector<PropDef>& fountains() const { return fountains_; }
     const std::vector<PropDef>& decor() const { return decor_; }
     const std::vector<PropDef>& rivers() const { return rivers_; }
+    const std::vector<PropDef>& crystals() const { return crystals_; }
+    const std::vector<PropDef>& glow_shrooms() const { return glow_shrooms_; }
+    const std::vector<PropDef>& campfires() const { return campfires_; }
+    const std::vector<PropDef>& monuments() const { return monuments_; }
+    const std::vector<PropDef>& watchtowers() const { return watchtowers_; }
 
     // Look up a placed instance's definition.
     const PropDef& resolve(const PropInstance& inst) const;
@@ -49,6 +54,9 @@ public:
     static PropDef build_lantern_post();
     static PropDef build_house(u32 variant); // a village house (style by kHouseStyles)
     static Vec2 house_half_extents(u32 variant); // (w,d) footprint, for collision-free layout
+    static PropDef build_townhouse();  // tall narrow jettied 3-storey (house variant)
+    static PropDef build_pub();        // 2-storey tavern w/ hanging sign + beer garden (house variant)
+    static PropDef build_blacksmith(); // workshop w/ open forge + anvil (house variant)
     static PropDef build_wall(int variant);  // stone perimeter wall segment
     static PropDef build_gate();             // lit stone gate tower (placed at gate gaps)
     static PropDef build_tower();            // plain unlit wall tower (periodic boundary towers)
@@ -62,6 +70,11 @@ public:
     static PropDef build_fountain();         // a stone plaza fountain
     static PropDef build_decor(int variant); // medieval town clutter (see kDecorVariants)
     static PropDef build_river();            // a sunken river-channel tile (banks + water)
+    static PropDef build_crystal(int variant); // a glowing magic crystal cluster (see kCrystalVariants)
+    static PropDef build_glow_shroom(int variant); // a bioluminescent mushroom cluster
+    static PropDef build_campfire();               // a cosy campfire (logs + flame + warm light)
+    static PropDef build_monument(int variant);    // weathered stone obelisk / pillar / standing stones
+    static PropDef build_watchtower();             // a wooden lookout tower
     static PropDef build_stone_bridge();     // an arched stone road bridge across a river
 
 private:
@@ -82,6 +95,11 @@ private:
     std::vector<PropDef> fountains_;
     std::vector<PropDef> decor_;
     std::vector<PropDef> rivers_;
+    std::vector<PropDef> crystals_;
+    std::vector<PropDef> glow_shrooms_;
+    std::vector<PropDef> campfires_;
+    std::vector<PropDef> monuments_;
+    std::vector<PropDef> watchtowers_;
 };
 
 } // namespace alryn

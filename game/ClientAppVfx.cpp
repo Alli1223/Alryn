@@ -3,6 +3,8 @@
 
 #include "ClientApp.h"
 
+#include <Alryn/Terrain/WorldGen.h> // ground height + water level for the roaming deer
+
 namespace alryn::game {
 
 void ClientApp::spawn_primary_vfx() {
@@ -195,6 +197,169 @@ void ClientApp::draw_particles() {
     }
 }
 
+void ClientApp::draw_ambient_life() {
+    if (renderer_ == nullptr) {
+        return;
+    }
+    const Vec3 feet = local_feet();
+    const f32 t = elapsed_;
+    const f32 night = 1.0f - sun_intensity_;
+    // 0..1 hash of a world cell + salt (deterministic per spot, so it stays put as you move).
+    auto hcell = [](int x, int z, int s) {
+        u32 v = static_cast<u32>(x * 73856093) ^ static_cast<u32>(z * 19349663) ^
+                static_cast<u32>(s * 83492791);
+        v ^= v >> 13;
+        v *= 0x2545F491u;
+        v ^= v >> 16;
+        return static_cast<f32>((v >> 8) & 0xFFFFu) / 65535.0f;
+    };
+
+    // Fireflies: blinking glow motes anchored to fixed WORLD cells around the player. Each lives at
+    // a fixed world spot (so walking moves you THROUGH the swarm instead of dragging it along) and
+    // only drifts gently about that spot. They settle just above the real ground and fade in at the
+    // view edge so there's no pop-in as cells enter/leave range.
+    if (night > 0.2f) {
+        const f32 cs = 4.5f;   // cell size (firefly spacing)
+        const int cr = 4;      // cell radius around the player (~18 m)
+        const int bcx = static_cast<int>(std::floor(feet.x / cs));
+        const int bcz = static_cast<int>(std::floor(feet.z / cs));
+        for (int dz = -cr; dz <= cr; ++dz) {
+            for (int dx = -cr; dx <= cr; ++dx) {
+                const int cx = bcx + dx, cz = bcz + dz;
+                if (hcell(cx, cz, 3) > 0.45f) {
+                    continue; // only ~45% of cells host a firefly
+                }
+                const f32 ax = (static_cast<f32>(cx) + hcell(cx, cz, 5)) * cs;
+                const f32 az = (static_cast<f32>(cz) + hcell(cx, cz, 7)) * cs;
+                const f32 g = worldgen::height(ax, az, world_seed_);
+                if (g < worldgen::water_level + 0.4f) {
+                    continue; // no fireflies out over the water
+                }
+                const f32 ph = hcell(cx, cz, 9) * TwoPi;
+                const f32 px = ax + std::sin(t * 0.5f + ph) * 1.1f + std::sin(t * 0.21f + ph * 1.7f) * 0.5f;
+                const f32 pz = az + std::cos(t * 0.43f + ph) * 1.1f;
+                const f32 py = g + 0.7f + 0.5f * std::sin(t * 0.9f + ph * 2.0f);
+                const f32 dxz = glm::length(Vec2{px - feet.x, pz - feet.z});
+                if (dxz > 18.0f) {
+                    continue;
+                }
+                const f32 blink = std::pow(0.5f + 0.5f * std::sin(t * 2.3f + ph * 3.1f), 3.0f);
+                const f32 edge = glm::smoothstep(18.0f, 12.0f, dxz); // soft fade at the radius
+                const f32 a = night * (0.18f + 0.82f * blink) * 0.6f * edge;
+                renderer_->draw_glow(
+                    shape_sphere_,
+                    glm::translate(Mat4{1.0f}, Vec3{px, py, pz}) * glm::scale(Mat4{1.0f}, Vec3{0.07f}),
+                    Vec4{0.78f, 0.96f, 0.42f, a});
+            }
+        }
+    }
+
+    // A flock of birds gliding across the sky by day (a slow circling V of dark chevrons).
+    auto wings = [&](const Vec3& pos, const Vec3& fwd, const Vec3& right, f32 flap, f32 sz, f32 alpha) {
+        Mat4 basis{1.0f};
+        basis[0] = Vec4(right, 0.0f);
+        basis[1] = Vec4(0.0f, 1.0f, 0.0f, 0.0f);
+        basis[2] = Vec4(fwd, 0.0f);
+        for (f32 side : {-1.0f, 1.0f}) {
+            const Mat4 m = glm::translate(Mat4{1.0f}, pos) * basis *
+                           glm::rotate(Mat4{1.0f}, side * (0.28f + flap * 0.5f), Vec3{0.0f, 0.0f, 1.0f}) *
+                           glm::translate(Mat4{1.0f}, Vec3{side * sz * 0.45f, 0.0f, 0.0f}) *
+                           glm::scale(Mat4{1.0f}, Vec3{sz, sz * 0.07f, sz * 0.32f});
+            renderer_->draw_transparent(shape_box_, m, Vec4{0.1f, 0.1f, 0.13f, alpha});
+        }
+    };
+    if (sun_intensity_ > 0.32f) {
+        const f32 ca = t * 0.05f;
+        const Vec3 fc = feet + Vec3{std::cos(ca) * 28.0f, 19.0f + std::sin(t * 0.1f) * 3.0f, std::sin(ca) * 28.0f};
+        const Vec3 fwd{-std::sin(ca), 0.0f, std::cos(ca)};
+        const Vec3 right = glm::normalize(glm::cross(Vec3{0.0f, 1.0f, 0.0f}, fwd));
+        for (int i = 0; i < 7; ++i) {
+            const f32 fi = static_cast<f32>(i) - 3.0f;
+            const Vec3 pos = fc + right * (fi * 1.9f) + fwd * (-std::abs(fi) * 1.3f) +
+                             Vec3{0.0f, std::sin(t * 0.6f + static_cast<f32>(i) * 1.7f) * 1.0f, 0.0f};
+            const f32 flap = 0.5f + 0.45f * std::sin(t * 7.0f + static_cast<f32>(i) * 1.5f);
+            wings(pos, fwd, right, flap, 1.0f, 0.85f * sun_intensity_);
+        }
+    }
+
+    // A lone owl gliding slowly over the trees at night (a bigger, slower dark glider).
+    if (night > 0.35f) {
+        const f32 oa = t * 0.025f + 2.0f;
+        const Vec3 oc = feet + Vec3{std::cos(oa) * 16.0f, 9.0f + std::sin(t * 0.08f) * 1.5f, std::sin(oa) * 16.0f};
+        const Vec3 ofwd{-std::sin(oa), 0.0f, std::cos(oa)};
+        const Vec3 oright = glm::normalize(glm::cross(Vec3{0.0f, 1.0f, 0.0f}, ofwd));
+        const f32 oflap = 0.35f + 0.25f * std::sin(t * 3.0f);
+        wings(oc, ofwd, oright, oflap, 1.7f, 0.8f * night);
+    }
+}
+
+void ClientApp::update_deer(Timestep dt) {
+    if (renderer_ == nullptr) {
+        return;
+    }
+    const Vec3 feet = local_feet();
+    auto ground = [&](f32 x, f32 z) { return worldgen::height(x, z, world_seed_); };
+    // Maintain a small roaming herd around the player.
+    while (deer_.size() < 6) {
+        Deer d;
+        const f32 a = frand(0.0f, TwoPi), r = frand(24.0f, 40.0f);
+        d.pos = Vec3{feet.x + std::cos(a) * r, 0.0f, feet.z + std::sin(a) * r};
+        d.pos.y = ground(d.pos.x, d.pos.z);
+        d.yaw = frand(0.0f, TwoPi);
+        d.target = d.pos;
+        deer_.push_back(d);
+    }
+    for (Deer& d : deer_) {
+        const f32 dist = glm::length(Vec2{d.pos.x - feet.x, d.pos.z - feet.z});
+        if (dist > 58.0f || d.pos.y < worldgen::water_level + 0.3f) {
+            const f32 a = frand(0.0f, TwoPi), r = frand(26.0f, 40.0f); // respawn around the player
+            d.pos = Vec3{feet.x + std::cos(a) * r, 0.0f, feet.z + std::sin(a) * r};
+            d.pos.y = ground(d.pos.x, d.pos.z);
+            d.retarget = 0.0f;
+            d.fleeing = false;
+            continue;
+        }
+        d.fleeing = dist < 11.0f; // bolt if the player gets close
+        d.retarget -= dt.seconds;
+        if (d.fleeing) {
+            const Vec2 away = glm::normalize(Vec2{d.pos.x - feet.x, d.pos.z - feet.z});
+            d.target = d.pos + Vec3{away.x, 0.0f, away.y} * 14.0f;
+        } else if (d.retarget <= 0.0f) {
+            const f32 a = frand(0.0f, TwoPi), r = frand(2.5f, 9.0f);
+            d.target = d.pos + Vec3{std::cos(a) * r, 0.0f, std::sin(a) * r};
+            d.retarget = frand(2.5f, 6.0f); // graze a while between strolls
+        }
+        const Vec2 to{d.target.x - d.pos.x, d.target.z - d.pos.z};
+        const f32 td = glm::length(to);
+        const f32 spd = (d.fleeing ? 8.0f : 1.4f) * dt.seconds;
+        if (td > 0.15f) {
+            const Vec2 step = to / td * std::min(spd, td);
+            d.pos.x += step.x;
+            d.pos.z += step.y;
+            d.pos.y = ground(d.pos.x, d.pos.z);
+            d.yaw = std::atan2(step.y, step.x);
+            d.gait += glm::length(step) * 3.2f;
+        }
+    }
+}
+
+void ClientApp::draw_deer() {
+    if (renderer_ == nullptr) {
+        return;
+    }
+    for (const Deer& d : deer_) {
+        const Mat4 base = glm::translate(Mat4{1.0f}, d.pos) * glm::rotate(Mat4{1.0f}, -d.yaw, Vec3{0.0f, 1.0f, 0.0f});
+        renderer_->draw(deer_body_mesh_, base);
+        for (int k = 0; k < 4; ++k) {
+            const f32 sign = (k == 0 || k == 3) ? 1.0f : -1.0f;
+            const f32 swing = std::sin(d.gait) * (d.fleeing ? 0.7f : 0.35f) * sign;
+            const Mat4 lm = base * glm::translate(Mat4{1.0f}, kDeerLegs[k]) *
+                            glm::rotate(Mat4{1.0f}, swing, Vec3{0.0f, 0.0f, 1.0f});
+            renderer_->draw(deer_leg_mesh_, lm);
+        }
+    }
+}
+
 void ClientApp::spawn_ability_vfx(PlayerRole role, u8 slot, const Vec3& feet, f32 yaw, const Vec3& aim) {
     const Vec3 chest = feet + Vec3{0.0f, 1.0f, 0.0f};
     const Vec3 facing{std::cos(yaw), 0.0f, std::sin(yaw)};
@@ -278,6 +443,8 @@ void ClientApp::spawn_ability_vfx(PlayerRole role, u8 slot, const Vec3& feet, f3
                 emit_ring(feet, Vec4{0.55f, 1.0f, 0.7f, 0.8f}, 14, 2.0f, 0.5f, 0.13f);
             }
             break;
+        case PlayerRole::Mage:
+            break; // Mage spells have their own VFX (spawn_spell_vfx); the hotbar only queues elements
     }
 }
 
@@ -343,6 +510,115 @@ Vec3 ClientApp::rand_dir() {
     const f32 a = frand(0.0f, TwoPi);
     const f32 r = std::sqrt(std::max(0.0f, 1.0f - z * z));
     return Vec3{r * std::cos(a), z, r * std::sin(a)};
+}
+
+void ClientApp::draw_buffs() {
+    if (!have_snapshot_ || renderer_ == nullptr) {
+        return;
+    }
+    const net::WagonState* aw = active_wagon();
+    const f32 pulse = 0.65f + 0.35f * std::sin(elapsed_ * 6.0f);
+    for (const net::PlayerState& p : snapshot_.players) {
+        if (p.buffs == 0) {
+            continue;
+        }
+        const Vec3 feet = (p.seated != 0 && aw != nullptr) ? attach_to_wagon(*aw, p.position)
+                                                           : p.position;
+        if ((p.buffs & 1u) != 0u) { // empowered: a fiery ring + rising embers
+            renderer_->draw_glow(shape_cylinder_,
+                                 glm::translate(Mat4{1.0f}, feet + Vec3{0.0f, 0.06f, 0.0f}) *
+                                     glm::scale(Mat4{1.0f}, Vec3{1.15f, 0.05f, 1.15f}),
+                                 Vec4{1.0f, 0.45f, 0.15f, 0.5f * pulse});
+        }
+        if ((p.buffs & 2u) != 0u) { // hasted: a green ring
+            renderer_->draw_glow(shape_cylinder_,
+                                 glm::translate(Mat4{1.0f}, feet + Vec3{0.0f, 0.13f, 0.0f}) *
+                                     glm::scale(Mat4{1.0f}, Vec3{0.92f, 0.05f, 0.92f}),
+                                 Vec4{0.4f, 1.0f, 0.45f, 0.5f * pulse});
+        }
+    }
+}
+
+void ClientApp::draw_rain() {
+    if (renderer_ == nullptr) {
+        return;
+    }
+    // Rain only sets in once the sky is well past overcast.
+    const f32 rain = glm::smoothstep(0.28f, 0.72f, weather_amt_);
+    if (rain <= 0.01f) {
+        return;
+    }
+    const Vec3 feet = local_feet();
+    const f32 t = elapsed_;
+
+    // World-anchored falling streaks in a column around the player. Each world cell may hold one
+    // drop whose xz is FIXED in world space, so moving the camera gives real parallax (the drops
+    // sit in the world, not on the glass). Every drop falls at a CONSTANT speed - storminess only
+    // changes how many cells spawn a drop and the opacity - so when the rain eases off it simply
+    // thins out instead of running backwards up the screen.
+    auto hcell = [](int x, int z, int s) {
+        u32 v = static_cast<u32>(x * 73856093) ^ static_cast<u32>(z * 19349663) ^
+                static_cast<u32>(s * 83492791);
+        v ^= v >> 13;
+        v *= 0x2545F491u;
+        v ^= v >> 16;
+        return static_cast<f32>((v >> 8) & 0xFFFFu) / 65535.0f;
+    };
+
+    const f32 cs = 1.3f;        // drop spacing (cell size)
+    const int cr = 9;           // cell radius around the player (~12 m column)
+    const f32 ceil_h = 13.0f;   // spawn height above the player's feet
+    const f32 fall_h = 17.0f;   // distance a drop falls before it recycles to the top
+    const f32 speed = 22.0f;    // constant fall speed (m/s) - the key to no reversal
+    const f32 drift = 0.5f;     // how much the wind carries a drop sideways as it falls
+
+    // A slowly turning horizontal breeze, stronger in a heavier storm.
+    const f32 wdir = t * 0.05f;
+    const Vec2 wind = Vec2{std::cos(wdir), std::sin(wdir)} * (1.5f + 4.5f * weather_amt_);
+    // The streak points along the drop's instantaneous velocity (fall + wind carry).
+    const Mat4 orient =
+        orient_to(glm::normalize(Vec3{wind.x * drift, -speed, wind.y * drift}));
+    const Vec4 col{0.74f, 0.81f, 0.94f, 0.18f + 0.30f * rain};
+
+    const int pcx = static_cast<int>(std::floor(feet.x / cs));
+    const int pcz = static_cast<int>(std::floor(feet.z / cs));
+    for (int dz = -cr; dz <= cr; ++dz) {
+        for (int dx = -cr; dx <= cr; ++dx) {
+            const int cx = pcx + dx, cz = pcz + dz;
+            if (hcell(cx, cz, 7) > 0.20f + 0.80f * rain) {
+                continue; // sparse in light rain, full coverage in a downpour
+            }
+            const f32 base_x = (static_cast<f32>(cx) + hcell(cx, cz, 11)) * cs;
+            const f32 base_z = (static_cast<f32>(cz) + hcell(cx, cz, 13)) * cs;
+            // Per-cell phase offset so the column doesn't fall in lockstep.
+            const f32 fallen = std::fmod(t * speed + hcell(cx, cz, 17) * fall_h, fall_h);
+            const f32 wy = feet.y + ceil_h - fallen;
+            if (wy < feet.y - 3.0f) {
+                continue; // it's reached the ground - cull until it recycles
+            }
+            const f32 age = fallen / speed; // seconds since this drop spawned at the top
+            const Vec3 pos{base_x + wind.x * drift * age, wy, base_z + wind.y * drift * age};
+            const f32 len = 0.5f + 0.4f * hcell(cx, cz, 23);
+            renderer_->draw_transparent(shape_box_,
+                                        glm::translate(Mat4{1.0f}, pos) * orient *
+                                            glm::scale(Mat4{1.0f}, Vec3{0.018f, 0.018f, len}),
+                                        col);
+        }
+    }
+}
+
+void ClientApp::draw_weather() {
+    if (renderer_ == nullptr || lightning_ < 0.01f) {
+        return;
+    }
+    // The only genuinely screen-space part: a brief full-screen bluish-white lightning wash
+    // (timed in update_day_night). The rain itself is world-space - see draw_rain().
+    const VkExtent2D ext = renderer_->extent();
+    const f32 W = static_cast<f32>(ext.width);
+    const f32 H = static_cast<f32>(ext.height);
+    ui::DrawList draw{*renderer_};
+    draw.rect(Vec4{0.0f, 0.0f, W, H},
+              Vec4{0.88f, 0.92f, 1.0f, lightning_ * 0.45f * std::max(weather_amt_, 0.5f)});
 }
 
 } // namespace alryn::game

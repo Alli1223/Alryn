@@ -71,8 +71,9 @@ MeshData round_column(f32 width, f32 height, const Vec3& color, int sides = 7) {
     return m;
 }
 
-// Open cone with a `sides`-gon base and apex up; centre axis is x=z=0.
-MeshData cone(f32 radius, f32 height, int sides, f32 base_y, const Vec3& color) {
+// Open cone with a `sides`-gon base and apex up; centre axis is x=z=0. (Kept for reuse - the pine
+// now uses drooping tiers instead of plain cones.)
+[[maybe_unused]] MeshData cone(f32 radius, f32 height, int sides, f32 base_y, const Vec3& color) {
     MeshData m;
     const Vec3 apex{0.0f, base_y + height, 0.0f};
     const Vec3 axis{0.0f, base_y + height * 0.4f, 0.0f};
@@ -642,17 +643,57 @@ TreeMeshData tree(int variant) {
             limb(t.trunk, base, dir, l, std::max(r * 0.18f, 0.03f), 0.012f, wood, 4);
         }
     };
+    // One drooping PINE TIER: a ring of `n` faceted branches that splay out from a central apex and
+    // DROOP down at the tips, with jittered radius/droop per branch for a jagged, well-defined
+    // low-poly conifer skirt (the reference look). Stacking tiers of decreasing radius builds the tree.
+    auto pine_tier = [&](MeshData& m, f32 cy, f32 r, f32 tier_h, const Vec3& col, int n, int s) {
+        const Vec3 apex{0.0f, cy + tier_h, 0.0f};
+        const Vec3 axis{0.0f, cy, 0.0f};
+        for (int i = 0; i < n; ++i) {
+            const f32 a0 = TwoPi * static_cast<f32>(i) / static_cast<f32>(n);
+            const f32 a1 = TwoPi * static_cast<f32>(i + 1) / static_cast<f32>(n);
+            const f32 am = (a0 + a1) * 0.5f;
+            const f32 rb = r * (0.62f + 0.2f * vrnd(static_cast<u32>(s), i * 3));      // inner (branches meet)
+            const f32 rt = r * (1.0f + 0.16f * vrnd(static_cast<u32>(s), i * 3 + 1));   // branch-tip reach
+            const f32 droop = 0.2f + 0.3f * vrnd(static_cast<u32>(s), i * 3 + 2);       // tip droops down
+            const Vec3 b0{std::cos(a0) * rb, cy + 0.06f, std::sin(a0) * rb};
+            const Vec3 b1{std::cos(a1) * rb, cy + 0.06f, std::sin(a1) * rb};
+            const Vec3 tip{std::cos(am) * rt, cy - droop, std::sin(am) * rt};
+            const Vec3 c = col * (0.82f + 0.3f * vrnd(static_cast<u32>(s), i * 3 + 1));
+            emit_tri(m, apex, b0, tip, axis, c); // a drooping branch wedge (two facets)
+            emit_tri(m, apex, tip, b1, axis, c);
+        }
+    };
+    // A ROOT FLARE at the trunk base: a few short triangular buttress roots splaying to the ground.
+    auto root_flare = [&](MeshData& m, f32 width, const Vec3& wood, int n, int s) {
+        const f32 rb = width * 0.5f;
+        for (int i = 0; i < n; ++i) {
+            const f32 a = TwoPi * static_cast<f32>(i) / static_cast<f32>(n) + vrnd(static_cast<u32>(s), i) * 0.4f;
+            const Vec3 out{std::cos(a), 0.0f, std::sin(a)};
+            const Vec3 side{-out.z, 0.0f, out.x};
+            const Vec3 top = out * rb * 0.7f + Vec3{0.0f, 0.55f, 0.0f};
+            const Vec3 foot = out * rb * (1.7f + 0.6f * vrnd(static_cast<u32>(s), i + 3));
+            const Vec3 w = side * rb * 0.55f;
+            emit_tri(m, top, foot - w, foot + w, Vec3{0.0f, 0.4f, 0.0f}, wood * 0.92f);
+        }
+    };
 
     switch (variant % 5) {
-        case 0: { // tall pine - stacked cones
-            const f32 th = 2.8f;
-            t.trunk = round_column(0.30f, th, bark);
-            add_branches(0.30f, th, bark, 5, 1.3f, 0.9f, variant * 17 + 1);
-            add_twigs(0.30f, th, bark, 4, variant * 17 + 2);
-            append(t.foliage, cone(1.6f, 2.3f, 7, th - 0.7f, leaf));
-            append(t.foliage, cone(1.2f, 2.0f, 7, th + 0.6f, leaf * 1.05f));
-            append(t.foliage, cone(0.82f, 1.7f, 7, th + 1.9f, leaf2));
-            append(t.foliage, cone(0.46f, 1.3f, 7, th + 3.1f, leaf2 * 1.05f));
+        case 0: { // detailed low-poly pine: tapered trunk + root flare + stacked drooping branch tiers
+            const f32 th = 2.7f;
+            t.trunk = round_column(0.36f, th, bark);
+            root_flare(t.trunk, 0.36f, bark, 6, variant * 17 + 3);
+            add_twigs(0.36f, th, bark, 3, variant * 17 + 2);
+            const int tiers = 8;
+            const f32 base_y = th - 1.0f, top_y = th + 2.8f;
+            for (int k = 0; k < tiers; ++k) {
+                const f32 f = static_cast<f32>(k) / static_cast<f32>(tiers - 1);
+                const f32 cy = glm::mix(base_y, top_y, f);
+                const f32 r = glm::mix(2.05f, 0.16f, std::pow(f, 1.12f)); // full, wide base -> point
+                const f32 tier_h = glm::mix(0.92f, 0.42f, f);
+                const Vec3 col = glm::mix(leaf, leaf2, f * 0.7f);
+                pine_tier(t.foliage, cy, r, tier_h, col, 9, variant * 31 + k);
+            }
             break;
         }
         case 1: { // round oak - tall trunk + stacked blobs

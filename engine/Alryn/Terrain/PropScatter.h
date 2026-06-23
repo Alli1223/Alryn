@@ -110,6 +110,46 @@ inline std::vector<PropInstance> scatter_props(int cx, int cz, f32 chunk_world, 
         return detail::hash01(h) < 0.5f;
     });
 
+    // Glowing magic crystal clusters: an occasional, magical detail dotted across the wilds (off
+    // roads + out of towns), favouring rockier ground. They glow + pool coloured light at night.
+    place(17.0f, seed + 6900u, PropCategory::Crystal, kCrystalVariants, [&](f32 x, f32 z, f32 gh, u32 h) {
+        if (gh < worldgen::water_level + 0.7f || !off_path(x, z)) return false;
+        if (detail::ground_slope(x, z, seed) > 3.2f) return false;
+        return detail::hash01(h) < 0.16f; // rare - a sprinkle, not a field
+    });
+
+    // Bioluminescent mushroom clusters: damp, shady forest floor (needs moisture), off paths/towns -
+    // they glow softly at night.
+    place(9.5f, seed + 6950u, PropCategory::GlowShroom, kGlowShroomVariants, [&](f32 x, f32 z, f32 gh, u32 h) {
+        if (gh < worldgen::water_level + 0.8f || gh > 9.0f || !off_path(x, z)) return false;
+        if (worldgen::moisture(x, z, seed) < 0.12f) return false; // damp ground only
+        if (detail::ground_slope(x, z, seed) > 2.0f) return false;
+        return detail::hash01(h) < 0.14f;
+    });
+
+    // Campfires: a rare cosy rest-spot in a flat dry clearing (off paths/towns) that lights the
+    // night - the wilderness-camp vibe from the references.
+    place(40.0f, seed + 6980u, PropCategory::Campfire, 1, [&](f32 x, f32 z, f32 gh, u32 h) {
+        if (gh < worldgen::water_level + 1.0f || !off_path(x, z)) return false;
+        if (detail::ground_slope(x, z, seed) > 0.9f) return false; // a flat clearing
+        return detail::hash01(h) < 0.3f;
+    });
+
+    // Stone monuments / ruins: occasional ancient landmarks on flattish, above-water ground.
+    place(34.0f, seed + 7000u, PropCategory::Monument, kMonumentVariants, [&](f32 x, f32 z, f32 gh, u32 h) {
+        if (gh < worldgen::water_level + 1.0f || !off_path(x, z)) return false;
+        if (detail::ground_slope(x, z, seed) > 1.4f) return false;
+        return detail::hash01(h) < 0.4f;
+    });
+
+    // Wooden watchtowers: a rare lookout on flat, dry, open ground well clear of towns.
+    place(70.0f, seed + 7050u, PropCategory::Watchtower, 1, [&](f32 x, f32 z, f32 gh, u32 h) {
+        if (gh < worldgen::water_level + 1.2f) return false;
+        if (worldgen::inside_village(x, z, seed, 18.0f)) return false;
+        if (detail::ground_slope(x, z, seed) > 0.8f || !off_path(x, z)) return false;
+        return detail::hash01(h) < 0.35f;
+    });
+
     // Roadside fences as a proper post-and-rail run: march POSTS along each road edge at a
     // varying spacing and join each kept post to the previous with a RAIL stretched to that
     // exact gap. The run BREAKS (no rail bridges it) wherever a post is dropped, so fences

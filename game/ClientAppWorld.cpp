@@ -307,6 +307,11 @@ void ClientApp::draw_prop(const PropInstance& p) {
         : p.category == PropCategory::Fountain  ? gpu_fountains_
         : p.category == PropCategory::Decor     ? gpu_decor_
         : p.category == PropCategory::River     ? gpu_rivers_
+        : p.category == PropCategory::Crystal   ? gpu_crystals_
+        : p.category == PropCategory::GlowShroom ? gpu_glow_shrooms_
+        : p.category == PropCategory::Campfire  ? gpu_campfires_
+        : p.category == PropCategory::Monument  ? gpu_monuments_
+        : p.category == PropCategory::Watchtower ? gpu_watchtowers_
                                                : gpu_fountains_;
     if (set.empty()) {
         return;
@@ -499,6 +504,38 @@ Mat4 ClientApp::orient_to(const Vec3& dir) {
     m[1] = Vec4{u, 0.0f};
     m[2] = Vec4{f, 0.0f};
     return m;
+}
+
+void ClientApp::draw_walls() {
+    if (!have_snapshot_ || renderer_ == nullptr) {
+        return;
+    }
+    for (const net::WallState& wl : snapshot_.walls) {
+        const f32 hp = static_cast<f32>(wl.health) / 255.0f;
+        const f32 len = wl.length;
+        const int n = std::max(4, static_cast<int>(len));
+        // Same rotated frame as the server's box collider (translate * rotateY(yaw)), so the
+        // visible chunks line up with what NPCs path around.
+        const Mat4 root = glm::translate(Mat4{1.0f}, wl.position) *
+                          glm::rotate(Mat4{1.0f}, wl.yaw, Vec3{0.0f, 1.0f, 0.0f});
+        for (int i = 0; i < n; ++i) {
+            const u32 h = static_cast<u32>(i) * 2654435761u +
+                          static_cast<u32>(std::lround(wl.position.x * 7.0f) * 40503);
+            const f32 r0 = static_cast<f32>(h & 255u) / 255.0f;
+            const f32 r1 = static_cast<f32>((h >> 8) & 255u) / 255.0f;
+            const f32 r2 = static_cast<f32>((h >> 16) & 255u) / 255.0f;
+            const f32 lx = ((static_cast<f32>(i) + 0.5f) / static_cast<f32>(n) - 0.5f) * len;
+            const f32 hh = kRockWallHeight * (0.7f + 0.5f * r0) * (0.4f + 0.6f * hp); // crumbles
+            const f32 cw = len / static_cast<f32>(n) * (0.75f + 0.4f * r1);
+            const Vec3 col = glm::mix(Vec3{0.24f, 0.22f, 0.20f}, Vec3{0.48f, 0.45f, 0.42f}, r2) *
+                             (0.5f + 0.5f * hp);
+            const Mat4 m = root *
+                           glm::translate(Mat4{1.0f}, Vec3{lx, hh * 0.5f, (r1 - 0.5f) * 0.3f}) *
+                           glm::rotate(Mat4{1.0f}, (r2 - 0.5f) * 0.4f, Vec3{0.0f, 1.0f, 0.0f}) *
+                           glm::scale(Mat4{1.0f}, Vec3{cw, hh, kRockWallThick * (0.8f + 0.3f * r0)});
+            renderer_->draw(shape_box_, m, Vec4{col, 1.0f});
+        }
+    }
 }
 
 } // namespace alryn::game

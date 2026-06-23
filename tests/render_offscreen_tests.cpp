@@ -117,11 +117,14 @@ TEST_CASE("Renderer: offscreen render of a lit cube (headless)") {
                       VK_ACCESS_SHADER_READ_BIT);
     });
 
-    vk::Buffer light_ubo; // 16-byte count + 4 * 128-byte spots (std140)
-    REQUIRE(light_ubo.create(device, 16 + 4 * 128, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+    // Sized to cover the whole std140 Lights block mesh.frag reads (count + spots + points +
+    // peek/cam + fog/screen); zeroed, so count = 0 (no lights) and fog density = 0 (no haze).
+    constexpr VkDeviceSize light_ubo_size = 4096;
+    vk::Buffer light_ubo;
+    REQUIRE(light_ubo.create(device, light_ubo_size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT));
     {
-        std::vector<u8> zero(16 + 4 * 128, 0); // count = 0 -> no lights sampled
+        std::vector<u8> zero(light_ubo_size, 0);
         light_ubo.upload(zero.data(), zero.size());
     }
 
@@ -158,7 +161,7 @@ TEST_CASE("Renderer: offscreen render of a lit cube (headless)") {
     VkDescriptorBufferInfo ubo_info{};
     ubo_info.buffer = light_ubo.handle();
     ubo_info.offset = 0;
-    ubo_info.range = 16 + 4 * 128;
+    ubo_info.range = light_ubo_size;
     VkWriteDescriptorSet writes[3]{};
     for (int b = 0; b < 3; ++b) {
         writes[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;

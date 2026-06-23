@@ -116,4 +116,27 @@ inline const Vec3 kHorseLegs[4] = {
     {-0.55f, kHorseLegHipY, -0.22f},
 };
 
+// Ox meshes (the draft animals that pull the cargo wagon - drawn as a yoked PAIR): a chunky horned
+// body + a single sturdy leg drawn x4 with a walk gait. Faces local +X, like the horse.
+MeshData build_ox_body();
+MeshData build_ox_leg();
+inline constexpr f32 kOxLegHipY = 0.9f;
+inline const Vec3 kOxLegs[4] = {
+    {0.38f, kOxLegHipY, 0.24f},
+    {0.38f, kOxLegHipY, -0.24f},
+    {-0.5f, kOxLegHipY, 0.24f},
+    {-0.5f, kOxLegHipY, -0.24f},
+};
+
+// Deer meshes (ambient wildlife): a slender stag body + a slim leg drawn x4 with a walk gait.
+MeshData build_deer_body();
+MeshData build_deer_leg();
+inline constexpr f32 kDeerLegHipY = 0.98f;
+inline const Vec3 kDeerLegs[4] = {
+    {0.3f, kDeerLegHipY, 0.13f},
+    {0.3f, kDeerLegHipY, -0.13f},
+    {-0.4f, kDeerLegHipY, 0.13f},
+    {-0.4f, kDeerLegHipY, -0.13f},
+};
+
 } // namespace alryn

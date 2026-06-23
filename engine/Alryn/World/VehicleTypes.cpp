@@ -154,4 +154,68 @@ MeshData build_horse_leg() {
     return m;
 }
 
+// A chunky horned ox, faces local +X: a broad low barrel, a shoulder hump, a blocky head with two
+// out-swept horns + ears + muzzle, and a tufted tail.
+MeshData build_ox_body() {
+    MeshData m;
+    const Vec3 hide{0.37f, 0.27f, 0.18f};
+    const Vec3 dark{0.22f, 0.16f, 0.11f};
+    const Vec3 horn{0.84f, 0.8f, 0.68f};
+    add_box(m, {-0.62f, 0.85f, -0.34f}, {0.48f, 1.35f, 0.34f}, hide);  // barrel (broad, low)
+    add_box(m, {-0.78f, 0.9f, -0.3f}, {-0.6f, 1.3f, 0.3f}, hide);      // rump
+    add_box(m, {0.2f, 1.3f, -0.22f}, {0.46f, 1.6f, 0.22f}, hide);      // shoulder hump
+    add_box(m, {0.42f, 1.02f, -0.24f}, {0.72f, 1.42f, 0.24f}, hide);   // thick neck
+    add_box(m, {0.68f, 0.98f, -0.22f}, {1.02f, 1.4f, 0.22f}, hide);    // head
+    add_box(m, {0.98f, 1.0f, -0.17f}, {1.2f, 1.28f, 0.17f}, hide * 0.94f); // muzzle
+    // horns: sweep out + up from the head top
+    for (f32 sz : {-1.0f, 1.0f}) {
+        add_box(m, {0.74f, 1.4f, sz * 0.24f - 0.05f}, {0.9f, 1.5f, sz * 0.24f + 0.05f}, horn);
+        add_box(m, {0.76f, 1.46f, sz * 0.36f - 0.05f}, {0.88f, 1.66f, sz * 0.36f + 0.05f}, horn);
+        add_box(m, {0.66f, 1.34f, sz * 0.28f - 0.05f}, {0.76f, 1.44f, sz * 0.28f + 0.05f}, dark); // ear
+    }
+    add_box(m, {-0.82f, 0.85f, -0.04f}, {-0.72f, 1.32f, 0.04f}, dark); // tail
+    add_box(m, {-0.84f, 0.68f, -0.06f}, {-0.7f, 0.86f, 0.06f}, dark);  // tail tuft
+    return m;
+}
+MeshData build_ox_leg() {
+    MeshData m;
+    const Vec3 hide{0.33f, 0.24f, 0.16f};
+    const Vec3 hoof{0.12f, 0.1f, 0.09f};
+    add_box(m, {-0.11f, -0.85f, -0.11f}, {0.11f, 0.0f, 0.11f}, hide); // sturdy leg
+    add_box(m, {-0.12f, -0.95f, -0.12f}, {0.12f, -0.85f, 0.12f}, hoof);
+    return m;
+}
+
+// A slender tan DEER (a stag) facing local +X: a lithe body with a pale belly, a long neck + small
+// head with ears + forked antlers, and a white scut tail. Slim legs are a separate mesh.
+MeshData build_deer_body() {
+    MeshData m;
+    const Vec3 hide{0.56f, 0.39f, 0.23f};
+    const Vec3 belly{0.8f, 0.68f, 0.52f};
+    const Vec3 dark{0.3f, 0.2f, 0.12f};
+    const Vec3 antler{0.72f, 0.62f, 0.46f};
+    add_box(m, {-0.48f, 0.98f, -0.17f}, {0.38f, 1.3f, 0.17f}, hide);  // body
+    add_box(m, {-0.46f, 0.94f, -0.15f}, {0.36f, 1.02f, 0.15f}, belly); // pale belly
+    add_box(m, {0.32f, 1.2f, -0.1f}, {0.56f, 1.68f, 0.1f}, hide);     // neck (up-forward)
+    add_box(m, {0.5f, 1.58f, -0.09f}, {0.78f, 1.82f, 0.09f}, hide);   // head
+    add_box(m, {0.74f, 1.6f, -0.07f}, {0.92f, 1.74f, 0.07f}, hide * 0.95f); // muzzle
+    for (f32 sz : {-1.0f, 1.0f}) {
+        add_box(m, {0.46f, 1.76f, sz * 0.07f - 0.03f}, {0.54f, 1.94f, sz * 0.07f + 0.03f}, dark); // ear
+        // a small forked antler
+        add_box(m, {0.52f, 1.8f, sz * 0.06f - 0.03f}, {0.58f, 2.18f, sz * 0.06f + 0.03f}, antler);
+        add_box(m, {0.5f, 2.02f, sz * 0.16f - 0.03f}, {0.6f, 2.1f, sz * 0.16f + 0.03f}, antler);
+        add_box(m, {0.52f, 1.96f, sz * 0.22f - 0.03f}, {0.58f, 2.12f, sz * 0.22f + 0.03f}, antler);
+    }
+    add_box(m, {-0.52f, 1.12f, -0.05f}, {-0.44f, 1.34f, 0.05f}, Vec3{0.93f, 0.9f, 0.85f}); // white tail
+    return m;
+}
+MeshData build_deer_leg() {
+    MeshData m;
+    const Vec3 hide{0.5f, 0.35f, 0.21f};
+    const Vec3 hoof{0.12f, 0.1f, 0.09f};
+    add_box(m, {-0.05f, -0.92f, -0.05f}, {0.05f, 0.0f, 0.05f}, hide); // slim leg
+    add_box(m, {-0.06f, -0.98f, -0.06f}, {0.06f, -0.92f, 0.06f}, hoof);
+    return m;
+}
+
 } // namespace alryn
