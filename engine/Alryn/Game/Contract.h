@@ -95,6 +95,11 @@ inline constexpr f32 kWheelBreakMinTime = 12.0f; // never breaks again sooner th
 inline constexpr f32 kWheelRepairTime = 6.0f;    // seconds of holding the wheel by the cart to refit
 inline constexpr f32 kWheelPickupRange = 2.5f;   // how close to grab the fallen wheel (E)
 inline constexpr f32 kWheelAttachRange = 4.0f;   // carry it this close to the cart for it to refit
+// A stranded (wheel-off) cart draws opportunist bandits: small waves on a timer while it's down.
+inline constexpr f32 kBanditFirstDelay = 3.0f;   // grace after the break before bandits show
+inline constexpr f32 kBanditWaveInterval = 8.0f; // seconds between bandit waves during a repair
+inline constexpr u32 kBanditWaveSize = 2;        // bandits per wave
+inline constexpr usize kRepairBanditCap = 8;     // don't pile on past this many ambushers at once
 
 // A transport wagon: an offer while Parked, the active cargo once accepted.
 struct Wagon {

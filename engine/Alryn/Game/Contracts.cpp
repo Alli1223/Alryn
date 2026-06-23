@@ -457,6 +457,7 @@ void GameServer::accept_contract(const Wagon& chosen, WagonMode mode) {
     wheel_off_ = false;
     wheel_carrier_ = 0;
     wheel_repair_ = 0.0f;
+    bandit_cd_ = 0.0f;
     wheel_break_cd_ = kWheelBreakMinTime + (kWheelBreakAvgTime - kWheelBreakMinTime) *
                                                detail::hash01(active_.id ^ 0x5733EEDu);
     goods_.clear();
@@ -956,6 +957,7 @@ void GameServer::end_contract_cleanup() {
     wheel_off_ = false;
     wheel_carrier_ = 0;
     wheel_repair_ = 0.0f;
+    bandit_cd_ = 0.0f;
     for (auto& [pid, pl] : players_) {
         pl.carrying = false;
     }
@@ -975,6 +977,7 @@ void GameServer::force_wheel_break() {
     const f32 sx = p.x + side.x * 2.6f;
     const f32 sz = p.z + side.y * 2.6f;
     wheel_pos_ = Vec3{sx, worldgen::height(sx, sz, sampler_.seed()), sz};
+    bandit_cd_ = kBanditFirstDelay; // bandits close in shortly after the cart strands
     ALRYN_INFO("A wheel came off the wagon - fetch it and refit it!");
 }
 
@@ -1086,6 +1089,17 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
         if (idx > static_cast<int>(w.route.size()) / 2) {
             spawn_wave(total / 2u);
             w.ambush_waves_spawned = 2;
+        }
+    }
+
+    // A stranded cart (a wheel is off, being refitted) is a sitting duck: opportunist bandits close
+    // in on a timer while it's down, so the party has to defend the repair. (The cart is halted, so
+    // the travel-progress waves above don't advance meanwhile - these are the only fresh spawns.)
+    if (wheel_off_ && left_town) {
+        bandit_cd_ -= dt.seconds;
+        if (bandit_cd_ <= 0.0f && ambush_.size() < kRepairBanditCap) {
+            spawn_wave(kBanditWaveSize);
+            bandit_cd_ = kBanditWaveInterval;
         }
     }
 

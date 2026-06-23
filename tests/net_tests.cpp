@@ -681,6 +681,101 @@ TEST_CASE("GameServer: a wheel comes off and a player refits it") {
     CHECK(server.wheel_repair() == doctest::Approx(0.0f)); // progress reset on refit
 }
 
+// While a wheel is off (the cart stranded outside town), opportunist bandits close in on a timer,
+// so the party must defend the repair. We tow the cart clear of town, break a wheel, then confirm
+// fresh ambushers keep spawning while it's down (the halted cart can't trigger travel-progress
+// waves, so any new spawns are the repair bandits).
+TEST_CASE("GameServer: bandits harry a stranded wagon during a wheel repair") {
+    GameServer server;
+    if (!server.start(24661, 4242u)) {
+        MESSAGE("Could not bind game server - skipping");
+        return;
+    }
+    NetClient c;
+    REQUIRE(c.connect("127.0.0.1", 24661));
+
+    PlayerId id = 0;
+    Snapshot snap{};
+    bool have_snap = false;
+    PlayerInput intent{};
+    auto pump = [&](int iterations) {
+        for (int i = 0; i < iterations; ++i) {
+            c.send_input(intent);
+            server.tick(Timestep{1.0f / 60.0f});
+            for (const ClientEvent& e : c.poll(1)) {
+                if (e.type == ClientEventType::WelcomeReceived) {
+                    id = e.welcome.your_id;
+                } else if (e.type == ClientEventType::SnapshotReceived) {
+                    snap = e.snapshot;
+                    have_snap = true;
+                }
+            }
+        }
+    };
+    pump(150);
+    REQUIRE(id != 0);
+    if (server.offer_count() == 0) {
+        MESSAGE("Spawn town has no road-connected neighbour - skipping");
+        return;
+    }
+    intent.vote_wagon = snap.wagons[0].id;
+    intent.vote_mode = 1;
+    pump(20);
+    REQUIRE(server.contract_phase() == ContractPhase::Active);
+
+    // Tow the cart out of town (player grabs the handles and follows the road route) until the
+    // first ambush wave proves it's left the walls.
+    const std::vector<Vec2> route = server.active_wagon().route;
+    const Vec2 center = server.active_wagon().source;
+    bool grabbed = false;
+    for (int t = 0; t < 1200 && server.ambusher_count() == 0; ++t) {
+        const Vec3 wp = server.active_wagon().position;
+        const Vec3 pp = server.players().at(id).controller.position();
+        if (!grabbed) {
+            Vec3 d = wp - pp;
+            d.y = 0.0f;
+            const f32 dist = glm::length(d);
+            if (dist > 2.0f) {
+                intent.move = d / std::max(dist, 1e-3f);
+            } else {
+                intent.move = Vec3{0.0f};
+                intent.grab = true;
+                grabbed = true;
+            }
+        } else {
+            const f32 pr = glm::length(Vec2{pp.x, pp.z} - center);
+            Vec2 tgt = route.back();
+            for (const Vec2& rp : route) {
+                if (glm::length(rp - center) > pr + 1.0f) {
+                    tgt = rp;
+                    break;
+                }
+            }
+            Vec3 d = Vec3{tgt.x, pp.y, tgt.y} - pp;
+            d.y = 0.0f;
+            const f32 dist = glm::length(d);
+            intent.move = dist > 1e-3f ? d / dist : Vec3{1.0f, 0.0f, 0.0f};
+        }
+        pump(3);
+        intent.grab = false;
+    }
+    REQUIRE(server.ambusher_count() > 0); // it left town
+
+    // Break a wheel: the cart strands. Stop input and just watch - nobody refits it, so it stays
+    // down and the repair bandits keep coming.
+    server.force_wheel_break();
+    REQUIRE(server.wheel_off());
+    intent = PlayerInput{};
+    const usize before = server.ambusher_count();
+    bool grew = false;
+    for (int t = 0; t < 60 && !grew; ++t) { // ~ first delay + a couple of wave intervals
+        pump(30);
+        grew = server.ambusher_count() > before;
+    }
+    CHECK(server.wheel_off());      // still stranded (never refitted)
+    CHECK(grew);                    // fresh bandits spawned during the repair
+}
+
 // Hiring a horse-drawn carriage puts a horse out front pulling and a driver seated up top.
 // Carriages are offered only on long routes, so we scan a few seeds until one offers a
 // carriage, then accept it with a hired driver and check the horse + seated driver are

@@ -275,6 +275,7 @@ private:
     net::PlayerId wheel_carrier_ = 0;    // player carrying the wheel (0 = lying on the ground)
     f32 wheel_repair_ = 0.0f;            // 0..1 re-attach progress (builds while held by the cart)
     f32 wheel_break_cd_ = 0.0f;          // rolling-seconds until the next possible break
+    f32 bandit_cd_ = 0.0f;               // seconds until the next bandit wave while a wheel is off
     std::vector<Enemy> ambush_;          // ambushers attacking the active wagon
     std::unordered_map<net::PlayerId, std::pair<u32, u8>> votes_; // player -> (wagon id, mode)
     u32 money_ = 0;                      // shared party wallet
