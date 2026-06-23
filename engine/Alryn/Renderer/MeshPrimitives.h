@@ -54,6 +54,14 @@ MeshData mushroom(const Vec3& cap = Vec3{0.74f, 0.18f, 0.15f}, f32 scale = 1.0f,
 // low to the ground around a short stem.
 MeshData ground_leaf(int variant = 0, const Vec3& color = Vec3{0.26f, 0.46f, 0.24f});
 
+// Tall marsh reeds / cattails for the bog: a clump of thin, upright arching blades
+// rooted at y = 0, some topped with a brown cattail seed-head. Sways in the wind.
+MeshData reed(int blades = 4, const Vec3& color = Vec3{0.34f, 0.44f, 0.26f});
+
+// A low-poly desert cactus (saguaro) rooted at y = 0: a tall ribbed green column with
+// one or two up-bent arms, capped with rounded tips. `variant` toggles the arm count.
+MeshData cactus(int variant = 0, const Vec3& color = Vec3{0.30f, 0.45f, 0.26f});
+
 // A fallen log lying along +X on y = 0 (octagonal), bark sides with paler cut ends
 // and a hint of moss on top. A collidable bit of forest-floor debris.
 MeshData fallen_log(int variant = 0, const Vec3& color = Vec3{0.34f, 0.26f, 0.18f});

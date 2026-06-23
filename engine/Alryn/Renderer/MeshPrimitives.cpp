@@ -439,6 +439,61 @@ MeshData tall_grass(int blades, const Vec3& color) {
     return m;
 }
 
+MeshData reed(int blades, const Vec3& color) {
+    MeshData m;
+    const Vec3 dark = color * 0.5f;
+    const Vec3 tip = glm::clamp(color * 1.2f + Vec3{0.06f, 0.08f, 0.0f}, Vec3{0.0f}, Vec3{1.0f});
+    for (int i = 0; i < blades; ++i) {
+        const u32 h = static_cast<u32>(i) * 0x9E3779B9u + 7u;
+        const f32 ang = TwoPi * static_cast<f32>(i) / static_cast<f32>(blades) + vrnd(h, 1) * 0.7f;
+        const f32 ca = std::cos(ang);
+        const f32 sa = std::sin(ang);
+        const Vec3 dir{ca, 0.0f, sa};
+        const Vec3 perp{-sa, 0.0f, ca};
+        const f32 height = 1.1f + vrnd(h, 2) * 0.8f; // tall marsh reeds
+        const f32 lean = 0.08f + vrnd(h, 3) * 0.22f;
+        std::vector<Vec3> rib = {Vec3{0.0f}, dir * (lean * 0.3f) + Vec3{0.0f, height * 0.5f, 0.0f},
+                                 dir * (lean * 0.7f) + Vec3{0.0f, height * 0.82f, 0.0f},
+                                 dir * lean + Vec3{0.0f, height, 0.0f}};
+        ribbon(m, rib, 0.03f, 0.005f, perp, dark, tip);
+        // Some blades carry a fat brown cattail seed-head just below the tip.
+        if (vrnd(h, 4) < 0.34f) {
+            const Vec3 headpos = dir * (lean * 0.85f) + Vec3{0.0f, height * 0.78f, 0.0f};
+            MeshData head = round_column(0.07f, 0.2f, Vec3{0.34f, 0.19f, 0.08f}, 6);
+            for (Vertex& v : head.vertices) {
+                v.position += headpos;
+            }
+            append(m, head);
+        }
+    }
+    return m;
+}
+
+MeshData cactus(int variant, const Vec3& color) {
+    MeshData m;
+    const f32 th = 1.35f + 0.55f * static_cast<f32>(variant & 1); // trunk height
+    append(m, round_column(0.34f, th, color, 8));
+    append(m, blob(0.17f, 0.15f, th, color)); // rounded crown
+    // An up-bent arm: a short horizontal stub from the trunk that elbows skyward.
+    auto arm = [&](f32 ang, f32 y) {
+        const Vec3 out{std::cos(ang), 0.0f, std::sin(ang)};
+        const Vec3 base{out.x * 0.18f, y, out.z * 0.18f};
+        limb(m, base, out, 0.34f, 0.12f, 0.10f, color, 6);
+        const Vec3 elbow = base + out * 0.34f;
+        limb(m, elbow, Vec3{0.0f, 1.0f, 0.0f}, 0.5f, 0.10f, 0.09f, color, 6);
+        MeshData cap = blob(0.1f, 0.1f, 0.0f, color);
+        for (Vertex& v : cap.vertices) {
+            v.position += elbow + Vec3{0.0f, 0.5f, 0.0f};
+        }
+        append(m, cap);
+    };
+    arm(0.0f, th * 0.5f);
+    if (variant != 0) {
+        arm(Pi, th * 0.62f); // a second arm on the opposite side
+    }
+    return m;
+}
+
 MeshData mushroom(const Vec3& cap, f32 scale, bool spots) {
     MeshData m;
     const Vec3 stem_c{0.93f, 0.90f, 0.82f};

@@ -22,7 +22,7 @@ namespace detail {
 // `base_y` is the plant's ground height: each vertex's height above it becomes the
 // `sway` weight so the wind shader bends tips more than roots.
 inline void append_transformed(MeshData& dst, const MeshData& src, const Mat4& xf,
-                               const Vec3& tint, f32 base_y) {
+                               const Vec3& tint, f32 base_y, f32 sway_scale = 1.0f) {
     const Mat3 nm{xf};
     const u32 base = static_cast<u32>(dst.vertices.size());
     for (const Vertex& v : src.vertices) {
@@ -30,7 +30,9 @@ inline void append_transformed(MeshData& dst, const MeshData& src, const Mat4& x
         o.position = Vec3{xf * Vec4{v.position, 1.0f}};
         o.normal = glm::normalize(nm * v.normal);
         o.color = v.color * tint;
-        o.sway = glm::max(o.position.y - base_y, 0.0f); // height above the plant base
+        // Height above the plant base drives the wind bend; `sway_scale` 0 makes a plant rigid
+        // (e.g. a cactus shouldn't wave around like grass).
+        o.sway = glm::max(o.position.y - base_y, 0.0f) * sway_scale;
         dst.vertices.push_back(o);
     }
     for (u32 i : src.indices) {
@@ -42,10 +44,12 @@ inline void append_transformed(MeshData& dst, const MeshData& src, const Mat4& x
 
 namespace detail {
 
-// Common gate for ground vegetation: above water, not bare desert, not too steep.
-// Returns the local moisture (or NaN-ish sentinel via the bool) for the caller.
+// Common gate for ground vegetation: above water, off roads/streets, not too steep, moist enough.
+// `biome_filter` (on for the lush forest-floor plants) also rejects the desert / bog / snow biomes,
+// which grow their OWN plants instead (cacti, reeds) - those placers pass biome_filter=false and do
+// their own biome check. Returns the local moisture via `out_moist`.
 inline bool veg_ground(f32 wx, f32 wz, u32 seed, f32 gh, f32 max_slope, f32 min_moist,
-                       f32& out_moist, bool town_ok = false) {
+                       f32& out_moist, bool town_ok = false, bool biome_filter = true) {
     if (gh < worldgen::water_level + 0.6f) {
         return false;
     }
@@ -61,6 +65,18 @@ inline bool veg_ground(f32 wx, f32 wz, u32 seed, f32 gh, f32 max_slope, f32 min_
         }
     }
     out_moist = worldgen::moisture(wx, wz, seed);
+    if (biome_filter) {
+        // Cheap biome proxy reusing gh + out_moist: keep the lush forest-floor plants out of the
+        // snow line, the wet bog hollows, and the hot/dry desert (which get reeds / cacti instead).
+        if (gh > 9.5f) {
+            return false;
+        }
+        const bool bog = out_moist > 0.42f && gh < worldgen::water_level + 4.5f;
+        const bool desert = out_moist < 0.08f && worldgen::temperature(wx, wz, seed) > 0.58f;
+        if (bog || desert) {
+            return false;
+        }
+    }
     if (out_moist < min_moist) {
         return false;
     }
@@ -100,11 +116,11 @@ inline MeshData build_vegetation(int cx, int cz, f32 chunk_world, u32 seed) {
         }
     };
     auto place_at = [&](const MeshData& src, f32 wx, f32 wz, f32 gh, f32 yaw, f32 sc, f32 sy,
-                        const Vec3& tint) {
+                        const Vec3& tint, bool rigid = false) {
         const Mat4 xf = glm::translate(Mat4{1.0f}, Vec3{wx, gh, wz}) *
                         glm::rotate(Mat4{1.0f}, yaw, Vec3{0.0f, 1.0f, 0.0f}) *
                         glm::scale(Mat4{1.0f}, Vec3{sc, sc * sy, sc});
-        detail::append_transformed(m, src, xf, tint, gh);
+        detail::append_transformed(m, src, xf, tint, gh, rigid ? 0.0f : 1.0f);
     };
 
     // ---- Grass: dense, everywhere it can grow; lush green when wet, tan when dry.
@@ -211,6 +227,50 @@ inline MeshData build_vegetation(int cx, int cz, f32 chunk_world, u32 seed) {
             place_at(primitives::flower(blossoms[bi]), wx + ox, wz + oz, gh2,
                      detail::hash01(detail::tree_hash(gx + k, gz, seed + 5507u)) * TwoPi, sc, 1.0f, Vec3{1.0f});
         }
+    });
+
+    // ---- Bog reeds: tall marsh reeds + cattails in the wet, low-lying swamp hollows. They sway.
+    for_cells(0.8f, seed + 5600u, [&](int gx, int gz, f32 wx, f32 wz) {
+        f32 moist;
+        const f32 gh = worldgen::height(wx, wz, seed);
+        if (!detail::veg_ground(wx, wz, seed, gh, 2.0f, 0.40f, moist, false, false)) return;
+        if (worldgen::biome_at(wx, wz, seed) != worldgen::Biome::Bog) return;
+        if (detail::hash01(detail::tree_hash(gx, gz, seed + 5603u)) > 0.55f) return;
+        const Vec3 reedc = glm::mix(Vec3{0.30f, 0.40f, 0.24f}, Vec3{0.42f, 0.50f, 0.28f},
+                                    detail::hash01(detail::tree_hash(gx, gz, seed + 5604u)));
+        const int n = 3 + static_cast<int>(detail::hash01(detail::tree_hash(gx, gz, seed + 5605u)) * 3.0f);
+        const f32 sc = 0.85f + detail::hash01(detail::tree_hash(gx, gz, seed + 5606u)) * 0.6f;
+        place_at(primitives::reed(n, reedc), wx, wz, gh,
+                 detail::hash01(detail::tree_hash(gx, gz, seed + 5607u)) * TwoPi, sc, 1.0f, Vec3{1.0f});
+    });
+
+    // ---- Desert cacti: sparse saguaros standing in the dunes. Rigid (no wind sway).
+    for_cells(3.4f, seed + 5700u, [&](int gx, int gz, f32 wx, f32 wz) {
+        f32 moist;
+        const f32 gh = worldgen::height(wx, wz, seed);
+        if (!detail::veg_ground(wx, wz, seed, gh, 1.1f, -1.0f, moist, false, false)) return;
+        if (worldgen::biome_at(wx, wz, seed) != worldgen::Biome::Desert) return;
+        if (detail::hash01(detail::tree_hash(gx, gz, seed + 5703u)) > 0.28f) return;
+        const int var = static_cast<int>(detail::tree_hash(gx, gz, seed + 5704u) % 2u);
+        const f32 sc = 0.85f + detail::hash01(detail::tree_hash(gx, gz, seed + 5705u)) * 0.7f;
+        const Vec3 green = glm::mix(Vec3{0.27f, 0.42f, 0.24f}, Vec3{0.34f, 0.48f, 0.28f},
+                                    detail::hash01(detail::tree_hash(gx, gz, seed + 5706u)));
+        place_at(primitives::cactus(var, green), wx, wz, gh,
+                 detail::hash01(detail::tree_hash(gx, gz, seed + 5707u)) * TwoPi, sc, 1.0f, Vec3{1.0f},
+                 /*rigid=*/true);
+    });
+
+    // ---- Desert dry tufts: sparse bleached grass clumps scattered between the dunes.
+    for_cells(1.2f, seed + 5800u, [&](int gx, int gz, f32 wx, f32 wz) {
+        f32 moist;
+        const f32 gh = worldgen::height(wx, wz, seed);
+        if (!detail::veg_ground(wx, wz, seed, gh, 1.4f, -1.0f, moist, false, false)) return;
+        if (worldgen::biome_at(wx, wz, seed) != worldgen::Biome::Desert) return;
+        if (detail::hash01(detail::tree_hash(gx, gz, seed + 5803u)) > 0.3f) return;
+        const Vec3 dry{0.72f, 0.63f, 0.34f};
+        const f32 sc = 0.7f + detail::hash01(detail::tree_hash(gx, gz, seed + 5805u)) * 0.6f;
+        place_at(primitives::grass_tuft(3, dry), wx, wz, gh,
+                 detail::hash01(detail::tree_hash(gx, gz, seed + 5807u)) * TwoPi, sc, 0.8f, Vec3{1.0f});
     });
 
     return m;
