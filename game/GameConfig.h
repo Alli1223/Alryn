@@ -7,14 +7,31 @@
 #include <Alryn/Core/Types.h>
 #include <Alryn/Platform/Events.h>
 
+#include <chrono>
+#include <cstdlib>
+#include <random>
+
 namespace alryn::game {
 
 // The UDP port the listen/dedicated server binds and clients connect to.
 inline constexpr u16 kPort = 24650;
 
-// Shared world seed used by the dedicated and in-process listen servers (clients
-// receive it in the Welcome and regenerate identical terrain from it).
-inline constexpr u32 kWorldSeed = 1337u;
+// The world seed the dedicated / in-process listen server starts from (clients receive it in the
+// Welcome and regenerate identical terrain from it). It's RANDOMISED once per process launch, so
+// every game starts in a fresh world - set `ALRYN_SEED=<number>` to pin a specific world (to replay
+// a layout you liked, or for reproducible tests). Computed once and cached for the process so the
+// whole launch agrees on one seed; the chosen seed is logged on join.
+inline u32 world_seed() {
+    static const u32 seed = []() -> u32 {
+        if (const char* env = std::getenv("ALRYN_SEED")) {
+            return static_cast<u32>(std::strtoul(env, nullptr, 10));
+        }
+        std::random_device rd;
+        const auto now = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+        return static_cast<u32>(rd()) ^ static_cast<u32>(now);
+    }();
+    return seed;
+}
 
 // Keyboard scancodes used by the client (GLFW GLFW_KEY_* values).
 namespace key {

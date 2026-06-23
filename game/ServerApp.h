@@ -19,12 +19,14 @@ public:
 
 protected:
     void on_init() override {
-        if (!server_.start(kPort, kWorldSeed)) {
+        const u32 seed = world_seed();
+        if (!server_.start(kPort, seed)) {
             ALRYN_FATAL("Failed to start server on port {}", kPort);
             close();
             return;
         }
-        ALRYN_INFO("Dedicated server listening on port {} - Ctrl+C to stop.", kPort);
+        ALRYN_INFO("Dedicated server listening on port {} (world seed {}) - Ctrl+C to stop.", kPort,
+                   seed);
     }
     void on_update(Timestep dt) override {
         server_.tick(dt);

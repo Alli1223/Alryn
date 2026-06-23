@@ -168,8 +168,9 @@ void ClientApp::enter_game(bool host_local, std::string host) {
     host_ = std::move(host);
     host_local_ = host_local;
     if (host_local_) {
-        if (local_server_.start(kPort, kWorldSeed)) {
-            ALRYN_INFO("Hosting a local listen server on port {}", kPort);
+        const u32 seed = world_seed();
+        if (local_server_.start(kPort, seed)) {
+            ALRYN_INFO("Hosting a local listen server on port {} (world seed {})", kPort, seed);
         } else {
             ALRYN_WARN("Port {} busy - joining the existing server instead", kPort);
             host_local_ = false;
