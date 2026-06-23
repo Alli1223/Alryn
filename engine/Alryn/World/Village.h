@@ -135,7 +135,7 @@ inline std::vector<VillageGate> compute_gates(const worldgen::Village& v, u32 se
         for (const Vec2& p : pts) {
             spread = std::max(spread, std::abs(glm::dot(p - gpos, tangent)));
         }
-        const f32 half = glm::clamp(spread + roads::road_half_width + 0.4f, kGateHalf, kGateMaxHalf);
+        const f32 half = glm::clamp(spread + roads::road_half_width + 0.9f, kGateHalf, kGateMaxHalf);
         gates.push_back(VillageGate{ang, gpos, half});
     }
     if (gates.empty()) {

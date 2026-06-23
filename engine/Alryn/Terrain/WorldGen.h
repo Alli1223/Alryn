@@ -16,41 +16,67 @@ namespace alryn::worldgen {
 inline constexpr f32 voxel_size = 0.5f;
 inline constexpr f32 water_level = -1.0f;
 
-// Smooth surface height at (x, z): blends ocean / lowland / mountains from a
-// low-frequency "region" field, then layers rolling hills + finer detail on land
-// for a wild, undulating forested landscape.
+// --- Rivers ---------------------------------------------------------------
+// Winding river network: the zero-contour of a low-frequency field, so rivers meander across the
+// land. `river_amount` is ~1 in the channel and fades to 0 at the banks (the carve weight). Pure
+// function of position (independent of height), so it's cheap to query anywhere - height() carves
+// channels with it, roads cross them (and bridge them), and the map draws them as water.
+inline f32 river_field(f32 x, f32 z, u32 seed) {
+    return noise::fbm2d(x * 0.0035f, z * 0.0035f, 2, 2.0f, 0.5f, seed + 808u);
+}
+inline f32 river_amount(f32 x, f32 z, u32 seed) {
+    return glm::smoothstep(0.024f, 0.0f, std::abs(river_field(x, z, seed)));
+}
+inline bool in_river(f32 x, f32 z, u32 seed) { return river_amount(x, z, seed) > 0.5f; }
+
+// Smooth surface height at (x, z): blends ocean / lowland / big mountain ranges from a
+// low-frequency "region" field, layers rolling hills + craggy ridge peaks + finer detail on land,
+// then carves winding river channels - a varied landscape with mountains between the valleys.
 inline f32 height(f32 x, f32 z, u32 seed) {
     const f32 region = noise::fbm2d(x * 0.006f, z * 0.006f, 3, 2.0f, 0.5f, seed + 101u);
-    const f32 continental = glm::smoothstep(-0.30f, 0.10f, region); // 0 ocean .. 1 land
-    const f32 mountainous = glm::smoothstep(0.35f, 0.90f, region);  // 0 .. 1 mountains
+    // Land-dominated (only the lowest region is ocean), so the continents are broad + connectable -
+    // towns aren't stranded on little islands - with rivers + the odd sea for water variety.
+    const f32 continental = glm::smoothstep(-0.55f, -0.05f, region);
+    // Mountains are RARER than lowland (only the highest region values), so most of the land is
+    // walkable valley that towns settle + roads link - with tall ranges rising between some of them.
+    const f32 mountainous = glm::smoothstep(0.46f, 0.86f, region);
 
-    const f32 base = glm::mix(-8.0f, 1.0f, continental) + mountainous * 7.0f;
+    const f32 base = glm::mix(-8.0f, 1.0f, continental) + mountainous * 11.0f; // taller ranges
 
     // Big rolling hills over all land (gentle, walkable, immersive undulation).
     const f32 hills = noise::fbm2d(x * 0.017f, z * 0.017f, 4, 2.0f, 0.5f, seed + 7u);
     // Mid-frequency terrain shape (bumps, dells) + fine surface roughness.
     const f32 detail = noise::fbm2d(x * 0.045f, z * 0.045f, 5, 2.0f, 0.5f, seed);
     const f32 fine = noise::fbm2d(x * 0.14f, z * 0.14f, 3, 2.0f, 0.5f, seed + 9u);
+    // Ridged crags on mountainous ground -> craggy summits with lower saddles (passes) between them.
+    const f32 ridge = 1.0f - std::abs(noise::fbm2d(x * 0.010f, z * 0.010f, 3, 2.0f, 0.5f, seed + 333u));
 
-    const f32 land_amp = glm::mix(2.2f, 9.0f, mountainous) * continental + 0.4f;
-    return base + continental * hills * 2.6f + land_amp * (detail * 0.7f + fine * 0.22f);
+    const f32 land_amp = glm::mix(2.2f, 10.0f, mountainous) * continental + 0.4f;
+    f32 h = base + continental * hills * 2.8f + mountainous * mountainous * ridge * 9.0f +
+            land_amp * (detail * 0.7f + fine * 0.22f);
+
+    // Carve winding river channels into the land (the water plane fills them; roads bridge them).
+    const f32 river = river_amount(x, z, seed) * continental;
+    h = glm::mix(h, std::min(h, water_level - 0.7f), river);
+    return h;
 }
 
 inline f32 density(const Vec3& p, u32 seed) {
     return p.y - height(p.x, p.z, seed);
 }
 
-// Wetness field: drives lush forest (wet) vs open meadow / dry sand (dry). Biased
-// positive so most of the land reads as green woodland, with drier clearings.
+// Wetness field: drives lush forest (wet) vs open meadow / dry sand (dry). Biased positive so most
+// land reads as green woodland, with drier clearings. LOW frequency so a biome tends to hold for a
+// whole stretch between towns before it changes, rather than speckling.
 inline f32 moisture(f32 x, f32 z, u32 seed) {
-    return noise::fbm2d(x * 0.018f, z * 0.018f, 3, 2.0f, 0.5f, seed + 202u) + 0.14f;
+    return noise::fbm2d(x * 0.0075f, z * 0.0075f, 3, 2.0f, 0.5f, seed + 202u) + 0.14f;
 }
 
-// Temperature field: large, very-low-frequency climate zones (so hot/cold regions are big and
-// road-spanning, not speckled), and colder at altitude. ~0 cold .. 1 hot. With moisture + height
-// this is what separates desert (hot+dry) from bog (wet lowland) from forest/plains/mountains.
+// Temperature field: VERY large, low-frequency climate zones (so a desert / cold belt spans many
+// towns, not a single patch), colder at altitude. ~0 cold .. 1 hot. With moisture + height this is
+// what separates desert (hot+dry) from bog (wet lowland) from forest/plains/mountains.
 inline f32 temperature(f32 x, f32 z, u32 seed) {
-    const f32 base = noise::fbm2d(x * 0.0035f, z * 0.0035f, 3, 2.0f, 0.5f, seed + 511u);
+    const f32 base = noise::fbm2d(x * 0.0013f, z * 0.0013f, 3, 2.0f, 0.5f, seed + 511u);
     const f32 warm = glm::smoothstep(-0.5f, 0.5f, base);
     const f32 h = height(x, z, seed);
     return glm::clamp(warm - glm::smoothstep(3.0f, 12.0f, h) * 0.55f, 0.0f, 1.0f);
@@ -151,7 +177,7 @@ inline std::optional<Village> village_at(int vcx, int vcz, u32 seed) {
     const f32 settle = noise::fbm2d(static_cast<f32>(vcx) * 0.16f, static_cast<f32>(vcz) * 0.16f,
                                     2, 2.0f, 0.5f, seed + 777u);
     const f32 keep = glm::smoothstep(-0.40f, 0.18f, settle);
-    if (detail::hash01(detail::tree_hash(vcx, vcz, salt)) > 0.5f * (0.35f + 0.65f * keep)) {
+    if (detail::hash01(detail::tree_hash(vcx, vcz, salt)) > 0.62f * (0.45f + 0.55f * keep)) {
         return std::nullopt; // only some cells grow a town (sparser out in the wild)
     }
     const f32 sz = detail::hash01(detail::tree_hash(vcx, vcz, salt + 8u));
@@ -164,12 +190,12 @@ inline std::optional<Village> village_at(int vcx, int vcz, u32 seed) {
     const f32 cx = (static_cast<f32>(vcx) + 0.5f) * village_cell + jx;
     const f32 cz = (static_cast<f32>(vcz) + 0.5f) * village_cell + jz;
     const f32 gh = height(cx, cz, seed);
-    if (gh < water_level + 2.0f || gh > 7.0f) {
-        return std::nullopt;
+    if (gh < water_level + 2.0f || gh > 9.0f) {
+        return std::nullopt; // not in a buildable valley (above water, below the mountain slopes)
     }
     for (f32 ox : {-half, 0.0f, half}) {
         for (f32 oz : {-half, 0.0f, half}) {
-            if (std::abs(height(cx + ox, cz + oz, seed) - gh) > 2.8f) {
+            if (std::abs(height(cx + ox, cz + oz, seed) - gh) > 3.6f) {
                 return std::nullopt; // not flat enough for a town of this size
             }
         }

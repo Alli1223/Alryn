@@ -2,6 +2,7 @@
 
 #include <Alryn/Core/Density.h>
 #include <Alryn/Core/Log.h>
+#include <Alryn/Terrain/RoadNetwork.h>
 #include <Alryn/Terrain/WorldGen.h>
 #include <Alryn/World/VehicleTypes.h>
 #include <Alryn/World/Village.h>
@@ -57,6 +58,11 @@ Vec3 GameServer::spawn_point(net::PlayerId id) const {
                     continue; // only the shell of ring r
                 }
                 if (const auto v = worldgen::village_at(ocx + dx, ocz + dz, seed)) {
+                    // Only spawn in a town that's actually road-connected to others, so the player
+                    // always starts somewhere they can take a haul from (never a stranded town).
+                    if (roads::reachable_towns(v->center, seed, 1).empty()) {
+                        continue;
+                    }
                     const f32 d = glm::length(v->center);
                     if (d < best) {
                         best = d;

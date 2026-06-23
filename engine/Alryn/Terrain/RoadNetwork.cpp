@@ -25,9 +25,22 @@ bool precedes(int acx, int acz, int bcx, int bcz) {
     return acz != bcz ? acz < bcz : acx < bcx;
 }
 
-// Cost of routing a road through (x,z): a strong penalty for being at/under water, so
-// the refinement bends the road onto dry land.
+// A shallow RIVER channel (a winding river carved just below the waterline), as opposed to deep
+// ocean/lake. Roads cross rivers (a bridge spans them) rather than detouring around them, so the
+// road's water-avoidance ignores these. The threshold is LOW so the whole carved band counts -
+// including its shallow edges, which dip just below the waterline but aren't the river's deep middle
+// (otherwise a road would be dropped at the river's banks).
+bool crossable_river(const Vec2& p, u32 seed) {
+    return worldgen::river_amount(p.x, p.y, seed) > 0.04f &&
+           worldgen::height(p.x, p.y, seed) > worldgen::water_level - 2.5f;
+}
+
+// Cost of routing a road through (x,z): a strong penalty for being at/under water, so the refinement
+// bends the road onto dry land - but RIVERS are crossed (bridged), not avoided.
 f32 water_cost(const Vec2& p, u32 seed) {
+    if (crossable_river(p, seed)) {
+        return 0.0f;
+    }
     const f32 h = worldgen::height(p.x, p.y, seed);
     const f32 below = (worldgen::water_level + 1.2f) - h; // >0 when too low/wet
     if (below <= 0.0f) {
@@ -74,10 +87,12 @@ std::vector<Vec2> route_impl(const Vec2& pa, const Vec2& pb, u32 seed) {
         return pa + along * t + perp * off[i];
     };
     auto in_water = [&](const Vec2& p) {
-        return worldgen::height(p.x, p.y, seed) < worldgen::water_level + 0.4f;
+        // A river is crossable (bridged), so it doesn't count as water the road must avoid/drop.
+        return !crossable_river(p, seed) &&
+               worldgen::height(p.x, p.y, seed) < worldgen::water_level + 0.4f;
     };
 
-    const f32 max_off = std::min(span * 0.5f, 60.0f);
+    const f32 max_off = std::min(span * 0.6f, 120.0f); // bend further to snake around water bodies
     constexpr f32 eps = 1.5f;
     constexpr f32 step = 8.0f;
     for (int it = 0; it < 24; ++it) {
@@ -197,7 +212,128 @@ std::unordered_map<CellKey, SegList, CellKeyHash> g_owned; // edges owned by a t
 std::mutex g_window_mutex;
 std::unordered_map<CellKey, SegList, CellKeyHash> g_window; // merged segs near a query cell
 
-// Segments of every road owned by the town (if any) in village cell (cx,cz).
+// ---- Routed-polyline cache (canonical cell pair) --------------------------
+// route() is the expensive bit (iterative water-avoidance + meander). Cache it per unordered town
+// pair so desired_links / owned_segments / town_links don't recompute the same road.
+struct EdgeKey {
+    u32 seed;
+    int acx, acz, bcx, bcz;
+    bool operator==(const EdgeKey& o) const {
+        return seed == o.seed && acx == o.acx && acz == o.acz && bcx == o.bcx && bcz == o.bcz;
+    }
+};
+struct EdgeKeyHash {
+    usize operator()(const EdgeKey& k) const {
+        usize h = std::hash<u32>{}(k.seed);
+        for (int v : {k.acx, k.acz, k.bcx, k.bcz}) {
+            h ^= std::hash<int>{}(v) + 0x9E3779B9u + (h << 6) + (h >> 2);
+        }
+        return h;
+    }
+};
+std::mutex g_route_mutex;
+std::unordered_map<EdgeKey, std::shared_ptr<const std::vector<Vec2>>, EdgeKeyHash> g_route;
+
+bool cell_less(int acx, int acz, int bcx, int bcz) {
+    return acz != bcz ? acz < bcz : acx < bcx;
+}
+
+// The routed polyline between the towns in two cells (canonical order; empty if either has no town
+// or they can't be linked on land). Cached.
+std::shared_ptr<const std::vector<Vec2>> routed(u32 seed, int acx, int acz, int bcx, int bcz) {
+    if (!cell_less(acx, acz, bcx, bcz)) {
+        std::swap(acx, bcx);
+        std::swap(acz, bcz);
+    }
+    const EdgeKey key{seed, acx, acz, bcx, bcz};
+    {
+        std::lock_guard<std::mutex> lock(g_route_mutex);
+        const auto it = g_route.find(key);
+        if (it != g_route.end()) {
+            return it->second;
+        }
+    }
+    auto poly = std::make_shared<std::vector<Vec2>>();
+    const auto a = town_at(acx, acz, seed);
+    const auto b = town_at(bcx, bcz, seed);
+    if (a && b) {
+        *poly = route(a->center, b->center, seed);
+    }
+    std::lock_guard<std::mutex> lock(g_route_mutex);
+    return g_route.emplace(key, std::move(poly)).first->second;
+}
+
+// ---- Desired links: each town wants its nearest few routable neighbours ----
+std::mutex g_desired_mutex;
+std::unordered_map<CellKey, std::shared_ptr<const std::vector<CellKey>>, CellKeyHash> g_desired;
+
+std::shared_ptr<const std::vector<CellKey>> desired_links(u32 seed, int cx, int cz) {
+    const CellKey key{seed, cx, cz};
+    {
+        std::lock_guard<std::mutex> lock(g_desired_mutex);
+        const auto it = g_desired.find(key);
+        if (it != g_desired.end()) {
+            return it->second;
+        }
+    }
+    auto out = std::make_shared<std::vector<CellKey>>();
+    if (const auto a = town_at(cx, cz, seed)) {
+        // All neighbouring towns within reach, by distance (cheap - no routing yet).
+        std::vector<std::pair<f32, CellKey>> cand;
+        for (int dz = -road_max_cells; dz <= road_max_cells; ++dz) {
+            for (int dx = -road_max_cells; dx <= road_max_cells; ++dx) {
+                if (dx == 0 && dz == 0) {
+                    continue;
+                }
+                if (const auto b = town_at(cx + dx, cz + dz, seed)) {
+                    cand.push_back({glm::length(b->center - a->center), CellKey{seed, cx + dx, cz + dz}});
+                }
+            }
+        }
+        std::sort(cand.begin(), cand.end(), [](const auto& l, const auto& r) {
+            if (l.first != r.first) {
+                return l.first < r.first;
+            }
+            return l.second.cz != r.second.cz ? l.second.cz < r.second.cz : l.second.cx < r.second.cx;
+        });
+        // Route the nearest candidates (only) in order until we have road_links_per_town that are
+        // reachable on land - so we pay route() for just a handful per town. Capped attempts bound
+        // the cost: if the nearest few aren't routable (a coastal town), we don't route the whole
+        // neighbourhood. (With the land-dominated terrain the nearest are almost always routable.)
+        constexpr int kMaxRouteAttempts = 8;
+        int attempts = 0;
+        for (const auto& [d, cell] : cand) {
+            if (static_cast<int>(out->size()) >= road_links_per_town || attempts >= kMaxRouteAttempts) {
+                break;
+            }
+            ++attempts;
+            if (!routed(seed, cx, cz, cell.cx, cell.cz)->empty()) {
+                out->push_back(cell);
+            }
+        }
+    }
+    std::lock_guard<std::mutex> lock(g_desired_mutex);
+    return g_desired.emplace(key, std::move(out)).first->second;
+}
+
+// An edge between two town cells is built iff EITHER endpoint wants it (it's among that town's
+// nearest few). This guarantees every town links to its nearest neighbours - no town is stranded.
+bool edge_wanted(u32 seed, int acx, int acz, int bcx, int bcz) {
+    for (const CellKey& k : *desired_links(seed, acx, acz)) {
+        if (k.cx == bcx && k.cz == bcz) {
+            return true;
+        }
+    }
+    for (const CellKey& k : *desired_links(seed, bcx, bcz)) {
+        if (k.cx == acx && k.cz == acz) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Segments of every road owned by the town (if any) in village cell (cx,cz): the wanted edges to
+// nearer-ordered cells (the precedes owner builds each edge exactly once).
 SegList owned_segments(u32 seed, int cx, int cz) {
     const CellKey key{seed, cx, cz};
     {
@@ -209,19 +345,15 @@ SegList owned_segments(u32 seed, int cx, int cz) {
     }
 
     auto segs = std::make_shared<std::vector<Segment>>();
-    if (const auto a = town_at(cx, cz, seed)) {
+    if (town_at(cx, cz, seed)) {
         for (int dz = -road_max_cells; dz <= road_max_cells; ++dz) {
             for (int dx = -road_max_cells; dx <= road_max_cells; ++dx) {
-                if (dx == 0 && dz == 0) {
-                    continue;
+                const int bcx = cx + dx, bcz = cz + dz;
+                if ((dx == 0 && dz == 0) || !precedes(cx, cz, bcx, bcz)) {
+                    continue; // self, or the other town owns this edge
                 }
-                const int bcx = cx + dx;
-                const int bcz = cz + dz;
-                if (!precedes(cx, cz, bcx, bcz)) {
-                    continue; // the other town owns this edge
-                }
-                if (const auto b = town_at(bcx, bcz, seed)) {
-                    polyline_to_segments(route(a->center, b->center, seed), *segs);
+                if (town_at(bcx, bcz, seed) && edge_wanted(seed, cx, cz, bcx, bcz)) {
+                    polyline_to_segments(*routed(seed, cx, cz, bcx, bcz), *segs);
                 }
             }
         }
@@ -257,8 +389,9 @@ SegList window_segments(u32 seed, int qcx, int qcz) {
 
 // ---- Town graph (for multi-hop routing through intermediate towns) --------
 
-// Neighbour town cells of (cx,cz) that have an actual land road, cached. (Reuses route() to test
-// linkage, which is the same per-edge road the renderer draws, so the graph + the roads agree.)
+// Neighbour town cells of (cx,cz) over the road graph, cached. An edge is a real built road (the
+// `edge_wanted` rule - either town wants the other among its nearest few), so the graph + the drawn
+// roads agree exactly, and the graph is connected (every town reaches its nearest neighbours).
 std::mutex g_links_mutex;
 std::unordered_map<CellKey, std::shared_ptr<const std::vector<CellKey>>, CellKeyHash> g_links;
 
@@ -272,14 +405,13 @@ std::shared_ptr<const std::vector<CellKey>> town_links(u32 seed, int cx, int cz)
         }
     }
     auto links = std::make_shared<std::vector<CellKey>>();
-    if (const auto a = town_at(cx, cz, seed)) {
+    if (town_at(cx, cz, seed)) {
         for (int dz = -road_max_cells; dz <= road_max_cells; ++dz) {
             for (int dx = -road_max_cells; dx <= road_max_cells; ++dx) {
                 if (dx == 0 && dz == 0) {
                     continue;
                 }
-                const auto b = town_at(cx + dx, cz + dz, seed);
-                if (b && !route(a->center, b->center, seed).empty()) {
+                if (town_at(cx + dx, cz + dz, seed) && edge_wanted(seed, cx, cz, cx + dx, cz + dz)) {
                     links->push_back(CellKey{seed, cx + dx, cz + dz});
                 }
             }
