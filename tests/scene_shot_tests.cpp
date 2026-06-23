@@ -17,7 +17,9 @@
 #include <Alryn/World/Village.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -42,7 +44,8 @@ Vec3 pixel(const std::vector<u8>& px, u32 w, u32 x, u32 y) {
 // Everything is translated by -focus so coordinates stay small and the camera frames it.
 void render_world(test::OffscreenRenderer& r, u32 seed, const Vec2& focus, f32 radius,
                   const std::string& out, f32 cam_height_mul = 1.95f, f32 cam_back_mul = 0.85f,
-                  const Vec3* eye_rel = nullptr, const Vec3* target_rel = nullptr) {
+                  const Vec3* eye_rel = nullptr, const Vec3* target_rel = nullptr,
+                  bool with_wagon = false, f32 wagon_yaw = 0.0f) {
     constexpr f32 voxel = 1.0f;
     constexpr int cv = 16;                 // voxels per chunk
     constexpr f32 cw = static_cast<f32>(cv) * voxel; // chunk world size (16 m)
@@ -104,6 +107,20 @@ void render_world(test::OffscreenRenderer& r, u32 seed, const Vec2& focus, f32 r
                                                                         : Vec4{1.0f};
                     add(part.mesh, model, tint);
                 }
+            }
+        }
+    }
+    // The cargo wagon sitting on the road at the focus (the transport entity in its landscape).
+    if (with_wagon) {
+        const f32 gy = worldgen::height(focus.x, focus.y, seed);
+        // The wagon mesh faces local +X; the client renders it with rotate(-yaw) to face travel.
+        const Mat4 wm = glm::translate(Mat4{1.0f}, Vec3{0.0f, gy, 0.0f}) *
+                        glm::rotate(Mat4{1.0f}, -wagon_yaw, Vec3{0.0f, 1.0f, 0.0f});
+        add(PropLibrary::build_wagon().parts[0].mesh, wm);
+        const MeshData wheel = PropLibrary::build_wagon_wheel().parts[0].mesh;
+        for (const f32 sx : {-kWagonWheelX, kWagonWheelX}) {
+            for (const f32 sz : {-kWagonWheelZ, kWagonWheelZ}) {
+                add(wheel, wm * glm::translate(Mat4{1.0f}, Vec3{sx, kWagonWheelRadius, sz}));
             }
         }
     }
@@ -386,6 +403,57 @@ TEST_CASE("Scene shot: real-world towns + the roads between them") {
         render_world(renderer, seed, fc, span, (executable_dir() / "world_road.ppm").string(),
                      1.0f, 1.0f, &eye, &tgt);
     }
+}
+
+// Wagon-on-road vistas across the biomes the roads cross (forest / plains / desert / bog /
+// mountains), framed low along the road so the cart sits in its landscape. These are the baseline
+// aesthetic shots to compare against reference art (`make shots` -> wagon_<biome>.png).
+TEST_CASE("Scene shot: the wagon on roads across biomes") {
+    test::OffscreenRenderer renderer;
+    if (!renderer.init(960, 600)) {
+        MESSAGE("No Vulkan device/shaders - skipping wagon vista shots");
+        return;
+    }
+    const u32 seed = 1337u;
+
+    // Collect one OPEN-ROAD point per biome (out in the wilderness between towns, so the cart sits
+    // in the biome's landscape, not on town ground) by walking the road segments over a wide area.
+    std::map<worldgen::Biome, Vec2> spots;
+    for (const roads::Segment& s : roads::gather(Vec2{0.0f, 0.0f}, 1600.0f, seed)) {
+        const Vec2 mid = (s.a + s.b) * 0.5f;
+        if (worldgen::height(mid.x, mid.y, seed) < worldgen::water_level + 0.6f) {
+            continue;
+        }
+        if (worldgen::inside_village(mid.x, mid.y, seed, 12.0f)) {
+            continue; // keep clear of towns - we want the open road in each biome
+        }
+        const worldgen::Biome b = worldgen::biome_at(mid.x, mid.y, seed);
+        spots.emplace(b, mid); // first open-road point found in each biome
+    }
+    REQUIRE_FALSE(spots.empty());
+
+    int shot = 0;
+    for (const auto& [biome, p] : spots) {
+        const Vec2 tan = roads::tangent(p.x, p.y, seed);
+        const f32 wagon_yaw = std::atan2(tan.y, tan.x);
+        const Vec3 dir{tan.x, 0.0f, tan.y};
+        const f32 span = 17.0f;
+        // The wagon sits at the terrain height (render_world only shifts in xz), so anchor the
+        // camera to that ground height too - otherwise on a mountain the camera ends up under it.
+        const f32 gy = worldgen::height(p.x, p.y, seed);
+        // A low, close 3/4 camera behind + beside the cart, looking along the road so the wagon is
+        // prominent in the foreground with the biome stretching out behind it.
+        const Vec3 eye = -dir * (span * 0.55f) + Vec3{span * 0.34f, gy + span * 0.46f, span * 0.18f};
+        const Vec3 tgt = dir * (span * 0.25f) + Vec3{0.0f, gy + 1.1f, 0.0f};
+        const std::string name =
+            std::string("wagon_") + worldgen::biome_name(biome) + ".ppm";
+        std::string low = name;
+        for (char& ch : low) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        render_world(renderer, seed, p, span, (executable_dir() / low).string(), 1.0f, 1.0f, &eye,
+                     &tgt, /*with_wagon=*/true, wagon_yaw);
+        ++shot;
+    }
+    CHECK(shot > 0);
 }
 
 TEST_CASE("Scene shot: a medieval town overview (walls, houses, market, lanterns)") {
