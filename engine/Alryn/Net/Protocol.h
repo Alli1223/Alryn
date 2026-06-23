@@ -111,6 +111,9 @@ struct WagonState {
     u8 has_horse = 0;  // 1 = render the pulling horse
     u8 goods_aboard = 0; // crates still in the bed
     u8 goods_total = 0;  // crates the full load carries (reward scales by aboard/total)
+    u8 wheel_off = 0;     // 1 = a wheel has come off (active cart halted until refitted)
+    Vec3 wheel_pos{0.0f}; // the fallen/carried wheel's world position (when wheel_off)
+    u8 repair = 0;        // 0..255 wheel re-attach progress
 };
 
 // A burning building, broadcast so clients render flames at its position. A low

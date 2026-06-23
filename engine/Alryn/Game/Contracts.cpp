@@ -250,7 +250,17 @@ void GameServer::update_contracts(Timestep dt, const DensitySampler& density) {
                 if (!pl.input.grab) {
                     continue;
                 }
+                if (wheel_carrier_ == id) {
+                    continue; // hands full with the wheel; it refits itself by the cart
+                }
                 const Vec3 ppos = pl.controller.position();
+                // 0) A wheel has come off: pick up the fallen wheel (E within reach), if not already
+                // carrying something. Carrying the wheel back to the cart refits it (update_wheel).
+                if (wheel_off_ && wheel_carrier_ == 0 && !pl.carrying &&
+                    glm::length(ppos - wheel_pos_) < kWheelPickupRange) {
+                    wheel_carrier_ = id;
+                    continue;
+                }
                 // 1) Carrying a crate: load it back into the cart's bed when close enough.
                 if (pl.carrying) {
                     if (cargo_.size() < active_.goods_total &&
@@ -308,6 +318,7 @@ void GameServer::update_contracts(Timestep dt, const DensitySampler& density) {
             if (pilot_ != 0 && players_.count(pilot_) == 0u) {
                 pilot_ = 0;
             }
+            update_wheel(dt, density);
             update_wagon(dt, density);
             if (contract_phase_ == ContractPhase::Active) {
                 update_ambush(dt, density);
@@ -443,6 +454,11 @@ void GameServer::accept_contract(const Wagon& chosen, WagonMode mode) {
     wagon_prev_pos_ = active_.position;
     wagon_vel_ = Vec2{0.0f};
     wagon_vy_ = 0.0f;
+    wheel_off_ = false;
+    wheel_carrier_ = 0;
+    wheel_repair_ = 0.0f;
+    wheel_break_cd_ = kWheelBreakMinTime + (kWheelBreakAvgTime - kWheelBreakMinTime) *
+                                               detail::hash01(active_.id ^ 0x5733EEDu);
     goods_.clear();
     active_mode_ = mode;
     tower_ = 0;
@@ -533,6 +549,15 @@ void GameServer::accept_contract(const Wagon& chosen, WagonMode mode) {
 
 void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
     Wagon& w = active_;
+    // A wheel is off: the cart is stranded - it can't roll until a player refits the wheel. Keep it
+    // grounded + zero its velocity (so cargo settles), but don't tow or advance it.
+    if (wheel_off_) {
+        w.position.y = ground_at(density, w.position.x, w.position.z);
+        wagon_vel_ = Vec2{0.0f};
+        wagon_prev_pos_ = w.position;
+        seat_occupants(vehicle_type(w.type));
+        return;
+    }
     const VehicleType& vt = vehicle_type(w.type);
     const f32 hitch = vt.horse_drawn() ? vt.reach() + 1.8f : kHitchDist;
     const f32 dmg = damage_speed_factor(w.health / kWagonHealth); // a battered cart moves slower
@@ -928,8 +953,71 @@ void GameServer::end_contract_cleanup() {
     has_horse_ = false;
     cargo_.clear();
     goods_.clear();
+    wheel_off_ = false;
+    wheel_carrier_ = 0;
+    wheel_repair_ = 0.0f;
     for (auto& [pid, pl] : players_) {
         pl.carrying = false;
+    }
+}
+
+// Knock a wheel off the active cart, dropping it on the ground beside the cart. The cart can't roll
+// again until a player carries this wheel back to it and refits it (update_wheel).
+void GameServer::force_wheel_break() {
+    if (contract_phase_ != ContractPhase::Active || wheel_off_) {
+        return;
+    }
+    wheel_off_ = true;
+    wheel_carrier_ = 0;
+    wheel_repair_ = 0.0f;
+    const Vec3& p = active_.position;
+    const Vec2 side{-std::sin(active_.yaw), std::cos(active_.yaw)}; // perpendicular to travel
+    const f32 sx = p.x + side.x * 2.6f;
+    const f32 sz = p.z + side.y * 2.6f;
+    wheel_pos_ = Vec3{sx, worldgen::height(sx, sz, sampler_.seed()), sz};
+    ALRYN_INFO("A wheel came off the wagon - fetch it and refit it!");
+}
+
+// Wheel-breakdown event: while rolling, a wheel can work loose (the cart then halts in update_wagon);
+// a player picks up the fallen wheel (E) and carries it back, and holding it by the cart channels the
+// re-attach. On refit the cart rolls again and the next break is armed.
+void GameServer::update_wheel(Timestep dt, const DensitySampler& density) {
+    (void)density;
+    if (contract_phase_ != ContractPhase::Active) {
+        return;
+    }
+    Wagon& w = active_;
+    if (!wheel_off_) {
+        // Wheels only shed while the cart is actually rolling (a parked cart is fine).
+        if (glm::length(wagon_vel_) > 0.4f) {
+            wheel_break_cd_ -= dt.seconds;
+            if (wheel_break_cd_ <= 0.0f) {
+                force_wheel_break();
+            }
+        }
+        return;
+    }
+    if (wheel_carrier_ == 0) {
+        return; // lying where it fell, waiting to be picked up
+    }
+    const auto it = players_.find(wheel_carrier_);
+    if (it == players_.end()) {
+        wheel_carrier_ = 0; // the carrier left - the wheel drops where it was
+        return;
+    }
+    const Vec3 cp = it->second.controller.position();
+    wheel_pos_ = cp + Vec3{0.0f, 0.6f, 0.0f}; // carried at the waist
+    if (glm::length(Vec2{cp.x - w.position.x, cp.z - w.position.z}) < kWheelAttachRange) {
+        wheel_repair_ += dt.seconds / kWheelRepairTime; // hold by the cart to refit
+        if (wheel_repair_ >= 1.0f) {
+            wheel_off_ = false;
+            wheel_carrier_ = 0;
+            wheel_repair_ = 0.0f;
+            wheel_break_cd_ = kWheelBreakAvgTime; // back on the road; arm the next one
+            ALRYN_INFO("Wheel refitted - the wagon rolls again.");
+        }
+    } else {
+        wheel_repair_ = std::max(0.0f, wheel_repair_ - dt.seconds / kWheelRepairTime); // slips if you stray
     }
 }
 

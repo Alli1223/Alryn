@@ -136,8 +136,14 @@ void ClientApp::draw_hud() {
                 near_good = true;
             }
         }
+        const bool wheel_off = wg.wheel_off != 0;
+        const bool near_wheel = wheel_off && glm::length(wg.wheel_pos - feet) < kWheelPickupRange + 0.6f;
         std::string hint;
-        if (carrying) {
+        if (wheel_off && near_wheel) {
+            hint = "[E] pick up the wheel";
+        } else if (wheel_off) {
+            hint = "fetch the fallen wheel, carry it to the cart to refit";
+        } else if (carrying) {
             hint = "[E] load the crate into the cart";
         } else if (near_good) {
             hint = "[E] pick up the fallen crate";
@@ -149,8 +155,23 @@ void ClientApp::draw_hud() {
             hint = "[E] haul / ride the wagon";
         }
         draw.text(Vec2{24.0f, 22.0f + ts * 4.0f}, hint, ts * 0.72f, Vec4{0.66f, 0.78f, 0.7f, 1.0f});
-        // Warn when crates have bounced out and aren't recovered (pay is dropping).
-        if (short_load) {
+        // Wheel-off: a prominent centred alert + the re-attach progress bar while someone refits.
+        if (wheel_off) {
+            const char* warn = "WHEEL OFF! THE WAGON IS STRANDED";
+            draw.text(Vec2{(W - draw.text_width(warn, ts * 0.95f)) * 0.5f, H * 0.28f}, warn,
+                      ts * 0.95f, Vec4{0.96f, 0.55f, 0.28f, 1.0f});
+            const f32 rf = static_cast<f32>(wg.repair) / 255.0f;
+            if (rf > 0.01f) {
+                const f32 bw = 260.0f;
+                const f32 bx = (W - bw) * 0.5f, by = H * 0.28f + ts * 1.3f;
+                draw.rect(Vec4{bx, by, bw, 14.0f}, Vec4{0.05f, 0.05f, 0.07f, 0.75f}, 3.0f);
+                draw.rect(Vec4{bx, by, bw * rf, 14.0f}, Vec4{0.55f, 0.8f, 0.45f, 0.95f}, 3.0f);
+                const std::string rt = std::format("RE-ATTACHING  {}%", static_cast<int>(rf * 100.0f));
+                draw.text(Vec2{(W - draw.text_width(rt, ts * 0.6f)) * 0.5f, by + 18.0f}, rt,
+                          ts * 0.6f, Vec4{0.8f, 0.88f, 0.78f, 1.0f});
+            }
+        } else if (short_load) {
+            // Warn when crates have bounced out and aren't recovered (pay is dropping).
             const char* warn = "CARGO SPILLING - RECOVER THE CRATES";
             draw.text(Vec2{(W - draw.text_width(warn, ts * 0.9f)) * 0.5f, H * 0.3f}, warn,
                       ts * 0.9f, Vec4{0.95f, 0.6f, 0.3f, 1.0f});

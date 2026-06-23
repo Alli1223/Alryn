@@ -71,16 +71,34 @@ void ClientApp::draw_wagons() {
         }
         wagon_prev_[wg.id] = wg.position;
 
-        const Mat4 m = wagon_model(wg, moved);
+        Mat4 m = wagon_model(wg, moved);
+        // A wheel has come off: the cart lists onto its missing corner (front-left, index 0).
+        if (wg.wheel_off) {
+            m = m * glm::rotate(Mat4{1.0f}, 0.17f, Vec3{1.0f, 0.0f, 0.0f}) *
+                glm::rotate(Mat4{1.0f}, -0.05f, Vec3{0.0f, 0.0f, 1.0f});
+        }
         renderer_->draw(vehicle_meshes_[wg.type % vehicle_meshes_.size()], m, Vec4{tint, 1.0f});
 
-        // Wheels (scaled to the type's radius), spun by the accumulated roll.
+        // Wheels (scaled to the type's radius), spun by the accumulated roll. When a wheel is off,
+        // its mount (index 0) is left bare.
         const f32 wscale = vt.wheel_radius() / kWagonWheelRadius;
-        for (const Vec3& off : vt.wheels()) {
-            const Mat4 wm = m * glm::translate(Mat4{1.0f}, off) *
+        const std::vector<Vec3> wheels = vt.wheels();
+        for (usize wi = 0; wi < wheels.size(); ++wi) {
+            if (wg.wheel_off && wi == 0) {
+                continue; // this wheel is the one that fell off
+            }
+            const Mat4 wm = m * glm::translate(Mat4{1.0f}, wheels[wi]) *
                             glm::rotate(Mat4{1.0f}, roll, Vec3{0.0f, 0.0f, 1.0f}) *
                             glm::scale(Mat4{1.0f}, Vec3{wscale});
             renderer_->draw(wagon_wheel_mesh_, wm, Vec4{tint, 1.0f});
+        }
+        // The fallen / carried wheel, lying tilted where it dropped (or held at a player's waist).
+        if (wg.wheel_off) {
+            const Mat4 wm = glm::translate(Mat4{1.0f}, wg.wheel_pos) *
+                            glm::rotate(Mat4{1.0f}, elapsed_ * 0.4f, Vec3{0.0f, 1.0f, 0.0f}) *
+                            glm::rotate(Mat4{1.0f}, 0.55f, Vec3{1.0f, 0.0f, 0.25f}) *
+                            glm::scale(Mat4{1.0f}, Vec3{wscale});
+            renderer_->draw(wagon_wheel_mesh_, wm, Vec4{0.46f, 0.34f, 0.22f, 1.0f});
         }
 
         // The lamp: an emissive glow always, plus a warm light at night when near.

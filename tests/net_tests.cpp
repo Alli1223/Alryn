@@ -595,6 +595,92 @@ TEST_CASE("GameServer: a wagon contract is offered, accepted by vote, and ambush
     CHECK_FALSE(snap.enemies.empty());
 }
 
+// A wheel can come off mid-haul: the cart strands until a player fetches the fallen wheel and
+// carries it back to refit it. We force the break right after acceptance, confirm the cart halts,
+// then walk the player to the wheel, pick it up, and hold it by the cart until it refits.
+TEST_CASE("GameServer: a wheel comes off and a player refits it") {
+    GameServer server;
+    if (!server.start(24659, 4242u)) {
+        MESSAGE("Could not bind game server - skipping");
+        return;
+    }
+    NetClient c;
+    REQUIRE(c.connect("127.0.0.1", 24659));
+
+    PlayerId id = 0;
+    Snapshot snap{};
+    bool have_snap = false;
+    PlayerInput intent{};
+    auto pump = [&](int iterations) {
+        for (int i = 0; i < iterations; ++i) {
+            c.send_input(intent);
+            server.tick(Timestep{1.0f / 60.0f});
+            for (const ClientEvent& e : c.poll(1)) {
+                if (e.type == ClientEventType::WelcomeReceived) {
+                    id = e.welcome.your_id;
+                } else if (e.type == ClientEventType::SnapshotReceived) {
+                    snap = e.snapshot;
+                    have_snap = true;
+                }
+            }
+        }
+    };
+    pump(150);
+    REQUIRE(id != 0);
+    REQUIRE(have_snap);
+    if (server.offer_count() == 0) {
+        MESSAGE("Spawn town has no road-connected neighbour - skipping");
+        return;
+    }
+    intent.vote_wagon = snap.wagons[0].id;
+    intent.vote_mode = 1; // hire a driver
+    pump(20);
+    REQUIRE(server.contract_phase() == ContractPhase::Active);
+
+    // Knock a wheel off: the cart is stranded and stops rolling.
+    server.force_wheel_break();
+    REQUIRE(server.wheel_off());
+    const Vec3 halt = server.active_wagon().position;
+    pump(120);
+    CHECK(server.wheel_off()); // stays off on its own
+    CHECK(glm::length(Vec2{server.active_wagon().position.x - halt.x,
+                           server.active_wagon().position.z - halt.z}) < 1.0f); // halted
+
+    auto ppos = [&]() { return server.players().at(id).controller.position(); };
+
+    // Walk to the fallen wheel and pick it up (it then rides at the player's waist).
+    bool carried = false;
+    for (int t = 0; t < 500 && !carried; ++t) {
+        Vec3 d = server.wheel_pos() - ppos();
+        d.y = 0.0f;
+        const f32 dist = glm::length(d);
+        if (dist > kWheelPickupRange - 0.5f) {
+            intent.move = d / std::max(dist, 1e-3f);
+            intent.grab = false;
+        } else {
+            intent.move = Vec3{0.0f};
+            intent.grab = true;
+        }
+        pump(2);
+        intent.grab = false;
+        carried = server.wheel_off() &&
+                  glm::length(Vec2{server.wheel_pos().x - ppos().x,
+                                   server.wheel_pos().z - ppos().z}) < 0.7f;
+    }
+    CHECK(carried);
+
+    // Hold it by the cart; the re-attach channels up and the wheel refits.
+    for (int t = 0; t < 600 && server.wheel_off(); ++t) {
+        Vec3 d = server.active_wagon().position - ppos();
+        d.y = 0.0f;
+        const f32 dist = glm::length(d);
+        intent.move = dist > kWheelAttachRange - 1.0f ? d / std::max(dist, 1e-3f) : Vec3{0.0f};
+        pump(3);
+    }
+    CHECK_FALSE(server.wheel_off());                       // refitted - the wagon can roll again
+    CHECK(server.wheel_repair() == doctest::Approx(0.0f)); // progress reset on refit
+}
+
 // Hiring a horse-drawn carriage puts a horse out front pulling and a driver seated up top.
 // Carriages are offered only on long routes, so we scan a few seeds until one offers a
 // carriage, then accept it with a hired driver and check the horse + seated driver are

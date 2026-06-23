@@ -289,6 +289,12 @@ void GameServer::tick(Timestep dt) {
             s.horse_pos = horse_pos_;
             s.horse_yaw = horse_yaw_;
         }
+        // Wheel-breakdown state only applies to the active cart.
+        if (contract_phase_ != ContractPhase::Offer && w.id == active_.id && wheel_off_) {
+            s.wheel_off = 1;
+            s.wheel_pos = wheel_pos_;
+            s.repair = static_cast<u8>(glm::clamp(wheel_repair_, 0.0f, 1.0f) * 255.0f);
+        }
         return s;
     };
     if (contract_phase_ == ContractPhase::Offer) {

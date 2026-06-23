@@ -88,6 +88,14 @@ inline constexpr f32 kWagonDamage = 9.0f;      // an ambusher's hit on the wagon
 inline constexpr u32 kMaxOffers = 4;           // wagons offered per town
 inline constexpr f32 kSettleSeconds = 6.0f;    // banner hold before re-offering
 
+// --- Wheel breakdown: a wheel can come off mid-haul; the cart halts until a player fetches the
+// fallen wheel and re-attaches it (a slow channel - bandits may strike while it's down, see #22).
+inline constexpr f32 kWheelBreakAvgTime = 26.0f; // avg seconds of ROLLING before a wheel works loose
+inline constexpr f32 kWheelBreakMinTime = 12.0f; // never breaks again sooner than this
+inline constexpr f32 kWheelRepairTime = 6.0f;    // seconds of holding the wheel by the cart to refit
+inline constexpr f32 kWheelPickupRange = 2.5f;   // how close to grab the fallen wheel (E)
+inline constexpr f32 kWheelAttachRange = 4.0f;   // carry it this close to the cart for it to refit
+
 // A transport wagon: an offer while Parked, the active cargo once accepted.
 struct Wagon {
     u32 id = 0;
