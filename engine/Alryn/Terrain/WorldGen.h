@@ -46,6 +46,16 @@ inline f32 moisture(f32 x, f32 z, u32 seed) {
     return noise::fbm2d(x * 0.018f, z * 0.018f, 3, 2.0f, 0.5f, seed + 202u) + 0.14f;
 }
 
+// Temperature field: large, very-low-frequency climate zones (so hot/cold regions are big and
+// road-spanning, not speckled), and colder at altitude. ~0 cold .. 1 hot. With moisture + height
+// this is what separates desert (hot+dry) from bog (wet lowland) from forest/plains/mountains.
+inline f32 temperature(f32 x, f32 z, u32 seed) {
+    const f32 base = noise::fbm2d(x * 0.0035f, z * 0.0035f, 3, 2.0f, 0.5f, seed + 511u);
+    const f32 warm = glm::smoothstep(-0.5f, 0.5f, base);
+    const f32 h = height(x, z, seed);
+    return glm::clamp(warm - glm::smoothstep(3.0f, 12.0f, h) * 0.55f, 0.0f, 1.0f);
+}
+
 // Roads connecting nearby towns (routed to avoid water) live in Terrain/RoadNetwork.h.
 // The old noise-contour "paths" are gone; road colouring is overlaid while meshing
 // (roads::tint_surface) so this header stays free of the road-network dependency.
@@ -55,6 +65,62 @@ inline f32 moisture(f32 x, f32 z, u32 seed) {
 inline f32 slope(f32 x, f32 z, u32 seed) {
     const f32 g = height(x, z, seed);
     return std::abs(height(x + 1.0f, z, seed) - g) + std::abs(height(x, z + 1.0f, seed) - g);
+}
+
+// --- Biomes ---------------------------------------------------------------
+// A discrete classification of the land, derived from the shared height / slope / moisture /
+// temperature fields. This is the linchpin everything downstream consumes: surface colouring (a
+// smooth version below), which plants + trees + props scatter where, road routing difficulty, and
+// the world map. Because it's a pure function of the noise fields it's deterministic + seamless and
+// costs nothing to query anywhere (server, client, worker thread).
+enum class Biome : u8 {
+    Ocean,     // below the waterline
+    Beach,     // gentle sand just above the water
+    Desert,    // hot + dry: sand dunes
+    Plains,    // open, drier grassland / meadow
+    Forest,    // the default lush green woodland
+    Bog,       // very wet lowland: dark murky swamp
+    Mountains, // high or steep rocky ground
+    Snow,      // the highest peaks
+};
+
+inline Biome biome_at(f32 x, f32 z, u32 seed) {
+    const f32 h = height(x, z, seed);
+    if (h < water_level + 0.25f) {
+        return Biome::Ocean;
+    }
+    const f32 s = slope(x, z, seed);
+    if (h > 11.0f) {
+        return Biome::Snow;
+    }
+    if (h > 6.5f || s > 1.7f) {
+        return Biome::Mountains;
+    }
+    if (h < water_level + 1.8f && s < 0.6f) {
+        return Biome::Beach;
+    }
+    const f32 m = moisture(x, z, seed);
+    if (m > 0.42f && h < water_level + 4.5f) {
+        return Biome::Bog; // wet hollows turn to swamp
+    }
+    if (temperature(x, z, seed) > 0.58f && m < 0.08f) {
+        return Biome::Desert; // hot + dry
+    }
+    return m > 0.02f ? Biome::Forest : Biome::Plains;
+}
+
+inline const char* biome_name(Biome b) {
+    switch (b) {
+        case Biome::Ocean: return "Ocean";
+        case Biome::Beach: return "Coast";
+        case Biome::Desert: return "Desert";
+        case Biome::Plains: return "Plains";
+        case Biome::Forest: return "Forest";
+        case Biome::Bog: return "Bog";
+        case Biome::Mountains: return "Mountains";
+        case Biome::Snow: return "Snow";
+    }
+    return "?";
 }
 
 // --- Villages -------------------------------------------------------------
@@ -195,6 +261,32 @@ inline Vec3 surface_color(const Vec3& p, const Vec3& normal, u32 seed) {
     // Snow on high, flatter ground.
     const f32 snow_amt = glm::smoothstep(8.5f, 12.5f, h) * glm::smoothstep(0.5f, 0.8f, up);
     color = glm::mix(color, snow, snow_amt);
+
+    // Desert: hot + dry, gentle, above the beach band -> warm rippled sand dunes. (Smooth masks
+    // matching biome_at's thresholds, so the look agrees with the classification without seams.)
+    const f32 t = temperature(p.x, p.z, seed);
+    const f32 desert_mask = glm::smoothstep(0.50f, 0.62f, t) * glm::smoothstep(0.16f, 0.0f, m) *
+                            glm::smoothstep(0.55f, 0.78f, up) *
+                            glm::smoothstep(water_level + 1.5f, water_level + 3.5f, h) *
+                            (1.0f - snow_amt);
+    if (desert_mask > 0.001f) {
+        const Vec3 dune{0.82f, 0.70f, 0.42f};
+        const Vec3 dune2{0.90f, 0.80f, 0.54f};
+        const f32 ripple = noise::fbm2d(p.x * 0.09f, p.z * 0.09f, 2, 2.0f, 0.5f, seed + 606u);
+        const Vec3 desert_col = glm::mix(dune, dune2, glm::smoothstep(-0.2f, 0.3f, ripple));
+        color = glm::mix(color, desert_col, desert_mask);
+    }
+    // Bog: very wet, low-lying, gentle -> dark murky muck with near-black water-logged hollows.
+    const f32 bog_mask = glm::smoothstep(0.34f, 0.46f, m) *
+                         glm::smoothstep(water_level + 5.0f, water_level + 1.0f, h) *
+                         glm::smoothstep(0.55f, 0.8f, up);
+    if (bog_mask > 0.001f) {
+        const Vec3 muck{0.22f, 0.26f, 0.16f};
+        const Vec3 muck2{0.13f, 0.16f, 0.12f};
+        const f32 puddle = noise::fbm2d(p.x * 0.08f, p.z * 0.08f, 2, 2.0f, 0.5f, seed + 707u);
+        const Vec3 bog_col = glm::mix(muck, muck2, glm::smoothstep(0.0f, 0.3f, puddle));
+        color = glm::mix(color, bog_col, bog_mask * 0.85f);
+    }
 
     // (The worn dirt road colour is overlaid separately via roads::tint_surface while
     // meshing, so this base colour stays independent of the road network.)

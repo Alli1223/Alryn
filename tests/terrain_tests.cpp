@@ -215,6 +215,47 @@ TEST_CASE("Worldgen: biomes give smooth heights with both land and water") {
     }
 }
 
+TEST_CASE("Worldgen: biome classifier is deterministic, varied, and consistent") {
+    using worldgen::Biome;
+    const u32 seed = 1337u;
+
+    // Deterministic + agrees with the underlying fields.
+    CHECK(worldgen::biome_at(123.0f, -45.0f, seed) == worldgen::biome_at(123.0f, -45.0f, seed));
+
+    // Deep water always classifies as ocean (height dominates).
+    for (int i = 0; i < 50; ++i) {
+        const f32 x = static_cast<f32>(i) * 37.0f;
+        const f32 z = static_cast<f32>(i) * -53.0f;
+        if (worldgen::height(x, z, seed) < worldgen::water_level - 0.5f) {
+            CHECK(worldgen::biome_at(x, z, seed) == Biome::Ocean);
+        }
+    }
+
+    // Sweep a wide area: the classifier must produce several distinct biomes (not degenerate),
+    // and each classified cell must be consistent with the fields that define it.
+    std::map<Biome, int> seen;
+    for (int gz = 0; gz < 90; ++gz) {
+        for (int gx = 0; gx < 90; ++gx) {
+            const f32 x = static_cast<f32>(gx) * 14.0f - 630.0f;
+            const f32 z = static_cast<f32>(gz) * 14.0f - 630.0f;
+            const Biome b = worldgen::biome_at(x, z, seed);
+            ++seen[b];
+            const f32 h = worldgen::height(x, z, seed);
+            if (b == Biome::Ocean) {
+                CHECK(h < worldgen::water_level + 0.25f);
+            } else if (b == Biome::Snow) {
+                CHECK(h > 11.0f);
+            } else if (b == Biome::Desert) {
+                CHECK(worldgen::temperature(x, z, seed) > 0.58f); // deserts are genuinely hot
+            } else if (b == Biome::Bog) {
+                CHECK(worldgen::moisture(x, z, seed) > 0.42f); // bogs are genuinely wet
+            }
+        }
+    }
+    CHECK(seen.size() >= 4);             // a varied world, not one biome everywhere
+    CHECK(seen.count(Biome::Forest) > 0); // forest still dominates the land
+}
+
 TEST_CASE("Trees: low-poly meshes + deterministic, on-land scatter") {
     const primitives::TreeMeshData pine = primitives::tree(0);
     const primitives::TreeMeshData round = primitives::tree(1);
