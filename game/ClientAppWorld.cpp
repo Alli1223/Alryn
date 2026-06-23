@@ -181,6 +181,26 @@ void ClientApp::draw_gates() {
     }
 }
 
+void ClientApp::draw_bridges() {
+    if (renderer_ == nullptr || world_seed_ == 0) {
+        return;
+    }
+    const Vec3 feet = local_feet();
+    for (const roads::Bridge& b : roads::bridges(Vec2{feet.x, feet.z}, 100.0f, world_seed_)) {
+        const Vec2 dir{std::cos(b.yaw), std::sin(b.yaw)};
+        const Vec2 e0 = b.center - dir * (b.length * 0.5f);
+        const Vec2 e1 = b.center + dir * (b.length * 0.5f);
+        // The deck sits level with the road on the banks (the river is carved below it). Drop it a
+        // touch so the planks read at road height rather than perched above.
+        const f32 deck_y = std::max(worldgen::height(e0.x, e0.y, world_seed_),
+                                    worldgen::height(e1.x, e1.y, world_seed_)) - 0.18f;
+        const Mat4 m = glm::translate(Mat4{1.0f}, Vec3{b.center.x, deck_y, b.center.y}) *
+                       glm::rotate(Mat4{1.0f}, -b.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
+                       glm::scale(Mat4{1.0f}, Vec3{b.length, 1.0f, 1.0f});
+        renderer_->draw(bridge_mesh_, m, Vec4{1.0f});
+    }
+}
+
 void ClientApp::draw_barricades() {
     if (!have_snapshot_) {
         return;

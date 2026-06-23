@@ -124,6 +124,20 @@ void render_world(test::OffscreenRenderer& r, u32 seed, const Vec2& focus, f32 r
             }
         }
     }
+    // Plank bridges where the roads cross rivers (deck stretched to the span, level with the banks).
+    {
+        const MeshData bridge = PropLibrary::build_plank_bridge().parts[0].mesh;
+        for (const roads::Bridge& b : roads::bridges(focus, radius + 24.0f, seed)) {
+            const Vec2 bdir{std::cos(b.yaw), std::sin(b.yaw)};
+            const Vec2 e0 = b.center - bdir * (b.length * 0.5f);
+            const Vec2 e1 = b.center + bdir * (b.length * 0.5f);
+            const f32 deck_y = std::max(worldgen::height(e0.x, e0.y, seed),
+                                        worldgen::height(e1.x, e1.y, seed)) - 0.18f;
+            add(bridge, at(Vec3{b.center.x, deck_y, b.center.y}) *
+                            glm::rotate(Mat4{1.0f}, -b.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
+                            glm::scale(Mat4{1.0f}, Vec3{b.length, 1.0f, 1.0f}));
+        }
+    }
     REQUIRE_FALSE(draws.empty());
 
     const Vec3 target = target_rel ? *target_rel : Vec3{0.0f, 0.0f, 0.0f};
@@ -454,6 +468,35 @@ TEST_CASE("Scene shot: the wagon on roads across biomes") {
         ++shot;
     }
     CHECK(shot > 0);
+}
+
+// A wagon crossing a plank bridge where a road spans a river - the new river + bridge feature.
+TEST_CASE("Scene shot: a wagon crossing a river bridge") {
+    test::OffscreenRenderer renderer;
+    if (!renderer.init(960, 600)) {
+        MESSAGE("No Vulkan device/shaders - skipping bridge vista");
+        return;
+    }
+    // Find a bridge (a road-over-river crossing) somewhere near the origin, across a few seeds.
+    for (const u32 seed : {1337u, 4242u, 99u, 777u}) {
+        const auto bs = roads::bridges(Vec2{0.0f, 0.0f}, 1500.0f, seed);
+        if (bs.empty()) {
+            continue;
+        }
+        const roads::Bridge& b = bs.front();
+        const Vec2 bd{std::cos(b.yaw), std::sin(b.yaw)};
+        const Vec2 e0 = b.center - bd * (b.length * 0.5f);
+        const Vec2 e1 = b.center + bd * (b.length * 0.5f);
+        // Frame on the BANK/deck height (not the carved river bottom), from a 3/4 aerial.
+        const f32 deck_y = std::max(worldgen::height(e0.x, e0.y, seed), worldgen::height(e1.x, e1.y, seed));
+        const f32 span = 24.0f;
+        const Vec3 eye{span * 0.4f, deck_y + span * 0.85f, span * 0.55f};
+        const Vec3 tgt{0.0f, deck_y, 0.0f};
+        render_world(renderer, seed, b.center, span, (executable_dir() / "bridge.ppm").string(), 1.0f,
+                     1.0f, &eye, &tgt);
+        return;
+    }
+    MESSAGE("no bridge found near origin in the scanned seeds - skipping");
 }
 
 TEST_CASE("Scene shot: a medieval town overview (walls, houses, market, lanterns)") {

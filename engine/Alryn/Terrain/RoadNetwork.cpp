@@ -363,6 +363,75 @@ SegList owned_segments(u32 seed, int cx, int cz) {
     return g_owned.emplace(key, std::move(segs)).first->second;
 }
 
+// ---- Bridges (road-over-river crossings) ----------------------------------
+std::mutex g_bridges_mutex;
+std::unordered_map<CellKey, std::shared_ptr<const std::vector<Bridge>>, CellKeyHash> g_bridges;
+
+// Append a Bridge for each contiguous span where the road polyline crosses a river - sampled
+// finely along the polyline (river bands are narrower than the road-point spacing).
+void poly_bridges(const std::vector<Vec2>& poly, u32 seed, std::vector<Bridge>& out) {
+    if (poly.size() < 2) {
+        return;
+    }
+    constexpr f32 step = 1.5f;
+    constexpr f32 thresh = 0.5f; // the river channel proper (not the shallow banks)
+    bool inriver = false;
+    Vec2 enter{0.0f};
+    Vec2 enter_dir{1.0f, 0.0f};
+    for (usize i = 0; i + 1 < poly.size(); ++i) {
+        const Vec2 a = poly[i], b = poly[i + 1];
+        const f32 segl = glm::length(b - a);
+        if (segl < 1e-3f) {
+            continue;
+        }
+        const Vec2 dir = (b - a) / segl;
+        for (f32 t = 0.0f; t < segl; t += step) {
+            const Vec2 p = a + dir * t;
+            const bool r = worldgen::river_amount(p.x, p.y, seed) > thresh;
+            if (r && !inriver) {
+                inriver = true;
+                enter = p;
+                enter_dir = dir;
+            } else if (!r && inriver) {
+                inriver = false;
+                const f32 len = glm::length(p - enter);
+                if (len > 0.5f) {
+                    out.push_back(Bridge{(enter + p) * 0.5f, std::atan2(enter_dir.y, enter_dir.x),
+                                         len + 3.5f});
+                }
+            }
+        }
+    }
+}
+
+// Bridges on the roads owned by the town in cell (cx,cz). Cached (like owned_segments).
+std::shared_ptr<const std::vector<Bridge>> owned_bridges(u32 seed, int cx, int cz) {
+    const CellKey key{seed, cx, cz};
+    {
+        std::lock_guard<std::mutex> lock(g_bridges_mutex);
+        const auto it = g_bridges.find(key);
+        if (it != g_bridges.end()) {
+            return it->second;
+        }
+    }
+    auto out = std::make_shared<std::vector<Bridge>>();
+    if (town_at(cx, cz, seed)) {
+        for (int dz = -road_max_cells; dz <= road_max_cells; ++dz) {
+            for (int dx = -road_max_cells; dx <= road_max_cells; ++dx) {
+                const int bcx = cx + dx, bcz = cz + dz;
+                if ((dx == 0 && dz == 0) || !precedes(cx, cz, bcx, bcz)) {
+                    continue;
+                }
+                if (town_at(bcx, bcz, seed) && edge_wanted(seed, cx, cz, bcx, bcz)) {
+                    poly_bridges(*routed(seed, cx, cz, bcx, bcz), seed, *out);
+                }
+            }
+        }
+    }
+    std::lock_guard<std::mutex> lock(g_bridges_mutex);
+    return g_bridges.emplace(key, std::move(out)).first->second;
+}
+
 // All road segments near village cell (qcx,qcz): the union of roads owned by towns in
 // the surrounding window (a road can reach up to road_max_cells away from its owner).
 SegList window_segments(u32 seed, int qcx, int qcz) {
@@ -576,6 +645,22 @@ std::vector<Segment> gather(const Vec2& center, f32 radius, u32 seed) {
     for (int cz = lo_z; cz <= hi_z; ++cz) {
         for (int cx = lo_x; cx <= hi_x; ++cx) {
             const SegList owned = owned_segments(seed, cx, cz);
+            out.insert(out.end(), owned->begin(), owned->end());
+        }
+    }
+    return out;
+}
+
+std::vector<Bridge> bridges(const Vec2& center, f32 radius, u32 seed) {
+    const f32 cell = worldgen::village_cell;
+    const int lo_x = static_cast<int>(std::floor((center.x - radius) / cell)) - road_max_cells;
+    const int hi_x = static_cast<int>(std::floor((center.x + radius) / cell)) + road_max_cells;
+    const int lo_z = static_cast<int>(std::floor((center.y - radius) / cell)) - road_max_cells;
+    const int hi_z = static_cast<int>(std::floor((center.y + radius) / cell)) + road_max_cells;
+    std::vector<Bridge> out;
+    for (int cz = lo_z; cz <= hi_z; ++cz) {
+        for (int cx = lo_x; cx <= hi_x; ++cx) {
+            const auto owned = owned_bridges(seed, cx, cz);
             out.insert(out.end(), owned->begin(), owned->end());
         }
     }

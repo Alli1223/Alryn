@@ -2128,6 +2128,37 @@ PropDef PropLibrary::build_decor(int variant) {
     return def;
 }
 
+// A low wooden PLANK BRIDGE carrying a road over a river (matching the reference's flat plank
+// crossing). The deck runs along local +X as a UNIT span (half-length 0.5) that the client stretches
+// to the river width; it's road-width along Z, with stringer beams beneath and a low rail + end posts
+// each side. Faces local +X (the road's heading across the river).
+PropDef PropLibrary::build_plank_bridge() {
+    PropDef def;
+    def.name = "plank_bridge";
+    const Vec3 wood{0.47f, 0.32f, 0.19f};
+    const Vec3 plank{0.52f, 0.37f, 0.22f};
+    const Vec3 dark{0.33f, 0.22f, 0.13f};
+    MeshData m;
+    constexpr f32 hl = 0.5f;       // half-length along X (the client scales this to the span)
+    constexpr f32 hw = 2.6f;       // half-width (Z) - a bit wider than the road
+    constexpr f32 deck_bot = 0.26f, deck_top = 0.42f;
+    add_box(m, {-hl, deck_bot, -hw}, {hl, deck_top, hw}, plank);            // plank deck
+    add_box(m, {-hl, deck_bot - 0.02f, -hw}, {hl, deck_bot, hw}, dark);     // a thin shadow lip under the deck
+    // Stringer beams running the span, beneath the deck.
+    for (f32 sz : {-1.0f, 1.0f}) {
+        const f32 z = sz * (hw - 0.35f);
+        add_box(m, {-hl, 0.0f, z - 0.16f}, {hl, deck_bot, z + 0.16f}, dark);
+    }
+    // A low log kerb each side (runs the span - stretches cleanly with the deck; no upright posts,
+    // which would distort into slabs when the unit deck is scaled to the river width).
+    for (f32 sz : {-1.0f, 1.0f}) {
+        const f32 z = sz * (hw - 0.13f);
+        add_box(m, {-hl, deck_top, z - 0.13f}, {hl, deck_top + 0.22f, z + 0.13f}, wood);
+    }
+    def.parts.push_back({std::move(m), PropLayer::Opaque});
+    return def;
+}
+
 // A sunken river-channel tile for a river-town: a stone-lined canal running along local +X,
 // with a teal water surface set just into the ground between two raised stone embankments
 // (so it reads as a recessed channel without carving the terrain). Tiles abut end-to-end

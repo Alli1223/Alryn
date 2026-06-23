@@ -584,37 +584,9 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
         push(PropCategory::Lantern, 0, cx + std::cos(a) * 10.5f, cz + std::sin(a) * 10.5f, 0.0f);
     }
 
-    // Flagstone paving: light paving slabs (build_path_tile) laid down the centre of each street +
-    // a denser cluster ringing the market plaza - the reference's town paving over the dirt.
-    constexpr f32 ptile = 2.25f;
-    for (int s = 0; s < nstreets; ++s) {
-        Vec2 dir = streets[s].b - streets[s].a;
-        const f32 len = glm::length(dir);
-        if (len < ptile) {
-            continue;
-        }
-        dir /= len;
-        const f32 yaw = std::atan2(-dir.y, dir.x);
-        const int n = static_cast<int>(len / ptile);
-        for (int k = 1; k <= n; ++k) {
-            const Vec2 p = streets[s].a + dir * (static_cast<f32>(k) * ptile);
-            if (in_river(p.x, p.y)) {
-                continue; // the bridge carries the path over the river
-            }
-            push(PropCategory::Path, 0, p.x, p.y, yaw);
-        }
-    }
-    for (f32 rad : {7.2f, 9.5f, 11.8f}) { // a paved ring around the plaza
-        const int ring_n = std::max(8, static_cast<int>(TwoPi * rad / ptile));
-        for (int i = 0; i < ring_n; ++i) {
-            const f32 a = TwoPi * static_cast<f32>(i) / static_cast<f32>(ring_n);
-            const f32 rx = cx + std::cos(a) * rad, rz = cz + std::sin(a) * rad;
-            if (in_river(rx, rz)) {
-                continue;
-            }
-            push(PropCategory::Path, 0, rx, rz, a);
-        }
-    }
+    // Streets are plain worn-EARTH roads (coloured into the terrain by town_path_amount /
+    // town_path_tint), like the reference towns. (The old flagstone path-tile props were a single
+    // repeated mesh, so they read as an ugly grid of identical square cobble patches - removed.)
 
     // Greenery: planters ringing the plaza + bushes scattered on open interior ground.
     for (int i = 0; i < 5; ++i) {

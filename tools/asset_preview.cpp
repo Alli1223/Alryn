@@ -126,6 +126,8 @@ Asset build_asset(const std::string& cat, int v) {
         add_prop(a, PropLibrary::build_bridge());
     } else if (cat == "stonebridge") {
         add_prop(a, PropLibrary::build_stone_bridge());
+    } else if (cat == "plankbridge") {
+        add_prop(a, PropLibrary::build_plank_bridge());
     } else if (cat == "path") {
         add_prop(a, PropLibrary::build_path_tile());
     } else if (cat == "river") {

@@ -301,6 +301,10 @@ private:
     // eases each gate's open amount toward "someone is near"; draw_gates draws the two leaves.
     void update_gates(Timestep dt);
     void draw_gates();
+    // Plank bridges where a road crosses a river: gathered deterministically (roads::bridges) near
+    // the player and drawn as the unit bridge mesh stretched to each crossing's span, level with the
+    // road on the banks.
+    void draw_bridges();
 
     // Player-built barricades: a low palisade of wooden stakes + rails, darkening as
     // the enemy hacks it down (health from the snapshot).
@@ -636,6 +640,7 @@ private:
     Mesh shape_rounded_;
     Mesh marker_;
     Mesh water_mesh_;
+    Mesh bridge_mesh_;    // a unit-length plank bridge (x:-0.5..0.5), stretched per river crossing
     Mesh gate_door_mesh_; // a unit gate-door leaf (x:0..1 hinge->free), drawn x2 per town gate
 
     // Town gates near the player, rebuilt each frame (open: 0 closed .. 1 swung open).

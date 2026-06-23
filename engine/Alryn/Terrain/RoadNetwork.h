@@ -38,6 +38,13 @@ struct Segment {
     Vec2 b{0.0f};
 };
 
+// A plank bridge spanning a river where a road crosses it (the client renders one here).
+struct Bridge {
+    Vec2 center{0.0f}; // midpoint of the river crossing
+    f32 yaw = 0.0f;    // the road's heading across the river (the bridge mesh faces local +X)
+    f32 length = 4.0f; // span across the river - the deck stretches to this
+};
+
 // Distance (world units) from (x,z) to the nearest road centreline. Huge if no road
 // is near. Replaces worldgen::path_distance.
 f32 distance(f32 x, f32 z, u32 seed);
@@ -55,6 +62,9 @@ Vec3 tint_surface(Vec3 color, const Vec3& p, f32 up, u32 seed);
 
 // All road segments within `radius` of `center` (world xz) - for drawing the map.
 std::vector<Segment> gather(const Vec2& center, f32 radius, u32 seed);
+
+// All bridges (road-over-river crossings) within `radius` of `center` - for the client to render.
+std::vector<Bridge> bridges(const Vec2& center, f32 radius, u32 seed);
 
 // The ordered, water-avoiding road polyline between two town centres (a -> b), or empty
 // if they can't be linked on land. For the wagon driver's path + the map route overlay.

@@ -82,6 +82,8 @@ void ClientApp::on_init() {
                                        Vec3{0.55f, 0.40f, 0.22f}));
     // A large wave grid that follows the player; the water shader animates it.
     water_mesh_.create(renderer_->device(), primitives::grid(80, 2.0f, Vec3{0.1f, 0.3f, 0.4f}));
+    // A unit-length plank bridge, stretched per river crossing where a road bridges a river.
+    bridge_mesh_.create(renderer_->device(), PropLibrary::build_plank_bridge().parts[0].mesh);
     // A unit gate-door leaf: a planked panel hinged at local x=0 extending to x=1, unit-tall in
     // y, thin in z, with two iron bands. Scaled to the gate size + swung open by the client.
     {
@@ -348,6 +350,7 @@ void ClientApp::on_render() {
     draw_villagers();
     draw_enemies();
     draw_gates();
+    draw_bridges();
     draw_fires();
     draw_barricades();
     draw_walls();
@@ -527,6 +530,7 @@ void ClientApp::on_shutdown() {
     rope_mesh_.destroy();
     goods_mesh_.destroy();
     water_mesh_.destroy();
+    bridge_mesh_.destroy();
     gate_door_mesh_.destroy();
     terrain_.reset();
     client_.disconnect();

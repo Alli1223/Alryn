@@ -76,6 +76,8 @@ public:
     static PropDef build_monument(int variant);    // weathered stone obelisk / pillar / standing stones
     static PropDef build_watchtower();             // a wooden lookout tower
     static PropDef build_stone_bridge();     // an arched stone road bridge across a river
+    static PropDef build_plank_bridge();     // a low wooden plank bridge (road over a river); the
+                                             // deck spans local +X (stretched to the river width)
 
 private:
     std::vector<PropDef> bushes_;
