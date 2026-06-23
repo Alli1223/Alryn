@@ -340,6 +340,65 @@ TEST_CASE("Roads: town graph routes multi-hop through intermediate towns") {
     CHECK(found_multihop); // the road graph produces real multi-hop hauls through other towns
 }
 
+TEST_CASE("Roads: route difficulty rises with the biomes the road crosses") {
+    const u32 seed = 1337u;
+    using worldgen::Biome;
+
+    // Find a patch of mountains and a patch of forest; build a short route sitting in each.
+    auto find_biome = [&](Biome want) -> std::optional<Vec2> {
+        for (int gz = -60; gz <= 60; ++gz) {
+            for (int gx = -60; gx <= 60; ++gx) {
+                const Vec2 p{static_cast<f32>(gx) * 12.0f, static_cast<f32>(gz) * 12.0f};
+                if (worldgen::biome_at(p.x, p.y, seed) == want) {
+                    return p;
+                }
+            }
+        }
+        return std::nullopt;
+    };
+    const auto mtn = find_biome(Biome::Mountains);
+    const auto forest = find_biome(Biome::Forest);
+    REQUIRE(forest.has_value());
+
+    auto patch = [&](const Vec2& c) {
+        return std::vector<Vec2>{c, c + Vec2{1, 0}, c + Vec2{2, 1}, c + Vec2{3, 0}};
+    };
+    const std::vector<Vec2> forest_route = patch(*forest);
+    CHECK(roads::route_hazard(forest_route, seed) < 0.2f);     // easy lowland
+    CHECK(roads::route_difficulty(forest_route, seed) == 1u);
+    CHECK(roads::route_hazard(forest_route, seed) == roads::route_hazard(forest_route, seed)); // det.
+
+    if (mtn) {
+        const std::vector<Vec2> mtn_route = patch(*mtn);
+        CHECK(roads::route_hazard(mtn_route, seed) > roads::route_hazard(forest_route, seed));
+        CHECK(roads::route_difficulty(mtn_route, seed) >= roads::route_difficulty(forest_route, seed));
+        CHECK(roads::route_difficulty(mtn_route, seed) == 3u); // a pure mountain crossing is hard
+    }
+
+    // A real road's difficulty is always a valid tier (find a connected town, route to its
+    // farthest reachable neighbour).
+    for (int cz = -7; cz <= 7; ++cz) {
+        for (int cx = -7; cx <= 7; ++cx) {
+            const auto v = worldgen::village_at(cx, cz, seed);
+            if (!v) {
+                continue;
+            }
+            const auto reach = roads::reachable_towns(v->center, seed, 8);
+            if (reach.empty()) {
+                continue;
+            }
+            const auto r = roads::route_through_towns(v->center, reach.back().center, seed);
+            if (!r.empty()) {
+                const u8 d = roads::route_difficulty(r, seed);
+                CHECK(d >= 1u);
+                CHECK(d <= 3u);
+            }
+            cz = 99; // found one - stop both loops
+            break;
+        }
+    }
+}
+
 TEST_CASE("Trees: low-poly meshes + deterministic, on-land scatter") {
     const primitives::TreeMeshData pine = primitives::tree(0);
     const primitives::TreeMeshData round = primitives::tree(1);

@@ -68,6 +68,15 @@ std::vector<Vec2> route_through_towns(const Vec2& a, const Vec2& b, u32 seed);
 // (longer than the straight line for a winding multi-hop route), for reward scaling.
 f32 route_length(const std::vector<Vec2>& route);
 
+// How hazardous the BIOMES a route crosses are, 0 (easy lowland forest/plains) .. 1 (a hard slog
+// over mountain passes / through bogs + deserts). The mean per-point biome hazard along the
+// polyline - so a haul that threads tough country reads as more dangerous.
+f32 route_hazard(const std::vector<Vec2>& route, u32 seed);
+
+// The route's difficulty TIER (1 easy .. 3 hard) from its biome hazard - drives the ambush size on
+// a contract and the danger shown on the map.
+u8 route_difficulty(const std::vector<Vec2>& route, u32 seed);
+
 // Every town reachable from `center`'s town over the road graph (including far, multi-hop ones),
 // nearest graph-distance first, capped at `max_results`. Lets the game offer long-haul contracts
 // to distant towns, not just immediate neighbours.

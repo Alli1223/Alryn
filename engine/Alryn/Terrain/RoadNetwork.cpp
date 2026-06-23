@@ -490,6 +490,37 @@ f32 route_length(const std::vector<Vec2>& route) {
     return len;
 }
 
+namespace {
+// How tough it is to haul a cart across a biome, 0 (easy) .. 1 (hard). Mountains/snow are steep +
+// exposed, bog is sticky + ambush-friendly, desert is open + hot; lowland forest/plains are easy.
+f32 biome_hazard(worldgen::Biome b) {
+    switch (b) {
+        case worldgen::Biome::Mountains: return 1.0f;
+        case worldgen::Biome::Snow: return 1.0f;
+        case worldgen::Biome::Bog: return 0.8f;
+        case worldgen::Biome::Desert: return 0.7f;
+        case worldgen::Biome::Beach: return 0.2f;
+        default: return 0.0f; // Forest / Plains / Ocean(roads don't cross water)
+    }
+}
+} // namespace
+
+f32 route_hazard(const std::vector<Vec2>& route, u32 seed) {
+    if (route.size() < 2) {
+        return 0.0f;
+    }
+    f32 sum = 0.0f;
+    for (const Vec2& p : route) {
+        sum += biome_hazard(worldgen::biome_at(p.x, p.y, seed));
+    }
+    return sum / static_cast<f32>(route.size());
+}
+
+u8 route_difficulty(const std::vector<Vec2>& route, u32 seed) {
+    const f32 h = route_hazard(route, seed);
+    return h < 0.18f ? 1u : (h < 0.45f ? 2u : 3u);
+}
+
 std::vector<worldgen::Village> reachable_towns(const Vec2& center, u32 seed, int max_results) {
     const auto src = owning_cell(seed, center);
     if (!src) {

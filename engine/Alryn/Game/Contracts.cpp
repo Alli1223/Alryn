@@ -367,9 +367,13 @@ void GameServer::generate_offers() {
             continue; // no road links these towns
         }
         const f32 dist = roads::route_length(route); // the TRUE road length (long for multi-hop)
-        const u8 difficulty = static_cast<u8>(
-            1u + detail::tree_hash(static_cast<int>(origin->vseed), static_cast<int>(dest.vseed),
-                                   5150u) % 3u);
+        // Difficulty (ambush size) comes from the BIOMES the road crosses - a haul over mountain
+        // passes / through bogs + deserts is genuinely tougher than a flat forest run - and a long
+        // haul is inherently riskier, so it nudges the tier up.
+        u8 difficulty = roads::route_difficulty(route, seed);
+        if (dist > 420.0f) {
+            difficulty = std::min<u8>(3u, static_cast<u8>(difficulty + 1u));
+        }
         Wagon wg;
         wg.id = detail::tree_hash(static_cast<int>(origin->vseed), static_cast<int>(dest.vseed),
                                   6161u) | 1u;
