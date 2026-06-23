@@ -274,6 +274,10 @@ TEST_CASE("Trees: low-poly meshes + deterministic, on-land scatter") {
 
     int total = 0;
     bool underwater = false;
+    bool mountain_all_pine = true; // alpine trees must be conifers
+    bool bog_all_dead = true;      // swamp trees must be the gnarled dead variant
+    bool no_desert_tree = true;    // deserts grow cacti, not trees
+    int mountains_seen = 0, bog_seen = 0;
     for (int cz = -24; cz < 24; ++cz) {
         for (int cx = -24; cx < 24; ++cx) {
             for (const TreeInstance& t : scatter_trees(cx, cz, 8.0f, seed)) {
@@ -283,11 +287,24 @@ TEST_CASE("Trees: low-poly meshes + deterministic, on-land scatter") {
                 }
                 CHECK(t.scale > 0.5f);
                 CHECK((t.variant >= 0 && t.variant < 5)); // pine/oak/birch/broad/dead
+                const worldgen::Biome b = worldgen::biome_at(t.position.x, t.position.z, seed);
+                if (b == worldgen::Biome::Mountains) {
+                    ++mountains_seen;
+                    if (t.variant != 0) mountain_all_pine = false;
+                } else if (b == worldgen::Biome::Bog) {
+                    ++bog_seen;
+                    if (t.variant != 4) bog_all_dead = false;
+                } else if (b == worldgen::Biome::Desert) {
+                    no_desert_tree = false;
+                }
             }
         }
     }
     CHECK(total > 0);
     CHECK_FALSE(underwater);
+    CHECK(no_desert_tree);
+    CHECK(mountain_all_pine); // every mountain tree is a conifer
+    CHECK(bog_all_dead);      // every bog tree is a dead/gnarled one
 }
 
 TEST_CASE("Vegetation: grass + flowers bake deterministically onto land") {
