@@ -66,8 +66,20 @@ enum class PropCategory : u8 {
     Bush, Rock, Log, Fence, Lantern, House, Wall, Gate, Well, Bridge, Market,
     Path, Planter, Fountain, FenceRail,
     Decor, // medieval clutter that fills a town: barrels, crates, hay, stalls, signposts...
-    River  // a sunken water channel tile (banks + water) for river-towns
+    River, // a sunken water channel tile (banks + water) for river-towns
+    Crystal, // glowing magic crystal clusters scattered in the wilds (emissive + coloured light)
+    GlowShroom, // bioluminescent mushroom clusters that glow at night
+    Campfire,   // a cosy campfire (logs + flame + warm light) - rare wilderness rest spots
+    Monument,   // weathered stone obelisk / broken pillar / standing stones (wilderness landmark)
+    Watchtower  // a wooden lookout tower in the wilds
 };
+
+// How many crystal colour variants `PropLibrary` builds (amethyst, sapphire, emerald, ...).
+inline constexpr u32 kCrystalVariants = 4;
+// Glowing-mushroom colour variants (cyan, amber, violet).
+inline constexpr u32 kGlowShroomVariants = 3;
+// Monument variants (carved obelisk, broken pillar, standing-stones trio).
+inline constexpr u32 kMonumentVariants = 3;
 
 // How many distinct ordinary house variants `PropLibrary` builds (cottages, longhouses, two-
 // storey houses, manors, ...). The village scatter fills with `variant % kHouseVariants`.

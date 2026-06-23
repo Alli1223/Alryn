@@ -68,6 +68,10 @@ void ClientApp::on_init() {
     wagon_wheel_mesh_.create(renderer_->device(), PropLibrary::build_wagon_wheel().parts[0].mesh);
     horse_body_mesh_.create(renderer_->device(), build_horse_body());
     horse_leg_mesh_.create(renderer_->device(), build_horse_leg());
+    ox_body_mesh_.create(renderer_->device(), build_ox_body());
+    ox_leg_mesh_.create(renderer_->device(), build_ox_leg());
+    deer_body_mesh_.create(renderer_->device(), build_deer_body());
+    deer_leg_mesh_.create(renderer_->device(), build_deer_leg());
     // A unit rope segment (along +Y, 0..1) for the verlet harness traces; scaled per link.
     rope_mesh_.create(renderer_->device(),
                       primitives::box(Vec3{-0.5f, 0.0f, -0.5f}, Vec3{0.5f, 1.0f, 0.5f},
@@ -145,6 +149,11 @@ void ClientApp::on_init() {
     upload_props(prop_lib_.fountains(), gpu_fountains_);
     upload_props(prop_lib_.decor(), gpu_decor_);
     upload_props(prop_lib_.rivers(), gpu_rivers_);
+    upload_props(prop_lib_.crystals(), gpu_crystals_);
+    upload_props(prop_lib_.glow_shrooms(), gpu_glow_shrooms_);
+    upload_props(prop_lib_.campfires(), gpu_campfires_);
+    upload_props(prop_lib_.monuments(), gpu_monuments_);
+    upload_props(prop_lib_.watchtowers(), gpu_watchtowers_);
 
     // Skip the menu when launched for scripted/CI runs (--host=... or a fixed
     // frame count); otherwise open the main menu and let the player choose.
@@ -277,6 +286,7 @@ void ClientApp::on_update(Timestep dt) {
         update_gates(dt);
         update_feedback(dt);
         update_ropes(dt);
+        update_deer(dt);
 
         if (terrain_ != nullptr && renderer_ != nullptr) {
             terrain_->update(local_feet(), renderer_->device());
@@ -346,6 +356,8 @@ void ClientApp::on_render() {
     draw_shields();
     draw_buffs();
     draw_particles();
+    draw_deer();         // ambient wildlife grazing in the meadows
+    draw_ambient_life(); // flock of birds by day, fireflies + an owl by night
 
     // Tree trunks (opaque, but they obey the peek-through dissolve so a trunk between
     // the camera and the player melts away just like the foliage does).
@@ -449,7 +461,8 @@ void ClientApp::on_render() {
                                     Vec4{t.tint, alpha});
     });
 
-    draw_weather(); // rain + lightning, behind the HUD
+    draw_rain();    // world-space falling streaks (depth-tested against the scene)
+    draw_weather(); // screen-space lightning flash, behind the HUD
     draw_health_bars();
     draw_hud();
     if (map_open_) {
@@ -488,7 +501,9 @@ void ClientApp::on_shutdown() {
                                       &gpu_fence_rails_, &gpu_lanterns_, &gpu_houses_,
                                       &gpu_walls_, &gpu_gates_, &gpu_wells_, &gpu_bridges_,
                                       &gpu_markets_, &gpu_paths_, &gpu_planters_,
-                                      &gpu_fountains_, &gpu_decor_, &gpu_rivers_}) {
+                                      &gpu_fountains_, &gpu_decor_, &gpu_rivers_, &gpu_crystals_,
+                                      &gpu_glow_shrooms_, &gpu_campfires_,
+                                      &gpu_monuments_, &gpu_watchtowers_}) {
         for (GpuProp& gp : *set) {
             for (GpuPropPart& part : gp.parts) {
                 part.mesh.destroy();
@@ -504,6 +519,10 @@ void ClientApp::on_shutdown() {
     wagon_wheel_mesh_.destroy();
     horse_body_mesh_.destroy();
     horse_leg_mesh_.destroy();
+    ox_body_mesh_.destroy();
+    ox_leg_mesh_.destroy();
+    deer_body_mesh_.destroy();
+    deer_leg_mesh_.destroy();
     rope_mesh_.destroy();
     goods_mesh_.destroy();
     water_mesh_.destroy();

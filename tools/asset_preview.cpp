@@ -17,6 +17,7 @@
 #include <Alryn/Core/Log.h>
 #include <Alryn/Renderer/MeshPrimitives.h>
 #include <Alryn/World/PropLibrary.h>
+#include <Alryn/World/VehicleTypes.h>
 
 #include <cmath>
 #include <cstdio>
@@ -73,6 +74,8 @@ int variant_count(const std::string& cat) {
     if (cat == "house") return 8;
     if (cat == "tree") return 5;
     if (cat == "decor") return 8;
+    if (cat == "crystal") return 4;
+    if (cat == "monument") return 3;
     if (cat == "bush" || cat == "rock" || cat == "log") return 3;
     if (cat == "fence" || cat == "rail" || cat == "wall" || cat == "fern") return 2;
     return 1;
@@ -128,10 +131,34 @@ Asset build_asset(const std::string& cat, int v) {
         add_prop(a, PropLibrary::build_river());
     } else if (cat == "decor") {
         add_prop(a, PropLibrary::build_decor(v));
+    } else if (cat == "crystal") {
+        add_prop(a, PropLibrary::build_crystal(v));
+    } else if (cat == "glowshroom") {
+        add_prop(a, PropLibrary::build_glow_shroom(v));
+    } else if (cat == "campfire") {
+        add_prop(a, PropLibrary::build_campfire());
+    } else if (cat == "monument") {
+        add_prop(a, PropLibrary::build_monument(v));
+    } else if (cat == "watchtower") {
+        add_prop(a, PropLibrary::build_watchtower());
     } else if (cat == "wagon") {
         add_prop(a, PropLibrary::build_wagon());
     } else if (cat == "wheel") {
         add_prop(a, PropLibrary::build_wagon_wheel());
+    } else if (cat == "ox") {
+        a.parts.push_back({build_ox_body(), Vec4{1.0f}});
+        for (const Vec3& lo : kOxLegs) {
+            MeshData leg = build_ox_leg();
+            for (Vertex& v : leg.vertices) v.position += lo;
+            a.parts.push_back({std::move(leg), Vec4{1.0f}});
+        }
+    } else if (cat == "deer") {
+        a.parts.push_back({build_deer_body(), Vec4{1.0f}});
+        for (const Vec3& lo : kDeerLegs) {
+            MeshData leg = build_deer_leg();
+            for (Vertex& v : leg.vertices) v.position += lo;
+            a.parts.push_back({std::move(leg), Vec4{1.0f}});
+        }
     } else if (cat == "fern") {
         a.parts.push_back({primitives::fern(v), Vec4{1.0f}});
     } else if (cat == "mushroom") {

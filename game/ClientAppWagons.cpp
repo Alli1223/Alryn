@@ -109,9 +109,9 @@ void ClientApp::draw_wagons() {
             renderer_->add_light(sl);
         }
 
-        // The pulling horse (carriages), with a simple walking leg gait + harness ropes.
+        // The draft oxen (a yoked pair) pulling the wagon, with a walking gait + harness ropes.
         if (wg.has_horse) {
-            draw_horse(wg.horse_pos, wg.horse_yaw);
+            draw_oxen(wg.horse_pos, wg.horse_yaw);
             draw_ropes(wg.id);
         }
     }
@@ -264,6 +264,33 @@ void ClientApp::draw_horse(const Vec3& pos, f32 yaw) {
                         glm::rotate(Mat4{1.0f}, swing, Vec3{0.0f, 0.0f, 1.0f});
         renderer_->draw(horse_leg_mesh_, lm);
     }
+}
+
+// A yoked PAIR of oxen pulling the wagon: two beasts side by side at the puller point, each with a
+// walking gait, joined by a wooden yoke beam across their shoulders.
+void ClientApp::draw_oxen(const Vec3& pos, f32 yaw) {
+    const f32 moved = glm::length(Vec2{pos.x - horse_prev_.x, pos.z - horse_prev_.z});
+    horse_gait_ += moved * 2.0f;
+    horse_prev_ = pos;
+    const Vec3 fwd{std::cos(yaw), 0.0f, std::sin(yaw)};
+    const Vec3 right = glm::normalize(glm::cross(Vec3{0.0f, 1.0f, 0.0f}, fwd));
+    for (f32 side : {-1.0f, 1.0f}) {
+        const Vec3 op = pos + right * (side * 0.52f);
+        const Mat4 base = glm::translate(Mat4{1.0f}, op) * glm::rotate(Mat4{1.0f}, -yaw, Vec3{0.0f, 1.0f, 0.0f});
+        renderer_->draw(ox_body_mesh_, base);
+        for (int k = 0; k < 4; ++k) {
+            const f32 sign = (k == 0 || k == 3) ? 1.0f : -1.0f;
+            const f32 swing = std::sin(horse_gait_ + side) * 0.42f * sign;
+            const Mat4 lm = base * glm::translate(Mat4{1.0f}, kOxLegs[k]) *
+                            glm::rotate(Mat4{1.0f}, swing, Vec3{0.0f, 0.0f, 1.0f});
+            renderer_->draw(ox_leg_mesh_, lm);
+        }
+    }
+    // a wooden yoke beam across both oxen's shoulders
+    const Mat4 ym = glm::translate(Mat4{1.0f}, pos + Vec3{0.0f, 1.5f, 0.0f}) *
+                    glm::rotate(Mat4{1.0f}, -yaw, Vec3{0.0f, 1.0f, 0.0f}) *
+                    glm::scale(Mat4{1.0f}, Vec3{0.12f, 0.1f, 1.5f});
+    renderer_->draw(shape_box_, ym, Vec4{0.4f, 0.28f, 0.16f, 1.0f});
 }
 
 u32 ClientApp::nearest_offer_in_range() const {

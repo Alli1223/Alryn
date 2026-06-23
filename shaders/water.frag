@@ -62,6 +62,14 @@ void main() {
     float glint = smoothstep(0.72, 1.0, tw) * pow(ndh, 20.0) * intensity;
     color += pc.sunColor.rgb * glint * 2.2;
 
+    // Foam: scrolling sine bands crest into white foam, concentrated on the steeper wave faces, so
+    // the surface reads alive + frothy rather than a flat sheet (the reference's foamy water).
+    vec2 fp = vWorldPos.xz * 0.55;
+    float fb = sin(fp.x * 1.3 + t * 0.8) * sin(fp.y * 1.1 - t * 0.6) + 0.55 * sin((fp.x + fp.y) * 0.9 + t * 1.1);
+    float crest = smoothstep(0.45, 1.0, 1.0 - N.y); // foam rides the tilted wave faces
+    float foam = smoothstep(0.72, 1.0, fb) * (0.35 + 0.65 * crest);
+    color = mix(color, vec3(0.9, 0.95, 1.0), foam * mix(0.3, 0.85, intensity));
+
     // Saturation lift so the pool reads vibrant blue (matching the world re-grade), not muddy teal.
     float wlum = dot(color, vec3(0.2126, 0.7152, 0.0722));
     color = mix(vec3(wlum), color, 1.28);

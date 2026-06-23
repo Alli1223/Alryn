@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Alryn/Core/Math.h>
+#include <Alryn/Core/Noise.h> // meadow-field noise that clusters wildflowers into beds
 #include <Alryn/Core/Types.h>
 #include <Alryn/Renderer/Mesh.h>
 #include <Alryn/Renderer/MeshPrimitives.h>
@@ -186,19 +187,30 @@ inline MeshData build_vegetation(int cx, int cz, f32 chunk_world, u32 seed) {
                  detail::hash01(detail::tree_hash(gx, gz, seed + 5407u)) * TwoPi, sc, 1.0f, Vec3{1.0f});
     });
 
-    // ---- Wildflowers: occasional dabs of colour on wetter ground.
-    static const Vec3 blossoms[] = {{0.92f, 0.28f, 0.32f}, {0.95f, 0.82f, 0.28f},
-                                    {0.97f, 0.97f, 0.99f}, {0.72f, 0.45f, 0.90f},
-                                    {0.96f, 0.60f, 0.78f}};
-    for_cells(1.3f, seed + 5500u, [&](int gx, int gz, f32 wx, f32 wz) {
+    // ---- Wildflowers: vivid blooms clustered into MEADOW BEDS (denser + more colourful, like the
+    // reference). A low-frequency "meadow" field concentrates them into flowery patches rather than
+    // an even sprinkle, and each chosen cell drops a small CLUSTER of blooms. Grows in town green
+    // areas too (off the streets), for the town flower beds.
+    static const Vec3 blossoms[] = {{0.93f, 0.22f, 0.26f}, {0.97f, 0.83f, 0.22f},
+                                    {0.98f, 0.98f, 0.99f}, {0.72f, 0.40f, 0.93f},
+                                    {0.97f, 0.57f, 0.78f}, {0.98f, 0.54f, 0.16f}};
+    for_cells(1.0f, seed + 5500u, [&](int gx, int gz, f32 wx, f32 wz) {
         f32 moist;
         const f32 gh = worldgen::height(wx, wz, seed);
-        if (!detail::veg_ground(wx, wz, seed, gh, 2.2f, 0.02f, moist)) return;
-        if (detail::hash01(detail::tree_hash(gx, gz, seed + 5503u)) > 0.16f) return;
-        const u32 bi = detail::tree_hash(gx, gz, seed + 5504u) % 5u;
-        const f32 sc = 0.9f + detail::hash01(detail::tree_hash(gx, gz, seed + 5505u)) * 0.6f;
-        place_at(primitives::flower(blossoms[bi]), wx, wz, gh,
-                 detail::hash01(detail::tree_hash(gx, gz, seed + 5507u)) * TwoPi, sc, 1.0f, Vec3{1.0f});
+        if (!detail::veg_ground(wx, wz, seed, gh, 2.2f, -0.02f, moist, true)) return;
+        const f32 meadow = noise::fbm2d(wx * 0.05f, wz * 0.05f, 2, 2.0f, 0.5f, seed + 5599u);
+        const f32 density = 0.1f + glm::smoothstep(-0.1f, 0.55f, meadow) * 0.55f; // dense in flowery patches
+        if (detail::hash01(detail::tree_hash(gx, gz, seed + 5503u)) > density) return;
+        const int count = 1 + static_cast<int>(detail::hash01(detail::tree_hash(gx, gz, seed + 5510u)) * 3.0f);
+        for (int k = 0; k < count; ++k) {
+            const f32 ox = (detail::hash01(detail::tree_hash(gx * 9 + k, gz, seed + 5511u)) - 0.5f) * 0.75f;
+            const f32 oz = (detail::hash01(detail::tree_hash(gx, gz * 9 + k, seed + 5512u)) - 0.5f) * 0.75f;
+            const u32 bi = detail::tree_hash(gx + k * 13, gz, seed + 5504u) % 6u;
+            const f32 sc = 0.85f + detail::hash01(detail::tree_hash(gx + k, gz, seed + 5505u)) * 0.7f;
+            const f32 gh2 = worldgen::height(wx + ox, wz + oz, seed);
+            place_at(primitives::flower(blossoms[bi]), wx + ox, wz + oz, gh2,
+                     detail::hash01(detail::tree_hash(gx + k, gz, seed + 5507u)) * TwoPi, sc, 1.0f, Vec3{1.0f});
+        }
     });
 
     return m;

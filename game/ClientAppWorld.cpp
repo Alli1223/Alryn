@@ -307,6 +307,11 @@ void ClientApp::draw_prop(const PropInstance& p) {
         : p.category == PropCategory::Fountain  ? gpu_fountains_
         : p.category == PropCategory::Decor     ? gpu_decor_
         : p.category == PropCategory::River     ? gpu_rivers_
+        : p.category == PropCategory::Crystal   ? gpu_crystals_
+        : p.category == PropCategory::GlowShroom ? gpu_glow_shrooms_
+        : p.category == PropCategory::Campfire  ? gpu_campfires_
+        : p.category == PropCategory::Monument  ? gpu_monuments_
+        : p.category == PropCategory::Watchtower ? gpu_watchtowers_
                                                : gpu_fountains_;
     if (set.empty()) {
         return;

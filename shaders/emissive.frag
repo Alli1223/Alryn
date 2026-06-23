@@ -19,5 +19,8 @@ layout(push_constant) uniform Push {
 } pc;
 
 void main() {
-    outColor = vec4(vColor * pc.tint.rgb, pc.tint.a);
+    // Lift bright self-lit surfaces so lanterns / windows / crystals / fires read HOT + glowing
+    // against the graded scene (a cheap stand-in for a full bloom pass).
+    vec3 c = vColor * pc.tint.rgb * 1.18;
+    outColor = vec4(c, pc.tint.a);
 }

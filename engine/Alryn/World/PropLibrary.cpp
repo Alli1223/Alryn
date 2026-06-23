@@ -1917,38 +1917,47 @@ PropDef PropLibrary::build_path_tile() {
                        static_cast<u32>(salt * 83492791));
         return static_cast<f32>((h >> 9) & 0xFFFFu) / 65535.0f;
     };
-    constexpr int g = 4;
-    const f32 cell = (2.0f * hx) / static_cast<f32>(g);
-    for (int j = 0; j < g; ++j) {
-        for (int i = 0; i < g; ++i) {
-            if (rnd(i, j, 11) < 0.14f) {
-                continue; // a worn, trodden-out gap (bare earth shows through)
+    // Irregular HEXAGONAL cobbles laid on a brick-offset grid (alternate rows shifted half a cell
+    // so the hexes interlock). Each stone is sized a little under its cell, so a mortar GAP of bare
+    // earth always shows between neighbouring cobbles - and each hexagon is individually rotated and
+    // has jittered corner radii, so they read as varied hand-cut stones, not a tidy tiling.
+    constexpr int cols = 5, rows = 5;
+    const f32 cellx = (2.0f * hx) / static_cast<f32>(cols);
+    const f32 cellz = (2.0f * hz) / static_cast<f32>(rows);
+    for (int j = 0; j < rows; ++j) {
+        const f32 rowoff = (j & 1) ? cellx * 0.5f : 0.0f; // brick/hex offset on alternate rows
+        for (int i = 0; i < cols; ++i) {
+            if (rnd(i, j, 11) < 0.10f) {
+                continue; // an occasional missing cobble (trodden-out, bare earth shows)
             }
-            const f32 cx = -hx + (static_cast<f32>(i) + 0.5f) * cell + (rnd(i, j, 1) - 0.5f) * cell * 0.4f;
-            const f32 cz = -hz + (static_cast<f32>(j) + 0.5f) * cell + (rnd(i, j, 2) - 0.5f) * cell * 0.4f;
-            const f32 r = cell * (0.56f + rnd(i, j, 3) * 0.16f); // varied size, packed close
-            const f32 top = 0.07f + rnd(i, j, 4) * 0.04f;        // a low FLAT slab, slightly proud
+            // The hexagon's outer radius, kept under half the cell so the mortar gap is guaranteed.
+            const f32 R = glm::min(cellx, cellz) * (0.40f + rnd(i, j, 3) * 0.07f);
+            f32 cx = -hx + (static_cast<f32>(i) + 0.5f) * cellx + rowoff +
+                     (rnd(i, j, 1) - 0.5f) * cellx * 0.18f;
+            f32 cz = -hz + (static_cast<f32>(j) + 0.5f) * cellz + (rnd(i, j, 2) - 0.5f) * cellz * 0.18f;
+            cx = glm::clamp(cx, -hx + R, hx - R); // keep it inside the tile (no seam overhang)
+            cz = glm::clamp(cz, -hz + R, hz - R);
+            const f32 rot = rnd(i, j, 8) * TwoPi; // each hexagon turned a random way
+            const f32 top = 0.07f + rnd(i, j, 4) * 0.04f; // a low FLAT cobble, slightly proud
             const f32 base = top - (0.05f + rnd(i, j, 7) * 0.03f);
             const f32 shade = 0.9f + rnd(i, j, 6) * 0.2f;
             const Vec3 col = stones[(i + j * 2 + static_cast<int>(rnd(i, j, 5) * 6.0f)) % 6] * shade;
-            // A flat irregular paving slab: 4 jittered corners, FLAT top (corners all at `top`),
-            // short straight sides down to `base` - reads as a clean rounded flagstone, not a rock.
-            auto corner = [&](f32 sx, f32 sz, int s) {
-                return Vec2{cx + sx * r * (0.82f + rnd(i, j, s) * 0.32f),
-                            cz + sz * r * (0.82f + rnd(i, j, s + 1) * 0.32f)};
-            };
-            const Vec2 c00 = corner(-1, -1, 20), c10 = corner(1, -1, 22), c11 = corner(1, 1, 24),
-                       c01 = corner(-1, 1, 26);
+            // 6 jittered corners -> an irregular hexagon.
+            Vec2 hexv[6];
+            for (int k = 0; k < 6; ++k) {
+                const f32 a = rot + TwoPi * static_cast<f32>(k) / 6.0f;
+                const f32 rr = R * (0.82f + rnd(i, j, 30 + k) * 0.30f);
+                hexv[k] = Vec2{cx + std::cos(a) * rr, cz + std::sin(a) * rr};
+            }
             const Vec3 axis{cx, top * 0.5f, cz};
+            const Vec3 ctr{cx, top, cz};
             auto T = [&](const Vec2& c) { return Vec3{c.x, top, c.y}; };
             auto B = [&](const Vec2& c) { return Vec3{c.x, base, c.y}; };
-            emit_tri(m, T(c00), T(c10), T(c11), axis, col); // flat top
-            emit_tri(m, T(c00), T(c11), T(c01), axis, col);
-            const Vec2 e[4] = {c00, c10, c11, c01};
-            for (int k = 0; k < 4; ++k) { // short straight sides
-                const Vec2& a = e[k];
-                const Vec2& b = e[(k + 1) % 4];
-                emit_tri(m, B(a), B(b), T(b), axis, col * 0.85f);
+            for (int k = 0; k < 6; ++k) {
+                const Vec2& a = hexv[k];
+                const Vec2& b = hexv[(k + 1) % 6];
+                emit_tri(m, ctr, T(a), T(b), axis, col);          // flat top (fan from centre)
+                emit_tri(m, B(a), B(b), T(b), axis, col * 0.85f); // short straight side
                 emit_tri(m, B(a), T(b), T(a), axis, col * 0.85f);
             }
         }
@@ -2155,6 +2164,297 @@ PropDef PropLibrary::build_river() {
     return def;
 }
 
+// A glowing magic CRYSTAL cluster: a few angular gem shards of varying size + tilt sprouting from a
+// small dark rock base, in a colour by `variant` (amethyst / sapphire / cyan / emerald). The shards
+// are emissive (glow at night) + an additive glow halo, and the def carries a coloured point light
+// so the cluster pools magical light in the dark - the signature detail from the reference art.
+PropDef PropLibrary::build_crystal(int variant) {
+    PropDef def;
+    def.name = "crystal";
+    static const Vec3 cols[kCrystalVariants] = {
+        {0.62f, 0.30f, 0.92f}, // amethyst purple
+        {0.32f, 0.5f, 1.0f},   // sapphire blue
+        {0.30f, 0.86f, 0.96f}, // cyan
+        {0.32f, 0.92f, 0.5f},  // emerald
+    };
+    const Vec3 col = cols[variant % kCrystalVariants];
+    const Vec3 rock{0.26f, 0.25f, 0.30f};
+    MeshData op, em;
+
+    auto rnd = [&](u32 s) {
+        u32 v = (static_cast<u32>(variant) * 2654435761u + s * 0x9E3779B9u);
+        v ^= v >> 15;
+        v *= 0x2545F491u;
+        return static_cast<f32>((v >> 9) & 0xFFFFu) / 65536.0f;
+    };
+    // A faceted gem shard: a 4-sided spike from `base` along `dir`, widest a third of the way up
+    // (the gem girdle) then tapering to a point.
+    auto shard = [&](MeshData& m, const Vec3& base, const Vec3& dir, f32 len, f32 r, const Vec3& c) {
+        const Vec3 up = glm::normalize(dir);
+        const Vec3 a = glm::normalize(glm::cross(up, std::abs(up.y) < 0.9f ? Vec3{0, 1, 0} : Vec3{1, 0, 0}));
+        const Vec3 b = glm::cross(up, a);
+        const Vec3 tip = base + up * len;
+        const Vec3 mid = base + up * (len * 0.34f);
+        const Vec3 ctr = base + up * (len * 0.5f);
+        const Vec3 b0 = base + a * r * 0.35f, b1 = base + b * r * 0.35f, b2 = base - a * r * 0.35f, b3 = base - b * r * 0.35f;
+        const Vec3 m0 = mid + a * r, m1 = mid + b * r, m2 = mid - a * r, m3 = mid - b * r;
+        const Vec3 bb[4] = {b0, b1, b2, b3};
+        const Vec3 mm[4] = {m0, m1, m2, m3};
+        for (int i = 0; i < 4; ++i) {
+            const int j = (i + 1) % 4;
+            emit_tri(m, bb[i], bb[j], mm[j], ctr, c);  // girdle side
+            emit_tri(m, bb[i], mm[j], mm[i], ctr, c);
+            emit_tri(m, mm[i], mm[j], tip, ctr, c * 1.12f); // facet to the point (brighter)
+        }
+    };
+
+    // a small dark rocky base
+    add_box(op, {-0.5f, -0.2f, -0.5f}, {0.5f, 0.18f, 0.5f}, rock);
+    add_box(op, {-0.34f, 0.12f, -0.34f}, {0.36f, 0.32f, 0.34f}, rock * 1.1f);
+
+    // a cluster of shards: one tall central spike + several smaller ones leaning out around it
+    const int n = 4 + static_cast<int>(rnd(1) * 3.0f);
+    shard(em, Vec3{0.0f, 0.18f, 0.0f}, Vec3{0.0f, 1.0f, 0.0f}, 1.5f + rnd(2) * 0.7f, 0.26f, col);
+    for (int i = 0; i < n; ++i) {
+        const f32 ang = TwoPi * (static_cast<f32>(i) / static_cast<f32>(n)) + rnd(i * 4 + 3) * 0.8f;
+        const Vec3 out{std::cos(ang), 0.0f, std::sin(ang)};
+        const Vec3 base = out * (0.18f + rnd(i * 4 + 4) * 0.22f) + Vec3{0.0f, 0.16f, 0.0f};
+        const Vec3 dir = glm::normalize(out * (0.5f + rnd(i * 4 + 5) * 0.5f) + Vec3{0.0f, 1.0f, 0.0f});
+        const f32 len = 0.7f + rnd(i * 4 + 6) * 0.9f;
+        shard(em, base, dir, len, 0.14f + rnd(i * 4 + 3) * 0.1f, col * (0.9f + 0.2f * rnd(i)));
+    }
+
+    PropLight l;
+    l.offset = Vec3{0.0f, 0.9f, 0.0f};
+    l.direction = glm::normalize(Vec3{0.0f, 1.0f, 0.0f});
+    l.color = col;
+    l.range = 9.0f;
+    l.intensity = 2.0f;
+    l.cone_deg = 360.0f;
+    def.lights.push_back(l);
+
+    def.parts.push_back({std::move(op), PropLayer::Opaque});
+    def.parts.push_back({std::move(em), PropLayer::Emissive});
+    BoxCollider c;
+    c.half_extents = Vec2{0.45f, 0.45f};
+    c.height = 0.6f;
+    def.colliders.push_back(c);
+    return def;
+}
+
+// A bioluminescent MUSHROOM cluster: a few toadstools whose caps + underglow glow softly in a colour
+// by `variant` (cyan / amber / violet), with a dim coloured light - magical forest-floor detail that
+// reads at night. No collider (you walk over them).
+PropDef PropLibrary::build_glow_shroom(int variant) {
+    PropDef def;
+    def.name = "glow_shroom";
+    static const Vec3 cols[kGlowShroomVariants] = {
+        {0.32f, 0.85f, 0.95f}, // cyan
+        {1.0f, 0.6f, 0.22f},   // amber
+        {0.7f, 0.42f, 0.95f},  // violet
+    };
+    const Vec3 glow = cols[variant % kGlowShroomVariants];
+    const Vec3 stem{0.86f, 0.84f, 0.78f};
+    MeshData op, em;
+    auto rnd = [&](u32 s) {
+        u32 v = (static_cast<u32>(variant) * 2654435761u + s * 0x9E3779B9u);
+        v ^= v >> 15;
+        v *= 0x2545F491u;
+        return static_cast<f32>((v >> 9) & 0xFFFFu) / 65536.0f;
+    };
+    const int n = 3 + static_cast<int>(rnd(1) * 3.0f);
+    for (int i = 0; i < n; ++i) {
+        const f32 ang = TwoPi * (static_cast<f32>(i) / static_cast<f32>(n)) + rnd(i * 5 + 2);
+        const f32 rad = (i == 0) ? 0.0f : 0.18f + rnd(i * 5 + 3) * 0.28f;
+        const f32 cxx = std::cos(ang) * rad, czz = std::sin(ang) * rad;
+        const f32 sc = (i == 0 ? 1.0f : 0.55f + rnd(i * 5 + 4) * 0.5f);
+        const f32 sh = 0.32f * sc, cr = 0.2f * sc;
+        add_box(op, {cxx - 0.05f * sc, 0.0f, czz - 0.05f * sc}, {cxx + 0.05f * sc, sh, czz + 0.05f * sc}, stem);
+        // glowing cap (emissive) - a little domed disc
+        add_box(em, {cxx - cr, sh, czz - cr}, {cxx + cr, sh + 0.1f * sc, czz + cr}, glow);
+        add_box(em, {cxx - cr * 0.6f, sh + 0.08f * sc, czz - cr * 0.6f}, {cxx + cr * 0.6f, sh + 0.16f * sc, czz + cr * 0.6f}, glow * 1.1f);
+        // a faint underglow disc just above the ground
+        add_box(em, {cxx - cr * 1.3f, 0.01f, czz - cr * 1.3f}, {cxx + cr * 1.3f, 0.04f, czz + cr * 1.3f}, glow * 0.5f);
+    }
+    PropLight l;
+    l.offset = Vec3{0.0f, 0.25f, 0.0f};
+    l.direction = Vec3{0.0f, 1.0f, 0.0f};
+    l.color = glow;
+    l.range = 5.5f;
+    l.intensity = 1.1f;
+    l.cone_deg = 360.0f;
+    def.lights.push_back(l);
+    def.parts.push_back({std::move(op), PropLayer::Opaque});
+    def.parts.push_back({std::move(em), PropLayer::Emissive});
+    return def;
+}
+
+// A cosy CAMPFIRE: a ring of stones around a small stack of logs with a flickering emissive flame, an
+// additive glow bloom and a warm point light - a rest-spot the dark wilderness lights up at night.
+PropDef PropLibrary::build_campfire() {
+    PropDef def;
+    def.name = "campfire";
+    const Vec3 stone{0.46f, 0.45f, 0.47f};
+    const Vec3 wood{0.34f, 0.24f, 0.15f};
+    const Vec3 char_{0.12f, 0.1f, 0.1f};
+    const Vec3 fire{1.0f, 0.55f, 0.16f};
+    MeshData op, em;
+    // ring of stones
+    for (int i = 0; i < 7; ++i) {
+        const f32 a = TwoPi * static_cast<f32>(i) / 7.0f;
+        const f32 sx = std::cos(a) * 0.62f, sz = std::sin(a) * 0.62f;
+        add_box(op, {sx - 0.16f, 0.0f, sz - 0.16f}, {sx + 0.16f, 0.2f, sz + 0.16f}, stone * (0.9f + 0.2f * static_cast<f32>(i % 2)));
+    }
+    // a couple of charred logs crossed in the middle
+    add_box(op, {-0.42f, 0.05f, -0.1f}, {0.42f, 0.18f, 0.1f}, char_);
+    add_box(op, {-0.1f, 0.05f, -0.42f}, {0.1f, 0.18f, 0.42f}, wood * 0.7f);
+    add_box(em, {-0.22f, 0.1f, -0.22f}, {0.22f, 0.24f, 0.22f}, Vec3{0.4f, 0.12f, 0.05f}); // embers
+    // flickering flame tongues (emissive) + an additive bloom (glow pass)
+    for (int i = 0; i < 5; ++i) {
+        const f32 a = TwoPi * static_cast<f32>(i) / 5.0f;
+        const f32 fx = std::cos(a) * 0.12f, fz = std::sin(a) * 0.12f;
+        const f32 fh = 0.5f + 0.35f * std::abs(std::sin(static_cast<f32>(i) * 1.7f));
+        add_box(em, {fx - 0.1f, 0.18f, fz - 0.1f}, {fx + 0.1f, fh, fz + 0.1f}, fire * (0.95f + 0.1f * static_cast<f32>(i % 2)));
+    }
+    add_box(em, {-0.14f, 0.22f, -0.14f}, {0.14f, 0.95f, 0.14f}, Vec3{1.6f, 1.0f, 0.4f}); // bright core
+    PropLight l;
+    l.offset = Vec3{0.0f, 0.6f, 0.0f};
+    l.direction = Vec3{0.0f, 1.0f, 0.0f};
+    l.color = Vec3{1.0f, 0.62f, 0.28f};
+    l.range = 13.0f;
+    l.intensity = 4.5f;
+    l.cone_deg = 360.0f;
+    def.lights.push_back(l);
+    def.parts.push_back({std::move(op), PropLayer::Opaque});
+    def.parts.push_back({std::move(em), PropLayer::Emissive});
+    BoxCollider c;
+    c.half_extents = Vec2{0.7f, 0.7f};
+    c.height = 0.2f;
+    def.colliders.push_back(c);
+    return def;
+}
+
+// A weathered stone MONUMENT - an ancient wilderness landmark by `variant`: 0 a tall carved obelisk
+// on a stepped plinth, 1 a broken/leaning pillar with rubble, 2 a trio of rough standing stones.
+// Mossy grey stone, faceted; a collider so you can't walk through it.
+PropDef PropLibrary::build_monument(int variant) {
+    PropDef def;
+    def.name = "monument";
+    const Vec3 stone{0.5f, 0.51f, 0.49f};
+    const Vec3 dark{0.4f, 0.41f, 0.39f};
+    const Vec3 moss{0.32f, 0.42f, 0.26f};
+    MeshData m;
+    auto rnd = [&](u32 s) {
+        u32 v = (static_cast<u32>(variant) * 2654435761u + s * 0x9E3779B9u);
+        v ^= v >> 15;
+        v *= 0x2545F491u;
+        return static_cast<f32>((v >> 9) & 0xFFFFu) / 65536.0f;
+    };
+    f32 cr = 0.7f;
+    if (variant % kMonumentVariants == 0) {
+        // carved obelisk on a stepped plinth
+        add_box(m, {-0.85f, 0.0f, -0.85f}, {0.85f, 0.28f, 0.85f}, stone * 0.95f);
+        add_box(m, {-0.62f, 0.28f, -0.62f}, {0.62f, 0.52f, 0.62f}, stone);
+        add_box(m, {-0.34f, 0.52f, -0.34f}, {0.34f, 3.6f, 0.34f}, stone * 1.04f); // shaft
+        add_box(m, {-0.36f, 1.3f, -0.36f}, {0.36f, 1.5f, 0.36f}, dark);           // carved band
+        add_box(m, {-0.36f, 2.4f, -0.36f}, {0.36f, 2.6f, 0.36f}, dark);
+        // a small pyramidal cap
+        const Vec3 apex{0.0f, 4.05f, 0.0f};
+        add_tri(m, {-0.34f, 3.6f, 0.34f}, {0.34f, 3.6f, 0.34f}, apex, stone * 1.06f);
+        add_tri(m, {0.34f, 3.6f, -0.34f}, {-0.34f, 3.6f, -0.34f}, apex, stone * 0.96f);
+        add_tri(m, {0.34f, 3.6f, 0.34f}, {0.34f, 3.6f, -0.34f}, apex, stone);
+        add_tri(m, {-0.34f, 3.6f, -0.34f}, {-0.34f, 3.6f, 0.34f}, apex, stone);
+        add_box(m, {-0.36f, 0.5f, -0.36f}, {0.0f, 0.9f, -0.32f}, moss); // moss patch
+        cr = 0.55f;
+    } else if (variant % kMonumentVariants == 1) {
+        // a broken, leaning pillar + rubble at the base
+        add_box(m, {-0.7f, 0.0f, -0.7f}, {0.7f, 0.22f, 0.7f}, stone * 0.95f);
+        add_box(m, {-0.34f, 0.22f, -0.34f}, {0.34f, 1.7f, 0.34f}, stone); // standing stub
+        add_box(m, {-0.3f, 1.55f, -0.3f}, {0.3f, 1.75f, 0.3f}, dark);     // jagged broken top
+        // a fallen broken section lying beside it
+        add_box(m, {0.5f, 0.0f, -0.25f}, {1.7f, 0.4f, 0.25f}, stone * 1.02f);
+        add_box(m, {-0.55f, 0.0f, 0.5f}, {-0.1f, 0.26f, 0.95f}, dark);    // rubble
+        add_box(m, {-0.34f, 0.6f, 0.3f}, {0.0f, 0.95f, 0.36f}, moss);     // moss
+        cr = 0.6f;
+    } else {
+        // a trio of rough standing stones in a loose ring
+        for (int i = 0; i < 3; ++i) {
+            const f32 a = TwoPi * static_cast<f32>(i) / 3.0f + rnd(i) * 0.5f;
+            const f32 sx = std::cos(a) * 0.55f, sz = std::sin(a) * 0.55f;
+            const f32 hgt = 1.5f + rnd(i * 3 + 1) * 1.1f;
+            const f32 w = 0.32f + rnd(i * 3 + 2) * 0.16f;
+            const f32 lean = (rnd(i * 3 + 3) - 0.5f) * 0.3f;
+            add_box(m, {sx - w + lean, 0.0f, sz - w}, {sx + w + lean, hgt, sz + w}, stone * (0.92f + 0.16f * rnd(i)));
+            add_box(m, {sx - w * 0.5f + lean, hgt * 0.5f, sz - w - 0.02f}, {sx + lean, hgt * 0.7f, sz - w + 0.04f}, moss);
+        }
+        cr = 0.95f;
+    }
+    def.parts.push_back({std::move(m), PropLayer::Opaque});
+    BoxCollider c;
+    c.half_extents = Vec2{cr, cr};
+    c.height = 1.6f;
+    def.colliders.push_back(c);
+    return def;
+}
+
+// A wooden WATCHTOWER: four braced legs carrying a railed platform with a small pitched-roof lookout
+// cabin on top - a wilderness landmark you can see from afar (a brazier could light it at night).
+PropDef PropLibrary::build_watchtower() {
+    PropDef def;
+    def.name = "watchtower";
+    const Vec3 wood{0.42f, 0.3f, 0.18f};
+    const Vec3 dark{0.32f, 0.22f, 0.13f};
+    const Vec3 roof{0.46f, 0.27f, 0.17f};
+    MeshData m;
+    constexpr f32 r = 1.0f;   // leg spread (half)
+    constexpr f32 ph = 3.4f;  // platform height
+    // four legs, splayed slightly outward at the base
+    for (f32 sx : {-1.0f, 1.0f}) {
+        for (f32 sz : {-1.0f, 1.0f}) {
+            const f32 bx = sx * (r + 0.35f), bz = sz * (r + 0.35f);
+            const f32 tx = sx * r, tz = sz * r;
+            // a leaning leg approximated by a thin box from base to platform (axis-aligned-ish)
+            add_box(m, {std::min(bx, tx) - 0.1f, 0.0f, std::min(bz, tz) - 0.1f},
+                    {std::min(bx, tx) + 0.1f, ph, std::min(bz, tz) + 0.1f}, wood);
+        }
+    }
+    // cross-braces (a couple of diagonal-ish horizontal rings)
+    for (f32 by : {1.1f, 2.2f}) {
+        add_box(m, {-r - 0.1f, by, -r - 0.05f}, {r + 0.1f, by + 0.12f, -r + 0.05f}, dark);
+        add_box(m, {-r - 0.1f, by, r - 0.05f}, {r + 0.1f, by + 0.12f, r + 0.05f}, dark);
+        add_box(m, {-r - 0.05f, by, -r - 0.1f}, {-r + 0.05f, by + 0.12f, r + 0.1f}, dark);
+        add_box(m, {r - 0.05f, by, -r - 0.1f}, {r + 0.05f, by + 0.12f, r + 0.1f}, dark);
+    }
+    // platform deck + a railing
+    add_box(m, {-r - 0.25f, ph, -r - 0.25f}, {r + 0.25f, ph + 0.14f, r + 0.25f}, wood * 1.05f);
+    for (f32 sz : {-1.0f, 1.0f}) {
+        add_box(m, {-r - 0.25f, ph + 0.14f, sz * (r + 0.2f) - 0.05f}, {r + 0.25f, ph + 0.7f, sz * (r + 0.2f) + 0.05f}, wood);
+    }
+    add_box(m, {-r - 0.25f, ph + 0.14f, -r - 0.25f}, {-r - 0.15f, ph + 0.7f, r + 0.25f}, wood);
+    add_box(m, {r + 0.15f, ph + 0.14f, -r - 0.25f}, {r + 0.25f, ph + 0.7f, r + 0.25f}, wood);
+    // a small lookout cabin (back wall + posts) with a pitched roof
+    add_box(m, {-r, ph + 0.14f, -r}, {r, ph + 1.6f, -r + 0.16f}, wood * 0.95f); // back wall
+    add_box(m, {-r, ph + 0.14f, -r}, {-r + 0.14f, ph + 1.6f, r * 0.4f}, wood);  // side posts
+    add_box(m, {r - 0.14f, ph + 0.14f, -r}, {r, ph + 1.6f, r * 0.4f}, wood);
+    const f32 ry = ph + 1.6f;
+    add_tri(m, {-r - 0.2f, ry, r + 0.2f}, {r + 0.2f, ry, r + 0.2f}, {0.0f, ry + 0.7f, -r * 0.3f}, roof);
+    add_tri(m, {r + 0.2f, ry, -r - 0.2f}, {-r - 0.2f, ry, -r - 0.2f}, {0.0f, ry + 0.7f, -r * 0.3f}, roof * 0.92f);
+    add_tri(m, {r + 0.2f, ry, r + 0.2f}, {r + 0.2f, ry, -r - 0.2f}, {0.0f, ry + 0.7f, -r * 0.3f}, roof);
+    add_tri(m, {-r - 0.2f, ry, -r - 0.2f}, {-r - 0.2f, ry, r + 0.2f}, {0.0f, ry + 0.7f, -r * 0.3f}, roof);
+    def.parts.push_back({std::move(m), PropLayer::Opaque});
+    // colliders on the four legs (the bay between them is walkable)
+    for (f32 sx : {-1.0f, 1.0f}) {
+        for (f32 sz : {-1.0f, 1.0f}) {
+            BoxCollider c;
+            c.center = Vec3{sx * r, 0.0f, sz * r};
+            c.half_extents = Vec2{0.22f, 0.22f};
+            c.height = ph;
+            def.colliders.push_back(c);
+        }
+    }
+    return def;
+}
+
 // An arched stone road bridge spanning a river (local +X = the road across the channel). A
 // gently arched stone deck wide enough for the cart, with low parapets and stone abutments;
 // the arch springs from the banks. Placed where a town avenue crosses the river.
@@ -2234,6 +2534,17 @@ PropLibrary::PropLibrary() {
         decor_.push_back(build_decor(static_cast<int>(i)));
     }
     rivers_.push_back(build_river());
+    for (u32 i = 0; i < kCrystalVariants; ++i) {
+        crystals_.push_back(build_crystal(static_cast<int>(i)));
+    }
+    for (u32 i = 0; i < kGlowShroomVariants; ++i) {
+        glow_shrooms_.push_back(build_glow_shroom(static_cast<int>(i)));
+    }
+    campfires_.push_back(build_campfire());
+    for (u32 i = 0; i < kMonumentVariants; ++i) {
+        monuments_.push_back(build_monument(static_cast<int>(i)));
+    }
+    watchtowers_.push_back(build_watchtower());
 }
 
 const PropDef& PropLibrary::resolve(const PropInstance& inst) const {
@@ -2255,6 +2566,11 @@ const PropDef& PropLibrary::resolve(const PropInstance& inst) const {
         case PropCategory::Fountain: return fountains_[inst.variant % fountains_.size()];
         case PropCategory::Decor: return decor_[inst.variant % decor_.size()];
         case PropCategory::River: return rivers_[inst.variant % rivers_.size()];
+        case PropCategory::Crystal: return crystals_[inst.variant % crystals_.size()];
+        case PropCategory::GlowShroom: return glow_shrooms_[inst.variant % glow_shrooms_.size()];
+        case PropCategory::Campfire: return campfires_[inst.variant % campfires_.size()];
+        case PropCategory::Monument: return monuments_[inst.variant % monuments_.size()];
+        case PropCategory::Watchtower: return watchtowers_[inst.variant % watchtowers_.size()];
     }
     return bushes_[0];
 }

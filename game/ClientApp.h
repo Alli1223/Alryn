@@ -268,7 +268,15 @@ private:
     // read who the Cleric/Hunter/Mage has buffed. Pulses; driven by PlayerState.buffs bitflags.
     void draw_buffs();
 
+    void draw_oxen(const Vec3& pos, f32 yaw); // a yoked pair of draft oxen pulling the wagon
+    void update_deer(Timestep dt);            // wander/graze/flee the ambient deer (client-side)
+    void draw_deer();
     void draw_particles();
+    // Ambient wildlife VFX (no networking): a flock of birds drifting across the sky by day, and
+    // at night a slow gliding owl plus fireflies. The fireflies are anchored to fixed WORLD cells
+    // (each drifts gently about its own spot), so the player walks past them through the world
+    // rather than carrying a screen-locked swarm.
+    void draw_ambient_life();
 
     // The showy burst for an ability cast, played for whoever cast it (the local player on
     // keypress for instant feel; remote players when the snapshot reports their `cast`).
@@ -412,9 +420,13 @@ private:
     // Medieval-styled; purely an info overlay (world input is frozen while it's open).
     void draw_skills();
 
-    // Weather overlay: a 2D screen-space rain field (streaks scaled by storminess + wind slant)
-    // and lightning flashes. The sky/sun/fog/wind are modulated in update_day_night; this is the
-    // on-screen precipitation. Driven by the eased `weather_amt_` (from the networked weather).
+    // Weather: precipitation + lightning, driven by the eased `weather_amt_` (from the networked
+    // weather). `draw_rain` is the WORLD-SPACE rain - a column of falling streaks anchored to world
+    // cells around the player (so the camera sees real parallax) at a constant fall speed (so fading
+    // rain never appears to run backwards); drawn in the 3D scene pass. `draw_weather` is just the
+    // genuinely screen-space part: the full-screen lightning flash. The sky/sun/fog/wind are
+    // modulated in update_day_night.
+    void draw_rain();
     void draw_weather();
 
     void draw_prop(const PropInstance& p);
@@ -612,6 +624,11 @@ private:
     std::vector<GpuProp> gpu_fountains_;
     std::vector<GpuProp> gpu_decor_;
     std::vector<GpuProp> gpu_rivers_;
+    std::vector<GpuProp> gpu_crystals_;
+    std::vector<GpuProp> gpu_glow_shrooms_;
+    std::vector<GpuProp> gpu_campfires_;
+    std::vector<GpuProp> gpu_monuments_;
+    std::vector<GpuProp> gpu_watchtowers_;
     Mesh shape_box_;
     Mesh shape_sphere_;
     Mesh shape_cylinder_;
@@ -686,6 +703,20 @@ private:
     Mesh wagon_wheel_mesh_;     // a single wheel, drawn x4 (scaled per type) and spun
     Mesh horse_body_mesh_;      // the carriage puller
     Mesh horse_leg_mesh_;       // a single leg, drawn x4 with a gait swing
+    Mesh ox_body_mesh_;         // a draft ox (the cargo wagon is pulled by a yoked pair)
+    Mesh ox_leg_mesh_;
+    Mesh deer_body_mesh_;       // ambient wildlife: deer that graze + flee near the player
+    Mesh deer_leg_mesh_;
+    // A client-side ambient deer (not networked - pure ambiance: wander, graze, flee the player).
+    struct Deer {
+        Vec3 pos{0.0f};
+        f32 yaw = 0.0f;
+        f32 gait = 0.0f;
+        Vec3 target{0.0f};
+        f32 retarget = 0.0f;
+        bool fleeing = false;
+    };
+    std::vector<Deer> deer_;
     Mesh rope_mesh_;            // a unit harness-trace link, drawn per rope segment
     Mesh goods_mesh_;           // a cargo crate (spilled on the ground / carried by a player)
     std::unordered_map<u32, f32> wagon_roll_;  // accumulated wheel spin per wagon id
