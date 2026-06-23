@@ -262,6 +262,7 @@ private:
     f32 driver_repath_ = 0.0f;           // seconds until the path is recomputed
     f32 driver_stuck_ = 0.0f;            // seconds the puller has gone without getting closer
     f32 driver_best_dist_ = 1e9f;        // closest the puller has gotten to the current waypoint
+    f32 driver_snag_ = 0.0f;             // seconds the cart has been snagged (tow-gate pinned low)
     std::vector<Enemy> ambush_;          // ambushers attacking the active wagon
     std::unordered_map<net::PlayerId, std::pair<u32, u8>> votes_; // player -> (wagon id, mode)
     u32 money_ = 0;                      // shared party wallet

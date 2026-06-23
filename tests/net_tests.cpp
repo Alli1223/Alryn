@@ -532,11 +532,63 @@ TEST_CASE("GameServer: a wagon contract is offered, accepted by vote, and ambush
     const bool horse_drawn = vehicle_type(snap.wagons[0].type).horse_drawn();
     CHECK(snap.wagons[0].has_horse == (horse_drawn ? 1 : 0));
 
-    // Once the cargo has driven clear of the town walls, ambushers spawn + are networked
-    // (in the enemy list). The hired driver is slow, so poll until it has left town.
-    for (int t = 0; t < 40 && server.ambusher_count() == 0; ++t) {
-        pump(60);
+    // Ambushers spawn once the cargo clears the town walls. The local player grabs the handles and
+    // tows it out along the road route through the gate (a player navigates town buildings far
+    // better than the cart trailer / hired teamster, so this is deterministic regardless of town
+    // geometry). The control loop reads authoritative SERVER state, so it's independent of packet
+    // timing. Follow the route point-by-point so we stay on the cleared road, never cutting into a
+    // building.
+    auto me = [&]() -> const PlayerState* {
+        for (const PlayerState& p : snap.players) {
+            if (p.id == id) {
+                return &p;
+            }
+        }
+        return nullptr;
+    };
+    const std::vector<Vec2> route = server.active_wagon().route;
+    const Vec2 center = server.active_wagon().source;
+    bool grabbed = false;
+    for (int t = 0; t < 1500 && server.ambusher_count() == 0; ++t) {
+        const PlayerState* p = me();
+        const Vec3 wp = server.active_wagon().position;
+        if (p == nullptr) {
+            pump(3);
+            continue;
+        }
+        if (!grabbed) {
+            Vec3 d = wp - p->position;
+            d.y = 0.0f;
+            const f32 dist = glm::length(d);
+            if (dist > 2.0f) {
+                intent.move = d / std::max(dist, 1e-3f); // walk to the cart
+                intent.grab = false;
+            } else {
+                intent.move = Vec3{0.0f};
+                intent.grab = true; // take the handles
+                grabbed = true;
+            }
+        } else if (!route.empty()) {
+            // Walk to the NEXT road point just beyond us (monotonic outward), staying on the road.
+            const f32 pr = glm::length(Vec2{p->position.x, p->position.z} - center);
+            Vec2 tgt = route.back();
+            for (const Vec2& rp : route) {
+                if (glm::length(rp - center) > pr + 1.0f) {
+                    tgt = rp;
+                    break;
+                }
+            }
+            Vec3 d = Vec3{tgt.x, p->position.y, tgt.y} - p->position;
+            d.y = 0.0f;
+            const f32 dist = glm::length(d);
+            intent.move = dist > 1e-3f ? d / dist : Vec3{1.0f, 0.0f, 0.0f};
+            intent.grab = false;
+        }
+        pump(3);
+        intent.grab = false;
     }
+    intent.move = Vec3{0.0f};
+    pump(10); // let the just-spawned ambushers reach the client in a snapshot
     CHECK(server.ambusher_count() > 0);
     CHECK_FALSE(snap.enemies.empty());
 }

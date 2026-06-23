@@ -54,7 +54,24 @@ std::vector<Segment> gather(const Vec2& center, f32 radius, u32 seed);
 
 // The ordered, water-avoiding road polyline between two town centres (a -> b), or empty
 // if they can't be linked on land. For the wagon driver's path + the map route overlay.
+// This now follows the TOWN GRAPH: for far towns it chains the per-edge roads through any
+// intermediate towns on the way (a multi-hop haul), so the wagon passes through them.
 std::vector<Vec2> route_polyline(const Vec2& a, const Vec2& b, u32 seed);
+
+// The multi-hop road polyline from town centre `a` to town centre `b`, routed over the town
+// graph so it passes THROUGH intermediate towns that lie on the way. Empty if `b`'s town isn't
+// reachable from `a`'s on the road graph. (If a/b aren't town centres it falls back to a direct
+// route.) `route_polyline` delegates to this.
+std::vector<Vec2> route_through_towns(const Vec2& a, const Vec2& b, u32 seed);
+
+// Total world-length of a road polyline (sum of segment lengths) - the true haul distance
+// (longer than the straight line for a winding multi-hop route), for reward scaling.
+f32 route_length(const std::vector<Vec2>& route);
+
+// Every town reachable from `center`'s town over the road graph (including far, multi-hop ones),
+// nearest graph-distance first, capped at `max_results`. Lets the game offer long-haul contracts
+// to distant towns, not just immediate neighbours.
+std::vector<worldgen::Village> reachable_towns(const Vec2& center, u32 seed, int max_results = 16);
 
 // Direction from a town toward its nearest connected town (where its single gate
 // faces), or nullopt if the town has no road (isolated by water).

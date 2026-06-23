@@ -6,6 +6,7 @@
 #include <cmath>
 #include <memory>
 #include <mutex>
+#include <queue>
 #include <unordered_map>
 
 namespace alryn::roads {
@@ -254,6 +255,119 @@ SegList window_segments(u32 seed, int qcx, int qcz) {
     return g_window.emplace(key, std::move(merged)).first->second;
 }
 
+// ---- Town graph (for multi-hop routing through intermediate towns) --------
+
+// Neighbour town cells of (cx,cz) that have an actual land road, cached. (Reuses route() to test
+// linkage, which is the same per-edge road the renderer draws, so the graph + the roads agree.)
+std::mutex g_links_mutex;
+std::unordered_map<CellKey, std::shared_ptr<const std::vector<CellKey>>, CellKeyHash> g_links;
+
+std::shared_ptr<const std::vector<CellKey>> town_links(u32 seed, int cx, int cz) {
+    const CellKey key{seed, cx, cz};
+    {
+        std::lock_guard<std::mutex> lock(g_links_mutex);
+        const auto it = g_links.find(key);
+        if (it != g_links.end()) {
+            return it->second;
+        }
+    }
+    auto links = std::make_shared<std::vector<CellKey>>();
+    if (const auto a = town_at(cx, cz, seed)) {
+        for (int dz = -road_max_cells; dz <= road_max_cells; ++dz) {
+            for (int dx = -road_max_cells; dx <= road_max_cells; ++dx) {
+                if (dx == 0 && dz == 0) {
+                    continue;
+                }
+                const auto b = town_at(cx + dx, cz + dz, seed);
+                if (b && !route(a->center, b->center, seed).empty()) {
+                    links->push_back(CellKey{seed, cx + dx, cz + dz});
+                }
+            }
+        }
+    }
+    std::lock_guard<std::mutex> lock(g_links_mutex);
+    return g_links.emplace(key, std::move(links)).first->second;
+}
+
+// The town cell whose centre is (very near) world point `c`, if it's a town centre.
+std::optional<CellKey> owning_cell(u32 seed, const Vec2& c) {
+    const int bx = static_cast<int>(std::floor(c.x / worldgen::village_cell));
+    const int bz = static_cast<int>(std::floor(c.y / worldgen::village_cell));
+    for (int dz = -1; dz <= 1; ++dz) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            if (const auto t = town_at(bx + dx, bz + dz, seed)) {
+                if (glm::length(t->center - c) < 2.5f) {
+                    return CellKey{seed, bx + dx, bz + dz};
+                }
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+Vec2 cell_center(u32 seed, const CellKey& k) {
+    const auto t = town_at(k.cx, k.cz, seed);
+    return t ? t->center : Vec2{0.0f};
+}
+
+// Dijkstra over the town graph from `src` toward `dst`. If `dst` is set, stops when it's settled
+// and returns the cell path; otherwise explores the whole reachable component and returns every
+// settled cell (with its graph distance in `out_dist`) for reachable_towns. Bounded for safety.
+std::vector<CellKey> dijkstra(u32 seed, const CellKey& src, const std::optional<CellKey>& dst,
+                              std::vector<std::pair<CellKey, f32>>* settled_out) {
+    std::unordered_map<CellKey, f32, CellKeyHash> dist;
+    std::unordered_map<CellKey, CellKey, CellKeyHash> prev;
+    using QE = std::pair<f32, CellKey>;
+    const auto cmp = [](const QE& a, const QE& b) { return a.first > b.first; };
+    std::priority_queue<QE, std::vector<QE>, decltype(cmp)> pq(cmp);
+    dist[src] = 0.0f;
+    pq.push({0.0f, src});
+    int settled = 0;
+    while (!pq.empty()) {
+        const auto [d, c] = pq.top();
+        pq.pop();
+        if (d > dist[c]) {
+            continue; // stale queue entry
+        }
+        if (settled_out) {
+            settled_out->push_back({c, d});
+        }
+        if (dst && c == *dst) {
+            break;
+        }
+        if (++settled > 800) {
+            break; // hard bound (towns are sparse; this is never hit in practice)
+        }
+        const Vec2 cc = cell_center(seed, c);
+        for (const CellKey& n : *town_links(seed, c.cx, c.cz)) {
+            const f32 nd = d + glm::length(cell_center(seed, n) - cc);
+            const auto it = dist.find(n);
+            if (it == dist.end() || nd < it->second) {
+                dist[n] = nd;
+                prev[n] = c;
+                pq.push({nd, n});
+            }
+        }
+    }
+    if (!dst || !dist.count(*dst)) {
+        return {};
+    }
+    std::vector<CellKey> path;
+    for (CellKey c = *dst;;) {
+        path.push_back(c);
+        if (c == src) {
+            break;
+        }
+        const auto it = prev.find(c);
+        if (it == prev.end()) {
+            return {};
+        }
+        c = it->second;
+    }
+    std::reverse(path.begin(), path.end());
+    return path;
+}
+
 f32 point_segment_distance(const Vec2& p, const Vec2& a, const Vec2& b) {
     const Vec2 ab = b - a;
     const f32 len2 = glm::dot(ab, ab);
@@ -336,8 +450,73 @@ std::vector<Segment> gather(const Vec2& center, f32 radius, u32 seed) {
     return out;
 }
 
+std::vector<Vec2> route_through_towns(const Vec2& a, const Vec2& b, u32 seed) {
+    const auto sa = owning_cell(seed, a);
+    const auto sb = owning_cell(seed, b);
+    if (!sa || !sb) {
+        return route(a, b, seed); // not town centres: a plain direct route
+    }
+    if (*sa == *sb) {
+        return {};
+    }
+    const std::vector<CellKey> cells = dijkstra(seed, *sa, sb, nullptr);
+    if (cells.size() < 2) {
+        return {}; // unreachable on the road graph
+    }
+    // Chain the per-edge roads, dropping the duplicated shared endpoint between legs.
+    std::vector<Vec2> out;
+    for (usize i = 0; i + 1 < cells.size(); ++i) {
+        const std::vector<Vec2> seg =
+            route(cell_center(seed, cells[i]), cell_center(seed, cells[i + 1]), seed);
+        if (seg.empty()) {
+            return {};
+        }
+        for (usize k = (out.empty() ? 0 : 1); k < seg.size(); ++k) {
+            out.push_back(seg[k]);
+        }
+    }
+    return out;
+}
+
 std::vector<Vec2> route_polyline(const Vec2& a, const Vec2& b, u32 seed) {
-    return route(a, b, seed);
+    return route_through_towns(a, b, seed);
+}
+
+f32 route_length(const std::vector<Vec2>& route) {
+    f32 len = 0.0f;
+    for (usize i = 1; i < route.size(); ++i) {
+        len += glm::length(route[i] - route[i - 1]);
+    }
+    return len;
+}
+
+std::vector<worldgen::Village> reachable_towns(const Vec2& center, u32 seed, int max_results) {
+    const auto src = owning_cell(seed, center);
+    if (!src) {
+        return {};
+    }
+    std::vector<std::pair<CellKey, f32>> settled;
+    dijkstra(seed, *src, std::nullopt, &settled);
+    // Nearest graph-distance first; break ties on cell so the order is deterministic.
+    std::sort(settled.begin(), settled.end(), [](const auto& l, const auto& r) {
+        if (l.second != r.second) {
+            return l.second < r.second;
+        }
+        return l.first.cz != r.first.cz ? l.first.cz < r.first.cz : l.first.cx < r.first.cx;
+    });
+    std::vector<worldgen::Village> out;
+    for (const auto& [cell, d] : settled) {
+        if (cell == *src) {
+            continue; // skip the origin town itself
+        }
+        if (const auto v = town_at(cell.cx, cell.cz, seed)) {
+            out.push_back(*v);
+            if (static_cast<int>(out.size()) >= max_results) {
+                break;
+            }
+        }
+    }
+    return out;
 }
 
 std::optional<Vec2> primary_direction(const worldgen::Village& v, u32 seed) {

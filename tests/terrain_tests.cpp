@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <optional>
 #include <tuple>
 
 using namespace alryn;
@@ -254,6 +255,89 @@ TEST_CASE("Worldgen: biome classifier is deterministic, varied, and consistent")
     }
     CHECK(seen.size() >= 4);             // a varied world, not one biome everywhere
     CHECK(seen.count(Biome::Forest) > 0); // forest still dominates the land
+}
+
+TEST_CASE("Roads: town graph routes multi-hop through intermediate towns") {
+    const u32 seed = 1337u;
+
+    // Find a town that has road-connected neighbours.
+    std::optional<worldgen::Village> origin;
+    for (int cz = -7; cz <= 7 && !origin; ++cz) {
+        for (int cx = -7; cx <= 7 && !origin; ++cx) {
+            if (const auto v = worldgen::village_at(cx, cz, seed)) {
+                if (!roads::reachable_towns(v->center, seed, 16).empty()) {
+                    origin = v;
+                }
+            }
+        }
+    }
+    REQUIRE(origin.has_value());
+
+    const auto reach = roads::reachable_towns(origin->center, seed, 16);
+    REQUIRE_FALSE(reach.empty());
+    // Deterministic ordering.
+    const auto reach2 = roads::reachable_towns(origin->center, seed, 16);
+    REQUIRE(reach.size() == reach2.size());
+    for (usize i = 0; i < reach.size(); ++i) {
+        CHECK(reach[i].vseed == reach2[i].vseed);
+    }
+
+    // The route to the farthest reachable town: non-empty, ends at both town centres, and its
+    // true length is at least the straight-line distance (it winds, possibly through towns).
+    const worldgen::Village& far = reach.back();
+    const std::vector<Vec2> route = roads::route_through_towns(origin->center, far.center, seed);
+    REQUIRE_FALSE(route.empty());
+    CHECK(glm::length(route.front() - origin->center) < 2.5f);
+    CHECK(glm::length(route.back() - far.center) < 2.5f);
+    CHECK(roads::route_length(route) > glm::length(far.center - origin->center) - 1.0f);
+    // route_polyline delegates to route_through_towns.
+    CHECK(roads::route_polyline(origin->center, far.center, seed).size() == route.size());
+
+    // Somewhere in the world, a reachable destination lies MORE than road_max_cells away (so it
+    // can only be reached by hopping through intermediate towns) and its route threads through one
+    // of them - the multi-hop haul. Scan the world for a guaranteed such case.
+    auto cell_of = [&](const Vec2& c) {
+        return std::pair<int, int>{static_cast<int>(std::floor(c.x / worldgen::village_cell)),
+                                   static_cast<int>(std::floor(c.y / worldgen::village_cell))};
+    };
+    bool found_multihop = false;
+    for (int cz = -16; cz <= 16 && !found_multihop; ++cz) {
+        for (int cx = -16; cx <= 16 && !found_multihop; ++cx) {
+            const auto v = worldgen::village_at(cx, cz, seed);
+            if (!v) {
+                continue;
+            }
+            const auto rr = roads::reachable_towns(v->center, seed, 40);
+            for (const auto& d : rr) {
+                const auto [dcx, dcz] = cell_of(d.center);
+                if (std::max(std::abs(dcx - cx), std::abs(dcz - cz)) <= roads::road_max_cells) {
+                    continue; // a direct hop is possible; we want a guaranteed multi-hop dest
+                }
+                const std::vector<Vec2> r = roads::route_through_towns(v->center, d.center, seed);
+                if (r.empty()) {
+                    continue;
+                }
+                for (const auto& mid : rr) {
+                    if (mid.vseed == d.vseed || glm::length(mid.center - v->center) < 1.0f ||
+                        glm::length(mid.center - d.center) < 1.0f) {
+                        continue;
+                    }
+                    f32 best = 1e30f;
+                    for (const Vec2& p : r) {
+                        best = std::min(best, glm::length(p - mid.center));
+                    }
+                    if (best < mid.half) {
+                        found_multihop = true;
+                        break;
+                    }
+                }
+                if (found_multihop) {
+                    break;
+                }
+            }
+        }
+    }
+    CHECK(found_multihop); // the road graph produces real multi-hop hauls through other towns
 }
 
 TEST_CASE("Trees: low-poly meshes + deterministic, on-land scatter") {

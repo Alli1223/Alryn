@@ -32,6 +32,7 @@ constexpr f32 kArcherInterval = 2.4f;
 constexpr f32 kArrowSpeed = 20.0f;
 constexpr f32 kArrowDamage = 8.0f;
 constexpr f32 kDriverStuckSeconds = 2.0f; // no waypoint progress for this long => skip it
+constexpr f32 kUnstickSeconds = 2.0f; // cart snagged (tow-gate pinned) this long => pull it free
 
 // Ground height under (x,z) via the density function.
 f32 ground_at(const DensitySampler& density, f32 x, f32 z) {
@@ -350,56 +351,78 @@ void GameServer::generate_offers() {
     // Never offer more wagons than we have distinct depot spots, or two would share a spot.
     const int max_offers = std::min<int>(static_cast<int>(kMaxOffers), static_cast<int>(spots.size()));
 
-    int idx = 0;
-    for (int dz = -roads::road_max_cells; dz <= roads::road_max_cells && idx < max_offers; ++dz) {
-        for (int dx = -roads::road_max_cells; dx <= roads::road_max_cells && idx < max_offers; ++dx) {
-            if (dx == 0 && dz == 0) {
-                continue;
-            }
-            const int ocx = static_cast<int>(std::floor(origin->center.x / worldgen::village_cell));
-            const int ocz = static_cast<int>(std::floor(origin->center.y / worldgen::village_cell));
-            const auto dest = worldgen::village_at(ocx + dx, ocz + dz, seed);
-            if (!dest) {
-                continue;
-            }
-            std::vector<Vec2> route = roads::route_polyline(origin->center, dest->center, seed);
-            if (route.empty()) {
-                continue; // no road links these towns
-            }
-            const f32 dist = glm::length(dest->center - origin->center);
-            const u8 difficulty = static_cast<u8>(
-                1u + detail::tree_hash(static_cast<int>(origin->vseed), static_cast<int>(dest->vseed),
-                                       5150u) % 3u);
-            Wagon wg;
-            wg.id = detail::tree_hash(static_cast<int>(origin->vseed), static_cast<int>(dest->vseed),
-                                      6161u) | 1u;
-            wg.source = origin->center;
-            wg.dest = dest->center;
-            wg.source_half = origin->half;
-            wg.difficulty = difficulty;
-            // Vehicle type: longer / harder routes lean toward bigger vehicles (which pay
-            // more); deterministic per (origin,dest) so server + client agree.
-            const f32 tn = detail::hash01(
-                detail::tree_hash(static_cast<int>(origin->vseed), static_cast<int>(dest->vseed), 5160u));
-            u8 type = 0;
-            if (dist > 300.0f && tn < 0.65f) {
-                type = 2; // carriage
-            } else if (dist > 200.0f || tn < 0.5f) {
-                type = 1; // wagon
-            }
-            type = static_cast<u8>(std::min<u32>(type, vehicle_type_count() - 1u));
-            wg.type = type;
-            wg.reward = static_cast<u32>(std::lround(
-                contract_reward(dist, difficulty, false) * capacity_reward_mult(vehicle_type(type).capacity())));
-            wg.route = std::move(route);
-            // Park the offer in a reserved depot spot (clear of buildings); face the dest.
-            const Vec3 sp = spots[static_cast<usize>(idx) % spots.size()];
-            const Vec2 dir = glm::normalize(dest->center - origin->center);
-            wg.position = sp;
-            wg.yaw = std::atan2(dir.y, dir.x);
-            offers_.push_back(std::move(wg));
-            ++idx;
+    // Destinations come from the TOWN GRAPH (roads::reachable_towns), so a contract can target a
+    // far town reached by a multi-hop road through other towns - not just an immediate neighbour.
+    const std::vector<worldgen::Village> dests = roads::reachable_towns(origin->center, seed, 32);
+    const int navail = static_cast<int>(dests.size());
+    const int want = std::min(max_offers, navail);
+    std::vector<bool> spot_used(spots.size(), false); // each offer claims one gate-aligned depot
+    for (int k = 0; k < want; ++k) {
+        // Spread the picks across the reachable set (sorted near -> far) so the board always mixes
+        // short hops with long multi-hop hauls that thread through other towns + tougher biomes.
+        const int di = (navail <= want) ? k : (k * navail) / want;
+        const worldgen::Village& dest = dests[static_cast<usize>(di)];
+        std::vector<Vec2> route = roads::route_polyline(origin->center, dest.center, seed);
+        if (route.empty()) {
+            continue; // no road links these towns
         }
+        const f32 dist = roads::route_length(route); // the TRUE road length (long for multi-hop)
+        const u8 difficulty = static_cast<u8>(
+            1u + detail::tree_hash(static_cast<int>(origin->vseed), static_cast<int>(dest.vseed),
+                                   5150u) % 3u);
+        Wagon wg;
+        wg.id = detail::tree_hash(static_cast<int>(origin->vseed), static_cast<int>(dest.vseed),
+                                  6161u) | 1u;
+        wg.source = origin->center;
+        wg.dest = dest.center;
+        wg.source_half = origin->half;
+        wg.difficulty = difficulty;
+        // Vehicle type: longer / harder routes lean toward bigger vehicles (which pay more);
+        // deterministic per (origin,dest) so server + client agree.
+        const f32 tn = detail::hash01(
+            detail::tree_hash(static_cast<int>(origin->vseed), static_cast<int>(dest.vseed), 5160u));
+        u8 type = 0;
+        if (dist > 300.0f && tn < 0.65f) {
+            type = 2; // carriage
+        } else if (dist > 200.0f || tn < 0.5f) {
+            type = 1; // wagon
+        }
+        type = static_cast<u8>(std::min<u32>(type, vehicle_type_count() - 1u));
+        wg.type = type;
+        wg.reward = static_cast<u32>(std::lround(
+            contract_reward(dist, difficulty, false) * capacity_reward_mult(vehicle_type(type).capacity())));
+        // Face along the first leg of the route (the way it leaves town through its gate).
+        Vec2 dir = dest.center - origin->center;
+        if (route.size() >= 2) {
+            dir = route[1] - route[0];
+        }
+        const f32 dl = glm::length(dir);
+        const Vec2 exit_dir = dl > 1e-3f ? dir / dl : Vec2{1.0f, 0.0f};
+        // Park the offer at the reserved depot spot best aligned with its OWN exit gate, so the cart
+        // sits on the side it leaves from and barely has to cross town to get out (no snaking
+        // through buildings). Each offer claims a distinct spot.
+        int best_spot = -1;
+        f32 best_align = -2.0f;
+        for (usize s = 0; s < spots.size(); ++s) {
+            if (spot_used[s]) {
+                continue;
+            }
+            const Vec2 sd = Vec2{spots[s].x, spots[s].z} - origin->center;
+            const f32 sl = glm::length(sd);
+            const f32 align = sl > 1e-3f ? glm::dot(sd / sl, exit_dir) : 0.0f;
+            if (align > best_align) {
+                best_align = align;
+                best_spot = static_cast<int>(s);
+            }
+        }
+        if (best_spot < 0) {
+            continue; // no depot spot free
+        }
+        spot_used[static_cast<usize>(best_spot)] = true;
+        wg.position = spots[static_cast<usize>(best_spot)];
+        wg.yaw = std::atan2(exit_dir.y, exit_dir.x);
+        wg.route = std::move(route);
+        offers_.push_back(std::move(wg));
     }
     ALRYN_INFO("Town {} offers {} wagon contract(s)", origin->vseed, offers_.size());
 }
@@ -448,9 +471,13 @@ void GameServer::accept_contract(const Wagon& chosen, WagonMode mode) {
     // (Earlier it teleported to the route edge, which looked like it vanished.) The driver
     // then heads for the first route point clear of the plaza, out the gate.
     active_.position = chosen.position;
-    int start = 0;
+    // Begin at the first route point that's farther out than the wagon already sits, so the driver
+    // tows it FORWARD out the gate from where it's parked (gate-aligned) instead of dragging it
+    // back toward the plaza first.
+    const f32 wagon_r = glm::length(Vec2{chosen.position.x, chosen.position.z} - active_.source);
+    int start = static_cast<int>(active_.route.size()) - 1;
     for (usize i = 0; i < active_.route.size(); ++i) {
-        if (glm::length(active_.route[i] - active_.source) > 9.0f) {
+        if (glm::length(active_.route[i] - active_.source) > std::max(9.0f, wagon_r + 2.0f)) {
             start = static_cast<int>(i);
             break;
         }
@@ -463,6 +490,7 @@ void GameServer::accept_contract(const Wagon& chosen, WagonMode mode) {
     driver_repath_ = 0.0f;
     driver_stuck_ = 0.0f;
     driver_best_dist_ = 1e9f;
+    driver_snag_ = 0.0f;
     riders_.clear();
     pilot_ = 0;
 
@@ -589,7 +617,20 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
     // eases to 0, so it slows and waits for the cart instead of yanking it through.
     auto tow_gate = [&]() {
         const f32 lag = glm::length(Vec2{w.position.x - puller.x, w.position.z - puller.z}) - hitch;
-        return glm::clamp(1.0f - lag / kTowMaxSlack, 0.0f, 1.0f);
+        f32 gate = glm::clamp(1.0f - lag / kTowMaxSlack, 0.0f, 1.0f);
+        // Anti-deadlock: if the cart stays snagged (gate pinned low - it's wedged on a building, so
+        // it can't catch up and the puller keeps waiting) for a couple of seconds, the puller stops
+        // waiting and pulls it free. The cart's OWN collision resolution still stops it passing
+        // through walls, so it slides around the obstacle instead of the pair deadlocking in town.
+        if (gate < 0.2f) {
+            driver_snag_ += dt.seconds;
+        } else if (gate > 0.5f) {
+            driver_snag_ = 0.0f;
+        }
+        if (driver_snag_ > kUnstickSeconds) {
+            gate = std::max(gate, 0.6f);
+        }
+        return gate;
     };
 
     const bool has_pilot = pilot_ != 0 && players_.count(pilot_) != 0u;
