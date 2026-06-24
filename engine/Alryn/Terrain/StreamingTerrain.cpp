@@ -52,7 +52,28 @@ StreamingTerrain::GenResult StreamingTerrain::generate(const GenRequest& req) co
                       static_cast<f32>(req.cz) * chunk_world_};
     const IVec3 dims{chunk_voxels_ + 1, y_voxels_ + 1, chunk_voxels_ + 1};
     res.field = std::make_unique<VoxelField>(dims, voxel_size_, origin);
-    res.field->fill([&](const Vec3& wp) { return req.density(wp); });
+    // Column-cached fill: density(p) = p.y - height(p.x,p.z) + sparse edits. height() (the expensive
+    // multi-octave noise) is CONSTANT down a column, so compute it once per (x,z) and just subtract y
+    // per voxel - so the tall band that covers the mountains costs ~one height() per column, not per
+    // voxel. (set() clamps to [-1,1], matching the old fill.)
+    for (int xi = 0; xi < dims.x; ++xi) {
+        for (int zi = 0; zi < dims.z; ++zi) {
+            const f32 wx = origin.x + static_cast<f32>(xi) * voxel_size_;
+            const f32 wz = origin.z + static_cast<f32>(zi) * voxel_size_;
+            const f32 h = worldgen::height(wx, wz, req.seed);
+            for (int yi = 0; yi < dims.y; ++yi) {
+                const f32 wy = origin.y + static_cast<f32>(yi) * voxel_size_;
+                f32 value = wy - h;
+                for (const WorldEdit& e : req.edits) { // sparse runtime deformations, usually none
+                    const f32 d = glm::length(Vec3{wx, wy, wz} - e.center);
+                    if (d < e.radius) {
+                        value += e.amount * (1.0f - d / e.radius);
+                    }
+                }
+                res.field->set(xi, yi, zi, value);
+            }
+        }
+    }
     res.trees = scatter_trees(req.cx, req.cz, chunk_world_, seed);
     res.props = scatter_props(req.cx, req.cz, chunk_world_, seed);
     res.terrain = mc::polygonize(
@@ -161,7 +182,7 @@ void StreamingTerrain::update(const Vec3& focus, const vk::Device& device) {
                     const int cz = center.y + dz; // IVec2 stores (chunk_x, chunk_z)
                     const i64 key = key_of(cx, cz);
                     if (chunks_.count(key) == 0 && pending_.count(key) == 0) {
-                        in_queue_.push_back({cx, cz, sampler_.snapshot()});
+                        in_queue_.push_back({cx, cz, sampler_.seed(), sampler_.edits()});
                         pending_.insert(key);
                     }
                 }

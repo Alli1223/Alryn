@@ -301,6 +301,10 @@ private:
     // eases each gate's open amount toward "someone is near"; draw_gates draws the two leaves.
     void update_gates(Timestep dt);
     void draw_gates();
+    // Plank bridges where a road crosses a river: gathered deterministically (roads::bridges) near
+    // the player and drawn as the unit bridge mesh stretched to each crossing's span, level with the
+    // road on the banks.
+    void draw_bridges();
 
     // Player-built barricades: a low palisade of wooden stakes + rails, darkening as
     // the enemy hacks it down (health from the snapshot).
@@ -636,6 +640,8 @@ private:
     Mesh shape_rounded_;
     Mesh marker_;
     Mesh water_mesh_;
+    Mesh bridge_mesh_stone_; // unit stone arch bridge (x:-0.5..0.5), stretched per river crossing
+    Mesh bridge_mesh_wood_;  // unit wooden plank bridge (Bridge.kind picks stone vs wood)
     Mesh gate_door_mesh_; // a unit gate-door leaf (x:0..1 hinge->free), drawn x2 per town gate
 
     // Town gates near the player, rebuilt each frame (open: 0 closed .. 1 swung open).
@@ -721,6 +727,15 @@ private:
     Mesh goods_mesh_;           // a cargo crate (spilled on the ground / carried by a player)
     std::unordered_map<u32, f32> wagon_roll_;  // accumulated wheel spin per wagon id
     std::unordered_map<u32, Vec3> wagon_prev_; // last wagon position (to derive roll)
+    // A shed wheel rolling on the ground: derive its heading + rolling spin from its networked
+    // position so the client can render it upright, rolling the way it travels.
+    struct FallenWheel {
+        Vec3 prev{0.0f};
+        Vec2 heading{1.0f, 0.0f};
+        f32 spin = 0.0f;
+        bool init = false;
+    };
+    std::unordered_map<u32, FallenWheel> wheel_fx_; // per wagon id, the loose wheel's roll state
     f32 horse_gait_ = 0.0f;     // horse leg-swing phase (from its motion)
     Vec3 horse_prev_{0.0f};
     // Verlet harness traces: two ropes (left/right) per horse-drawn wagon, simulated each

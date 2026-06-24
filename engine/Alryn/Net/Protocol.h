@@ -99,6 +99,7 @@ struct WagonState {
     Vec3 position{0.0f};
     f32 yaw = 0.0f;
     Vec3 dest{0.0f};      // destination town centre
+    Vec3 source{0.0f};    // origin town centre (so the map can draw the planned route)
     Vec3 horse_pos{0.0f}; // the pulling horse (carriages), if has_horse
     f32 horse_yaw = 0.0f;
     u32 reward = 0;
@@ -110,6 +111,10 @@ struct WagonState {
     u8 has_horse = 0;  // 1 = render the pulling horse
     u8 goods_aboard = 0; // crates still in the bed
     u8 goods_total = 0;  // crates the full load carries (reward scales by aboard/total)
+    u8 wheel_off = 0;     // 1 = a wheel has come off (active cart halted until refitted)
+    u8 wheel_index = 0;   // which axle shed its wheel (0..3) - the cart lists onto that corner
+    Vec3 wheel_pos{0.0f}; // the fallen/carried wheel's world position (when wheel_off)
+    u8 repair = 0;        // 0..255 wheel re-attach progress
 };
 
 // A burning building, broadcast so clients render flames at its position. A low

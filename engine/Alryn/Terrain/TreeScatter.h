@@ -48,11 +48,23 @@ inline std::vector<TreeInstance> scatter_trees(int cx, int cz, f32 chunk_world, 
             }
             const f32 moist = worldgen::moisture(wx, wz, seed);
             if (moist < -0.1f) {
-                continue; // dry desert stays open
+                continue; // very dry ground stays open
+            }
+            const worldgen::Biome biome = worldgen::biome_at(wx, wz, seed);
+            if (biome == worldgen::Biome::Desert || biome == worldgen::Biome::Snow ||
+                biome == worldgen::Biome::Beach || biome == worldgen::Biome::Ocean) {
+                continue; // deserts grow cacti, peaks/coasts grow nothing
             }
             const u32 h = detail::tree_hash(gx, gz, seed + 777u);
-            // Thick canopy where it's wet; still well-wooded toward dry/edge ground.
-            const f32 density = 0.45f + glm::clamp(moist, 0.0f, 0.7f) * 0.5f;
+            // Canopy density per biome: thick wet forest, sparse alpine conifers, a few gnarled
+            // trees in the bog, scattered lone trees on the open plains.
+            f32 density;
+            switch (biome) {
+                case worldgen::Biome::Mountains: density = 0.24f; break;
+                case worldgen::Biome::Bog: density = 0.18f; break;
+                case worldgen::Biome::Plains: density = 0.14f; break;
+                default: density = 0.45f + glm::clamp(moist, 0.0f, 0.7f) * 0.5f; break;
+            }
             if (detail::hash01(h) > density) {
                 continue;
             }
@@ -109,22 +121,35 @@ inline std::vector<TreeInstance> scatter_trees(int cx, int cz, f32 chunk_world, 
             // Big trees for a dense, canopied forest (half the previous towering size).
             t.scale = 2.3f + detail::hash01(detail::tree_hash(gx, gz, seed + 3u)) * 1.5f;
             t.yaw = detail::hash01(detail::tree_hash(gx, gz, seed + 4u)) * TwoPi;
-            t.variant = static_cast<int>(h % 5u); // pine / oak / birch / broad oak / dead
             const f32 cv = 0.85f + detail::hash01(detail::tree_hash(gx, gz, seed + 5u)) * 0.3f;
-            // The foliage mesh is baked deep forest green (primitives::tree()); a tint of
-            // target/leaf_base re-colours the whole canopy to that target. Conifers + dead trees
-            // stay green/muted; deciduous trees turn an AUTUMN patchwork - green / gold / orange /
-            // russet by a per-tree hash - matching the reference towns.
             const Vec3 leaf_base{0.16f, 0.40f, 0.19f};
-            if (t.variant == 0 || t.variant == 4) {
-                t.tint = Vec3{cv * 0.92f, cv, cv * 0.88f}; // pine / dead: stay green-ish
+            if (biome == worldgen::Biome::Mountains) {
+                t.variant = 0;        // alpine conifers
+                t.scale *= 0.82f;     // a touch smaller up high
+                t.tint = Vec3{cv * 0.64f, cv * 0.86f, cv * 0.66f}; // deep, cool green
+            } else if (biome == worldgen::Biome::Bog) {
+                t.variant = 4;        // weathered, gnarled dead trees
+                t.scale *= 0.88f;
+                t.tint = Vec3{0.42f, 0.40f, 0.33f} * (cv + 0.08f); // dark + lifeless
             } else {
-                const f32 a = detail::hash01(detail::tree_hash(gx, gz, seed + 6u));
-                const Vec3 target = a < 0.30f   ? Vec3{0.34f, 0.52f, 0.22f}  // still green
-                                    : a < 0.60f ? Vec3{0.84f, 0.66f, 0.22f}  // golden yellow
-                                    : a < 0.85f ? Vec3{0.88f, 0.46f, 0.16f}  // orange
-                                                : Vec3{0.74f, 0.30f, 0.16f}; // russet red
-                t.tint = (target / leaf_base) * cv;
+                // Forest / plains: the broadleaf mix with the autumn-patchwork tint. The foliage
+                // mesh is baked deep forest green (primitives::tree()); a tint of target/leaf_base
+                // re-colours the whole canopy. Conifers + dead trees stay green/muted; deciduous
+                // trees turn an AUTUMN patchwork - green / gold / orange / russet by a per-tree hash.
+                t.variant = static_cast<int>(h % 5u); // pine / oak / birch / broad oak / dead
+                if (biome == worldgen::Biome::Plains) {
+                    t.scale *= 0.9f;
+                }
+                if (t.variant == 0 || t.variant == 4) {
+                    t.tint = Vec3{cv * 0.92f, cv, cv * 0.88f}; // pine / dead: stay green-ish
+                } else {
+                    const f32 a = detail::hash01(detail::tree_hash(gx, gz, seed + 6u));
+                    const Vec3 target = a < 0.30f   ? Vec3{0.34f, 0.52f, 0.22f}  // still green
+                                        : a < 0.60f ? Vec3{0.84f, 0.66f, 0.22f}  // golden yellow
+                                        : a < 0.85f ? Vec3{0.88f, 0.46f, 0.16f}  // orange
+                                                    : Vec3{0.74f, 0.30f, 0.16f}; // russet red
+                    t.tint = (target / leaf_base) * cv;
+                }
             }
             trees.push_back(t);
         }

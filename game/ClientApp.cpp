@@ -82,6 +82,9 @@ void ClientApp::on_init() {
                                        Vec3{0.55f, 0.40f, 0.22f}));
     // A large wave grid that follows the player; the water shader animates it.
     water_mesh_.create(renderer_->device(), primitives::grid(80, 2.0f, Vec3{0.1f, 0.3f, 0.4f}));
+    // A unit-length plank bridge, stretched per river crossing where a road bridges a river.
+    bridge_mesh_stone_.create(renderer_->device(), PropLibrary::build_arch_bridge().parts[0].mesh);
+    bridge_mesh_wood_.create(renderer_->device(), PropLibrary::build_plank_bridge().parts[0].mesh);
     // A unit gate-door leaf: a planked panel hinged at local x=0 extending to x=1, unit-tall in
     // y, thin in z, with two iron bands. Scaled to the gate size + swung open by the client.
     {
@@ -168,8 +171,9 @@ void ClientApp::enter_game(bool host_local, std::string host) {
     host_ = std::move(host);
     host_local_ = host_local;
     if (host_local_) {
-        if (local_server_.start(kPort, kWorldSeed)) {
-            ALRYN_INFO("Hosting a local listen server on port {}", kPort);
+        const u32 seed = world_seed();
+        if (local_server_.start(kPort, seed)) {
+            ALRYN_INFO("Hosting a local listen server on port {} (world seed {})", kPort, seed);
         } else {
             ALRYN_WARN("Port {} busy - joining the existing server instead", kPort);
             host_local_ = false;
@@ -347,6 +351,7 @@ void ClientApp::on_render() {
     draw_villagers();
     draw_enemies();
     draw_gates();
+    draw_bridges();
     draw_fires();
     draw_barricades();
     draw_walls();
@@ -526,6 +531,8 @@ void ClientApp::on_shutdown() {
     rope_mesh_.destroy();
     goods_mesh_.destroy();
     water_mesh_.destroy();
+    bridge_mesh_stone_.destroy();
+    bridge_mesh_wood_.destroy();
     gate_door_mesh_.destroy();
     terrain_.reset();
     client_.disconnect();
@@ -641,7 +648,16 @@ void ClientApp::update_camera() {
     const Vec3 dir_to_cam{std::cos(cam_pitch) * std::cos(cam_yaw), std::sin(cam_pitch),
                           std::cos(cam_pitch) * std::sin(cam_yaw)};
     const Vec3 target = local_feet() + Vec3{0.0f, cam::target_height, 0.0f};
-    const Vec3 eye = target + dir_to_cam * cam_distance_;
+    Vec3 eye = target + dir_to_cam * cam_distance_;
+    // Camera-terrain collision: never let the eye sink into a hillside - going up a hill, the fixed
+    // iso offset can bury the camera in the slope, clipping through the ground. Lift the eye to stay a
+    // clearance above the terrain at its own position (smooth, since the height field is continuous).
+    if (world_seed_ != 0) {
+        const f32 floor = worldgen::height(eye.x, eye.z, world_seed_) + 1.4f;
+        if (eye.y < floor) {
+            eye.y = floor;
+        }
+    }
     camera_.set_perspective(radians(iso::fov_deg), renderer_->aspect(), cam::near_plane,
                             cam::far_plane);
     camera_.look_at(eye, target);

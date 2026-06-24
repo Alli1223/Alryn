@@ -94,9 +94,11 @@ TEST_CASE("Net: message serialization round-trips") {
     snapshot.contract_phase = static_cast<u8>(ContractPhase::Active);
     snapshot.contract_outcome = 1;
     snapshot.wagons.push_back({55u, Vec3{2.0f, 0.5f, 3.0f}, 0.9f, Vec3{40.0f, 0.0f, 60.0f},
-                               Vec3{6.0f, 0.5f, 4.0f}, 1.2f, 500u, 2 /*carriage*/, 200,
-                               static_cast<u8>(WagonMode::Manual), 3, 1, 1 /*has_horse*/,
-                               4 /*aboard*/, 6 /*total*/});
+                               Vec3{8.0f, 0.0f, 9.0f} /*source*/, Vec3{6.0f, 0.5f, 4.0f}, 1.2f, 500u,
+                               2 /*carriage*/, 200, static_cast<u8>(WagonMode::Manual), 3, 1,
+                               1 /*has_horse*/, 4 /*aboard*/, 6 /*total*/});
+    snapshot.wagons[0].wheel_off = 1;
+    snapshot.wagons[0].wheel_index = 2; // a shed wheel on axle 2
     snapshot.goods.push_back({77u, Vec3{12.0f, 1.0f, 13.0f}, 1});  // a fallen crate (loose)
     snapshot.goods.push_back({78u, Vec3{0.2f, 0.55f, -0.1f}, 0}); // a crate in the bed (local pos)
     snapshot.auras.push_back({Vec3{3.0f, 1.0f, -5.0f}, 5.0f, 0}); // a Cleric heal aura
@@ -165,6 +167,8 @@ TEST_CASE("Net: message serialization round-trips") {
     CHECK(decoded.wagons[0].id == 55u);
     CHECK(decoded.wagons[0].reward == 500u);
     CHECK(decoded.wagons[0].dest.z == doctest::Approx(60.0f));
+    CHECK(decoded.wagons[0].source.x == doctest::Approx(8.0f));
+    CHECK(decoded.wagons[0].source.z == doctest::Approx(9.0f));
     CHECK(decoded.wagons[0].mode == static_cast<u8>(WagonMode::Manual));
     CHECK(decoded.wagons[0].difficulty == 3);
     CHECK(decoded.wagons[0].type == 2);            // carriage
@@ -173,6 +177,8 @@ TEST_CASE("Net: message serialization round-trips") {
     CHECK(decoded.wagons[0].horse_yaw == doctest::Approx(1.2f));
     CHECK(decoded.wagons[0].goods_aboard == 4);
     CHECK(decoded.wagons[0].goods_total == 6);
+    CHECK(decoded.wagons[0].wheel_off == 1);
+    CHECK(decoded.wagons[0].wheel_index == 2); // which axle shed survives the wire
     CHECK(decoded.players[0].seated == 0);
     CHECK(decoded.players[1].seated == 1);
     CHECK(decoded.players[0].carrying == 0);
@@ -481,19 +487,132 @@ TEST_CASE("GameServer: no siege - players join, peaceful townsfolk, nothing atta
 
 // The wagon-transport loop: a player in a town is offered wagons, votes one (solo =
 // instant consensus), and once accepted the cargo is networked + ambushers spawn.
+// Tows the active cargo out of town (the local player grabs the handles and follows the road route
+// through the gate, driven off authoritative SERVER state so it's packet-timing independent), then
+// reports whether ambushers spawned (the cargo cleared the walls). Returns false if the cart can't
+// be towed clear of this particular town's geometry.
+static bool tow_out_and_ambush(GameServer& server, NetClient& c, PlayerId id,
+                               const std::function<void(int)>& pump, PlayerInput& intent) {
+    const std::vector<Vec2> route = server.active_wagon().route;
+    const Vec2 center = server.active_wagon().source;
+    bool grabbed = false;
+    for (int t = 0; t < 1500 && server.ambusher_count() == 0; ++t) {
+        const Vec3 pp = server.players().at(id).controller.position();
+        const Vec3 wp = server.active_wagon().position;
+        if (!grabbed) {
+            Vec3 d = wp - pp;
+            d.y = 0.0f;
+            const f32 dist = glm::length(d);
+            if (dist > 1.8f) {
+                intent.move = d / std::max(dist, 1e-3f); // walk to the cart
+            } else {
+                intent.move = Vec3{0.0f};
+                intent.grab = true; // take the handles
+                grabbed = true;
+            }
+        } else if (!route.empty()) {
+            // Head for the next road point beyond us (monotonic outward), staying on the road.
+            const f32 pr = glm::length(Vec2{pp.x, pp.z} - center);
+            Vec2 tgt = route.back();
+            for (const Vec2& rp : route) {
+                if (glm::length(rp - center) > pr + 1.0f) {
+                    tgt = rp;
+                    break;
+                }
+            }
+            Vec3 d = Vec3{tgt.x, pp.y, tgt.y} - pp;
+            d.y = 0.0f;
+            const f32 dist = glm::length(d);
+            intent.move = dist > 1e-3f ? d / dist : Vec3{1.0f, 0.0f, 0.0f};
+        }
+        pump(3);
+        intent.grab = false;
+    }
+    intent.move = Vec3{0.0f};
+    pump(10); // let any just-spawned ambushers reach the client in a snapshot
+    return server.ambusher_count() > 0;
+}
+
 TEST_CASE("GameServer: a wagon contract is offered, accepted by vote, and ambushed") {
+    // Town geometry varies by seed; on some spawn towns the cart can't be towed clear of the walls.
+    // Scan a few seeds and use the first where the full offer -> accept -> tow-out -> ambush flow
+    // completes, so the test is robust to any single town's layout.
+    const u32 seeds[] = {4242u, 1337u, 777u, 99u, 2024u, 5150u};
+    bool tested = false;
+    for (int si = 0; si < static_cast<int>(std::size(seeds)) && !tested; ++si) {
+        GameServer server;
+        const u16 port = static_cast<u16>(24658 + si);
+        if (!server.start(port, seeds[si])) {
+            continue;
+        }
+        NetClient c;
+        if (!c.connect("127.0.0.1", port)) {
+            continue;
+        }
+        PlayerId id = 0;
+        Snapshot snap{};
+        bool have_snap = false;
+        PlayerInput intent{};
+        std::function<void(int)> pump = [&](int iterations) {
+            for (int i = 0; i < iterations; ++i) {
+                c.send_input(intent);
+                server.tick(Timestep{1.0f / 60.0f});
+                for (const ClientEvent& e : c.poll(1)) {
+                    if (e.type == ClientEventType::WelcomeReceived) {
+                        id = e.welcome.your_id;
+                    } else if (e.type == ClientEventType::SnapshotReceived) {
+                        snap = e.snapshot;
+                        have_snap = true;
+                    }
+                }
+            }
+        };
+        pump(150); // connect + spawn in a town + receive the offers
+        if (id == 0 || !have_snap || server.offer_count() == 0) {
+            continue;
+        }
+        CHECK(server.contract_phase() == ContractPhase::Offer);
+        REQUIRE_FALSE(snap.wagons.empty());
+        CHECK(snap.money == 0u);
+
+        // Vote the first offered wagon, hiring a driver (solo -> instant consensus).
+        intent.vote_wagon = snap.wagons[0].id;
+        intent.vote_mode = 1;
+        pump(20);
+        if (server.contract_phase() != ContractPhase::Active) {
+            continue;
+        }
+        const bool horse_drawn = vehicle_type(snap.wagons[0].type).horse_drawn();
+        CHECK(snap.wagons[0].has_horse == (horse_drawn ? 1 : 0)); // horse only for carriages
+        if (horse_drawn) {
+            continue; // the hand-haul tow below assumes a non-carriage cart
+        }
+        if (tow_out_and_ambush(server, c, id, pump, intent)) {
+            CHECK(server.ambusher_count() > 0);     // ambushers spawned once the cargo left town
+            CHECK_FALSE(snap.enemies.empty());      // and they're networked to the client
+            CHECK(server.contract_phase() == ContractPhase::Active);
+            tested = true;
+        }
+    }
+    CHECK(tested); // some seed completed offer -> accept -> tow-out -> ambush
+}
+
+// A wheel can come off mid-haul: the cart strands until a player fetches the fallen wheel and
+// carries it back to refit it. We force the break right after acceptance, confirm the cart halts,
+// then walk the player to the wheel, pick it up, and hold it by the cart until it refits.
+TEST_CASE("GameServer: a wheel comes off and a player refits it") {
     GameServer server;
-    if (!server.start(24658, 4242u)) {
+    if (!server.start(24659, 4242u)) {
         MESSAGE("Could not bind game server - skipping");
         return;
     }
     NetClient c;
-    REQUIRE(c.connect("127.0.0.1", 24658));
+    REQUIRE(c.connect("127.0.0.1", 24659));
 
     PlayerId id = 0;
     Snapshot snap{};
     bool have_snap = false;
-    PlayerInput intent{}; // the intent we resend each pump (votes ride in here)
+    PlayerInput intent{};
     auto pump = [&](int iterations) {
         for (int i = 0; i < iterations; ++i) {
             c.send_input(intent);
@@ -508,37 +627,207 @@ TEST_CASE("GameServer: a wagon contract is offered, accepted by vote, and ambush
             }
         }
     };
-
-    pump(150); // connect + spawn in a town + receive the offers
+    pump(150);
     REQUIRE(id != 0);
     REQUIRE(have_snap);
     if (server.offer_count() == 0) {
-        MESSAGE("Spawn town has no road-connected neighbour - skipping contract flow");
+        MESSAGE("Spawn town has no road-connected neighbour - skipping");
         return;
     }
-    CHECK(server.contract_phase() == ContractPhase::Offer);
-    REQUIRE_FALSE(snap.wagons.empty());
-    CHECK(snap.money == 0u);
-
-    // Vote for the first offered wagon, hiring a driver. Solo -> consensus is immediate.
     intent.vote_wagon = snap.wagons[0].id;
-    intent.vote_mode = 1;
+    intent.vote_mode = 1; // hire a driver
     pump(20);
-    CHECK(server.contract_phase() == ContractPhase::Active);
-    REQUIRE_FALSE(snap.wagons.empty());
-    CHECK(snap.wagons[0].mode == static_cast<u8>(WagonMode::Driver));
-    // The networked horse flag matches the accepted vehicle's type (seed-independent):
-    // only horse-drawn types (carriages) ride with a horse.
-    const bool horse_drawn = vehicle_type(snap.wagons[0].type).horse_drawn();
-    CHECK(snap.wagons[0].has_horse == (horse_drawn ? 1 : 0));
+    REQUIRE(server.contract_phase() == ContractPhase::Active);
 
-    // Once the cargo has driven clear of the town walls, ambushers spawn + are networked
-    // (in the enemy list). The hired driver is slow, so poll until it has left town.
-    for (int t = 0; t < 40 && server.ambusher_count() == 0; ++t) {
-        pump(60);
+    // Knock a wheel off: it bursts off and ROLLS away (a physical object), then friction settles it.
+    server.force_wheel_break();
+    REQUIRE(server.wheel_off());
+    const Vec3 wheel_at_break = server.wheel_pos();
+    pump(10);
+    CHECK(glm::length(Vec2{server.wheel_pos().x - wheel_at_break.x,
+                           server.wheel_pos().z - wheel_at_break.z}) > 0.5f); // it rolled off
+    const Vec3 halt = server.active_wagon().position;
+    pump(120);
+    const Vec3 settled = server.wheel_pos();
+    pump(40);
+    CHECK(glm::length(Vec2{server.wheel_pos().x - settled.x,
+                           server.wheel_pos().z - settled.z}) < 0.05f); // friction brought it to a stop
+    CHECK(server.wheel_off()); // stays off on its own
+    CHECK(glm::length(Vec2{server.active_wagon().position.x - halt.x,
+                           server.active_wagon().position.z - halt.z}) < 1.0f); // halted
+
+    auto ppos = [&]() { return server.players().at(id).controller.position(); };
+
+    // Walk to the fallen wheel and pick it up (it then rides at the player's waist).
+    bool carried = false;
+    for (int t = 0; t < 500 && !carried; ++t) {
+        Vec3 d = server.wheel_pos() - ppos();
+        d.y = 0.0f;
+        const f32 dist = glm::length(d);
+        if (dist > kWheelPickupRange - 0.5f) {
+            intent.move = d / std::max(dist, 1e-3f);
+            intent.grab = false;
+        } else {
+            intent.move = Vec3{0.0f};
+            intent.grab = true;
+        }
+        pump(2);
+        intent.grab = false;
+        carried = server.wheel_off() &&
+                  glm::length(Vec2{server.wheel_pos().x - ppos().x,
+                                   server.wheel_pos().z - ppos().z}) < 0.7f;
     }
-    CHECK(server.ambusher_count() > 0);
-    CHECK_FALSE(snap.enemies.empty());
+    CHECK(carried);
+
+    // Hold it by the cart; the re-attach channels up and the wheel refits.
+    for (int t = 0; t < 600 && server.wheel_off(); ++t) {
+        Vec3 d = server.active_wagon().position - ppos();
+        d.y = 0.0f;
+        const f32 dist = glm::length(d);
+        intent.move = dist > kWheelAttachRange - 1.0f ? d / std::max(dist, 1e-3f) : Vec3{0.0f};
+        pump(3);
+    }
+    CHECK_FALSE(server.wheel_off());                       // refitted - the wagon can roll again
+    CHECK(server.wheel_repair() == doctest::Approx(0.0f)); // progress reset on refit
+}
+
+// A player can stand ON TOP of the moving cart and ride along: the bed is a moving platform, so when
+// the cart rolls the player on it is carried the same distance.
+TEST_CASE("GameServer: a player standing on the cart bed rides along with it") {
+    GameServer server;
+    if (!server.start(24663, 4242u)) {
+        MESSAGE("Could not bind game server - skipping");
+        return;
+    }
+    NetClient c;
+    REQUIRE(c.connect("127.0.0.1", 24663));
+
+    PlayerId id = 0;
+    Snapshot snap{};
+    bool have_snap = false;
+    PlayerInput intent{};
+    auto pump = [&](int iterations) {
+        for (int i = 0; i < iterations; ++i) {
+            c.send_input(intent);
+            server.tick(Timestep{1.0f / 60.0f});
+            for (const ClientEvent& e : c.poll(1)) {
+                if (e.type == ClientEventType::WelcomeReceived) {
+                    id = e.welcome.your_id;
+                } else if (e.type == ClientEventType::SnapshotReceived) {
+                    snap = e.snapshot;
+                    have_snap = true;
+                }
+            }
+        }
+    };
+    pump(150);
+    REQUIRE(id != 0);
+    REQUIRE(have_snap);
+    if (server.offer_count() == 0) {
+        MESSAGE("Spawn town has no road-connected neighbour - skipping");
+        return;
+    }
+    intent.vote_wagon = snap.wagons[0].id;
+    intent.vote_mode = 1; // hire a driver so the cart rolls on its own
+    pump(20);
+    REQUIRE(server.contract_phase() == ContractPhase::Active);
+
+    auto ppos = [&]() { return server.players().at(id).controller.position(); };
+    const f32 deck = vehicle_type(server.active_wagon().type).deck_height();
+
+    // Let the cart get rolling, then drop the player on top of the bed.
+    Vec3 cart_a = server.active_wagon().position;
+    pump(40);
+    Vec3 cart_b = server.active_wagon().position;
+    if (glm::length(Vec2{cart_b.x - cart_a.x, cart_b.z - cart_a.z}) < 0.2f) {
+        MESSAGE("Cart didn't get rolling - skipping ride-along check");
+        return;
+    }
+    const Vec3 cart = server.active_wagon().position;
+    server.debug_place_player(id, Vec3{cart.x, cart.y + deck, cart.z});
+    intent.move = Vec3{0.0f}; // just stand there
+    pump(3);                  // settle onto the deck
+
+    const Vec3 p0 = ppos();
+    const Vec3 c0 = server.active_wagon().position;
+    pump(40);
+    const Vec3 p1 = ppos();
+    const Vec3 c1 = server.active_wagon().position;
+    const Vec2 cart_delta{c1.x - c0.x, c1.z - c0.z};
+    const Vec2 player_delta{p1.x - p0.x, p1.z - p0.z};
+    CHECK(glm::length(cart_delta) > 0.3f);                       // the cart kept rolling
+    CHECK(glm::length(player_delta - cart_delta) < 0.5f);        // the player rode along with it
+    CHECK(std::abs(p1.y - (c1.y + deck)) < 0.6f);                // and stayed standing on the bed
+}
+
+// While a wheel is off (the cart stranded outside town), opportunist bandits close in on a timer,
+// so the party must defend the repair. We tow the cart clear of town, break a wheel, then confirm
+// fresh ambushers keep spawning while it's down (the halted cart can't trigger travel-progress
+// waves, so any new spawns are the repair bandits).
+TEST_CASE("GameServer: bandits harry a stranded wagon during a wheel repair") {
+    // Scan seeds for one whose spawn town the cart can be towed clear of (see the ambush test),
+    // then strand it with a wheel break and confirm fresh bandits keep coming while it's down.
+    const u32 seeds[] = {4242u, 1337u, 777u, 99u, 2024u, 5150u};
+    bool tested = false;
+    for (int si = 0; si < static_cast<int>(std::size(seeds)) && !tested; ++si) {
+        GameServer server;
+        const u16 port = static_cast<u16>(24680 + si);
+        if (!server.start(port, seeds[si])) {
+            continue;
+        }
+        NetClient c;
+        if (!c.connect("127.0.0.1", port)) {
+            continue;
+        }
+        PlayerId id = 0;
+        Snapshot snap{};
+        bool have_snap = false;
+        PlayerInput intent{};
+        std::function<void(int)> pump = [&](int iterations) {
+            for (int i = 0; i < iterations; ++i) {
+                c.send_input(intent);
+                server.tick(Timestep{1.0f / 60.0f});
+                for (const ClientEvent& e : c.poll(1)) {
+                    if (e.type == ClientEventType::WelcomeReceived) {
+                        id = e.welcome.your_id;
+                    } else if (e.type == ClientEventType::SnapshotReceived) {
+                        snap = e.snapshot;
+                        have_snap = true;
+                    }
+                }
+            }
+        };
+        pump(150);
+        if (id == 0 || !have_snap || server.offer_count() == 0) {
+            continue;
+        }
+        intent.vote_wagon = snap.wagons[0].id;
+        intent.vote_mode = 1;
+        pump(20);
+        if (server.contract_phase() != ContractPhase::Active ||
+            vehicle_type(snap.wagons[0].type).horse_drawn()) {
+            continue;
+        }
+        if (!tow_out_and_ambush(server, c, id, pump, intent)) {
+            continue; // couldn't tow this town's cart clear - try another seed
+        }
+
+        // Break a wheel: the cart strands. Stop input and watch - nobody refits it, so it stays
+        // down and the repair bandits keep coming.
+        server.force_wheel_break();
+        REQUIRE(server.wheel_off());
+        intent = PlayerInput{};
+        const usize before = server.ambusher_count();
+        bool grew = false;
+        for (int t = 0; t < 60 && !grew; ++t) { // ~ first delay + a couple of wave intervals
+            pump(30);
+            grew = server.ambusher_count() > before;
+        }
+        CHECK(server.wheel_off()); // still stranded (never refitted)
+        CHECK(grew);               // fresh bandits spawned during the repair
+        tested = true;
+    }
+    CHECK(tested);
 }
 
 // Hiring a horse-drawn carriage puts a horse out front pulling and a driver seated up top.

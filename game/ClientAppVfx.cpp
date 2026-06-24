@@ -254,43 +254,8 @@ void ClientApp::draw_ambient_life() {
         }
     }
 
-    // A flock of birds gliding across the sky by day (a slow circling V of dark chevrons).
-    auto wings = [&](const Vec3& pos, const Vec3& fwd, const Vec3& right, f32 flap, f32 sz, f32 alpha) {
-        Mat4 basis{1.0f};
-        basis[0] = Vec4(right, 0.0f);
-        basis[1] = Vec4(0.0f, 1.0f, 0.0f, 0.0f);
-        basis[2] = Vec4(fwd, 0.0f);
-        for (f32 side : {-1.0f, 1.0f}) {
-            const Mat4 m = glm::translate(Mat4{1.0f}, pos) * basis *
-                           glm::rotate(Mat4{1.0f}, side * (0.28f + flap * 0.5f), Vec3{0.0f, 0.0f, 1.0f}) *
-                           glm::translate(Mat4{1.0f}, Vec3{side * sz * 0.45f, 0.0f, 0.0f}) *
-                           glm::scale(Mat4{1.0f}, Vec3{sz, sz * 0.07f, sz * 0.32f});
-            renderer_->draw_transparent(shape_box_, m, Vec4{0.1f, 0.1f, 0.13f, alpha});
-        }
-    };
-    if (sun_intensity_ > 0.32f) {
-        const f32 ca = t * 0.05f;
-        const Vec3 fc = feet + Vec3{std::cos(ca) * 28.0f, 19.0f + std::sin(t * 0.1f) * 3.0f, std::sin(ca) * 28.0f};
-        const Vec3 fwd{-std::sin(ca), 0.0f, std::cos(ca)};
-        const Vec3 right = glm::normalize(glm::cross(Vec3{0.0f, 1.0f, 0.0f}, fwd));
-        for (int i = 0; i < 7; ++i) {
-            const f32 fi = static_cast<f32>(i) - 3.0f;
-            const Vec3 pos = fc + right * (fi * 1.9f) + fwd * (-std::abs(fi) * 1.3f) +
-                             Vec3{0.0f, std::sin(t * 0.6f + static_cast<f32>(i) * 1.7f) * 1.0f, 0.0f};
-            const f32 flap = 0.5f + 0.45f * std::sin(t * 7.0f + static_cast<f32>(i) * 1.5f);
-            wings(pos, fwd, right, flap, 1.0f, 0.85f * sun_intensity_);
-        }
-    }
-
-    // A lone owl gliding slowly over the trees at night (a bigger, slower dark glider).
-    if (night > 0.35f) {
-        const f32 oa = t * 0.025f + 2.0f;
-        const Vec3 oc = feet + Vec3{std::cos(oa) * 16.0f, 9.0f + std::sin(t * 0.08f) * 1.5f, std::sin(oa) * 16.0f};
-        const Vec3 ofwd{-std::sin(oa), 0.0f, std::cos(oa)};
-        const Vec3 oright = glm::normalize(glm::cross(Vec3{0.0f, 1.0f, 0.0f}, ofwd));
-        const f32 oflap = 0.35f + 0.25f * std::sin(t * 3.0f);
-        wings(oc, ofwd, oright, oflap, 1.7f, 0.8f * night);
-    }
+    // (The day "bird flock" + night owl were removed - they orbited the camera at a fixed offset,
+    // so they read as stationary shapes floating behind the player with shadows that didn't move.)
 }
 
 void ClientApp::update_deer(Timestep dt) {

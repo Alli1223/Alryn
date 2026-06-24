@@ -150,6 +150,11 @@ public:
     usize ambusher_count() const { return ambush_.size(); }
     const Wagon& active_wagon() const { return active_; }
     WagonMode active_mode() const { return active_mode_; }
+    bool wheel_off() const { return wheel_off_; }   // a wheel has come off the active cart
+    Vec3 wheel_pos() const { return wheel_pos_; }    // the fallen/carried wheel's world position
+    f32 wheel_repair() const { return wheel_repair_; } // 0..1 re-attach progress
+    void force_wheel_break();                        // trigger a break now (test / debug hook)
+    void debug_place_player(net::PlayerId id, const Vec3& pos); // move a player (test / debug hook)
     usize villager_count() const { return villagers_.size(); }
     usize house_count() const { return houses_.size(); }
     usize barricade_count() const { return barricades_.size(); }
@@ -176,10 +181,16 @@ private:
     void generate_offers();                       // offer wagons from the town players are in
     void accept_contract(const Wagon& chosen, WagonMode mode);
     void update_wagon(Timestep dt, const DensitySampler& density);  // drive / tow the cargo
+    void update_wheel(Timestep dt, const DensitySampler& density);  // wheel break / fetch / refit
     void update_cargo(Timestep dt, const DensitySampler& density);  // slide the bed crates, eject on bumps
     void end_contract_cleanup();                // clear haul state on delivery / wreck
     void append_wagon_colliders(std::vector<Collider>& out) const; // block players from carts
     void seat_occupants(const VehicleType& vt); // place pilot/riders/seated-driver on the vehicle
+    // The active cart's bed is a moving platform: its top-surface height where (x,z) is over the
+    // footprint (else a large-negative sentinel), so the controller can stand a player on top.
+    f32 wagon_top_at(f32 x, f32 z) const;
+    // After the cart moves, carry any player standing on top along with it (delta = this tick's move).
+    void carry_top_riders(const Vec2& delta, const VehicleType& vt);
     void update_ambush(Timestep dt, const DensitySampler& density); // ambushers + player combat
     // --- Roles, weapons & abilities (Game/Abilities.cpp) ---
     void sync_player_role(ServerPlayer& player); // adopt the chosen role each tick (stats/speed)
@@ -262,6 +273,17 @@ private:
     f32 driver_repath_ = 0.0f;           // seconds until the path is recomputed
     f32 driver_stuck_ = 0.0f;            // seconds the puller has gone without getting closer
     f32 driver_best_dist_ = 1e9f;        // closest the puller has gotten to the current waypoint
+    f32 driver_snag_ = 0.0f;             // seconds the cart has been snagged (tow-gate pinned low)
+    // Wheel-breakdown event: a wheel works loose mid-haul, the cart halts, and a player must fetch
+    // the fallen wheel and hold it by the cart to refit it.
+    bool wheel_off_ = false;             // a wheel is currently off (cart halted until refitted)
+    u8 wheel_index_ = 0;                 // which axle shed (0..3) - random per break
+    Vec3 wheel_pos_{0.0f};               // the fallen wheel's world position (follows a carrier)
+    Vec2 wheel_vel_{0.0f};               // the shed wheel's roll velocity (xz) while loose on the ground
+    net::PlayerId wheel_carrier_ = 0;    // player carrying the wheel (0 = lying on the ground)
+    f32 wheel_repair_ = 0.0f;            // 0..1 re-attach progress (builds while held by the cart)
+    f32 wheel_break_cd_ = 0.0f;          // rolling-seconds until the next possible break
+    f32 bandit_cd_ = 0.0f;               // seconds until the next bandit wave while a wheel is off
     std::vector<Enemy> ambush_;          // ambushers attacking the active wagon
     std::unordered_map<net::PlayerId, std::pair<u32, u8>> votes_; // player -> (wagon id, mode)
     u32 money_ = 0;                      // shared party wallet

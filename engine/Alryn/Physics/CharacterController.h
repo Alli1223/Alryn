@@ -6,6 +6,7 @@
 #include <Alryn/Core/Types.h>
 #include <Alryn/Physics/Collider.h>
 
+#include <functional>
 #include <optional>
 #include <span>
 
@@ -40,8 +41,12 @@ public:
 
     // move_dir: desired world-space horizontal direction (xz; y ignored, length<=1).
     // `colliders` are static props (trees/walls) the capsule is pushed out of.
+    // `platform` (optional): a walkable surface ABOVE the terrain at (x,z) - returns its height, or a
+    // large-negative value where there's none. Used so the feet stand on a bridge deck over a river
+    // (the terrain there is the carved river bed; the deck is the higher walkable ground).
     void update(const DensitySampler& density, const Vec3& move_dir, bool jump, Timestep dt,
-                std::span<const Collider> colliders = {});
+                std::span<const Collider> colliders = {},
+                const std::function<f32(f32, f32)>& platform = {});
 
 private:
     bool wall_at(const DensitySampler& density, const Vec3& feet) const;

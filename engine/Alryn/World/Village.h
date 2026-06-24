@@ -135,7 +135,7 @@ inline std::vector<VillageGate> compute_gates(const worldgen::Village& v, u32 se
         for (const Vec2& p : pts) {
             spread = std::max(spread, std::abs(glm::dot(p - gpos, tangent)));
         }
-        const f32 half = glm::clamp(spread + roads::road_half_width + 0.4f, kGateHalf, kGateMaxHalf);
+        const f32 half = glm::clamp(spread + roads::road_half_width + 0.9f, kGateHalf, kGateMaxHalf);
         gates.push_back(VillageGate{ang, gpos, half});
     }
     if (gates.empty()) {
@@ -229,11 +229,12 @@ struct Street {
     Vec2 a, b;
 };
 
-// The town's STREET NETWORK: a central HIGH STREET running through the plaza (aimed along the first
-// gate, so it leads out of town), a couple of perpendicular BRANCH streets off it, and an avenue
-// from the plaza out to each gate. Houses line these streets facing them and the ground is tinted as
-// worn dirt along them - so placement (`for_each_house`) and colouring (`town_path_amount`) always
-// agree. Writes the segments into `out`, returns the count. Allocation-free.
+// The town's STREET NETWORK, built AROUND a central market plaza rather than through it: a **ring
+// road** circling the market (so the centre stays a clear, prominent plaza - roads don't cut through
+// the stalls), an **avenue from the ring out to each gate** (the cart's way out of town), and a few
+// **radial spokes** off the ring so houses also line the outer town. Houses line these streets facing
+// them and the ground is tinted as worn dirt along them - so placement (`for_each_house`) and
+// colouring (`town_path_amount`) always agree. Writes the segments into `out`, returns the count.
 inline int town_streets(const worldgen::Village& v, u32 seed, const std::vector<VillageGate>& gates,
                         std::array<Street, 20>& out) {
     int n = 0;
@@ -241,18 +242,40 @@ inline int town_streets(const worldgen::Village& v, u32 seed, const std::vector<
         if (n < static_cast<int>(out.size())) out[n++] = {a, b};
     };
     const Vec2 c = v.center;
-    const f32 R = v.half * 0.92f;
-    const f32 ang = gates.empty()
-                        ? detail::hash01(detail::tree_hash(static_cast<int>(v.vseed), 0, 720u + seed)) * TwoPi
-                        : std::atan2(gates[0].pos.y - c.y, gates[0].pos.x - c.x);
-    const Vec2 md{std::cos(ang), std::sin(ang)}, mp{-md.y, md.x};
-    add(c - md * R, c + md * R); // the central high street, right through the plaza
-    for (f32 o : {-0.46f, 0.46f}) {
-        const Vec2 bc = c + md * (o * R); // two cross branches off the high street
-        add(bc - mp * (R * 0.6f), bc + mp * (R * 0.6f));
+    const f32 ring_r = kMarketHalf + 2.5f;  // the ring road, just OUTSIDE the market footprint
+    const f32 outer_r = v.half * 0.9f;       // how far the spokes reach toward the wall
+    const f32 base_ang =
+        gates.empty()
+            ? detail::hash01(detail::tree_hash(static_cast<int>(v.vseed), 0, 720u + seed)) * TwoPi
+            : std::atan2(gates[0].pos.y - c.y, gates[0].pos.x - c.x);
+    // 1. The plaza RING (an octagon around the market) - the roads go AROUND the prominent centre.
+    constexpr int ring_n = 8;
+    Vec2 prev{};
+    for (int i = 0; i <= ring_n; ++i) {
+        const f32 a = base_ang + TwoPi * static_cast<f32>(i) / static_cast<f32>(ring_n);
+        const Vec2 p = c + Vec2{std::cos(a), std::sin(a)} * ring_r;
+        if (i > 0) {
+            add(prev, p);
+        }
+        prev = p;
     }
+    // 2. An avenue from the ring out to each gate (the cart's route out of town) - meets the ring,
+    //    not the centre, so nothing drives through the market.
     for (const VillageGate& g : gates) {
-        add(c, g.pos); // an avenue from the plaza out to each gate (the cart's route)
+        Vec2 dir = g.pos - c;
+        const f32 len = glm::length(dir);
+        if (len < 1e-3f) {
+            continue;
+        }
+        dir /= len;
+        add(c + dir * ring_r, g.pos);
+    }
+    // 3. A few radial spokes off the ring (between the gates) so houses line the outer town too.
+    constexpr int spokes = 4;
+    for (int i = 0; i < spokes; ++i) {
+        const f32 a = base_ang + TwoPi * (static_cast<f32>(i) + 0.5f) / static_cast<f32>(spokes);
+        const Vec2 dir{std::cos(a), std::sin(a)};
+        add(c + dir * ring_r, c + dir * outer_r);
     }
     return n;
 }
@@ -306,6 +329,12 @@ inline void for_each_house(const worldgen::Village& v, u32 seed,
             if (point_seg_dist(Vec2{x, z}, streets[s].a, streets[s].b) < road_half + 0.5f) {
                 return false; // keep the street / road corridor clear (houses sit beside it)
             }
+        }
+        // Also keep clear of the actual (meandering) inter-town ROAD: it enters through the gate and
+        // winds to the market, so it doesn't follow the idealised straight street lines - a house clear
+        // of the streets can still sit on the real road. This is what stops houses overlapping roads.
+        if (roads::distance(x, z, seed) < roads::road_half_width + r + 0.3f) {
+            return false;
         }
         for (int k = 0; k < np; ++k) {
             if (glm::length(placed[k] - Vec2{x, z}) < r + reach[k]) {
@@ -441,7 +470,7 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
     const int vid = static_cast<int>(v.vseed);
     const auto gates = detail::village_gate_points(v, seed);
 
-    auto push = [&](PropCategory cat, u8 var, f32 x, f32 z, f32 yaw) {
+    auto push = [&](PropCategory cat, u8 var, f32 x, f32 z, f32 yaw, f32 length = 1.0f) {
         const f32 gh = worldgen::height(x, z, seed);
         if (gh < worldgen::water_level + 0.5f) {
             return; // never place a town prop down in the water
@@ -452,6 +481,7 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
         p.position = Vec3{x, gh, z};
         p.yaw = yaw;
         p.scale = 1.0f;
+        p.length = length; // stretch along local +X (walls span their chord exactly)
         out.push_back(p);
     };
 
@@ -584,37 +614,9 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
         push(PropCategory::Lantern, 0, cx + std::cos(a) * 10.5f, cz + std::sin(a) * 10.5f, 0.0f);
     }
 
-    // Flagstone paving: light paving slabs (build_path_tile) laid down the centre of each street +
-    // a denser cluster ringing the market plaza - the reference's town paving over the dirt.
-    constexpr f32 ptile = 2.25f;
-    for (int s = 0; s < nstreets; ++s) {
-        Vec2 dir = streets[s].b - streets[s].a;
-        const f32 len = glm::length(dir);
-        if (len < ptile) {
-            continue;
-        }
-        dir /= len;
-        const f32 yaw = std::atan2(-dir.y, dir.x);
-        const int n = static_cast<int>(len / ptile);
-        for (int k = 1; k <= n; ++k) {
-            const Vec2 p = streets[s].a + dir * (static_cast<f32>(k) * ptile);
-            if (in_river(p.x, p.y)) {
-                continue; // the bridge carries the path over the river
-            }
-            push(PropCategory::Path, 0, p.x, p.y, yaw);
-        }
-    }
-    for (f32 rad : {7.2f, 9.5f, 11.8f}) { // a paved ring around the plaza
-        const int ring_n = std::max(8, static_cast<int>(TwoPi * rad / ptile));
-        for (int i = 0; i < ring_n; ++i) {
-            const f32 a = TwoPi * static_cast<f32>(i) / static_cast<f32>(ring_n);
-            const f32 rx = cx + std::cos(a) * rad, rz = cz + std::sin(a) * rad;
-            if (in_river(rx, rz)) {
-                continue;
-            }
-            push(PropCategory::Path, 0, rx, rz, a);
-        }
-    }
+    // Streets are plain worn-EARTH roads (coloured into the terrain by town_path_amount /
+    // town_path_tint), like the reference towns. (The old flagstone path-tile props were a single
+    // repeated mesh, so they read as an ugly grid of identical square cobble patches - removed.)
 
     // Greenery: planters ringing the plaza + bushes scattered on open interior ground.
     for (int i = 0; i < 5; ++i) {
@@ -724,8 +726,12 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
         if (!near_gate(amid, 0.0f)) {
             const Vec2 mid = (p0 + p1) * 0.5f;
             const Vec2 chord = p1 - p0;
+            // Stretch the (unit-3.2m) wall to span its actual chord, with a slight overlap, so the
+            // rampart is continuous on the organic boundary instead of gapping on bulges / doubling up
+            // on tight curves (the wall mesh is half_len 1.6 -> 3.2 long).
+            const f32 clen = glm::length(chord);
             push(PropCategory::Wall, static_cast<u8>(i % 2), mid.x, mid.y,
-                 std::atan2(-chord.y, chord.x));
+                 std::atan2(-chord.y, chord.x), (clen / 3.2f) * 1.08f);
         }
         // Periodic boundary tower - kept a little further from the gate so it never stands in
         // the opening (the flanking gate towers below mark the gate itself).

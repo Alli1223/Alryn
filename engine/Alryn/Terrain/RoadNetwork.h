@@ -20,10 +20,14 @@ namespace alryn::roads {
 
 // Half-width of the dirt road (fences/lanterns line its edges, like the old paths).
 inline constexpr f32 road_half_width = 2.2f;
-// Connect towns whose village cells are within this Chebyshev distance (~510 m). Raised from 2
-// so the sparser, further-apart towns (see worldgen::village_at wilderness bands) still get linked
-// by road - longer, lonelier hauls rather than stranded, contract-less towns.
+// How far (in village cells, Chebyshev) a town looks for neighbours to link by road (~850 m). Each
+// town connects to its NEAREST few routable neighbours (road_links_per_town), so no town is left
+// stranded even on sparse, mountainous, river-cut terrain - and the graph stays well-connected for
+// long multi-hop hauls.
 inline constexpr int road_max_cells = 3;
+// Each town wants a road to its nearest this-many routable towns (an edge is built if EITHER side
+// wants it, so towns reliably get one and usually two-or-more connections).
+inline constexpr int road_links_per_town = 3;
 // Polyline resolution of a routed road (segments = road_points). Higher now that roads
 // meander, so the curves render + collide smoothly.
 inline constexpr int road_points = 28;
@@ -33,6 +37,29 @@ struct Segment {
     Vec2 a{0.0f};
     Vec2 b{0.0f};
 };
+
+// A bridge spanning a river where a road crosses it (the client renders one here).
+struct Bridge {
+    Vec2 center{0.0f}; // midpoint of the river crossing
+    f32 yaw = 0.0f;    // the road's heading across the river (the bridge mesh faces local +X)
+    f32 length = 4.0f; // span across the river - the deck stretches to this
+    f32 bank_a = 0.0f; // ground height at the -X (back) end - the deck meets the land here (no lip)
+    f32 bank_b = 0.0f; // ground height at the +X (front) end
+    u8 kind = 0;       // 0 = stone arch, 1 = wooden trestle (deterministic per crossing)
+};
+
+// Bridge deck geometry, SHARED by the meshes (PropLibrary::build_arch_bridge / build_plank_bridge)
+// and the walkable bridge_height() below, so the deck you stand on matches the deck you see. The
+// deck blends between the two BANK heights along the span (so it meets the land flush at both ends -
+// no lip) and humps up by `bridge_arch_rise` at the middle (the arch).
+inline constexpr f32 bridge_half_width = 2.4f; // deck half-width across the road (local z)
+inline constexpr f32 bridge_arch_rise = 0.55f; // how high the deck humps at the crown (the arch)
+inline constexpr f32 bridge_max_span = 22.0f;  // a "crossing" longer than this is a road running
+                                               // ALONG a river, not across it - no bridge there
+// World deck-top height at along-fraction t in [-1, 1] (-1 = back bank, +1 = front bank, 0 = crown).
+inline f32 bridge_deck_y(f32 bank_a, f32 bank_b, f32 t) {
+    return bank_a + (bank_b - bank_a) * (t + 1.0f) * 0.5f + bridge_arch_rise * (1.0f - t * t);
+}
 
 // Distance (world units) from (x,z) to the nearest road centreline. Huge if no road
 // is near. Replaces worldgen::path_distance.
@@ -52,9 +79,43 @@ Vec3 tint_surface(Vec3 color, const Vec3& p, f32 up, u32 seed);
 // All road segments within `radius` of `center` (world xz) - for drawing the map.
 std::vector<Segment> gather(const Vec2& center, f32 radius, u32 seed);
 
+// All bridges (road-over-river crossings) within `radius` of `center` - for the client to render.
+std::vector<Bridge> bridges(const Vec2& center, f32 radius, u32 seed);
+
+// The walkable bridge-deck height at world (x,z) if it lies on a bridge (following the arch), else a
+// large-negative sentinel. The server feeds this to the character controller as a platform, so the
+// deck is solid ground over the river (the terrain mesh underneath still shows the river + water).
+f32 bridge_height(f32 x, f32 z, u32 seed);
+
 // The ordered, water-avoiding road polyline between two town centres (a -> b), or empty
 // if they can't be linked on land. For the wagon driver's path + the map route overlay.
+// This now follows the TOWN GRAPH: for far towns it chains the per-edge roads through any
+// intermediate towns on the way (a multi-hop haul), so the wagon passes through them.
 std::vector<Vec2> route_polyline(const Vec2& a, const Vec2& b, u32 seed);
+
+// The multi-hop road polyline from town centre `a` to town centre `b`, routed over the town
+// graph so it passes THROUGH intermediate towns that lie on the way. Empty if `b`'s town isn't
+// reachable from `a`'s on the road graph. (If a/b aren't town centres it falls back to a direct
+// route.) `route_polyline` delegates to this.
+std::vector<Vec2> route_through_towns(const Vec2& a, const Vec2& b, u32 seed);
+
+// Total world-length of a road polyline (sum of segment lengths) - the true haul distance
+// (longer than the straight line for a winding multi-hop route), for reward scaling.
+f32 route_length(const std::vector<Vec2>& route);
+
+// How hazardous the BIOMES a route crosses are, 0 (easy lowland forest/plains) .. 1 (a hard slog
+// over mountain passes / through bogs + deserts). The mean per-point biome hazard along the
+// polyline - so a haul that threads tough country reads as more dangerous.
+f32 route_hazard(const std::vector<Vec2>& route, u32 seed);
+
+// The route's difficulty TIER (1 easy .. 3 hard) from its biome hazard - drives the ambush size on
+// a contract and the danger shown on the map.
+u8 route_difficulty(const std::vector<Vec2>& route, u32 seed);
+
+// Every town reachable from `center`'s town over the road graph (including far, multi-hop ones),
+// nearest graph-distance first, capped at `max_results`. Lets the game offer long-haul contracts
+// to distant towns, not just immediate neighbours.
+std::vector<worldgen::Village> reachable_towns(const Vec2& center, u32 seed, int max_results = 16);
 
 // Direction from a town toward its nearest connected town (where its single gate
 // faces), or nullopt if the town has no road (isolated by water).

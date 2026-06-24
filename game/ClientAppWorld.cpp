@@ -181,6 +181,25 @@ void ClientApp::draw_gates() {
     }
 }
 
+void ClientApp::draw_bridges() {
+    if (renderer_ == nullptr || world_seed_ == 0) {
+        return;
+    }
+    const Vec3 feet = local_feet();
+    for (const roads::Bridge& b : roads::bridges(Vec2{feet.x, feet.z}, 100.0f, world_seed_)) {
+        // The deck meets each bank flush (no lip): position at the mid-bank height and PITCH the span
+        // so the back end sits at bank_a and the front end at bank_b; the mesh adds the arch hump. This
+        // matches roads::bridge_deck_y exactly, so the visible deck is the walkable deck.
+        const f32 base_y = (b.bank_a + b.bank_b) * 0.5f;
+        const f32 pitch = std::asin(glm::clamp((b.bank_b - b.bank_a) / b.length, -0.6f, 0.6f));
+        const Mat4 m = glm::translate(Mat4{1.0f}, Vec3{b.center.x, base_y, b.center.y}) *
+                       glm::rotate(Mat4{1.0f}, -b.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
+                       glm::rotate(Mat4{1.0f}, pitch, Vec3{0.0f, 0.0f, 1.0f}) *
+                       glm::scale(Mat4{1.0f}, Vec3{b.length, 1.0f, 1.0f});
+        renderer_->draw(b.kind == 1 ? bridge_mesh_wood_ : bridge_mesh_stone_, m, Vec4{1.0f});
+    }
+}
+
 void ClientApp::draw_barricades() {
     if (!have_snapshot_) {
         return;

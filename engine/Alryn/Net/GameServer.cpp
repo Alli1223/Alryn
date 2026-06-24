@@ -2,6 +2,7 @@
 
 #include <Alryn/Core/Density.h>
 #include <Alryn/Core/Log.h>
+#include <Alryn/Terrain/RoadNetwork.h>
 #include <Alryn/Terrain/WorldGen.h>
 #include <Alryn/World/VehicleTypes.h>
 #include <Alryn/World/Village.h>
@@ -57,6 +58,11 @@ Vec3 GameServer::spawn_point(net::PlayerId id) const {
                     continue; // only the shell of ring r
                 }
                 if (const auto v = worldgen::village_at(ocx + dx, ocz + dz, seed)) {
+                    // Only spawn in a town that's actually road-connected to others, so the player
+                    // always starts somewhere they can take a haul from (never a stranded town).
+                    if (roads::reachable_towns(v->center, seed, 1).empty()) {
+                        continue;
+                    }
                     const f32 d = glm::length(v->center);
                     if (d < best) {
                         best = d;
@@ -188,7 +194,14 @@ void GameServer::tick(Timestep dt) {
             collider_scratch_.clear();
         }
         append_wagon_colliders(collider_scratch_); // can't walk through parked / hauled carts
-        player.controller.update(density, move, player.input.jump, dt, collider_scratch_);
+        // A bridge deck is walkable ground over the river it spans; the active cart's bed is a
+        // moving platform you can jump on top of and ride.
+        const u32 seed = sampler_.seed();
+        player.controller.update(density, move, player.input.jump, dt, collider_scratch_,
+                                 [this, seed](f32 x, f32 z) {
+                                     return std::max(roads::bridge_height(x, z, seed),
+                                                     wagon_top_at(x, z));
+                                 });
     }
 
     // Step thrown rocks: gravity + bounce off terrain/props. With combat dormant they
@@ -275,6 +288,7 @@ void GameServer::tick(Timestep dt) {
         s.position = w.position;
         s.yaw = w.yaw;
         s.dest = Vec3{w.dest.x, 0.0f, w.dest.y};
+        s.source = Vec3{w.source.x, 0.0f, w.source.y};
         s.reward = w.reward;
         s.type = w.type;
         s.health = static_cast<u8>(glm::clamp(w.health / kWagonHealth, 0.0f, 1.0f) * 255.0f);
@@ -287,6 +301,13 @@ void GameServer::tick(Timestep dt) {
             s.has_horse = 1;
             s.horse_pos = horse_pos_;
             s.horse_yaw = horse_yaw_;
+        }
+        // Wheel-breakdown state only applies to the active cart.
+        if (contract_phase_ != ContractPhase::Offer && w.id == active_.id && wheel_off_) {
+            s.wheel_off = 1;
+            s.wheel_index = wheel_index_;
+            s.wheel_pos = wheel_pos_;
+            s.repair = static_cast<u8>(glm::clamp(wheel_repair_, 0.0f, 1.0f) * 255.0f);
         }
         return s;
     };
@@ -414,6 +435,10 @@ void GameServer::update_townsfolk(Timestep dt, const DensitySampler& density) {
         }
         return best;
     };
+    // So townsfolk crossing a road bridge walk over the deck rather than dropping into the river.
+    const std::function<f32(f32, f32)> bridge = [seed](f32 x, f32 z) {
+        return roads::bridge_height(x, z, seed);
+    };
 
     for (auto it = villagers_.begin(); it != villagers_.end();) {
         Villager& vg = it->second;
@@ -468,18 +493,49 @@ void GameServer::update_townsfolk(Timestep dt, const DensitySampler& density) {
         }
         Vec3 to = vg.target - vg.position;
         to.y = 0.0f;
-        if (glm::length(to) < 0.5f) {
-            vg.speed = 0.0f;
-            vg.wait -= dt.seconds;
-            if (vg.wait <= 0.0f) {
+        vg.wait -= dt.seconds; // doubles as a "give up if stuck" pursuit timer
+        if (glm::length(to) < 0.5f || vg.wait <= 0.0f) {
+            // (Re)choose a nearby OPEN spot to stroll to. Picking anywhere across the whole town (the
+            // old behaviour) aimed villagers at points inside/behind houses, so they just pressed into
+            // a wall (step_villager only pushes out of colliders - it can't path around). Validating the
+            // target (a few metres away, inside the town, off the roads, not inside a building/prop) and
+            // giving up when stuck keeps them strolling the open streets instead of walking into houses.
+            auto blocked = [&](const Vec2& p) {
+                if (glm::length(p - vg.home_center) > vg.home_half * 0.85f) {
+                    return true; // outside the town
+                }
+                if (glm::length(p - vg.home_center) < detail::kMarketHalf + 1.0f) {
+                    return true; // keep out of the central market plaza (don't path into the stalls)
+                }
+                if (roads::distance(p.x, p.y, seed) < roads::road_half_width) {
+                    return true; // on a road / street
+                }
+                for (const Collider& c : collider_scratch_) {
+                    if (glm::length(resolve_collider(c, p, kVillagerRadius, vg.position.y,
+                                                     kEnemyHeight) -
+                                    p) > 1e-3f) {
+                        return true; // inside a building / prop
+                    }
+                }
+                return false;
+            };
+            Vec2 best{vg.position.x, vg.position.z}; // default: stay put if nowhere open is found
+            for (int attempt = 0; attempt < 8; ++attempt) {
                 const f32 ang = rnd(vg.rng) * TwoPi;
-                const f32 rad = rnd(vg.rng) * vg.home_half * 0.7f;
-                vg.target = Vec3{vg.home_center.x + std::cos(ang) * rad, vg.position.y,
-                                 vg.home_center.y + std::sin(ang) * rad};
-                vg.wait = 1.0f + rnd(vg.rng) * 3.0f; // pause a beat at each stop
+                const f32 rad = 2.5f + rnd(vg.rng) * 6.0f;
+                const Vec2 cand{vg.position.x + std::cos(ang) * rad, vg.position.z + std::sin(ang) * rad};
+                if (!blocked(cand)) {
+                    best = cand;
+                    break;
+                }
             }
+            vg.target = Vec3{best.x, vg.position.y, best.y};
+            vg.wait = 2.5f + rnd(vg.rng) * 4.0f;
+        }
+        if (glm::length(Vec2{vg.target.x - vg.position.x, vg.target.z - vg.position.z}) >= 0.5f) {
+            step_villager(vg, density, collider_scratch_, vg.target, dt, kVillagerSpeed, bridge);
         } else {
-            step_villager(vg, density, collider_scratch_, vg.target, dt, kVillagerSpeed);
+            vg.speed = 0.0f;
         }
         ++it;
     }

@@ -140,6 +140,7 @@ void write(ByteWriter& w, const Snapshot& s) {
         w.write_vec3(wg.position);
         w.write_f32(wg.yaw);
         w.write_vec3(wg.dest);
+        w.write_vec3(wg.source);
         w.write_vec3(wg.horse_pos);
         w.write_f32(wg.horse_yaw);
         w.write_u32(wg.reward);
@@ -151,6 +152,10 @@ void write(ByteWriter& w, const Snapshot& s) {
         w.write_u8(wg.has_horse);
         w.write_u8(wg.goods_aboard);
         w.write_u8(wg.goods_total);
+        w.write_u8(wg.wheel_off);
+        w.write_u8(wg.wheel_index);
+        w.write_vec3(wg.wheel_pos);
+        w.write_u8(wg.repair);
     }
     w.write_u16(static_cast<u16>(s.goods.size()));
     for (const GoodState& g : s.goods) {
@@ -272,6 +277,7 @@ bool read(ByteReader& r, Snapshot& s) {
         wg.position = r.read_vec3();
         wg.yaw = r.read_f32();
         wg.dest = r.read_vec3();
+        wg.source = r.read_vec3();
         wg.horse_pos = r.read_vec3();
         wg.horse_yaw = r.read_f32();
         wg.reward = r.read_u32();
@@ -283,6 +289,10 @@ bool read(ByteReader& r, Snapshot& s) {
         wg.has_horse = r.read_u8();
         wg.goods_aboard = r.read_u8();
         wg.goods_total = r.read_u8();
+        wg.wheel_off = r.read_u8();
+        wg.wheel_index = r.read_u8();
+        wg.wheel_pos = r.read_vec3();
+        wg.repair = r.read_u8();
         s.wagons.push_back(wg);
     }
     const u16 good_count = r.read_u16();

@@ -9,6 +9,7 @@
 #include <Alryn/Physics/Collider.h>
 
 #include <cmath>
+#include <functional>
 #include <span>
 
 namespace alryn {
@@ -85,7 +86,8 @@ inline CharacterAppearance villager_look(u32 id) {
 // day/night + flee logic so the motion itself stays testable.
 inline void step_villager(Villager& v, const DensitySampler& density,
                           std::span<const Collider> colliders, const Vec3& goal, Timestep dt,
-                          f32 speed = kVillagerSpeed) {
+                          f32 speed = kVillagerSpeed,
+                          const std::function<f32(f32, f32)>& platform = {}) {
     const f32 dts = dt.seconds;
     if (!v.alive || dts <= 0.0f) {
         return;
@@ -107,9 +109,17 @@ inline void step_villager(Villager& v, const DensitySampler& density,
     } else {
         v.speed = 0.0f;
     }
+    // Follow the terrain, or a bridge deck near the feet when crossing one (see step_enemy).
     const Vec3 from{v.position.x, v.position.y + 6.0f, v.position.z};
     if (const auto ground = raycast_density(density, from, Vec3{0.0f, -1.0f, 0.0f}, 20.0f)) {
-        v.position.y = ground->y;
+        f32 gy = ground->y;
+        if (platform) {
+            const f32 ph = platform(v.position.x, v.position.z);
+            if (ph > -1e8f && ph > gy && ph <= v.position.y + 1.0f) {
+                gy = ph;
+            }
+        }
+        v.position.y = gy;
     }
 }
 

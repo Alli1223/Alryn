@@ -1,6 +1,7 @@
 #include <Alryn/World/PropLibrary.h>
 
 #include <Alryn/Renderer/MeshPrimitives.h>
+#include <Alryn/Terrain/RoadNetwork.h> // shared bridge deck geometry (build_plank_bridge)
 
 #include <utility>
 
@@ -2123,6 +2124,146 @@ PropDef PropLibrary::build_decor(int variant) {
             add_box(m, {-0.2f, 0.46f, -0.18f}, {0.2f, 0.6f, 0.18f}, Vec3{0.5f, 0.7f, 0.3f}); // greens on top
             collider(0.56f, 0.56f, 0.46f);
             break;
+    }
+    def.parts.push_back({std::move(m), PropLayer::Opaque});
+    return def;
+}
+
+// A low-poly medieval STONE ARCH BRIDGE carrying a road over a river (Bridge.kind 0). Built as a
+// UNIT span along local +X (half-length 0.5) that the client stretches to the river width, pitches to
+// meet each bank, and places at bank level; the roadway is a gentle ARCH (matching roads::bridge_deck_y)
+// with a single chunky semicircular arch opening for the river, stone abutments, a cobbled deck and low
+// parapet walls. Few, big facets for the faceted low-poly look. Faces local +X (the road's heading).
+PropDef PropLibrary::build_arch_bridge() {
+    PropDef def;
+    def.name = "arch_bridge";
+    const Vec3 stone{0.62f, 0.60f, 0.55f};  // warm pale ashlar
+    const Vec3 dark{0.42f, 0.40f, 0.37f};   // shaded under-arch
+    const Vec3 cobble{0.56f, 0.52f, 0.47f}; // roadway
+    MeshData m;
+    constexpr f32 hl = 0.5f;                  // unit half-length (X); the client scales it
+    const f32 hw = roads::bridge_half_width;   // deck half-width (Z) - matches the collision deck
+    const f32 rise = roads::bridge_arch_rise;  // deck hump at the crown - matches bridge_deck_y
+    constexpr f32 ax = 0.42f;                  // arch opening half-span (unit X)
+    constexpr f32 spring_y = -1.3f;            // arch springing line (below the deck)
+    constexpr f32 arch_h = 1.2f;               // arch height (crown above the springing)
+    constexpr int seg = 7;                     // few, chunky facets (low-poly)
+    auto deck_top = [&](f32 x) { const f32 t = x / hl; return rise * (1.0f - t * t); };
+    auto soffit = [&](f32 x) {
+        const f32 r = std::abs(x) / ax;
+        return r < 1.0f ? spring_y + arch_h * std::sqrt(std::max(0.0f, 1.0f - r * r)) : -2.0f;
+    };
+    for (int i = 1; i <= seg; ++i) {
+        const f32 x0 = glm::mix(-hl, hl, static_cast<f32>(i - 1) / static_cast<f32>(seg));
+        const f32 x1 = glm::mix(-hl, hl, static_cast<f32>(i) / static_cast<f32>(seg));
+        const f32 d0 = deck_top(x0), d1 = deck_top(x1);
+        const f32 s0 = soffit(x0), s1 = soffit(x1);
+        const Vec3 axis{(x0 + x1) * 0.5f, (d0 + s0) * 0.5f, 0.0f};
+        add_quad(m, {x0, d0, -hw}, {x1, d1, -hw}, {x1, d1, hw}, {x0, d0, hw}, cobble); // roadway
+        for (f32 sz : {-1.0f, 1.0f}) { // the two spandrel faces (the visible arch)
+            const f32 z = sz * hw;
+            emit_tri(m, {x0, s0, z}, {x1, s1, z}, {x1, d1, z}, axis, stone);
+            emit_tri(m, {x0, s0, z}, {x1, d1, z}, {x0, d0, z}, axis, stone);
+        }
+        add_quad(m, {x0, s0, -hw}, {x0, s0, hw}, {x1, s1, hw}, {x1, s1, -hw}, dark); // arch underside
+    }
+    // Chunky low parapet walls along each side, following the deck hump.
+    for (int i = 1; i <= seg; ++i) {
+        const f32 x0 = glm::mix(-hl, hl, static_cast<f32>(i - 1) / static_cast<f32>(seg));
+        const f32 x1 = glm::mix(-hl, hl, static_cast<f32>(i) / static_cast<f32>(seg));
+        const f32 d0 = deck_top(x0), d1 = deck_top(x1);
+        for (f32 sz : {-1.0f, 1.0f}) {
+            const f32 z = sz * (hw - 0.14f);
+            for (f32 zo : {-0.14f, 0.14f}) {
+                const Vec3 axis{(x0 + x1) * 0.5f, d0 + 0.28f, z + zo};
+                emit_tri(m, {x0, d0, z + zo}, {x1, d1, z + zo}, {x1, d1 + 0.56f, z + zo}, axis, stone);
+                emit_tri(m, {x0, d0, z + zo}, {x1, d1 + 0.56f, z + zo}, {x0, d0 + 0.56f, z + zo}, axis,
+                         stone);
+            }
+            add_quad(m, {x0, d0 + 0.56f, z - 0.14f}, {x1, d1 + 0.56f, z - 0.14f},
+                     {x1, d1 + 0.56f, z + 0.14f}, {x0, d0 + 0.56f, z + 0.14f}, dark); // parapet cap
+        }
+    }
+    def.parts.push_back({std::move(m), PropLayer::Opaque});
+    return def;
+}
+
+// A low-poly WOODEN plank bridge carrying a road over a river (Bridge.kind 1). Same UNIT span + deck
+// arch as the stone bridge (so the walkable deck matches roads::bridge_deck_y), but built from timber:
+// chunky cross-planks for the roadway, a couple of trestle leg-pairs dropping to the riverbed, and
+// post-and-rail railings down each side. Warm wood tones. Faces local +X (the road's heading).
+PropDef PropLibrary::build_plank_bridge() {
+    PropDef def;
+    def.name = "plank_bridge";
+    const Vec3 plank{0.46f, 0.31f, 0.18f};  // warm timber
+    const Vec3 plank2{0.40f, 0.26f, 0.15f}; // a darker plank (alternating)
+    const Vec3 post{0.34f, 0.22f, 0.13f};   // posts / beams (darker)
+    MeshData m;
+    constexpr f32 hl = 0.5f;
+    const f32 hw = roads::bridge_half_width;
+    const f32 rise = roads::bridge_arch_rise;
+    auto deck_top = [&](f32 x) { const f32 t = x / hl; return rise * (1.0f - t * t); };
+    constexpr int planks = 11; // chunky cross-planks across the span
+    constexpr f32 deck_thick = 0.16f;
+    // Two stringer beams running the length under the planks (the deck's spine).
+    for (f32 sz : {-1.0f, 1.0f}) {
+        const f32 z = sz * (hw - 0.22f);
+        for (int i = 1; i <= planks; ++i) {
+            const f32 x0 = glm::mix(-hl, hl, static_cast<f32>(i - 1) / static_cast<f32>(planks));
+            const f32 x1 = glm::mix(-hl, hl, static_cast<f32>(i) / static_cast<f32>(planks));
+            const f32 d0 = deck_top(x0), d1 = deck_top(x1);
+            add_box(m, {x0, std::min(d0, d1) - deck_thick - 0.18f, z - 0.1f},
+                    {x1, std::min(d0, d1) - deck_thick, z + 0.1f}, post); // stringer segment
+        }
+    }
+    // Cross-planks forming the roadway (alternating shade), following the arch hump.
+    for (int i = 0; i < planks; ++i) {
+        const f32 x0 = glm::mix(-hl, hl, static_cast<f32>(i) / static_cast<f32>(planks)) + 0.004f;
+        const f32 x1 = glm::mix(-hl, hl, static_cast<f32>(i + 1) / static_cast<f32>(planks)) - 0.004f;
+        const f32 d = deck_top((x0 + x1) * 0.5f);
+        add_box(m, {x0, d - deck_thick, -hw}, {x1, d, hw}, (i % 2 == 0) ? plank : plank2);
+    }
+    // A couple of trestle leg-pairs dropping from the deck to the riverbed (under the arch).
+    for (f32 lx : {-0.26f, 0.26f}) {
+        const f32 d = deck_top(lx);
+        for (f32 sz : {-1.0f, 1.0f}) {
+            const f32 z = sz * (hw - 0.18f);
+            // a splayed leg: top under the deck, foot kicked outward + down to the bed
+            const Vec3 top{lx, d - deck_thick, z};
+            const Vec3 foot{lx + 0.0f, -1.9f, z + sz * 0.18f};
+            const Vec3 axis = (top + foot) * 0.5f;
+            for (f32 zo : {-0.07f, 0.07f}) {
+                emit_tri(m, {top.x - 0.07f, top.y, top.z + zo}, {top.x + 0.07f, top.y, top.z + zo},
+                         {foot.x + 0.07f, foot.y, foot.z + zo}, axis, post);
+                emit_tri(m, {top.x - 0.07f, top.y, top.z + zo}, {foot.x + 0.07f, foot.y, foot.z + zo},
+                         {foot.x - 0.07f, foot.y, foot.z + zo}, axis, post);
+            }
+        }
+        // a cross-brace beam tying the two legs together
+        add_box(m, {lx - 0.06f, -1.0f, -hw + 0.1f}, {lx + 0.06f, -0.84f, hw - 0.1f}, post);
+    }
+    // Post-and-rail railings down each side (posts every couple of planks + a top rail).
+    constexpr int rposts = 6;
+    for (f32 sz : {-1.0f, 1.0f}) {
+        const f32 z = sz * (hw - 0.06f);
+        for (int i = 0; i <= rposts; ++i) {
+            const f32 x = glm::mix(-hl, hl, static_cast<f32>(i) / static_cast<f32>(rposts));
+            const f32 d = deck_top(x);
+            add_box(m, {x - 0.04f, d, z - 0.05f}, {x + 0.04f, d + 0.62f, z + 0.05f}, post); // post
+        }
+        // top rail following the hump (segmented so it arcs)
+        for (int i = 1; i <= rposts; ++i) {
+            const f32 x0 = glm::mix(-hl, hl, static_cast<f32>(i - 1) / static_cast<f32>(rposts));
+            const f32 x1 = glm::mix(-hl, hl, static_cast<f32>(i) / static_cast<f32>(rposts));
+            const f32 d0 = deck_top(x0), d1 = deck_top(x1);
+            const Vec3 axis{(x0 + x1) * 0.5f, (d0 + d1) * 0.5f + 0.52f, z};
+            for (f32 zo : {-0.05f, 0.05f}) {
+                emit_tri(m, {x0, d0 + 0.46f, z + zo}, {x1, d1 + 0.46f, z + zo},
+                         {x1, d1 + 0.58f, z + zo}, axis, plank);
+                emit_tri(m, {x0, d0 + 0.46f, z + zo}, {x1, d1 + 0.58f, z + zo},
+                         {x0, d0 + 0.58f, z + zo}, axis, plank);
+            }
+        }
     }
     def.parts.push_back({std::move(m), PropLayer::Opaque});
     return def;

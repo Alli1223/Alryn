@@ -76,6 +76,7 @@ int variant_count(const std::string& cat) {
     if (cat == "decor") return 8;
     if (cat == "crystal") return 4;
     if (cat == "monument") return 3;
+    if (cat == "cactus") return 2;
     if (cat == "bush" || cat == "rock" || cat == "log") return 3;
     if (cat == "fence" || cat == "rail" || cat == "wall" || cat == "fern") return 2;
     return 1;
@@ -125,6 +126,10 @@ Asset build_asset(const std::string& cat, int v) {
         add_prop(a, PropLibrary::build_bridge());
     } else if (cat == "stonebridge") {
         add_prop(a, PropLibrary::build_stone_bridge());
+    } else if (cat == "archbridge") {
+        add_prop(a, PropLibrary::build_arch_bridge());
+    } else if (cat == "plankbridge") {
+        add_prop(a, PropLibrary::build_plank_bridge());
     } else if (cat == "path") {
         add_prop(a, PropLibrary::build_path_tile());
     } else if (cat == "river") {
@@ -163,6 +168,10 @@ Asset build_asset(const std::string& cat, int v) {
         a.parts.push_back({primitives::fern(v), Vec4{1.0f}});
     } else if (cat == "mushroom") {
         a.parts.push_back({primitives::mushroom(), Vec4{1.0f}});
+    } else if (cat == "reed") {
+        a.parts.push_back({primitives::reed(5), Vec4{1.0f}});
+    } else if (cat == "cactus") {
+        a.parts.push_back({primitives::cactus(v), Vec4{1.0f}});
     }
     return a;
 }
@@ -229,8 +238,8 @@ int main(int argc, char** argv) {
     if (argc < 2) {
         std::printf("usage: asset_preview <category> [variant] [out.ppm]\n");
         std::printf("  categories: house townhouse pub blacksmith tree bush rock log fence rail "
-                    "lantern well gate tower wall market fountain planter bridge stonebridge path "
-                    "river decor wagon wheel fern mushroom\n");
+                    "lantern well gate tower wall market fountain planter bridge stonebridge "
+                    "archbridge plankbridge path river decor wagon wheel fern mushroom\n");
         std::printf("  no variant -> render every variant of the category to its own file\n");
         return 2;
     }
