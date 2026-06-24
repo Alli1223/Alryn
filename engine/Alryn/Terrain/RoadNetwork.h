@@ -38,12 +38,20 @@ struct Segment {
     Vec2 b{0.0f};
 };
 
-// A plank bridge spanning a river where a road crosses it (the client renders one here).
+// A bridge spanning a river where a road crosses it (the client renders one here).
 struct Bridge {
     Vec2 center{0.0f}; // midpoint of the river crossing
     f32 yaw = 0.0f;    // the road's heading across the river (the bridge mesh faces local +X)
     f32 length = 4.0f; // span across the river - the deck stretches to this
 };
+
+// Bridge deck geometry, SHARED by the mesh (PropLibrary::build_plank_bridge) and the walkable
+// bridge_height() below, so the deck you stand on matches the deck you see. The deck is a gentle
+// stone ARCH: level with the banks at the ends, humping up by `bridge_arch_rise` at the middle.
+inline constexpr f32 bridge_half_width = 2.4f; // deck half-width across the road (local z)
+inline constexpr f32 bridge_arch_rise = 0.7f;  // how high the deck humps at the crown (the arch)
+// World deck-top height at arc-fraction t in [-1, 1] (0 = the crown), given the bank level.
+inline f32 bridge_deck_y(f32 bank, f32 t) { return bank + bridge_arch_rise * (1.0f - t * t); }
 
 // Distance (world units) from (x,z) to the nearest road centreline. Huge if no road
 // is near. Replaces worldgen::path_distance.
@@ -65,6 +73,11 @@ std::vector<Segment> gather(const Vec2& center, f32 radius, u32 seed);
 
 // All bridges (road-over-river crossings) within `radius` of `center` - for the client to render.
 std::vector<Bridge> bridges(const Vec2& center, f32 radius, u32 seed);
+
+// The walkable bridge-deck height at world (x,z) if it lies on a bridge (following the arch), else a
+// large-negative sentinel. The server feeds this to the character controller as a platform, so the
+// deck is solid ground over the river (the terrain mesh underneath still shows the river + water).
+f32 bridge_height(f32 x, f32 z, u32 seed);
 
 // The ordered, water-avoiding road polyline between two town centres (a -> b), or empty
 // if they can't be linked on land. For the wagon driver's path + the map route overlay.

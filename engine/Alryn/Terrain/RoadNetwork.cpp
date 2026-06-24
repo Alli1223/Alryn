@@ -667,6 +667,26 @@ std::vector<Bridge> bridges(const Vec2& center, f32 radius, u32 seed) {
     return out;
 }
 
+f32 bridge_height(f32 x, f32 z, u32 seed) {
+    f32 best = -1e9f;
+    for (const Bridge& b : bridges(Vec2{x, z}, bridge_half_width + 4.0f, seed)) {
+        const Vec2 dir{std::cos(b.yaw), std::sin(b.yaw)};
+        const Vec2 perp{-dir.y, dir.x};
+        const Vec2 rel = Vec2{x, z} - b.center;
+        const f32 along = glm::dot(rel, dir);
+        const f32 across = glm::dot(rel, perp);
+        if (std::abs(along) > b.length * 0.5f || std::abs(across) > bridge_half_width) {
+            continue; // not on this bridge's deck
+        }
+        const Vec2 e0 = b.center - dir * (b.length * 0.5f);
+        const Vec2 e1 = b.center + dir * (b.length * 0.5f);
+        const f32 bank =
+            std::max(worldgen::height(e0.x, e0.y, seed), worldgen::height(e1.x, e1.y, seed));
+        best = std::max(best, bridge_deck_y(bank, along / (b.length * 0.5f)));
+    }
+    return best;
+}
+
 std::vector<Vec2> route_through_towns(const Vec2& a, const Vec2& b, u32 seed) {
     const auto sa = owning_cell(seed, a);
     const auto sb = owning_cell(seed, b);

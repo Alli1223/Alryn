@@ -194,7 +194,10 @@ void GameServer::tick(Timestep dt) {
             collider_scratch_.clear();
         }
         append_wagon_colliders(collider_scratch_); // can't walk through parked / hauled carts
-        player.controller.update(density, move, player.input.jump, dt, collider_scratch_);
+        // A bridge deck is walkable ground over the river it spans.
+        const u32 seed = sampler_.seed();
+        player.controller.update(density, move, player.input.jump, dt, collider_scratch_,
+                                 [seed](f32 x, f32 z) { return roads::bridge_height(x, z, seed); });
     }
 
     // Step thrown rocks: gravity + bounce off terrain/props. With combat dormant they

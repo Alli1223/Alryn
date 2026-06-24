@@ -6,6 +6,7 @@
 #include <Alryn/Renderer/Vulkan/VulkanDevice.h>
 #include <Alryn/Renderer/Vulkan/VulkanInstance.h>
 #include <Alryn/Renderer/MeshPrimitives.h>
+#include <Alryn/Physics/CharacterController.h>
 #include <Alryn/Terrain/MarchingTetra.h>
 #include <Alryn/Terrain/StreamingTerrain.h>
 #include <Alryn/Terrain/Terrain.h>
@@ -338,6 +339,49 @@ TEST_CASE("Roads: town graph routes multi-hop through intermediate towns") {
         }
     }
     CHECK(found_multihop); // the road graph produces real multi-hop hauls through other towns
+}
+
+TEST_CASE("Roads: a bridge deck is walkable ground over the river") {
+    // Find a bridge across a few seeds.
+    for (const u32 seed : {1337u, 4242u, 99u, 777u}) {
+        const auto bs = roads::bridges(Vec2{0.0f, 0.0f}, 1500.0f, seed);
+        if (bs.empty()) {
+            continue;
+        }
+        const roads::Bridge& b = bs.front();
+        const f32 deck = roads::bridge_height(b.center.x, b.center.y, seed); // deck at the crown
+        REQUIRE(deck > -1.0e8f);
+        // The carved river under the bridge sits well below the deck.
+        CHECK(worldgen::height(b.center.x, b.center.y, seed) < deck - 0.8f);
+
+        const DensitySampler density = [seed](const Vec3& p) { return worldgen::density(p, seed); };
+        const auto platform = [seed](f32 x, f32 z) { return roads::bridge_height(x, z, seed); };
+        constexpr Timestep step{1.0f / 60.0f};
+
+        // Stand on the deck and tick with no input: the player must NOT fall into the river.
+        CharacterController ch;
+        ch.set_position(Vec3{b.center.x, deck + 0.05f, b.center.y});
+        for (int i = 0; i < 120; ++i) {
+            ch.update(density, Vec3{0.0f}, false, step, {}, platform);
+        }
+        CHECK(ch.position().y > deck - 0.5f); // held on the deck
+
+        // Walk across the span (along its axis): stay on the arched deck the whole way.
+        const Vec2 dir{std::cos(b.yaw), std::sin(b.yaw)};
+        ch.set_position(Vec3{b.center.x - dir.x * b.length * 0.42f, deck,
+                             b.center.y - dir.y * b.length * 0.42f});
+        f32 worst_below_deck = 0.0f;
+        for (int i = 0; i < 300; ++i) {
+            ch.update(density, Vec3{dir.x, 0.0f, dir.y}, false, step, {}, platform);
+            const f32 dh = roads::bridge_height(ch.position().x, ch.position().z, seed);
+            if (dh > -1.0e8f) {
+                worst_below_deck = std::min(worst_below_deck, ch.position().y - dh);
+            }
+        }
+        CHECK(worst_below_deck > -0.6f); // never dropped through the deck into the river
+        return;
+    }
+    MESSAGE("no bridge found near origin in the scanned seeds - skipping");
 }
 
 TEST_CASE("Roads: route difficulty rises with the biomes the road crosses") {

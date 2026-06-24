@@ -1,6 +1,7 @@
 #include <Alryn/World/PropLibrary.h>
 
 #include <Alryn/Renderer/MeshPrimitives.h>
+#include <Alryn/Terrain/RoadNetwork.h> // shared bridge deck geometry (build_plank_bridge)
 
 #include <utility>
 
@@ -2128,33 +2129,67 @@ PropDef PropLibrary::build_decor(int variant) {
     return def;
 }
 
-// A low wooden PLANK BRIDGE carrying a road over a river (matching the reference's flat plank
-// crossing). The deck runs along local +X as a UNIT span (half-length 0.5) that the client stretches
-// to the river width; it's road-width along Z, with stringer beams beneath and a low rail + end posts
-// each side. Faces local +X (the road's heading across the river).
+// A medieval STONE ARCH BRIDGE carrying a road over a river. Built as a UNIT span along local +X
+// (half-length 0.5) that the client stretches to the river width and places at the bank level; the
+// roadway is a gentle stone ARCH (level with the banks at the ends, humping up at the crown - matching
+// the walkable roads::bridge_deck_y), with a semicircular arch opening for the river beneath, stone
+// abutments at the banks, cobbled deck and low parapet walls. Faces local +X (the road's heading).
 PropDef PropLibrary::build_plank_bridge() {
     PropDef def;
-    def.name = "plank_bridge";
-    const Vec3 wood{0.47f, 0.32f, 0.19f};
-    const Vec3 plank{0.52f, 0.37f, 0.22f};
-    const Vec3 dark{0.33f, 0.22f, 0.13f};
+    def.name = "arch_bridge";
+    const Vec3 stone{0.57f, 0.55f, 0.51f};
+    const Vec3 dark{0.43f, 0.41f, 0.38f};
+    const Vec3 cobble{0.51f, 0.48f, 0.44f};
     MeshData m;
-    constexpr f32 hl = 0.5f;       // half-length along X (the client scales this to the span)
-    constexpr f32 hw = 2.6f;       // half-width (Z) - a bit wider than the road
-    constexpr f32 deck_bot = 0.26f, deck_top = 0.42f;
-    add_box(m, {-hl, deck_bot, -hw}, {hl, deck_top, hw}, plank);            // plank deck
-    add_box(m, {-hl, deck_bot - 0.02f, -hw}, {hl, deck_bot, hw}, dark);     // a thin shadow lip under the deck
-    // Stringer beams running the span, beneath the deck.
-    for (f32 sz : {-1.0f, 1.0f}) {
-        const f32 z = sz * (hw - 0.35f);
-        add_box(m, {-hl, 0.0f, z - 0.16f}, {hl, deck_bot, z + 0.16f}, dark);
+    constexpr f32 hl = 0.5f;                       // unit half-length (X); the client scales it
+    const f32 hw = roads::bridge_half_width;        // deck half-width (Z) - matches the collision deck
+    const f32 rise = roads::bridge_arch_rise;       // deck hump at the crown - matches bridge_deck_y
+    constexpr f32 deck_thick = 0.34f;
+    constexpr f32 ax = 0.46f;                       // arch opening half-span (unit X)
+    constexpr f32 spring_y = -1.5f;                 // arch springing line (below the deck)
+    constexpr f32 arch_h = 1.35f;                   // arch height (crown above the springing)
+    constexpr int seg = 16;
+    // Deck top at unit-x: a parabolic hump, 0 at the ends (bank level) -> `rise` at the crown.
+    auto deck_top = [&](f32 x) { const f32 t = x / hl; return rise * (1.0f - t * t); };
+    // The arch soffit (top of the river opening): a semicircle for |x| < ax, else the solid abutment.
+    auto soffit = [&](f32 x) {
+        const f32 r = std::abs(x) / ax;
+        return r < 1.0f ? spring_y + arch_h * std::sqrt(std::max(0.0f, 1.0f - r * r)) : -2.0f;
+    };
+    for (int i = 1; i <= seg; ++i) {
+        const f32 x0 = glm::mix(-hl, hl, static_cast<f32>(i - 1) / static_cast<f32>(seg));
+        const f32 x1 = glm::mix(-hl, hl, static_cast<f32>(i) / static_cast<f32>(seg));
+        const f32 d0 = deck_top(x0), d1 = deck_top(x1);
+        const f32 s0 = soffit(x0), s1 = soffit(x1);
+        const Vec3 axis{(x0 + x1) * 0.5f, (d0 + s0) * 0.5f, 0.0f};
+        // Cobbled roadway (humped) + a dark course just below it (the deck edge).
+        add_quad(m, {x0, d0, -hw}, {x1, d1, -hw}, {x1, d1, hw}, {x0, d0, hw}, cobble);
+        // The two stone faces (spandrel), from the arch soffit up to the deck - the visible arch.
+        for (f32 sz : {-1.0f, 1.0f}) {
+            const f32 z = sz * hw;
+            emit_tri(m, {x0, s0, z}, {x1, s1, z}, {x1, d1, z}, axis, stone);
+            emit_tri(m, {x0, s0, z}, {x1, d1, z}, {x0, d0, z}, axis, stone);
+        }
+        // The arch underside (soffit), spanning between the two faces - reads as the arch's curve.
+        add_quad(m, {x0, s0, -hw}, {x0, s0, hw}, {x1, s1, hw}, {x1, s1, -hw}, dark);
     }
-    // A low log kerb each side (runs the span - stretches cleanly with the deck; no upright posts,
-    // which would distort into slabs when the unit deck is scaled to the river width).
-    for (f32 sz : {-1.0f, 1.0f}) {
-        const f32 z = sz * (hw - 0.13f);
-        add_box(m, {-hl, deck_top, z - 0.13f}, {hl, deck_top + 0.22f, z + 0.13f}, wood);
+    // Low parapet walls along each side, following the deck hump.
+    for (int i = 1; i <= seg; ++i) {
+        const f32 x0 = glm::mix(-hl, hl, static_cast<f32>(i - 1) / static_cast<f32>(seg));
+        const f32 x1 = glm::mix(-hl, hl, static_cast<f32>(i) / static_cast<f32>(seg));
+        const f32 d0 = deck_top(x0), d1 = deck_top(x1);
+        for (f32 sz : {-1.0f, 1.0f}) {
+            const f32 z = sz * (hw - 0.12f);
+            const Vec3 axis{(x0 + x1) * 0.5f, d0 + 0.25f, z};
+            for (f32 zo : {-0.12f, 0.12f}) {
+                emit_tri(m, {x0, d0, z + zo}, {x1, d1, z + zo}, {x1, d1 + 0.5f, z + zo}, axis, stone);
+                emit_tri(m, {x0, d0, z + zo}, {x1, d1 + 0.5f, z + zo}, {x0, d0 + 0.5f, z + zo}, axis, stone);
+            }
+            add_quad(m, {x0, d0 + 0.5f, z - 0.12f}, {x1, d1 + 0.5f, z - 0.12f},
+                     {x1, d1 + 0.5f, z + 0.12f}, {x0, d0 + 0.5f, z + 0.12f}, dark); // parapet cap
+        }
     }
+    (void)deck_thick;
     def.parts.push_back({std::move(m), PropLayer::Opaque});
     return def;
 }

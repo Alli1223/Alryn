@@ -42,7 +42,8 @@ std::optional<f32> CharacterController::ground_height(const DensitySampler& dens
 }
 
 void CharacterController::update(const DensitySampler& density, const Vec3& move_dir, bool jump,
-                                 Timestep dt, std::span<const Collider> colliders) {
+                                 Timestep dt, std::span<const Collider> colliders,
+                                 const std::function<f32(f32, f32)>& platform) {
     const f32 dts = dt.seconds;
     if (dts <= 0.0f) {
         return;
@@ -87,7 +88,16 @@ void CharacterController::update(const DensitySampler& density, const Vec3& move
 
     // Vertical: gravity/jump in the air, ground-following when grounded.
     const f32 top = p.y + config_.height + 2.0f;
-    const std::optional<f32> ground = ground_height(density, p.x, p.z, top);
+    std::optional<f32> ground = ground_height(density, p.x, p.z, top);
+    // A platform (a bridge deck) above the terrain raises the ground here, so the feet stand on it
+    // over the river (only when the deck is at/below where we'd reach - never teleporting up to a
+    // bridge from far below it).
+    if (platform) {
+        const f32 ph = platform(p.x, p.z);
+        if (ph > -1.0e8f && ph <= p.y + config_.step_height + 0.05f && (!ground || ph > *ground)) {
+            ground = ph;
+        }
+    }
 
     if (!on_ground_) {
         velocity_.y = std::max(velocity_.y - config_.gravity * dts, -config_.max_fall);

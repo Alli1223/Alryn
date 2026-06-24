@@ -34,12 +34,17 @@ constexpr f32 kArrowDamage = 8.0f;
 constexpr f32 kDriverStuckSeconds = 2.0f; // no waypoint progress for this long => skip it
 constexpr f32 kUnstickSeconds = 2.0f; // cart snagged (tow-gate pinned) this long => pull it free
 
-// Ground height under (x,z) via the density function.
-f32 ground_at(const DensitySampler& density, f32 x, f32 z) {
-    if (const auto g = raycast_density(density, Vec3{x, 60.0f, z}, Vec3{0.0f, -1.0f, 0.0f}, 120.0f)) {
-        return g->y;
+// Ground height under (x,z) via the density function. With `bridge_seed` set, a bridge deck spanning
+// a river here counts as ground (so the wagon + its puller ride over the bridge, not into the river).
+f32 ground_at(const DensitySampler& density, f32 x, f32 z, u32 bridge_seed = 0) {
+    f32 g = worldgen::height(x, z, 0u);
+    if (const auto h = raycast_density(density, Vec3{x, 60.0f, z}, Vec3{0.0f, -1.0f, 0.0f}, 120.0f)) {
+        g = h->y;
     }
-    return worldgen::height(x, z, 0u);
+    if (bridge_seed != 0) {
+        g = std::max(g, roads::bridge_height(x, z, bridge_seed));
+    }
+    return g;
 }
 
 // 8-connected A* over a local 1 m grid that routes from `start` to `goal` (world xz)
@@ -550,10 +555,11 @@ void GameServer::accept_contract(const Wagon& chosen, WagonMode mode) {
 
 void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
     Wagon& w = active_;
+    const u32 wseed = sampler_.seed(); // so the cart + its puller ride bridges over rivers
     // A wheel is off: the cart is stranded - it can't roll until a player refits the wheel. Keep it
     // grounded + zero its velocity (so cargo settles), but don't tow or advance it.
     if (wheel_off_) {
-        w.position.y = ground_at(density, w.position.x, w.position.z);
+        w.position.y = ground_at(density, w.position.x, w.position.z, wseed);
         wagon_vel_ = Vec2{0.0f};
         wagon_prev_pos_ = w.position;
         seat_occupants(vehicle_type(w.type));
@@ -607,7 +613,7 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
             while (dyaw < -Pi) dyaw += TwoPi;
             yaw += dyaw * std::min(1.0f, dt.seconds * 7.0f);
         }
-        pos.y = ground_at(density, pos.x, pos.z);
+        pos.y = ground_at(density, pos.x, pos.z, wseed);
         // Advance to (or skip) the current route waypoint. While gated (waiting for the cart)
         // the puller isn't trying to make progress, so don't count that as being "stuck".
         const f32 dist_wp = glm::length(Vec2{pos.x, pos.z} - wp);
@@ -691,12 +697,12 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
             }
             w.position.x = next.x;
             w.position.z = next.y;
-            w.position.y = ground_at(density, w.position.x, w.position.z);
+            w.position.y = ground_at(density, w.position.x, w.position.z, wseed);
         }
         // The horse rides in front along the carriage heading.
         const Vec3 hdir{std::cos(w.yaw), 0.0f, std::sin(w.yaw)};
         horse_pos_ = w.position + hdir * hitch;
-        horse_pos_.y = ground_at(density, horse_pos_.x, horse_pos_.z);
+        horse_pos_.y = ground_at(density, horse_pos_.x, horse_pos_.z, wseed);
         horse_yaw_ = w.yaw;
     } else if (has_tower) {
         // A player has the handles - they haul, in EITHER mode. In Driver mode this lets a
@@ -709,7 +715,7 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
             const Vec2 bar{puller.x, puller.z};
             Vec2 dp{driver_->position.x, driver_->position.z};
             dp += (bar - dp) * std::min(1.0f, dt.seconds * 2.0f); // amble to the drawbar
-            driver_->position = Vec3{dp.x, ground_at(density, dp.x, dp.y), dp.y};
+            driver_->position = Vec3{dp.x, ground_at(density, dp.x, dp.y, wseed), dp.y};
             driver_->yaw = std::atan2(active_.position.z - dp.y, active_.position.x - dp.x);
         }
     } else if (active_mode_ == WagonMode::Driver && driver_) {
@@ -755,7 +761,7 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
         }
         w.position.x = C.x;
         w.position.z = C.y;
-        w.position.y = ground_at(density, w.position.x, w.position.z);
+        w.position.y = ground_at(density, w.position.x, w.position.z, wseed);
     }
 
     // Slide the physical cargo in the bed (and spill it out on bumps) - all driven by the

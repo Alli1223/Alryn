@@ -132,7 +132,7 @@ void render_world(test::OffscreenRenderer& r, u32 seed, const Vec2& focus, f32 r
             const Vec2 e0 = b.center - bdir * (b.length * 0.5f);
             const Vec2 e1 = b.center + bdir * (b.length * 0.5f);
             const f32 deck_y = std::max(worldgen::height(e0.x, e0.y, seed),
-                                        worldgen::height(e1.x, e1.y, seed)) - 0.18f;
+                                        worldgen::height(e1.x, e1.y, seed));
             add(bridge, at(Vec3{b.center.x, deck_y, b.center.y}) *
                             glm::rotate(Mat4{1.0f}, -b.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
                             glm::scale(Mat4{1.0f}, Vec3{b.length, 1.0f, 1.0f}));

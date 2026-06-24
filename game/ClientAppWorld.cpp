@@ -190,10 +190,10 @@ void ClientApp::draw_bridges() {
         const Vec2 dir{std::cos(b.yaw), std::sin(b.yaw)};
         const Vec2 e0 = b.center - dir * (b.length * 0.5f);
         const Vec2 e1 = b.center + dir * (b.length * 0.5f);
-        // The deck sits level with the road on the banks (the river is carved below it). Drop it a
-        // touch so the planks read at road height rather than perched above.
+        // Placed at the bank level; the deck arches up from there (the mesh hump + roads::bridge_height
+        // agree, so the visible deck matches the walkable deck).
         const f32 deck_y = std::max(worldgen::height(e0.x, e0.y, world_seed_),
-                                    worldgen::height(e1.x, e1.y, world_seed_)) - 0.18f;
+                                    worldgen::height(e1.x, e1.y, world_seed_));
         const Mat4 m = glm::translate(Mat4{1.0f}, Vec3{b.center.x, deck_y, b.center.y}) *
                        glm::rotate(Mat4{1.0f}, -b.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
                        glm::scale(Mat4{1.0f}, Vec3{b.length, 1.0f, 1.0f});
