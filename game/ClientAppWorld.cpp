@@ -187,17 +187,16 @@ void ClientApp::draw_bridges() {
     }
     const Vec3 feet = local_feet();
     for (const roads::Bridge& b : roads::bridges(Vec2{feet.x, feet.z}, 100.0f, world_seed_)) {
-        const Vec2 dir{std::cos(b.yaw), std::sin(b.yaw)};
-        const Vec2 e0 = b.center - dir * (b.length * 0.5f);
-        const Vec2 e1 = b.center + dir * (b.length * 0.5f);
-        // Placed at the bank level; the deck arches up from there (the mesh hump + roads::bridge_height
-        // agree, so the visible deck matches the walkable deck).
-        const f32 deck_y = std::max(worldgen::height(e0.x, e0.y, world_seed_),
-                                    worldgen::height(e1.x, e1.y, world_seed_));
-        const Mat4 m = glm::translate(Mat4{1.0f}, Vec3{b.center.x, deck_y, b.center.y}) *
+        // The deck meets each bank flush (no lip): position at the mid-bank height and PITCH the span
+        // so the back end sits at bank_a and the front end at bank_b; the mesh adds the arch hump. This
+        // matches roads::bridge_deck_y exactly, so the visible deck is the walkable deck.
+        const f32 base_y = (b.bank_a + b.bank_b) * 0.5f;
+        const f32 pitch = std::asin(glm::clamp((b.bank_b - b.bank_a) / b.length, -0.6f, 0.6f));
+        const Mat4 m = glm::translate(Mat4{1.0f}, Vec3{b.center.x, base_y, b.center.y}) *
                        glm::rotate(Mat4{1.0f}, -b.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
+                       glm::rotate(Mat4{1.0f}, pitch, Vec3{0.0f, 0.0f, 1.0f}) *
                        glm::scale(Mat4{1.0f}, Vec3{b.length, 1.0f, 1.0f});
-        renderer_->draw(bridge_mesh_, m, Vec4{1.0f});
+        renderer_->draw(b.kind == 1 ? bridge_mesh_wood_ : bridge_mesh_stone_, m, Vec4{1.0f});
     }
 }
 

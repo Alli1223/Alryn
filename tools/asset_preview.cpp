@@ -126,6 +126,8 @@ Asset build_asset(const std::string& cat, int v) {
         add_prop(a, PropLibrary::build_bridge());
     } else if (cat == "stonebridge") {
         add_prop(a, PropLibrary::build_stone_bridge());
+    } else if (cat == "archbridge") {
+        add_prop(a, PropLibrary::build_arch_bridge());
     } else if (cat == "plankbridge") {
         add_prop(a, PropLibrary::build_plank_bridge());
     } else if (cat == "path") {
@@ -236,8 +238,8 @@ int main(int argc, char** argv) {
     if (argc < 2) {
         std::printf("usage: asset_preview <category> [variant] [out.ppm]\n");
         std::printf("  categories: house townhouse pub blacksmith tree bush rock log fence rail "
-                    "lantern well gate tower wall market fountain planter bridge stonebridge path "
-                    "river decor wagon wheel fern mushroom\n");
+                    "lantern well gate tower wall market fountain planter bridge stonebridge "
+                    "archbridge plankbridge path river decor wagon wheel fern mushroom\n");
         std::printf("  no variant -> render every variant of the category to its own file\n");
         return 2;
     }

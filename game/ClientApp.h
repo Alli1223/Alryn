@@ -640,7 +640,8 @@ private:
     Mesh shape_rounded_;
     Mesh marker_;
     Mesh water_mesh_;
-    Mesh bridge_mesh_;    // a unit-length plank bridge (x:-0.5..0.5), stretched per river crossing
+    Mesh bridge_mesh_stone_; // unit stone arch bridge (x:-0.5..0.5), stretched per river crossing
+    Mesh bridge_mesh_wood_;  // unit wooden plank bridge (Bridge.kind picks stone vs wood)
     Mesh gate_door_mesh_; // a unit gate-door leaf (x:0..1 hinge->free), drawn x2 per town gate
 
     // Town gates near the player, rebuilt each frame (open: 0 closed .. 1 swung open).

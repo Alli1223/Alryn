@@ -124,18 +124,19 @@ void render_world(test::OffscreenRenderer& r, u32 seed, const Vec2& focus, f32 r
             }
         }
     }
-    // Plank bridges where the roads cross rivers (deck stretched to the span, level with the banks).
+    // Stone / wooden bridges where the roads cross rivers (deck stretched to the span, pitched to
+    // meet each bank flush; kind picks the style).
     {
-        const MeshData bridge = PropLibrary::build_plank_bridge().parts[0].mesh;
+        const MeshData stone = PropLibrary::build_arch_bridge().parts[0].mesh;
+        const MeshData wood = PropLibrary::build_plank_bridge().parts[0].mesh;
         for (const roads::Bridge& b : roads::bridges(focus, radius + 24.0f, seed)) {
-            const Vec2 bdir{std::cos(b.yaw), std::sin(b.yaw)};
-            const Vec2 e0 = b.center - bdir * (b.length * 0.5f);
-            const Vec2 e1 = b.center + bdir * (b.length * 0.5f);
-            const f32 deck_y = std::max(worldgen::height(e0.x, e0.y, seed),
-                                        worldgen::height(e1.x, e1.y, seed));
-            add(bridge, at(Vec3{b.center.x, deck_y, b.center.y}) *
-                            glm::rotate(Mat4{1.0f}, -b.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
-                            glm::scale(Mat4{1.0f}, Vec3{b.length, 1.0f, 1.0f}));
+            const f32 base_y = (b.bank_a + b.bank_b) * 0.5f;
+            const f32 pitch = std::asin(glm::clamp((b.bank_b - b.bank_a) / b.length, -0.6f, 0.6f));
+            add(b.kind == 1 ? wood : stone,
+                at(Vec3{b.center.x, base_y, b.center.y}) *
+                    glm::rotate(Mat4{1.0f}, -b.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
+                    glm::rotate(Mat4{1.0f}, pitch, Vec3{0.0f, 0.0f, 1.0f}) *
+                    glm::scale(Mat4{1.0f}, Vec3{b.length, 1.0f, 1.0f}));
         }
     }
     REQUIRE_FALSE(draws.empty());

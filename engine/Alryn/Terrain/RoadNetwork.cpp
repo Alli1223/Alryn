@@ -39,7 +39,11 @@ bool crossable_river(const Vec2& p, u32 seed) {
 // bends the road onto dry land - but RIVERS are crossed (bridged), not avoided.
 f32 water_cost(const Vec2& p, u32 seed) {
     if (crossable_river(p, seed)) {
-        return 0.0f;
+        // A river is crossed, not avoided - but give its DEEP channel a mild cost so the router
+        // prefers to cross perpendicular (a short span) rather than run ALONG the river (which would
+        // need a long parallel bridge). Much smaller than the deep-water drop cost, so it only nudges.
+        const f32 ra = worldgen::river_amount(p.x, p.y, seed);
+        return ra * ra * 1.5f;
     }
     const f32 h = worldgen::height(p.x, p.y, seed);
     const f32 below = (worldgen::water_level + 1.2f) - h; // >0 when too low/wet
@@ -395,9 +399,26 @@ void poly_bridges(const std::vector<Vec2>& poly, u32 seed, std::vector<Bridge>& 
             } else if (!r && inriver) {
                 inriver = false;
                 const f32 len = glm::length(p - enter);
-                if (len > 0.5f) {
-                    out.push_back(Bridge{(enter + p) * 0.5f, std::atan2(enter_dir.y, enter_dir.x),
-                                         len + 3.5f});
+                // A genuine crossing is short; a long span means the road runs ALONG the river, not
+                // across it - skip it (no giant parallel bridge); the routing cost keeps roads off
+                // rivers' length so this is rare.
+                if (len > 0.5f && len <= bridge_max_span) {
+                    Bridge br;
+                    br.center = (enter + p) * 0.5f;
+                    br.yaw = std::atan2(enter_dir.y, enter_dir.x);
+                    br.length = len + 3.5f;
+                    const Vec2 bdir{std::cos(br.yaw), std::sin(br.yaw)};
+                    const Vec2 e0 = br.center - bdir * (br.length * 0.5f);
+                    const Vec2 e1 = br.center + bdir * (br.length * 0.5f);
+                    br.bank_a = worldgen::height(e0.x, e0.y, seed); // deck meets the land at each end
+                    br.bank_b = worldgen::height(e1.x, e1.y, seed);
+                    u32 h = seed * 2654435761u;
+                    h ^= static_cast<u32>(std::lround(br.center.x * 0.5f)) * 73856093u;
+                    h ^= static_cast<u32>(std::lround(br.center.y * 0.5f)) * 19349663u;
+                    h ^= h >> 13;
+                    h *= 0x5bd1e995u;
+                    br.kind = static_cast<u8>(h & 1u); // stone or wood, deterministic per crossing
+                    out.push_back(br);
                 }
             }
         }
@@ -678,11 +699,7 @@ f32 bridge_height(f32 x, f32 z, u32 seed) {
         if (std::abs(along) > b.length * 0.5f || std::abs(across) > bridge_half_width) {
             continue; // not on this bridge's deck
         }
-        const Vec2 e0 = b.center - dir * (b.length * 0.5f);
-        const Vec2 e1 = b.center + dir * (b.length * 0.5f);
-        const f32 bank =
-            std::max(worldgen::height(e0.x, e0.y, seed), worldgen::height(e1.x, e1.y, seed));
-        best = std::max(best, bridge_deck_y(bank, along / (b.length * 0.5f)));
+        best = std::max(best, bridge_deck_y(b.bank_a, b.bank_b, along / (b.length * 0.5f)));
     }
     return best;
 }

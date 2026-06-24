@@ -43,15 +43,23 @@ struct Bridge {
     Vec2 center{0.0f}; // midpoint of the river crossing
     f32 yaw = 0.0f;    // the road's heading across the river (the bridge mesh faces local +X)
     f32 length = 4.0f; // span across the river - the deck stretches to this
+    f32 bank_a = 0.0f; // ground height at the -X (back) end - the deck meets the land here (no lip)
+    f32 bank_b = 0.0f; // ground height at the +X (front) end
+    u8 kind = 0;       // 0 = stone arch, 1 = wooden trestle (deterministic per crossing)
 };
 
-// Bridge deck geometry, SHARED by the mesh (PropLibrary::build_plank_bridge) and the walkable
-// bridge_height() below, so the deck you stand on matches the deck you see. The deck is a gentle
-// stone ARCH: level with the banks at the ends, humping up by `bridge_arch_rise` at the middle.
+// Bridge deck geometry, SHARED by the meshes (PropLibrary::build_arch_bridge / build_plank_bridge)
+// and the walkable bridge_height() below, so the deck you stand on matches the deck you see. The
+// deck blends between the two BANK heights along the span (so it meets the land flush at both ends -
+// no lip) and humps up by `bridge_arch_rise` at the middle (the arch).
 inline constexpr f32 bridge_half_width = 2.4f; // deck half-width across the road (local z)
-inline constexpr f32 bridge_arch_rise = 0.7f;  // how high the deck humps at the crown (the arch)
-// World deck-top height at arc-fraction t in [-1, 1] (0 = the crown), given the bank level.
-inline f32 bridge_deck_y(f32 bank, f32 t) { return bank + bridge_arch_rise * (1.0f - t * t); }
+inline constexpr f32 bridge_arch_rise = 0.55f; // how high the deck humps at the crown (the arch)
+inline constexpr f32 bridge_max_span = 22.0f;  // a "crossing" longer than this is a road running
+                                               // ALONG a river, not across it - no bridge there
+// World deck-top height at along-fraction t in [-1, 1] (-1 = back bank, +1 = front bank, 0 = crown).
+inline f32 bridge_deck_y(f32 bank_a, f32 bank_b, f32 t) {
+    return bank_a + (bank_b - bank_a) * (t + 1.0f) * 0.5f + bridge_arch_rise * (1.0f - t * t);
+}
 
 // Distance (world units) from (x,z) to the nearest road centreline. Huge if no road
 // is near. Replaces worldgen::path_distance.

@@ -75,9 +75,11 @@ public:
     static PropDef build_campfire();               // a cosy campfire (logs + flame + warm light)
     static PropDef build_monument(int variant);    // weathered stone obelisk / pillar / standing stones
     static PropDef build_watchtower();             // a wooden lookout tower
-    static PropDef build_stone_bridge();     // an arched stone road bridge across a river
-    static PropDef build_plank_bridge();     // a low wooden plank bridge (road over a river); the
-                                             // deck spans local +X (stretched to the river width)
+    static PropDef build_stone_bridge();     // a town-canal arched stone bridge (fixed span)
+    // Road-over-river bridges: UNIT meshes (deck on local +X, x:-0.5..0.5) the client stretches to
+    // the river crossing + pitches to meet each bank. Two styles, picked per crossing (Bridge.kind).
+    static PropDef build_arch_bridge();      // kind 0: a low-poly stone ARCH bridge
+    static PropDef build_plank_bridge();     // kind 1: a low-poly WOODEN trestle/plank bridge
 
 private:
     std::vector<PropDef> bushes_;
