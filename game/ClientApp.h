@@ -11,6 +11,7 @@
 #include <Alryn/Character/CharacterAnimator.h>
 #include <Alryn/Character/CharacterModel.h>
 #include <Alryn/Character/Outfit.h>
+#include <Alryn/Character/Weapon.h>
 #include <Alryn/Combat/Enemy.h>
 #include <Alryn/Net/GameServer.h>
 #include <Alryn/Net/NetClient.h>
@@ -145,13 +146,16 @@ protected:
     // World position of a hand (the far end of a forearm), in the forearm JOINT frame.
     static Mat4 hand_frame(const CharacterModel& model, const std::vector<Mat4>& jmats, BonePart arm);
 
-    // The role's weapon, RIGIDLY gripped in the hand JOINT frame so it rotates WITH the arm - a
+    // The role's weapon(s), RIGIDLY gripped in the hand JOINT frame so they rotate WITH the arm - a
     // Knight's sword swings with the attack animation (it IS the blade you hold) and the shield
     // raises with the block. NOTE: the rig's bone labels are mirrored - the *L* arm is on the
-    // player's RIGHT (the weapon hand), the *R* arm on their LEFT (the shield hand). The Cleric's
-    // staff is handled separately (draw_cleric_staff) so it can behave like a walking stick.
+    // player's RIGHT (the main-hand weapon), the *R* arm on their LEFT (the off-hand shield/dagger).
+    // Built from the shared modular weapon_pieces (Character/Weapon.h).
     void draw_role_weapon(const CharacterModel& model, const std::vector<Mat4>& jmats,
                           PlayerRole role);
+    void draw_weapon(WeaponType type, const Mat4& hand, const CharacterPalette& pal,
+                     EquipmentTier tier);
+    const Mesh& shape_mesh(BoneShape s) const; // BoneShape -> the matching unit shape mesh
 
     // The Cleric's staff held VERTICAL like a walking stick: the hand grips the top, the shaft
     // drops to the ground, and as they walk the tip plants ahead then drifts back (and lifts to

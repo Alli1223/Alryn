@@ -68,64 +68,37 @@ Mat4 ClientApp::hand_frame(const CharacterModel& model, const std::vector<Mat4>&
     return Mat4{1.0f};
 }
 
+const Mesh& ClientApp::shape_mesh(BoneShape s) const {
+    return s == BoneShape::Sphere       ? shape_sphere_
+           : s == BoneShape::Cylinder   ? shape_cylinder_
+           : s == BoneShape::Capsule    ? shape_capsule_
+           : s == BoneShape::RoundedBox ? shape_rounded_
+                                        : shape_box_;
+}
+
+void ClientApp::draw_weapon(WeaponType type, const Mat4& hand, const CharacterPalette& pal,
+                            EquipmentTier tier) {
+    for (const WeaponPiece& wp : weapon_pieces(type, tier, pal)) {
+        if (wp.emissive) {
+            renderer_->draw_emissive(shape_mesh(wp.shape), hand * wp.local, Vec4{wp.color, 1.0f});
+            renderer_->draw_glow(shape_mesh(wp.shape), hand * wp.local * glm::scale(Mat4{1.0f}, Vec3{1.7f}),
+                                 Vec4{wp.color, 0.4f}); // soft halo around glowing pieces
+        } else {
+            renderer_->draw(shape_mesh(wp.shape), hand * wp.local, Vec4{wp.color, 1.0f});
+        }
+    }
+}
+
 void ClientApp::draw_role_weapon(const CharacterModel& model, const std::vector<Mat4>& jmats, PlayerRole role) {
-    const Mat4 weapon_hand = hand_frame(model, jmats, BonePart::LowerArmL); // player's right
-    switch (role) {
-        case PlayerRole::Knight: {
-            // Sword: blade continues along the forearm (local -Y), tilted slightly forward.
-            const Mat4 grip = weapon_hand * glm::rotate(Mat4{1.0f}, -0.35f, Vec3{1.0f, 0.0f, 0.0f});
-            renderer_->draw(shape_box_,
-                            grip * glm::scale(Mat4{1.0f}, Vec3{0.30f, 0.05f, 0.07f}),
-                            Vec4{0.36f, 0.26f, 0.12f, 1.0f}); // crossguard
-            renderer_->draw(shape_box_,
-                            grip * glm::translate(Mat4{1.0f}, Vec3{0.0f, 0.12f, 0.0f}) *
-                                glm::scale(Mat4{1.0f}, Vec3{0.05f, 0.22f, 0.05f}),
-                            Vec4{0.3f, 0.2f, 0.1f, 1.0f}); // grip handle (into the fist)
-            renderer_->draw(shape_box_,
-                            grip * glm::translate(Mat4{1.0f}, Vec3{0.0f, -0.62f, 0.0f}) *
-                                glm::scale(Mat4{1.0f}, Vec3{0.07f, 1.1f, 0.16f}),
-                            Vec4{0.80f, 0.84f, 0.92f, 1.0f}); // blade
-            // Shield on the off (player's left) hand, in FRONT of the forearm (local +Z).
-            const Mat4 shield_hand = hand_frame(model, jmats, BonePart::LowerArmR);
-            renderer_->draw(shape_rounded_,
-                            shield_hand * glm::translate(Mat4{1.0f}, Vec3{0.0f, 0.0f, 0.18f}) *
-                                glm::scale(Mat4{1.0f}, Vec3{0.58f, 0.74f, 0.13f}),
-                            Vec4{0.46f, 0.33f, 0.2f, 1.0f}); // shield
-            renderer_->draw(shape_sphere_,
-                            shield_hand * glm::translate(Mat4{1.0f}, Vec3{0.0f, 0.0f, 0.25f}) *
-                                glm::scale(Mat4{1.0f}, Vec3{0.13f}),
-                            Vec4{0.82f, 0.7f, 0.32f, 1.0f}); // boss
-            break;
-        }
-        case PlayerRole::Hunter: {
-            // A vertical bow held in the hand: stave along the forearm axis.
-            renderer_->draw(shape_box_,
-                            weapon_hand * glm::scale(Mat4{1.0f}, Vec3{0.05f, 1.5f, 0.06f}),
-                            Vec4{0.4f, 0.26f, 0.12f, 1.0f}); // stave
-            for (f32 s : {1.0f, -1.0f}) {
-                renderer_->draw(shape_box_,
-                                weapon_hand *
-                                    glm::translate(Mat4{1.0f}, Vec3{0.07f, s * 0.66f, 0.0f}) *
-                                    glm::scale(Mat4{1.0f}, Vec3{0.05f, 0.22f, 0.05f}),
-                                Vec4{0.4f, 0.26f, 0.12f, 1.0f}); // recurved tips
-            }
-            break;
-        }
-        case PlayerRole::Cleric:
-            break; // staff drawn by draw_cleric_staff (walking-stick behaviour)
-        case PlayerRole::Mage: {
-            // A wizard's staff along the forearm, topped with a glowing arcane orb.
-            renderer_->draw(shape_box_,
-                            weapon_hand * glm::translate(Mat4{1.0f}, Vec3{0.0f, -0.35f, 0.0f}) *
-                                glm::scale(Mat4{1.0f}, Vec3{0.055f, 1.5f, 0.055f}),
-                            Vec4{0.32f, 0.22f, 0.14f, 1.0f}); // shaft
-            const Mat4 orb = weapon_hand * glm::translate(Mat4{1.0f}, Vec3{0.0f, 0.46f, 0.0f});
-            renderer_->draw_emissive(shape_sphere_, orb * glm::scale(Mat4{1.0f}, Vec3{0.13f}),
-                                     Vec4{0.7f, 0.5f, 1.0f, 1.0f}); // orb
-            renderer_->draw_glow(shape_sphere_, orb * glm::scale(Mat4{1.0f}, Vec3{0.28f}),
-                                 Vec4{0.6f, 0.42f, 1.0f, 0.5f});
-            break;
-        }
+    // Modular weapons: the role's main-hand weapon on the L-suffixed arm (the player's right) and the
+    // off-hand (shield / dagger) on the R-suffixed arm, both built from the shared weapon_pieces.
+    const CharacterPalette& pal = model.palette();
+    const u8 r = static_cast<u8>(role);
+    draw_weapon(role_weapon(r, 0), hand_frame(model, jmats, BonePart::LowerArmL), pal,
+                EquipmentTier::Master);
+    const WeaponType off = role_offhand(r);
+    if (off != WeaponType::None) {
+        draw_weapon(off, hand_frame(model, jmats, BonePart::LowerArmR), pal, EquipmentTier::Master);
     }
 }
 
@@ -168,11 +141,7 @@ void ClientApp::draw_character(PlayerVisual& v, const Vec3& feet, f32 yaw, bool 
         // the arm, unlike the box mats whose columns are scaled by box_size.
         const std::vector<Mat4> jmats = v.model.joint_matrices(root, pose);
         const PlayerRole r = static_cast<PlayerRole>(role % kRoleCount);
-        if (r == PlayerRole::Cleric) {
-            draw_cleric_staff(v.model, jmats, feet, v.animator, yaw);
-        } else {
-            draw_role_weapon(v.model, jmats, r);
-        }
+        draw_role_weapon(v.model, jmats, r);
         // A steel motion trail off the real blade tip while a Knight is mid-swing (the sword
         // is on the player's right = the L-suffixed bone).
         if (r == PlayerRole::Knight && v.animator.swinging()) {

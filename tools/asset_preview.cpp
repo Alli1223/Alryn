@@ -17,6 +17,7 @@
 #include <Alryn/Character/CharacterModel.h>
 #include <Alryn/Character/Equipment.h>
 #include <Alryn/Character/Outfit.h>
+#include <Alryn/Character/Weapon.h>
 #include <Alryn/Core/Log.h>
 #include <Alryn/Game/Roles.h>
 #include <Alryn/Renderer/MeshPrimitives.h>
@@ -242,14 +243,39 @@ Asset build_character(int role) {
         return Vec3{1.0f};
     };
 
+    auto shape_for = [&](BoneShape s) -> const MeshData& {
+        return s == BoneShape::Sphere       ? sphere
+               : s == BoneShape::Cylinder   ? cylinder
+               : s == BoneShape::Capsule    ? capsule
+               : s == BoneShape::RoundedBox ? rounded
+                                            : box;
+    };
+
     Asset a;
     for (usize i = 0; i < bones.size(); ++i) {
-        const MeshData& shape = bones[i].shape == BoneShape::Sphere       ? sphere
-                                : bones[i].shape == BoneShape::Cylinder   ? cylinder
-                                : bones[i].shape == BoneShape::Capsule    ? capsule
-                                : bones[i].shape == BoneShape::RoundedBox ? rounded
-                                                                          : box;
-        a.parts.push_back({bake(shape, mats[i], bone_color(bones[i].color)), Vec4{1.0f}});
+        a.parts.push_back({bake(shape_for(bones[i].shape), mats[i], bone_color(bones[i].color)), Vec4{1.0f}});
+    }
+
+    // Weapon(s) in hand: the L-suffixed arm is the player's RIGHT (main hand), R-suffixed the left
+    // (off hand). Bake the modular weapon pieces at those hand-joint frames.
+    const std::vector<Mat4> jmats = model.joint_matrices(Mat4{1.0f}, pose);
+    auto hand_frame = [&](BonePart arm) -> Mat4 {
+        const int bi = model.bone_index(arm);
+        if (bi < 0) {
+            return Mat4{1.0f};
+        }
+        const f32 wrist = bones[static_cast<usize>(bi)].box_center.y * 2.0f;
+        return jmats[static_cast<usize>(bi)] * glm::translate(Mat4{1.0f}, Vec3{0.0f, wrist, 0.0f});
+    };
+    auto add_weapon = [&](WeaponType wt, const Mat4& hand) {
+        for (const WeaponPiece& wp : weapon_pieces(wt, EquipmentTier::Master, pal)) {
+            const Vec3 c = wp.emissive ? wp.color * 1.7f : wp.color;
+            a.parts.push_back({bake(shape_for(wp.shape), hand * wp.local, c), Vec4{1.0f}});
+        }
+    };
+    add_weapon(role_weapon(static_cast<u8>(role), 0), hand_frame(BonePart::LowerArmL));
+    if (role_offhand(static_cast<u8>(role)) != WeaponType::None) {
+        add_weapon(role_offhand(static_cast<u8>(role)), hand_frame(BonePart::LowerArmR));
     }
     return a;
 }
