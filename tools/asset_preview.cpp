@@ -14,6 +14,7 @@
 
 #include "support/OffscreenRenderer.h"
 
+#include <Alryn/Character/CharacterAnimator.h>
 #include <Alryn/Character/CharacterModel.h>
 #include <Alryn/Character/Equipment.h>
 #include <Alryn/Character/Outfit.h>
@@ -222,8 +223,31 @@ Asset build_character(int role) {
     eq.outfit_tint = role_tint[static_cast<usize>(role) % kRoleCount];
     apply_outfit(model, outfit_kind_for_role(static_cast<u8>(role)), eq);
 
-    const std::vector<Quat> pose; // bind pose (arms at the sides) - good for a reference compare
-    const std::vector<Mat4> mats = model.bone_matrices(Mat4{1.0f}, pose);
+    // Pose: bind by default (arms at the sides). Set ALRYN_POSE=walk|swing|cast|block to drive the
+    // animator mid-action and verify the locomotion + action BLEND (legs walk while the arms act).
+    std::vector<Quat> pose;          // empty => bind pose
+    Mat4 root{1.0f};
+    if (const char* mode = std::getenv("ALRYN_POSE")) {
+        CharacterAnimator anim;
+        const Timestep dt{1.0f / 60.0f};
+        for (int k = 0; k < 40; ++k) {
+            anim.update(5.0f, dt); // walk up to a mid-stride
+        }
+        const std::string m = mode;
+        if (m == "swing") {
+            anim.play_swing();
+            for (int k = 0; k < 13; ++k) anim.update(5.0f, dt); // ~mid-chop
+        } else if (m == "cast") {
+            anim.play_cast();
+            for (int k = 0; k < 17; ++k) anim.update(5.0f, dt); // ~mid-thrust
+        } else if (m == "block") {
+            anim.set_blocking(true);
+            for (int k = 0; k < 20; ++k) anim.update(5.0f, dt);
+        }
+        pose = anim.pose(model);
+        root = anim.body_offset();
+    }
+    const std::vector<Mat4> mats = model.bone_matrices(root, pose);
     const CharacterPalette& pal = model.palette();
     const std::vector<Bone>& bones = model.bones();
 
@@ -258,7 +282,7 @@ Asset build_character(int role) {
 
     // Weapon(s) in hand: the L-suffixed arm is the player's RIGHT (main hand), R-suffixed the left
     // (off hand). Bake the modular weapon pieces at those hand-joint frames.
-    const std::vector<Mat4> jmats = model.joint_matrices(Mat4{1.0f}, pose);
+    const std::vector<Mat4> jmats = model.joint_matrices(root, pose);
     auto hand_frame = [&](BonePart arm) -> Mat4 {
         const int bi = model.bone_index(arm);
         if (bi < 0) {

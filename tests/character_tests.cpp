@@ -285,4 +285,20 @@ TEST_CASE("CharacterAnimator: actions blend over locomotion (legs keep walking)"
         CHECK_FALSE(same(bone(pw, BonePart::UpperArmL), bone(pb, BonePart::UpperArmL)));
         CHECK(same(bone(pw, BonePart::UpperLegR), bone(pb, BonePart::UpperLegR)));
     }
+
+    // Casting thrusts the weapon arm forward (a one-shot) while the legs keep walking.
+    acting.set_blocking(false);
+    step_both(30); // let the block ease out
+    acting.play_cast();
+    CHECK(acting.casting());
+    step_both(14); // ~mid-cast
+    {
+        const std::vector<Quat> pw = plain.pose(m);
+        const std::vector<Quat> pc = acting.pose(m);
+        CHECK_FALSE(same(bone(pw, BonePart::UpperArmL), bone(pc, BonePart::UpperArmL))); // weapon arm thrusts
+        CHECK(same(bone(pw, BonePart::UpperLegL), bone(pc, BonePart::UpperLegL)));        // legs in step
+        CHECK(same(bone(pw, BonePart::UpperLegR), bone(pc, BonePart::UpperLegR)));
+    }
+    step_both(50);
+    CHECK_FALSE(acting.casting()); // one-shot ends, the arm rejoins locomotion
 }

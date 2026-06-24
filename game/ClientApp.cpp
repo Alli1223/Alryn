@@ -694,12 +694,22 @@ void ClientApp::update_visuals(Timestep dt) {
         // feedback; remote players follow the networked `action` field.
         const bool is_local = p.id == my_id_;
         v.animator.set_blocking(is_local ? blocking_ : (p.action == 2));
-        if (is_local) {
-            if (pending_local_swing_) {
+        // Pick the attack animation by the role's weapon: a ranged bow/staff casts (forward thrust),
+        // a melee sword/mace swings.
+        auto attack_anim = [&]() {
+            const WeaponType wt = role_weapon(p.role, 0);
+            if (wt == WeaponType::Bow || wt == WeaponType::Staff) {
+                v.animator.play_cast();
+            } else {
                 v.animator.play_swing();
             }
+        };
+        if (is_local) {
+            if (pending_local_swing_) {
+                attack_anim();
+            }
         } else if (p.action == 1 && v.last_action != 1) {
-            v.animator.play_swing(); // rising edge of a remote swing
+            attack_anim(); // rising edge of a remote attack
         }
         v.last_action = p.action;
         v.animator.update(v.speed, dt);
