@@ -623,6 +623,27 @@ TEST_CASE("Village: houses don't overlap the roads") {
     CHECK(on_road == 0); // no house overlaps a road
 }
 
+// The streaming terrain meshes a fixed vertical band per column; the surface must never rise above
+// it, or a tall mountain lifts the (still-solid) density ground above the last meshed chunk and you
+// walk up an invisible floor. height() is capped to max_terrain_height (which sits below the band).
+TEST_CASE("Terrain: mountain height stays within the meshed band (no invisible floor)") {
+    const u32 seed = 4242u;
+    f32 max_h = -1e9f;
+    bool found_tall = false; // a peak taller than the OLD [-10,10] band - proves the cap matters
+    for (int z = -1600; z <= 1600; z += 13) {
+        for (int x = -1600; x <= 1600; x += 13) {
+            const f32 h = worldgen::height(static_cast<f32>(x), static_cast<f32>(z), seed);
+            max_h = std::max(max_h, h);
+            if (h > 10.0f) {
+                found_tall = true;
+            }
+        }
+    }
+    CHECK(found_tall);                                          // mountains DO exceed the old band
+    CHECK(max_h <= worldgen::max_terrain_height + 0.01f);      // ...but the surface is capped to the ceiling
+    CHECK(worldgen::max_terrain_height < 30.0f);               // ...which stays below StreamingTerrain y_max_
+}
+
 TEST_CASE("Paths: fences + lanterns line the trail edges; lanterns glow + light") {
     PropLibrary lib;
     REQUIRE_FALSE(lib.fences().empty());

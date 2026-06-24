@@ -135,8 +135,11 @@ private:
     int chunk_voxels_;
     int view_radius_;
     f32 chunk_world_;
-    f32 y_min_ = -10.0f;
-    f32 y_max_ = 10.0f;
+    // The vertical band each chunk column meshes. It MUST cover the full terrain height range
+    // (worldgen::height, capped to worldgen::max_terrain_height) - otherwise tall mountains rise
+    // above the meshed band and you walk up the (still-solid) density function on an invisible floor.
+    f32 y_min_ = -11.0f;
+    f32 y_max_ = 30.0f;
     int y_voxels_;
 
     std::unordered_map<i64, Chunk> chunks_;

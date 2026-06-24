@@ -15,6 +15,11 @@ namespace alryn::worldgen {
 
 inline constexpr f32 voxel_size = 0.5f;
 inline constexpr f32 water_level = -1.0f;
+// Hard ceiling on terrain elevation. `height()` is clamped to this so the surface can never rise
+// above the band the streaming terrain meshes (StreamingTerrain y_max_) - otherwise a tall mountain
+// would lift the (still-solid) density ground above the last meshed chunk and you'd walk up an
+// invisible floor. Kept a couple of metres below y_max_ so the chunk's top samples stay clear air.
+inline constexpr f32 max_terrain_height = 28.0f;
 
 // --- Rivers ---------------------------------------------------------------
 // Winding river network: the zero-contour of a low-frequency field, so rivers meander across the
@@ -58,7 +63,12 @@ inline f32 height(f32 x, f32 z, u32 seed) {
     // Carve winding river channels into the land (the water plane fills them; roads bridge them).
     const f32 river = river_amount(x, z, seed) * continental;
     h = glm::mix(h, std::min(h, water_level - 0.7f), river);
-    return h;
+    // Cap the rare extreme summits so the surface always stays within the meshed band (no invisible
+    // floor). A soft compression above most peaks keeps natural slopes rather than a flat plateau.
+    if (h > 22.0f) {
+        h = 22.0f + (h - 22.0f) * 0.4f; // 22..~26.5, well under max_terrain_height
+    }
+    return std::min(h, max_terrain_height);
 }
 
 inline f32 density(const Vec3& p, u32 seed) {
