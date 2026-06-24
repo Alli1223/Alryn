@@ -18,8 +18,10 @@ inline constexpr f32 water_level = -1.0f;
 // Hard ceiling on terrain elevation. `height()` is clamped to this so the surface can never rise
 // above the band the streaming terrain meshes (StreamingTerrain y_max_) - otherwise a tall mountain
 // would lift the (still-solid) density ground above the last meshed chunk and you'd walk up an
-// invisible floor. Kept a couple of metres below y_max_ so the chunk's top samples stay clear air.
-inline constexpr f32 max_terrain_height = 28.0f;
+// invisible floor. Set WELL ABOVE the natural summit (~42 m) so it's just a safety net and never
+// actually flattens a peak; kept below y_max_ so the chunk's top samples stay clear air. The
+// column-cached field fill makes the tall band this requires cheap (one height() per column).
+inline constexpr f32 max_terrain_height = 48.0f;
 
 // --- Rivers ---------------------------------------------------------------
 // Winding river network: the zero-contour of a low-frequency field, so rivers meander across the
@@ -46,7 +48,7 @@ inline f32 height(f32 x, f32 z, u32 seed) {
     // walkable valley that towns settle + roads link - with tall ranges rising between some of them.
     const f32 mountainous = glm::smoothstep(0.46f, 0.86f, region);
 
-    const f32 base = glm::mix(-8.0f, 1.0f, continental) + mountainous * 11.0f; // taller ranges
+    const f32 base = glm::mix(-8.0f, 1.0f, continental) + mountainous * 16.0f; // tall, dramatic ranges
 
     // Big rolling hills over all land (gentle, walkable, immersive undulation).
     const f32 hills = noise::fbm2d(x * 0.017f, z * 0.017f, 4, 2.0f, 0.5f, seed + 7u);
@@ -57,17 +59,14 @@ inline f32 height(f32 x, f32 z, u32 seed) {
     const f32 ridge = 1.0f - std::abs(noise::fbm2d(x * 0.010f, z * 0.010f, 3, 2.0f, 0.5f, seed + 333u));
 
     const f32 land_amp = glm::mix(2.2f, 10.0f, mountainous) * continental + 0.4f;
-    f32 h = base + continental * hills * 2.8f + mountainous * mountainous * ridge * 9.0f +
+    f32 h = base + continental * hills * 2.8f + mountainous * mountainous * ridge * 13.0f +
             land_amp * (detail * 0.7f + fine * 0.22f);
 
     // Carve winding river channels into the land (the water plane fills them; roads bridge them).
     const f32 river = river_amount(x, z, seed) * continental;
     h = glm::mix(h, std::min(h, water_level - 0.7f), river);
-    // Cap the rare extreme summits so the surface always stays within the meshed band (no invisible
-    // floor). A soft compression above most peaks keeps natural slopes rather than a flat plateau.
-    if (h > 22.0f) {
-        h = 22.0f + (h - 22.0f) * 0.4f; // 22..~26.5, well under max_terrain_height
-    }
+    // Only a hard safety clamp (well above the natural summit), so the surface can never exceed the
+    // meshed band - there's no soft compression, so mountains keep their full dramatic height.
     return std::min(h, max_terrain_height);
 }
 

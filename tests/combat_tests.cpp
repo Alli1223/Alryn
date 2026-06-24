@@ -3,6 +3,8 @@
 #include <Alryn/Combat/Enemy.h>
 #include <Alryn/Combat/Villager.h>
 #include <Alryn/Core/Density.h>
+#include <Alryn/Terrain/RoadNetwork.h>
+#include <Alryn/Terrain/WorldGen.h>
 
 #include <span>
 
@@ -14,6 +16,48 @@ DensitySampler flat_ground() {
     return [](const Vec3& p) { return p.y; };
 }
 } // namespace
+
+// Ambushers chasing the cart must cross a road bridge with it (the `platform` callback), not drop
+// into the carved river the bridge spans.
+TEST_CASE("Combat: an enemy crosses a bridge instead of falling into the river") {
+    for (const u32 seed : {1337u, 4242u, 99u, 777u}) {
+        const auto bs = roads::bridges(Vec2{0.0f, 0.0f}, 1500.0f, seed);
+        if (bs.empty()) {
+            continue;
+        }
+        const roads::Bridge& b = bs.front();
+        const DensitySampler density = [seed](const Vec3& p) { return worldgen::density(p, seed); };
+        const auto platform = [seed](f32 x, f32 z) { return roads::bridge_height(x, z, seed); };
+        const std::span<const Collider> none{};
+        constexpr Timestep step{1.0f / 60.0f};
+        const Vec2 dir{std::cos(b.yaw), std::sin(b.yaw)};
+
+        // March an enemy from one bank, across the deck, to the other bank.
+        const Vec3 start{b.center.x - dir.x * b.length * 0.42f, 0.0f,
+                         b.center.y - dir.y * b.length * 0.42f};
+        Enemy e;
+        e.position = Vec3{start.x, roads::bridge_height(start.x, start.z, seed), start.z};
+        const Vec3 goal{b.center.x + dir.x * b.length * 0.6f, e.position.y,
+                        b.center.y + dir.y * b.length * 0.6f};
+        f32 worst_below_deck = 0.0f;
+        for (int i = 0; i < 300; ++i) {
+            step_enemy(e, density, none, goal, step, kEnemySpeed, platform);
+            const f32 dh = roads::bridge_height(e.position.x, e.position.z, seed);
+            if (dh > -1.0e8f) {
+                worst_below_deck = std::min(worst_below_deck, e.position.y - dh);
+            }
+        }
+        CHECK(worst_below_deck > -0.6f); // rode the deck the whole way, never dropped into the river
+
+        // Sanity: WITHOUT the platform it follows the terrain down into the carved river (the old bug).
+        Enemy e2;
+        e2.position = Vec3{b.center.x, roads::bridge_height(b.center.x, b.center.y, seed), b.center.y};
+        step_enemy(e2, density, none, e2.position, step, kEnemySpeed); // no platform
+        CHECK(e2.position.y < roads::bridge_height(b.center.x, b.center.y, seed) - 0.5f);
+        return;
+    }
+    MESSAGE("no bridge found near origin in the scanned seeds - skipping");
+}
 
 TEST_CASE("Combat: melee cone hits what's in front, misses behind / wide / far") {
     const Vec3 origin{0.0f, 0.0f, 0.0f};

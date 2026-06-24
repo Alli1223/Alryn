@@ -103,11 +103,15 @@ private:
         int frames_left = 0;
     };
 
-    // A chunk to generate off the main thread (carries a thread-safe density snapshot).
+    // A chunk to generate off the main thread. Carries the seed + a value-copy of the world edits
+    // (thread-safe) so the worker can fill the field column-by-column: worldgen::height() is constant
+    // per (x,z), so caching it once per column - rather than re-evaluating the density (and its noise)
+    // at every voxel - makes a TALL vertical band (needed for mountains) cheap.
     struct GenRequest {
         int cx = 0;
         int cz = 0;
-        DensitySampler density;
+        u32 seed = 0;
+        std::vector<WorldEdit> edits;
     };
     // The CPU result of generating a chunk: everything but the GPU upload (done on the
     // main thread in update()).
@@ -138,8 +142,9 @@ private:
     // The vertical band each chunk column meshes. It MUST cover the full terrain height range
     // (worldgen::height, capped to worldgen::max_terrain_height) - otherwise tall mountains rise
     // above the meshed band and you walk up the (still-solid) density function on an invisible floor.
+    // The column-cached fill keeps this tall band cheap (one height() per (x,z), not per voxel).
     f32 y_min_ = -11.0f;
-    f32 y_max_ = 30.0f;
+    f32 y_max_ = 50.0f;
     int y_voxels_;
 
     std::unordered_map<i64, Chunk> chunks_;

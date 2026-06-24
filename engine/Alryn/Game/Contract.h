@@ -90,8 +90,10 @@ inline constexpr f32 kSettleSeconds = 6.0f;    // banner hold before re-offering
 
 // --- Wheel breakdown: a wheel can come off mid-haul; the cart halts until a player fetches the
 // fallen wheel and re-attaches it (a slow channel - bandits may strike while it's down, see #22).
-inline constexpr f32 kWheelBreakAvgTime = 26.0f; // avg seconds of ROLLING before a wheel works loose
-inline constexpr f32 kWheelBreakMinTime = 12.0f; // never breaks again sooner than this
+// Tuned so a wheel comes off only about once or twice per haul (the timer counts only while the cart
+// is actually ROLLING, so it's roughly the driving time, not wall-clock).
+inline constexpr f32 kWheelBreakAvgTime = 95.0f; // upper bound on rolling-seconds before a wheel sheds
+inline constexpr f32 kWheelBreakMinTime = 55.0f; // never breaks again sooner than this
 inline constexpr f32 kWheelRepairTime = 6.0f;    // seconds of holding the wheel by the cart to refit
 inline constexpr f32 kWheelPickupRange = 2.5f;   // how close to grab the fallen wheel (E)
 inline constexpr f32 kWheelAttachRange = 4.0f;   // carry it this close to the cart for it to refit

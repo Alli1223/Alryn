@@ -1079,7 +1079,13 @@ void GameServer::update_wheel(Timestep dt, const DensitySampler& density) {
             wheel_off_ = false;
             wheel_carrier_ = 0;
             wheel_repair_ = 0.0f;
-            wheel_break_cd_ = kWheelBreakAvgTime; // back on the road; arm the next one
+            // Re-arm the next break with a fresh randomised interval (so it isn't a fixed cadence) -
+            // hashed off the cart's current position, which has moved since the last break.
+            wheel_break_cd_ =
+                kWheelBreakMinTime +
+                (kWheelBreakAvgTime - kWheelBreakMinTime) *
+                    detail::hash01(active_.id ^ 0x5733EEDu ^
+                                   static_cast<u32>(std::lround(active_.position.x + active_.position.z)));
             ALRYN_INFO("Wheel refitted - the wagon rolls again.");
         }
     } else {
@@ -1165,6 +1171,9 @@ void GameServer::carry_top_riders(const Vec2& delta, const VehicleType& vt) {
 
 void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
     Wagon& w = active_;
+    // So ambushers chasing the cart cross bridges with it instead of dropping into the river.
+    const u32 wseed = sampler_.seed();
+    const auto bridge = [wseed](f32 x, f32 z) { return roads::bridge_height(x, z, wseed); };
 
     // Spawn ambushers in up to two waves as the wagon travels.
     auto spawn_wave = [&](u32 count) {
@@ -1258,7 +1267,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                     }
                 }
             }
-            step_enemy(e, density, collider_scratch_, g, dt, kEnemySpeed);
+            step_enemy(e, density, collider_scratch_, g, dt, kEnemySpeed, bridge);
             if (e.attack_cd <= 0.0f && td < kArcherShootRange) {
                 const Vec3 from = e.position + Vec3{0.0f, 1.3f, 0.0f};
                 Vec3 dir = (target + Vec3{0.0f, 0.6f, 0.0f}) - from;
@@ -1279,7 +1288,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
 
         const f32 spd = e.kind == 2u ? kEnemySpeed * 0.62f : kEnemySpeed;
         const f32 dmg = e.kind == 2u ? kEnemyAttackDamage * 2.3f : kEnemyAttackDamage;
-        step_enemy(e, density, collider_scratch_, goal, dt, spd);
+        step_enemy(e, density, collider_scratch_, goal, dt, spd, bridge);
         if (e.attack_cd <= 0.0f) {
             const f32 reach = kEnemyAttackRange + kEnemyRadius;
             if (victim != nullptr && best < reach) {

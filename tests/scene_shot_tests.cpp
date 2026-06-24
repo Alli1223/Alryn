@@ -49,7 +49,7 @@ void render_world(test::OffscreenRenderer& r, u32 seed, const Vec2& focus, f32 r
     constexpr f32 voxel = 1.0f;
     constexpr int cv = 16;                 // voxels per chunk
     constexpr f32 cw = static_cast<f32>(cv) * voxel; // chunk world size (16 m)
-    constexpr f32 y_min = -14.0f, y_max = 16.0f;
+    constexpr f32 y_min = -14.0f, y_max = 50.0f; // covers the tall mountains (matches the game band)
     const int yv = static_cast<int>((y_max - y_min) / voxel);
 
     WorldSampler sampler(seed);

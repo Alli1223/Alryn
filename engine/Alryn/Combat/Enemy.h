@@ -7,6 +7,7 @@
 #include <Alryn/Physics/Collider.h>
 
 #include <cmath>
+#include <functional>
 #include <span>
 
 namespace alryn {
@@ -71,7 +72,8 @@ inline bool in_attack_cone(const Vec3& origin, f32 yaw, const Vec3& target, f32 
 // damage (the server decides that once it is in range) so the motion stays testable.
 inline void step_enemy(Enemy& e, const DensitySampler& density,
                        std::span<const Collider> colliders, const Vec3& goal, Timestep dt,
-                       f32 speed = kEnemySpeed) {
+                       f32 speed = kEnemySpeed,
+                       const std::function<f32(f32, f32)>& platform = {}) {
     const f32 dts = dt.seconds;
     if (!e.alive || dts <= 0.0f) {
         return;
@@ -90,10 +92,20 @@ inline void step_enemy(Enemy& e, const DensitySampler& density,
         e.position.z = xz.y;
         e.yaw = std::atan2(dir.z, dir.x);
     }
-    // Follow the terrain surface (drop onto the ground from just above).
+    // Follow the terrain surface (drop onto the ground from just above), or a bridge deck when
+    // crossing one: the optional `platform` (e.g. roads::bridge_height) is used when it sits near the
+    // feet - the deck is flush with the banks at the ends, so they walk onto it smoothly - but NOT
+    // when it's well above (so an enemy in the river isn't yanked up onto a bridge passing overhead).
     const Vec3 from{e.position.x, e.position.y + 6.0f, e.position.z};
     if (const auto ground = raycast_density(density, from, Vec3{0.0f, -1.0f, 0.0f}, 20.0f)) {
-        e.position.y = ground->y;
+        f32 gy = ground->y;
+        if (platform) {
+            const f32 ph = platform(e.position.x, e.position.z);
+            if (ph > -1e8f && ph > gy && ph <= e.position.y + 1.0f) {
+                gy = ph;
+            }
+        }
+        e.position.y = gy;
     }
     if (e.attack_cd > 0.0f) {
         e.attack_cd -= dts;

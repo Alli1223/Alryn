@@ -435,6 +435,10 @@ void GameServer::update_townsfolk(Timestep dt, const DensitySampler& density) {
         }
         return best;
     };
+    // So townsfolk crossing a road bridge walk over the deck rather than dropping into the river.
+    const std::function<f32(f32, f32)> bridge = [seed](f32 x, f32 z) {
+        return roads::bridge_height(x, z, seed);
+    };
 
     for (auto it = villagers_.begin(); it != villagers_.end();) {
         Villager& vg = it->second;
@@ -529,7 +533,7 @@ void GameServer::update_townsfolk(Timestep dt, const DensitySampler& density) {
             vg.wait = 2.5f + rnd(vg.rng) * 4.0f;
         }
         if (glm::length(Vec2{vg.target.x - vg.position.x, vg.target.z - vg.position.z}) >= 0.5f) {
-            step_villager(vg, density, collider_scratch_, vg.target, dt, kVillagerSpeed);
+            step_villager(vg, density, collider_scratch_, vg.target, dt, kVillagerSpeed, bridge);
         } else {
             vg.speed = 0.0f;
         }

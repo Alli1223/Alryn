@@ -639,9 +639,10 @@ TEST_CASE("Terrain: mountain height stays within the meshed band (no invisible f
             }
         }
     }
-    CHECK(found_tall);                                          // mountains DO exceed the old band
-    CHECK(max_h <= worldgen::max_terrain_height + 0.01f);      // ...but the surface is capped to the ceiling
-    CHECK(worldgen::max_terrain_height < 30.0f);               // ...which stays below StreamingTerrain y_max_
+    CHECK(found_tall);                                     // mountains DO exceed the old band
+    CHECK(max_h > 25.0f);                                  // ...and rise into genuinely tall, dramatic peaks
+    CHECK(max_h <= worldgen::max_terrain_height + 0.01f);  // ...but the surface stays under the ceiling
+    CHECK(worldgen::max_terrain_height < 50.0f);           // ...which stays below StreamingTerrain y_max_ (50)
 }
 
 TEST_CASE("Paths: fences + lanterns line the trail edges; lanterns glow + light") {
