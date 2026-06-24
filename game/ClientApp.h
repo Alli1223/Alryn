@@ -232,6 +232,18 @@ private:
 
     void update_visuals(Timestep dt);
 
+    // The local player's authoritative state from the latest snapshot (or null before one arrives).
+    const net::PlayerState* local_player() const {
+        if (have_snapshot_) {
+            for (const net::PlayerState& p : snapshot_.players) {
+                if (p.id == my_id_) {
+                    return &p;
+                }
+            }
+        }
+        return nullptr;
+    }
+
     // The local player's health fraction (0..1) from the snapshot.
     f32 local_health() const {
         if (have_snapshot_) {
@@ -431,6 +443,8 @@ private:
     // four cooldown-gated abilities, each with its key, icon, cooldown and a description.
     // Medieval-styled; purely an info overlay (world input is frozen while it's open).
     void draw_skills();
+    void draw_wardrobe();              // the gear/wardrobe overlay (U)
+    void wardrobe_click(const Vec2& p); // buy / recolour / change-weapon hit-testing
 
     // Weather: precipitation + lightning, driven by the eased `weather_amt_` (from the networked
     // weather). `draw_rain` is the WORLD-SPACE rain - a column of falling streaks anchored to world
@@ -681,6 +695,11 @@ private:
     u32 world_seed_ = 0;     // shared world seed (from Welcome) - for the map's town/road graph
     bool map_open_ = false;  // full-screen map overlay (M)
     bool skills_open_ = false; // full-screen skills tree overlay (K)
+    bool wardrobe_open_ = false; // gear / wardrobe overlay (U): buy tiers, recolour, change weapon
+    u8 pending_buy_ = 0;       // shop: the gear tier we're trying to buy up to (sent in PlayerInput.buy)
+    ui::Rect wardrobe_buy_rect_ = {};        // the "buy upgrade" button (from draw_wardrobe)
+    ui::Rect wardrobe_weapon_rect_ = {};     // the "change weapon" button
+    ui::Rect wardrobe_swatch_rects_[8] = {}; // the recolour swatches
 
     // World-map view state: a pannable, zoomable terrain minimap. `map_center_` is the world XZ
     // the map is centred on (set to the player when opened, then moved by dragging); `map_ppm_` is

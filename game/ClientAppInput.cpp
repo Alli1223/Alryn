@@ -159,7 +159,7 @@ void ClientApp::on_event(Event& event) {
         dispatcher.dispatch<KeyPressedEvent>([&](KeyPressedEvent& e) {
             if (e.key() == key::M) {
                 map_open_ = !map_open_;
-                skills_open_ = false;
+                skills_open_ = wardrobe_open_ = false;
                 if (map_open_) { // open centred on the player at the default zoom
                     const Vec3 f = local_feet();
                     map_center_ = Vec2{f.x, f.z};
@@ -171,27 +171,37 @@ void ClientApp::on_event(Event& event) {
             }
             if (e.key() == key::K) {
                 skills_open_ = !skills_open_;
-                map_open_ = false;
+                map_open_ = wardrobe_open_ = false;
                 consumed = true;
                 return true;
             }
-            if ((map_open_ || skills_open_) && e.key() == key::Escape) {
+            if (e.key() == key::U) {
+                wardrobe_open_ = !wardrobe_open_;
                 map_open_ = skills_open_ = false;
+                consumed = true;
+                return true;
+            }
+            if ((map_open_ || skills_open_ || wardrobe_open_) && e.key() == key::Escape) {
+                map_open_ = skills_open_ = wardrobe_open_ = false;
                 consumed = true;
                 return true;
             }
             return false;
         });
-        // Clicks inside the open skills tree equip / unequip the ability node hit.
-        if (skills_open_) {
+        // Clicks inside an open overlay route to its hit-tester (equip a skill / buy gear).
+        if (skills_open_ || wardrobe_open_) {
             dispatcher.dispatch<MouseButtonPressedEvent>([&](MouseButtonPressedEvent& e) {
                 if (e.button() == 0) {
-                    skills_click(pointer_pos());
+                    if (skills_open_) {
+                        skills_click(pointer_pos());
+                    } else {
+                        wardrobe_click(pointer_pos());
+                    }
                 }
                 return true;
             });
         }
-        if (map_open_ || skills_open_ || consumed) {
+        if (map_open_ || skills_open_ || wardrobe_open_ || consumed) {
             return;
         }
     }
@@ -365,6 +375,11 @@ void ClientApp::send_input() {
     packet.block = blocking_ && (role_ == PlayerRole::Knight || role_ == PlayerRole::Cleric);
     packet.appearance = appearance_;
     packet.equipment = equip_loadout_; // desired loadout; the server clamps tiers to what's owned
+    // A pending shop purchase: keep requesting until the server grants it (owned_tier reaches it).
+    if (const net::PlayerState* me = local_player(); me != nullptr && me->owned_tier >= pending_buy_) {
+        pending_buy_ = 0;
+    }
+    packet.buy = pending_buy_;
     client_.send_input(packet);
     pending_ability_ = 0;
     pending_spell_ = 0;

@@ -47,6 +47,8 @@ struct PlayerInput {
     bool block = false;  // holding the shield up (Knight, right mouse) - guard + block pose
     CharacterAppearance appearance; // the player's chosen look (sent each tick)
     Equipment equipment;            // the player's worn gear loadout (server clamps earned tiers)
+    u8 buy = 0;                     // shop: the gear tier the player is trying to OWN (0 = no request;
+                                    // the server buys up to it one tier at a time in a town, if affordable)
 };
 
 struct PlayerState {
@@ -64,6 +66,7 @@ struct PlayerState {
     u8 buffs = 0;                   // co-op buff bitflags: bit0 = empowered, bit1 = hasted
     CharacterAppearance appearance; // so every client renders the right avatar
     Equipment equipment;            // the authoritative worn gear (drives the outfit + weapon + stats)
+    u8 owned_tier = 0;              // highest gear tier this player has bought (for their wardrobe)
 };
 
 // A live enemy, broadcast each tick so clients can render + animate it.

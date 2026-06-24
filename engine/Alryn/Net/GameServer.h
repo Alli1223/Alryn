@@ -163,6 +163,7 @@ public:
     // Unlock a gear tier for a player (raises owned_tier so they can equip up to it). The town shop
     // calls this on a purchase; also a test hook.
     void unlock_tier(net::PlayerId id, u8 tier);
+    void debug_add_money(u32 amount) { money_ += amount; } // test/debug hook (normally from deliveries)
     usize villager_count() const { return villagers_.size(); }
     usize house_count() const { return houses_.size(); }
     usize barricade_count() const { return barricades_.size(); }

@@ -52,6 +52,7 @@ void write(ByteWriter& w, const PlayerInput& in) {
     w.write_u8(in.block ? 1 : 0);
     write_appearance(w, in.appearance);
     write_equipment(w, in.equipment);
+    w.write_u8(in.buy);
 }
 
 bool read(ByteReader& r, PlayerInput& in) {
@@ -79,6 +80,7 @@ bool read(ByteReader& r, PlayerInput& in) {
     in.block = r.read_u8() != 0;
     read_appearance(r, in.appearance);
     read_equipment(r, in.equipment);
+    in.buy = r.read_u8();
     return r.ok();
 }
 
@@ -111,6 +113,7 @@ void write(ByteWriter& w, const Snapshot& s) {
         w.write_u8(p.buffs);
         write_appearance(w, p.appearance);
         write_equipment(w, p.equipment);
+        w.write_u8(p.owned_tier);
     }
     w.write_u16(static_cast<u16>(s.projectiles.size()));
     for (const ProjectileState& pr : s.projectiles) {
@@ -225,6 +228,7 @@ bool read(ByteReader& r, Snapshot& s) {
         p.buffs = r.read_u8();
         read_appearance(r, p.appearance);
         read_equipment(r, p.equipment);
+        p.owned_tier = r.read_u8();
         s.players.push_back(p);
     }
     const u16 proj_count = r.read_u16();

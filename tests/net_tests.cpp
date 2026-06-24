@@ -9,6 +9,7 @@
 #include <Alryn/Net/NetClient.h>
 #include <Alryn/Net/NetServer.h>
 #include <Alryn/Net/Protocol.h>
+#include <Alryn/Terrain/WorldGen.h>
 #include <Alryn/World/VehicleTypes.h>
 
 using namespace alryn;
@@ -343,6 +344,59 @@ TEST_CASE("GameServer: gear tiers are owned-clamped and boost stats") {
         CHECK(sp.equipment.outfit_tier == 3);
         CHECK(sp.equipment.weapon_tier == 3);
         CHECK(sp.max_health > base_hp + 50.0f); // armour added a meaningful chunk of health
+    }
+}
+
+// Buying gear from a town shop: a request only goes through while standing in a town with enough
+// gold, and it spends the party wallet + raises owned_tier (which then equips + boosts stats).
+TEST_CASE("GameServer: gear is bought from a town shop (gold + in-town gated)") {
+    GameServer server;
+    if (!server.start(24692, 4242u)) {
+        MESSAGE("Could not bind game server - skipping");
+        return;
+    }
+    NetClient c;
+    REQUIRE(c.connect("127.0.0.1", 24692));
+    PlayerId id = 0;
+    PlayerInput intent;
+    intent.role = static_cast<u8>(PlayerRole::Knight);
+    intent.equipment = Equipment{3, 3, 0, 0};
+    auto pump = [&](int n) {
+        for (int i = 0; i < n; ++i) {
+            c.send_input(intent);
+            server.tick(Timestep{1.0f / 60.0f});
+            for (const ClientEvent& e : c.poll(1)) {
+                if (e.type == ClientEventType::WelcomeReceived) id = e.welcome.your_id;
+            }
+        }
+    };
+    pump(120);
+    REQUIRE(id != 0);
+    const Vec3 spawn = server.players().at(id).controller.position();
+    if (!worldgen::inside_village(spawn.x, spawn.z, 4242u, 6.0f)) {
+        MESSAGE("spawn not inside a town - skipping shop test");
+        return;
+    }
+
+    // In a town but broke: a buy request is refused.
+    intent.buy = 1;
+    pump(10);
+    CHECK(server.players().at(id).owned_tier == 0);
+
+    // Earn some gold (normally from a delivery); now the purchase goes through + spends it.
+    server.debug_add_money(100);
+    pump(10);
+    CHECK(server.players().at(id).owned_tier == 1);
+    CHECK(server.money() == 100u - tier_price(EquipmentTier::Worn));
+
+    // Out in the wilderness, upgrades are refused even with plenty of gold.
+    const Vec3 far = spawn + Vec3{750.0f, 0.0f, 0.0f};
+    if (!worldgen::inside_village(far.x, far.z, 4242u, 6.0f)) {
+        server.debug_add_money(1000);
+        server.debug_place_player(id, far);
+        intent.buy = 2;
+        pump(10);
+        CHECK(server.players().at(id).owned_tier == 1); // not in a town -> no upgrade
     }
 }
 

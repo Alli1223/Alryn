@@ -45,7 +45,20 @@ void GameServer::sync_player_role(ServerPlayer& player) {
 
 void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
     const f32 dts = dt.seconds;
+    const u32 seed = sampler_.seed();
     for (auto& [id, pl] : players_) {
+        // Town shop: buy gear tiers up to the requested target, one at a time, while standing in a
+        // town and the party can afford the next tier (server-authoritative purchase -> owned_tier).
+        const Vec3 pp = pl.controller.position();
+        while (pl.input.buy > pl.owned_tier && static_cast<u8>(pl.owned_tier + 1) < kTierCount &&
+               worldgen::inside_village(pp.x, pp.z, seed, 6.0f)) {
+            const u32 price = tier_price(static_cast<EquipmentTier>(pl.owned_tier + 1));
+            if (money_ < price) {
+                break;
+            }
+            money_ -= price;
+            pl.owned_tier = static_cast<u8>(pl.owned_tier + 1);
+        }
         sync_player_role(pl);
         pl.cast_fx = 0; // cleared each tick; set below when an ability actually fires
         for (f32& cd : pl.ability_cd) {

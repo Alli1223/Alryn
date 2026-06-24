@@ -188,7 +188,7 @@ void ClientApp::draw_hud() {
         draw.text(Vec2{(W - draw.text_width(msg, bs)) * 0.5f, H * 0.34f}, msg, bs, c);
     }
 
-    draw.text(Vec2{24.0f, H - 52.0f}, "[M] MAP    [K] SKILLS", ts * 0.72f,
+    draw.text(Vec2{24.0f, H - 52.0f}, "[M] MAP    [K] SKILLS    [U] GEAR", ts * 0.72f,
               Vec4{0.72f, 0.80f, 0.88f, 1.0f});
 
     // Health bar.
@@ -1009,6 +1009,132 @@ std::string ClientApp::town_name(const Vec3& c) {
     std::string name = pre[h % 16u];
     name += suf[(h >> 8) % 16u];
     return name;
+}
+
+// The GEAR / WARDROBE overlay (U): the party gold, the current kit + its stat bonus, a BUY-upgrade
+// button (only in a town + affordable), recolour swatches, and a change-weapon button. Clicks are
+// hit-tested in wardrobe_click() against the rects stashed here.
+void ClientApp::draw_wardrobe() {
+    if (renderer_ == nullptr) {
+        return;
+    }
+    const VkExtent2D ext = renderer_->extent();
+    const f32 W = static_cast<f32>(ext.width);
+    const f32 H = static_cast<f32>(ext.height);
+    ui::DrawList draw{*renderer_};
+    const ui::Theme& th = ui::theme();
+    const Vec3 accent = role_color(role_);
+
+    draw.rect(Vec4{0.0f, 0.0f, W, H}, Vec4{0.03f, 0.02f, 0.015f, 0.86f});
+    const f32 pw = std::min(W * 0.62f, 720.0f);
+    const f32 ph = std::min(H * 0.82f, 600.0f);
+    const Vec4 panel{(W - pw) * 0.5f, (H - ph) * 0.5f, pw, ph};
+    draw.rect(panel, th.panel, Vec4{accent, 0.7f}, 2.5f, 12.0f);
+
+    const f32 x = panel.x + 30.0f;
+    f32 y = panel.y + 24.0f;
+    draw.text(Vec2{x, y}, "WARDROBE", 34.0f, th.accent_hover);
+    const std::string money = std::format("$ {}", snapshot_.money);
+    draw.text(Vec2{panel.x + panel.z - draw.text_width(money, 24.0f) - 30.0f, y + 8.0f}, money, 24.0f,
+              th.accent_hover);
+    y += 58.0f;
+
+    const net::PlayerState* me = local_player();
+    const u8 owned = me != nullptr ? me->owned_tier : 0;
+    const Vec3 feet = local_feet();
+    const bool in_town =
+        world_seed_ != 0 && worldgen::inside_village(feet.x, feet.z, world_seed_, 6.0f);
+
+    // Current kit + its stat bonus.
+    draw.text(Vec2{x, y},
+              std::format("{}  -  {} KIT", role_name(role_), tier_name(static_cast<EquipmentTier>(owned))),
+              22.0f, Vec4{accent, 1.0f});
+    y += 30.0f;
+    Equipment cur;
+    cur.outfit_tier = owned;
+    cur.weapon_tier = owned;
+    const EquipBonus eb = equipment_bonus(cur);
+    draw.text(Vec2{x, y},
+              std::format("+{} HP    x{:.2f} DAMAGE    +{:.0f}% ARMOUR", static_cast<int>(eb.health_add),
+                          eb.damage_mult, eb.mitigation_add * 100.0f),
+              15.0f, th.text_muted);
+    y += 36.0f;
+
+    // Buy-upgrade button (server gates it on being in a town + affordability; this just requests it).
+    wardrobe_buy_rect_ = ui::Rect{};
+    if (static_cast<u8>(owned + 1) < kTierCount) {
+        const auto next = static_cast<EquipmentTier>(owned + 1);
+        const u32 price = tier_price(next);
+        const bool affordable = snapshot_.money >= price;
+        const bool can = in_town && affordable;
+        const Vec4 btn{x, y, 340.0f, 46.0f};
+        wardrobe_buy_rect_ = ui::Rect{btn.x, btn.y, btn.z, btn.w};
+        draw.rect(btn, can ? Vec4{accent * 0.55f, 0.97f} : Vec4{0.2f, 0.18f, 0.16f, 0.9f},
+                  Vec4{accent, can ? 0.95f : 0.3f}, 2.0f, 8.0f);
+        draw.text(Vec2{btn.x + 16.0f, btn.y + 13.0f},
+                  std::format("BUY {} KIT   -   $ {}", tier_name(next), price), 18.0f,
+                  can ? th.text : th.text_muted);
+        y += 54.0f;
+        const char* hint = !in_town       ? "VISIT A TOWN SHOP TO BUY UPGRADES"
+                           : !affordable  ? "NOT ENOUGH GOLD - DELIVER MORE CARGO"
+                                          : "NICER LOOK + MORE HEALTH, DAMAGE & ARMOUR";
+        draw.text(Vec2{x, y}, hint, 14.0f, th.text_muted);
+        y += 34.0f;
+    } else {
+        draw.text(Vec2{x, y}, "FULLY UPGRADED  -  MASTER GEAR", 18.0f, th.accent_hover);
+        y += 44.0f;
+    }
+
+    // Recolour swatches (the player's chosen primary colour).
+    draw.text(Vec2{x, y}, "OUTFIT COLOUR", 15.0f, th.text);
+    y += 26.0f;
+    const f32 sw = 46.0f;
+    for (int i = 0; i < 8; ++i) {
+        const Vec4 r{x + static_cast<f32>(i) * (sw + 8.0f), y, sw, sw};
+        wardrobe_swatch_rects_[i] = ui::Rect{r.x, r.y, r.z, r.w};
+        const Vec3 c = outfit_tint_of(static_cast<u8>(i));
+        const bool sel = equip_loadout_.outfit_tint == static_cast<u8>(i);
+        draw.rect(r, Vec4{c, 1.0f}, Vec4{sel ? Vec3{1.0f} : accent, sel ? 1.0f : 0.4f},
+                  sel ? 3.0f : 1.5f, 6.0f);
+    }
+    y += sw + 28.0f;
+
+    // Change weapon (cycles the role's options).
+    const WeaponType wt = role_weapon(static_cast<u8>(role_), equip_loadout_.weapon_index);
+    draw.text(Vec2{x, y}, std::format("WEAPON:   {}", weapon_name(wt)), 18.0f, Vec4{accent, 1.0f});
+    wardrobe_weapon_rect_ = ui::Rect{};
+    if (role_weapon_count(static_cast<u8>(role_)) > 1) {
+        const Vec4 btn{x + 280.0f, y - 8.0f, 140.0f, 36.0f};
+        wardrobe_weapon_rect_ = ui::Rect{btn.x, btn.y, btn.z, btn.w};
+        draw.rect(btn, Vec4{accent * 0.55f, 0.97f}, Vec4{accent, 0.95f}, 2.0f, 8.0f);
+        draw.text(Vec2{btn.x + 22.0f, btn.y + 9.0f}, "CHANGE", 16.0f, th.text);
+    }
+
+    draw.text(Vec2{x, panel.y + panel.w - 34.0f}, "PRESS U OR ESC TO CLOSE", 14.0f, th.text_muted);
+}
+
+void ClientApp::wardrobe_click(const Vec2& p) {
+    if (in_rect(p, wardrobe_buy_rect_)) {
+        const net::PlayerState* me = local_player();
+        const u8 owned = me != nullptr ? me->owned_tier : 0;
+        if (static_cast<u8>(owned + 1) < kTierCount) {
+            pending_buy_ = static_cast<u8>(owned + 1); // request the next tier (server gates it)
+        }
+        return;
+    }
+    if (in_rect(p, wardrobe_weapon_rect_)) {
+        const u8 n = role_weapon_count(static_cast<u8>(role_));
+        if (n > 1) {
+            equip_loadout_.weapon_index = static_cast<u8>((equip_loadout_.weapon_index + 1) % n);
+        }
+        return;
+    }
+    for (int i = 0; i < 8; ++i) {
+        if (in_rect(p, wardrobe_swatch_rects_[i])) {
+            equip_loadout_.outfit_tint = static_cast<u8>(i);
+            return;
+        }
+    }
 }
 
 } // namespace alryn::game

@@ -476,6 +476,9 @@ void ClientApp::on_render() {
     if (skills_open_) {
         draw_skills();
     }
+    if (wardrobe_open_) {
+        draw_wardrobe();
+    }
     }
 
     if (state_ == AppState::Menu && current_screen_ == Screen::Customise) {
