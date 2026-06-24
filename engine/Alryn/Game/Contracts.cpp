@@ -1043,6 +1043,20 @@ void GameServer::update_wheel(Timestep dt, const DensitySampler& density) {
             const f32 r = vehicle_type(w.type).wheel_radius();
             Vec2 p2{wheel_pos_.x, wheel_pos_.z};
             p2 += wheel_vel_ * dt.seconds;
+            // Bounce off walls / fences / buildings instead of rolling through them: if the step lands
+            // inside a collider, push the wheel back out and reflect its velocity off the surface.
+            if (collision_) {
+                collision_->gather(Vec3{p2.x, wheel_pos_.y, p2.y}, collider_scratch_);
+                for (const Collider& c : collider_scratch_) {
+                    const Vec2 pushed = resolve_collider(c, p2, r, wheel_pos_.y - r, 2.0f * r);
+                    if (glm::length(pushed - p2) > 1e-4f) {
+                        const Vec2 n = glm::normalize(pushed - p2); // outward surface normal
+                        wheel_vel_ = glm::reflect(wheel_vel_, n) * kWheelBounce;
+                        p2 = pushed;
+                        break; // one bounce per tick
+                    }
+                }
+            }
             wheel_vel_ *= std::max(0.0f, 1.0f - kWheelRollDrag * dt.seconds); // friction
             if (glm::length(wheel_vel_) < kWheelRollStop) {
                 wheel_vel_ = Vec2{0.0f}; // settled

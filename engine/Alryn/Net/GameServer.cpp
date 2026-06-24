@@ -489,18 +489,46 @@ void GameServer::update_townsfolk(Timestep dt, const DensitySampler& density) {
         }
         Vec3 to = vg.target - vg.position;
         to.y = 0.0f;
-        if (glm::length(to) < 0.5f) {
-            vg.speed = 0.0f;
-            vg.wait -= dt.seconds;
-            if (vg.wait <= 0.0f) {
+        vg.wait -= dt.seconds; // doubles as a "give up if stuck" pursuit timer
+        if (glm::length(to) < 0.5f || vg.wait <= 0.0f) {
+            // (Re)choose a nearby OPEN spot to stroll to. Picking anywhere across the whole town (the
+            // old behaviour) aimed villagers at points inside/behind houses, so they just pressed into
+            // a wall (step_villager only pushes out of colliders - it can't path around). Validating the
+            // target (a few metres away, inside the town, off the roads, not inside a building/prop) and
+            // giving up when stuck keeps them strolling the open streets instead of walking into houses.
+            auto blocked = [&](const Vec2& p) {
+                if (glm::length(p - vg.home_center) > vg.home_half * 0.85f) {
+                    return true; // outside the town
+                }
+                if (roads::distance(p.x, p.y, seed) < roads::road_half_width) {
+                    return true; // on a road / street
+                }
+                for (const Collider& c : collider_scratch_) {
+                    if (glm::length(resolve_collider(c, p, kVillagerRadius, vg.position.y,
+                                                     kEnemyHeight) -
+                                    p) > 1e-3f) {
+                        return true; // inside a building / prop
+                    }
+                }
+                return false;
+            };
+            Vec2 best{vg.position.x, vg.position.z}; // default: stay put if nowhere open is found
+            for (int attempt = 0; attempt < 8; ++attempt) {
                 const f32 ang = rnd(vg.rng) * TwoPi;
-                const f32 rad = rnd(vg.rng) * vg.home_half * 0.7f;
-                vg.target = Vec3{vg.home_center.x + std::cos(ang) * rad, vg.position.y,
-                                 vg.home_center.y + std::sin(ang) * rad};
-                vg.wait = 1.0f + rnd(vg.rng) * 3.0f; // pause a beat at each stop
+                const f32 rad = 2.5f + rnd(vg.rng) * 6.0f;
+                const Vec2 cand{vg.position.x + std::cos(ang) * rad, vg.position.z + std::sin(ang) * rad};
+                if (!blocked(cand)) {
+                    best = cand;
+                    break;
+                }
             }
-        } else {
+            vg.target = Vec3{best.x, vg.position.y, best.y};
+            vg.wait = 2.5f + rnd(vg.rng) * 4.0f;
+        }
+        if (glm::length(Vec2{vg.target.x - vg.position.x, vg.target.z - vg.position.z}) >= 0.5f) {
             step_villager(vg, density, collider_scratch_, vg.target, dt, kVillagerSpeed);
+        } else {
+            vg.speed = 0.0f;
         }
         ++it;
     }

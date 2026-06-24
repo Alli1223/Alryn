@@ -307,6 +307,12 @@ inline void for_each_house(const worldgen::Village& v, u32 seed,
                 return false; // keep the street / road corridor clear (houses sit beside it)
             }
         }
+        // Also keep clear of the actual (meandering) inter-town ROAD: it enters through the gate and
+        // winds to the market, so it doesn't follow the idealised straight street lines - a house clear
+        // of the streets can still sit on the real road. This is what stops houses overlapping roads.
+        if (roads::distance(x, z, seed) < roads::road_half_width + r + 0.3f) {
+            return false;
+        }
         for (int k = 0; k < np; ++k) {
             if (glm::length(placed[k] - Vec2{x, z}) < r + reach[k]) {
                 return false; // would overlap an already-placed house
@@ -441,7 +447,7 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
     const int vid = static_cast<int>(v.vseed);
     const auto gates = detail::village_gate_points(v, seed);
 
-    auto push = [&](PropCategory cat, u8 var, f32 x, f32 z, f32 yaw) {
+    auto push = [&](PropCategory cat, u8 var, f32 x, f32 z, f32 yaw, f32 length = 1.0f) {
         const f32 gh = worldgen::height(x, z, seed);
         if (gh < worldgen::water_level + 0.5f) {
             return; // never place a town prop down in the water
@@ -452,6 +458,7 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
         p.position = Vec3{x, gh, z};
         p.yaw = yaw;
         p.scale = 1.0f;
+        p.length = length; // stretch along local +X (walls span their chord exactly)
         out.push_back(p);
     };
 
@@ -696,8 +703,12 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
         if (!near_gate(amid, 0.0f)) {
             const Vec2 mid = (p0 + p1) * 0.5f;
             const Vec2 chord = p1 - p0;
+            // Stretch the (unit-3.2m) wall to span its actual chord, with a slight overlap, so the
+            // rampart is continuous on the organic boundary instead of gapping on bulges / doubling up
+            // on tight curves (the wall mesh is half_len 1.6 -> 3.2 long).
+            const f32 clen = glm::length(chord);
             push(PropCategory::Wall, static_cast<u8>(i % 2), mid.x, mid.y,
-                 std::atan2(-chord.y, chord.x));
+                 std::atan2(-chord.y, chord.x), (clen / 3.2f) * 1.08f);
         }
         // Periodic boundary tower - kept a little further from the gate so it never stands in
         // the opening (the flanking gate towers below mark the gate itself).

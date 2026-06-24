@@ -546,7 +546,7 @@ TEST_CASE("Scene shot: a medieval town overview (walls, houses, market, lanterns
             glm::translate(Mat4{1.0f},
                            Vec3{p.position.x - ctr.x, p.position.y - town->ground, p.position.z - ctr.y}) *
             glm::rotate(Mat4{1.0f}, p.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
-            glm::scale(Mat4{1.0f}, Vec3{p.scale});
+            glm::scale(Mat4{1.0f}, Vec3{p.scale * p.length, p.scale, p.scale});
         for (const PropPart& part : def.parts) {
             if (part.layer == PropLayer::Glow) {
                 continue;

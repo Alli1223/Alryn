@@ -100,6 +100,7 @@ inline constexpr f32 kWheelAttachRange = 4.0f;   // carry it this close to the c
 inline constexpr f32 kWheelRollSpeed = 5.5f;     // initial roll speed when the wheel pops off (m/s)
 inline constexpr f32 kWheelRollDrag = 1.15f;     // velocity decay per second (friction) - guarantees a stop
 inline constexpr f32 kWheelRollStop = 0.5f;      // below this speed the wheel settles and stops
+inline constexpr f32 kWheelBounce = 0.55f;       // velocity kept when it bounces off a wall/building
 // A stranded (wheel-off) cart draws opportunist bandits: small waves on a timer while it's down.
 inline constexpr f32 kBanditFirstDelay = 3.0f;   // grace after the break before bandits show
 inline constexpr f32 kBanditWaveInterval = 8.0f; // seconds between bandit waves during a repair

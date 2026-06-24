@@ -586,6 +586,43 @@ TEST_CASE("Props: library builds geometry, scatter is deterministic & on land") 
     CHECK(stacked == 0); // none piled on top of another
 }
 
+// Town houses must sit BESIDE the roads, never on top of them: the inter-town road meanders to the
+// market, so a house placed clear of the idealised street lines can still land on the real road.
+// for_each_house now also rejects against roads::distance - this guards that.
+TEST_CASE("Village: houses don't overlap the roads") {
+    const u32 seed = 4242u;
+    int towns_checked = 0;
+    int houses_seen = 0;
+    int on_road = 0;
+    for (int cz = -8; cz <= 8 && towns_checked < 6; ++cz) {
+        for (int cx = -8; cx <= 8 && towns_checked < 6; ++cx) {
+            const auto v = worldgen::village_at(cx, cz, seed);
+            if (!v) {
+                continue;
+            }
+            // Only towns that actually have roads running to them can have the overlap problem.
+            if (roads::reachable_towns(v->center, seed, 1).empty()) {
+                continue;
+            }
+            ++towns_checked;
+            for (const PropInstance& p : village_props(*v, seed)) {
+                if (p.category != PropCategory::House) {
+                    continue;
+                }
+                ++houses_seen;
+                // The house body must clear the road corridor (the fix keeps it road_half + reach away;
+                // assert at least the corridor half-width, so no house sits in the road).
+                if (roads::distance(p.position.x, p.position.z, seed) < roads::road_half_width) {
+                    ++on_road;
+                }
+            }
+        }
+    }
+    REQUIRE(towns_checked > 0);
+    REQUIRE(houses_seen > 0);
+    CHECK(on_road == 0); // no house overlaps a road
+}
+
 TEST_CASE("Paths: fences + lanterns line the trail edges; lanterns glow + light") {
     PropLibrary lib;
     REQUIRE_FALSE(lib.fences().empty());
