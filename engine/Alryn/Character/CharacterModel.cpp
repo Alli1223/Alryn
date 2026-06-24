@@ -229,7 +229,7 @@ std::vector<Mat4> CharacterModel::bone_matrices(const Mat4& root,
         const Quat rotation = i < pose.size() ? pose[i] : QuatIdentity;
         joint[i] = parent * glm::translate(Mat4{1.0f}, b.joint_offset) * glm::mat4_cast(rotation);
         box[i] = joint[i] * glm::translate(Mat4{1.0f}, b.box_center) *
-                 glm::scale(Mat4{1.0f}, b.box_size);
+                 glm::mat4_cast(b.box_rotation) * glm::scale(Mat4{1.0f}, b.box_size);
     }
     return box;
 }

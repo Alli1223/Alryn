@@ -40,6 +40,7 @@ struct Bone {
     Vec3 box_center{0.0f};   // shape centre relative to this joint
     BoneColor color = BoneColor::Skin;
     BoneShape shape = BoneShape::Box;
+    Quat box_rotation = QuatIdentity; // bind-pose orientation of the shape (e.g. a diagonal strap)
 };
 
 struct CharacterPalette {
