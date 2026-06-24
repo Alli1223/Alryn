@@ -97,6 +97,8 @@ TEST_CASE("Net: message serialization round-trips") {
                                Vec3{8.0f, 0.0f, 9.0f} /*source*/, Vec3{6.0f, 0.5f, 4.0f}, 1.2f, 500u,
                                2 /*carriage*/, 200, static_cast<u8>(WagonMode::Manual), 3, 1,
                                1 /*has_horse*/, 4 /*aboard*/, 6 /*total*/});
+    snapshot.wagons[0].wheel_off = 1;
+    snapshot.wagons[0].wheel_index = 2; // a shed wheel on axle 2
     snapshot.goods.push_back({77u, Vec3{12.0f, 1.0f, 13.0f}, 1});  // a fallen crate (loose)
     snapshot.goods.push_back({78u, Vec3{0.2f, 0.55f, -0.1f}, 0}); // a crate in the bed (local pos)
     snapshot.auras.push_back({Vec3{3.0f, 1.0f, -5.0f}, 5.0f, 0}); // a Cleric heal aura
@@ -175,6 +177,8 @@ TEST_CASE("Net: message serialization round-trips") {
     CHECK(decoded.wagons[0].horse_yaw == doctest::Approx(1.2f));
     CHECK(decoded.wagons[0].goods_aboard == 4);
     CHECK(decoded.wagons[0].goods_total == 6);
+    CHECK(decoded.wagons[0].wheel_off == 1);
+    CHECK(decoded.wagons[0].wheel_index == 2); // which axle shed survives the wire
     CHECK(decoded.players[0].seated == 0);
     CHECK(decoded.players[1].seated == 1);
     CHECK(decoded.players[0].carrying == 0);
@@ -635,11 +639,19 @@ TEST_CASE("GameServer: a wheel comes off and a player refits it") {
     pump(20);
     REQUIRE(server.contract_phase() == ContractPhase::Active);
 
-    // Knock a wheel off: the cart is stranded and stops rolling.
+    // Knock a wheel off: it bursts off and ROLLS away (a physical object), then friction settles it.
     server.force_wheel_break();
     REQUIRE(server.wheel_off());
+    const Vec3 wheel_at_break = server.wheel_pos();
+    pump(10);
+    CHECK(glm::length(Vec2{server.wheel_pos().x - wheel_at_break.x,
+                           server.wheel_pos().z - wheel_at_break.z}) > 0.5f); // it rolled off
     const Vec3 halt = server.active_wagon().position;
     pump(120);
+    const Vec3 settled = server.wheel_pos();
+    pump(40);
+    CHECK(glm::length(Vec2{server.wheel_pos().x - settled.x,
+                           server.wheel_pos().z - settled.z}) < 0.05f); // friction brought it to a stop
     CHECK(server.wheel_off()); // stays off on its own
     CHECK(glm::length(Vec2{server.active_wagon().position.x - halt.x,
                            server.active_wagon().position.z - halt.z}) < 1.0f); // halted
@@ -677,6 +689,75 @@ TEST_CASE("GameServer: a wheel comes off and a player refits it") {
     }
     CHECK_FALSE(server.wheel_off());                       // refitted - the wagon can roll again
     CHECK(server.wheel_repair() == doctest::Approx(0.0f)); // progress reset on refit
+}
+
+// A player can stand ON TOP of the moving cart and ride along: the bed is a moving platform, so when
+// the cart rolls the player on it is carried the same distance.
+TEST_CASE("GameServer: a player standing on the cart bed rides along with it") {
+    GameServer server;
+    if (!server.start(24663, 4242u)) {
+        MESSAGE("Could not bind game server - skipping");
+        return;
+    }
+    NetClient c;
+    REQUIRE(c.connect("127.0.0.1", 24663));
+
+    PlayerId id = 0;
+    Snapshot snap{};
+    bool have_snap = false;
+    PlayerInput intent{};
+    auto pump = [&](int iterations) {
+        for (int i = 0; i < iterations; ++i) {
+            c.send_input(intent);
+            server.tick(Timestep{1.0f / 60.0f});
+            for (const ClientEvent& e : c.poll(1)) {
+                if (e.type == ClientEventType::WelcomeReceived) {
+                    id = e.welcome.your_id;
+                } else if (e.type == ClientEventType::SnapshotReceived) {
+                    snap = e.snapshot;
+                    have_snap = true;
+                }
+            }
+        }
+    };
+    pump(150);
+    REQUIRE(id != 0);
+    REQUIRE(have_snap);
+    if (server.offer_count() == 0) {
+        MESSAGE("Spawn town has no road-connected neighbour - skipping");
+        return;
+    }
+    intent.vote_wagon = snap.wagons[0].id;
+    intent.vote_mode = 1; // hire a driver so the cart rolls on its own
+    pump(20);
+    REQUIRE(server.contract_phase() == ContractPhase::Active);
+
+    auto ppos = [&]() { return server.players().at(id).controller.position(); };
+    const f32 deck = vehicle_type(server.active_wagon().type).deck_height();
+
+    // Let the cart get rolling, then drop the player on top of the bed.
+    Vec3 cart_a = server.active_wagon().position;
+    pump(40);
+    Vec3 cart_b = server.active_wagon().position;
+    if (glm::length(Vec2{cart_b.x - cart_a.x, cart_b.z - cart_a.z}) < 0.2f) {
+        MESSAGE("Cart didn't get rolling - skipping ride-along check");
+        return;
+    }
+    const Vec3 cart = server.active_wagon().position;
+    server.debug_place_player(id, Vec3{cart.x, cart.y + deck, cart.z});
+    intent.move = Vec3{0.0f}; // just stand there
+    pump(3);                  // settle onto the deck
+
+    const Vec3 p0 = ppos();
+    const Vec3 c0 = server.active_wagon().position;
+    pump(40);
+    const Vec3 p1 = ppos();
+    const Vec3 c1 = server.active_wagon().position;
+    const Vec2 cart_delta{c1.x - c0.x, c1.z - c0.z};
+    const Vec2 player_delta{p1.x - p0.x, p1.z - p0.z};
+    CHECK(glm::length(cart_delta) > 0.3f);                       // the cart kept rolling
+    CHECK(glm::length(player_delta - cart_delta) < 0.5f);        // the player rode along with it
+    CHECK(std::abs(p1.y - (c1.y + deck)) < 0.6f);                // and stayed standing on the bed
 }
 
 // While a wheel is off (the cart stranded outside town), opportunist bandits close in on a timer,

@@ -95,6 +95,11 @@ inline constexpr f32 kWheelBreakMinTime = 12.0f; // never breaks again sooner th
 inline constexpr f32 kWheelRepairTime = 6.0f;    // seconds of holding the wheel by the cart to refit
 inline constexpr f32 kWheelPickupRange = 2.5f;   // how close to grab the fallen wheel (E)
 inline constexpr f32 kWheelAttachRange = 4.0f;   // carry it this close to the cart for it to refit
+// A shed wheel is a physical object: it bursts off with a speed + direction and ROLLS until friction
+// stops it (then it lies waiting to be fetched), so the players have to chase it down.
+inline constexpr f32 kWheelRollSpeed = 5.5f;     // initial roll speed when the wheel pops off (m/s)
+inline constexpr f32 kWheelRollDrag = 1.15f;     // velocity decay per second (friction) - guarantees a stop
+inline constexpr f32 kWheelRollStop = 0.5f;      // below this speed the wheel settles and stops
 // A stranded (wheel-off) cart draws opportunist bandits: small waves on a timer while it's down.
 inline constexpr f32 kBanditFirstDelay = 3.0f;   // grace after the break before bandits show
 inline constexpr f32 kBanditWaveInterval = 8.0f; // seconds between bandit waves during a repair

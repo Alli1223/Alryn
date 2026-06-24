@@ -112,6 +112,7 @@ struct WagonState {
     u8 goods_aboard = 0; // crates still in the bed
     u8 goods_total = 0;  // crates the full load carries (reward scales by aboard/total)
     u8 wheel_off = 0;     // 1 = a wheel has come off (active cart halted until refitted)
+    u8 wheel_index = 0;   // which axle shed its wheel (0..3) - the cart lists onto that corner
     Vec3 wheel_pos{0.0f}; // the fallen/carried wheel's world position (when wheel_off)
     u8 repair = 0;        // 0..255 wheel re-attach progress
 };

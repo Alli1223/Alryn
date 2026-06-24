@@ -324,8 +324,12 @@ void GameServer::update_contracts(Timestep dt, const DensitySampler& density) {
                 pilot_ = 0;
             }
             update_wheel(dt, density);
+            const Vec3 cart_before = active_.position;
             update_wagon(dt, density);
             if (contract_phase_ == ContractPhase::Active) {
+                // Carry along anyone standing on top of the cart (a moving platform).
+                carry_top_riders(Vec2{active_.position.x - cart_before.x,
+                                      active_.position.z - cart_before.z}, vt);
                 update_ambush(dt, density);
             }
             seat_occupants(vt); // place riders/pilot/seated-driver on the vehicle (post-move)
@@ -937,7 +941,9 @@ void GameServer::append_wagon_colliders(std::vector<Collider>& out) const {
         c.yaw = wg.yaw;
         c.half = fp;
         c.y_min = wg.position.y;
-        c.y_max = wg.position.y + 1.6f;
+        // A low kerb: blocks walking THROUGH the cart at ground level, but tops out well below the
+        // deck so a player can jump ON TOP (the deck is a platform; foot > y_max => no sideways push).
+        c.y_max = wg.position.y + 0.4f;
         out.push_back(c);
     };
     if (contract_phase_ == ContractPhase::Offer) {
@@ -979,12 +985,34 @@ void GameServer::force_wheel_break() {
     wheel_carrier_ = 0;
     wheel_repair_ = 0.0f;
     const Vec3& p = active_.position;
-    const Vec2 side{-std::sin(active_.yaw), std::cos(active_.yaw)}; // perpendicular to travel
-    const f32 sx = p.x + side.x * 2.6f;
-    const f32 sz = p.z + side.y * 2.6f;
-    wheel_pos_ = Vec3{sx, worldgen::height(sx, sz, sampler_.seed()), sz};
+    const VehicleType& vt = vehicle_type(active_.type);
+    const std::vector<Vec3> wheels = vt.wheels();
+    // Pick a RANDOM wheel to shed (not always the same corner): hash the cart id + its current
+    // position (so each break, at a different spot on the road, sheds a different wheel).
+    const u32 h = detail::tree_hash(static_cast<int>(active_.id),
+                                    static_cast<int>(std::lround(p.x * 7.0f + p.z * 13.0f)), 0xC0FFEEu);
+    wheel_index_ = static_cast<u8>(h % static_cast<u32>(std::max<usize>(1, wheels.size())));
+    const Vec3 woff = wheels[wheel_index_];
+    // The wheel bursts off from its own axle position on the cart (transform the local offset by the
+    // cart's heading - the mesh faces local +X and is drawn rotateY(-yaw), so +X->fwd, +Z->right).
+    const Vec2 fwd{std::cos(active_.yaw), std::sin(active_.yaw)};
+    const Vec2 right{-std::sin(active_.yaw), std::cos(active_.yaw)};
+    const f32 r = vt.wheel_radius();
+    const f32 wx = p.x + fwd.x * woff.x + right.x * woff.z;
+    const f32 wz = p.z + fwd.y * woff.x + right.y * woff.z;
+    wheel_pos_ = Vec3{wx, worldgen::height(wx, wz, sampler_.seed()) + r, wz}; // centre rides at ground+radius
+    // Launch it: rolls OFF the side it sat on, with a little of the cart's forward momentum.
+    const f32 side_sign = woff.z >= 0.0f ? 1.0f : -1.0f;
+    wheel_vel_ = glm::normalize(right * side_sign + fwd * 0.45f) * kWheelRollSpeed;
     bandit_cd_ = kBanditFirstDelay; // bandits close in shortly after the cart strands
-    ALRYN_INFO("A wheel came off the wagon - fetch it and refit it!");
+    ALRYN_INFO("A wheel came off the wagon - chase it down, fetch it and refit it!");
+}
+
+void GameServer::debug_place_player(net::PlayerId id, const Vec3& pos) {
+    const auto it = players_.find(id);
+    if (it != players_.end()) {
+        it->second.controller.set_position(pos);
+    }
 }
 
 // Wheel-breakdown event: while rolling, a wheel can work loose (the cart then halts in update_wagon);
@@ -1007,8 +1035,23 @@ void GameServer::update_wheel(Timestep dt, const DensitySampler& density) {
         return;
     }
     if (wheel_carrier_ == 0) {
-        return; // lying where it fell, waiting to be picked up
+        // Loose on the ground: roll it physically (initial burst velocity decaying under friction)
+        // until it settles, then it lies waiting to be fetched. Friction-only so it always stops
+        // within a bounded distance (no rolling off forever down a hillside).
+        if (glm::length(wheel_vel_) > 1e-3f) {
+            const u32 seed = sampler_.seed();
+            const f32 r = vehicle_type(w.type).wheel_radius();
+            Vec2 p2{wheel_pos_.x, wheel_pos_.z};
+            p2 += wheel_vel_ * dt.seconds;
+            wheel_vel_ *= std::max(0.0f, 1.0f - kWheelRollDrag * dt.seconds); // friction
+            if (glm::length(wheel_vel_) < kWheelRollStop) {
+                wheel_vel_ = Vec2{0.0f}; // settled
+            }
+            wheel_pos_ = Vec3{p2.x, worldgen::height(p2.x, p2.y, seed) + r, p2.y};
+        }
+        return; // waiting to be picked up
     }
+    wheel_vel_ = Vec2{0.0f}; // carried - no longer rolling
     const auto it = players_.find(wheel_carrier_);
     if (it == players_.end()) {
         wheel_carrier_ = 0; // the carrier left - the wheel drops where it was
@@ -1055,6 +1098,54 @@ void GameServer::seat_occupants(const VehicleType& vt) {
         }
         const Vec3 local = seats.empty() ? Vec3{-0.6f, 0.85f, 0.0f} : seats[i % seats.size()].pos;
         it->second.controller.set_position(seat_world(local));
+    }
+}
+
+// The active cart's bed is a moving platform: the deck-top height where (x,z) sits over the cart
+// footprint (else a large-negative sentinel). The controller maxes this with the bridge height, so a
+// player who jumps up gets caught on the deck (foot >= deck - step_height) and stands on top.
+f32 GameServer::wagon_top_at(f32 x, f32 z) const {
+    if (contract_phase_ != ContractPhase::Active) {
+        return -1e9f;
+    }
+    const VehicleType& vt = vehicle_type(active_.type);
+    const Vec2 fp = vt.footprint();
+    const Vec2 rel{x - active_.position.x, z - active_.position.z};
+    const Vec2 fwd{std::cos(active_.yaw), std::sin(active_.yaw)};
+    const Vec2 right{-std::sin(active_.yaw), std::cos(active_.yaw)};
+    const f32 lx = glm::dot(rel, fwd);
+    const f32 lz = glm::dot(rel, right);
+    const f32 pad = 0.15f; // a little forgiveness so you don't slip off at the very rail
+    if (std::abs(lx) > fp.x + pad || std::abs(lz) > fp.y + pad) {
+        return -1e9f;
+    }
+    return active_.position.y + vt.deck_height();
+}
+
+// After the cart has moved this tick (delta = its xz step), carry along any player standing ON TOP of
+// it (within the footprint, at deck height) so they ride with the wagon. Pilot/handler/seated riders
+// are positioned elsewhere, so they're skipped here.
+void GameServer::carry_top_riders(const Vec2& delta, const VehicleType& vt) {
+    if (glm::length(delta) < 1e-5f) {
+        return;
+    }
+    const f32 deck = active_.position.y + vt.deck_height();
+    const Vec2 fp = vt.footprint();
+    const Vec2 fwd{std::cos(active_.yaw), std::sin(active_.yaw)};
+    const Vec2 right{-std::sin(active_.yaw), std::cos(active_.yaw)};
+    for (auto& [id, pl] : players_) {
+        if (id == tower_ || id == pilot_ || riders_.count(id) != 0u) {
+            continue;
+        }
+        const Vec3 pp = pl.controller.position();
+        const Vec2 rel{pp.x - active_.position.x, pp.z - active_.position.z};
+        if (std::abs(glm::dot(rel, fwd)) > fp.x + 0.25f || std::abs(glm::dot(rel, right)) > fp.y + 0.25f) {
+            continue; // not over the bed
+        }
+        if (pp.y < deck - 0.45f || pp.y > deck + 1.2f) {
+            continue; // not standing on the deck (on the ground beside it, or airborne above)
+        }
+        pl.controller.set_position(pp + Vec3{delta.x, 0.0f, delta.y});
     }
 }
 

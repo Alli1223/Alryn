@@ -71,20 +71,25 @@ void ClientApp::draw_wagons() {
         }
         wagon_prev_[wg.id] = wg.position;
 
+        const f32 wscale = vt.wheel_radius() / kWagonWheelRadius;
+        const std::vector<Vec3> wheels = vt.wheels();
+        const usize gone = wg.wheel_index % std::max<usize>(1, wheels.size());
+
         Mat4 m = wagon_model(wg, moved);
-        // A wheel has come off: the cart lists onto its missing corner (front-left, index 0).
+        // A wheel has come off: the cart lists onto whichever corner shed its wheel.
         if (wg.wheel_off) {
-            m = m * glm::rotate(Mat4{1.0f}, 0.17f, Vec3{1.0f, 0.0f, 0.0f}) *
-                glm::rotate(Mat4{1.0f}, -0.05f, Vec3{0.0f, 0.0f, 1.0f});
+            const Vec3 woff = wheels[gone];
+            const f32 sx = woff.x >= 0.0f ? 1.0f : -1.0f; // front/back end
+            const f32 sz = woff.z >= 0.0f ? 1.0f : -1.0f; // left/right side
+            m = m * glm::rotate(Mat4{1.0f}, sz * 0.17f, Vec3{1.0f, 0.0f, 0.0f}) *
+                glm::rotate(Mat4{1.0f}, -sx * 0.05f, Vec3{0.0f, 0.0f, 1.0f});
         }
         renderer_->draw(vehicle_meshes_[wg.type % vehicle_meshes_.size()], m, Vec4{tint, 1.0f});
 
-        // Wheels (scaled to the type's radius), spun by the accumulated roll. When a wheel is off,
-        // its mount (index 0) is left bare.
-        const f32 wscale = vt.wheel_radius() / kWagonWheelRadius;
-        const std::vector<Vec3> wheels = vt.wheels();
+        // Wheels (scaled to the type's radius), spun by the accumulated roll. The shed wheel's mount
+        // is left bare.
         for (usize wi = 0; wi < wheels.size(); ++wi) {
-            if (wg.wheel_off && wi == 0) {
+            if (wg.wheel_off && wi == gone) {
                 continue; // this wheel is the one that fell off
             }
             const Mat4 wm = m * glm::translate(Mat4{1.0f}, wheels[wi]) *
@@ -92,13 +97,43 @@ void ClientApp::draw_wagons() {
                             glm::scale(Mat4{1.0f}, Vec3{wscale});
             renderer_->draw(wagon_wheel_mesh_, wm, Vec4{tint, 1.0f});
         }
-        // The fallen / carried wheel, lying tilted where it dropped (or held at a player's waist).
+        // The shed wheel, rolling upright across the ground (or carried). We derive its heading +
+        // rolling spin from how its networked position moves, then HIGHLIGHT it (a pulsing golden glow
+        // + a tall beacon) so it's easy to spot and chase down.
         if (wg.wheel_off) {
-            const Mat4 wm = glm::translate(Mat4{1.0f}, wg.wheel_pos) *
-                            glm::rotate(Mat4{1.0f}, elapsed_ * 0.4f, Vec3{0.0f, 1.0f, 0.0f}) *
-                            glm::rotate(Mat4{1.0f}, 0.55f, Vec3{1.0f, 0.0f, 0.25f}) *
+            FallenWheel& fw = wheel_fx_[wg.id];
+            const Vec2 d{wg.wheel_pos.x - fw.prev.x, wg.wheel_pos.z - fw.prev.z};
+            const f32 dist = glm::length(d);
+            if (fw.init && dist > 1e-4f) {
+                fw.heading = d / dist;                  // roll the way it's travelling
+                fw.spin -= dist / vt.wheel_radius();    // no-slip rolling
+            }
+            fw.prev = wg.wheel_pos;
+            fw.init = true;
+            const Vec3 h{fw.heading.x, 0.0f, fw.heading.y};
+            const Vec3 axle{-fw.heading.y, 0.0f, fw.heading.x}; // horizontal, perpendicular to travel
+            Mat4 basis{1.0f};
+            basis[0] = Vec4(h, 0.0f);                    // mesh local X -> heading
+            basis[1] = Vec4(0.0f, 1.0f, 0.0f, 0.0f);     // mesh local Y -> up (wheel stands)
+            basis[2] = Vec4(axle, 0.0f);                 // mesh local Z -> axle
+            const Mat4 wm = glm::translate(Mat4{1.0f}, wg.wheel_pos) * basis *
+                            glm::rotate(Mat4{1.0f}, fw.spin, Vec3{0.0f, 0.0f, 1.0f}) *
                             glm::scale(Mat4{1.0f}, Vec3{wscale});
             renderer_->draw(wagon_wheel_mesh_, wm, Vec4{0.46f, 0.34f, 0.22f, 1.0f});
+
+            const f32 pulse = 0.55f + 0.45f * std::sin(elapsed_ * 4.0f);
+            renderer_->draw_glow(
+                shape_sphere_,
+                glm::translate(Mat4{1.0f}, wg.wheel_pos) *
+                    glm::scale(Mat4{1.0f}, Vec3{vt.wheel_radius() * 1.9f}),
+                Vec4{1.0f, 0.82f, 0.25f, 0.45f * pulse}); // golden halo around the wheel
+            renderer_->draw_glow(
+                shape_box_,
+                glm::translate(Mat4{1.0f}, wg.wheel_pos + Vec3{0.0f, 3.2f, 0.0f}) *
+                    glm::scale(Mat4{1.0f}, Vec3{0.07f, 3.4f, 0.07f}),
+                Vec4{1.0f, 0.78f, 0.2f, 0.3f * pulse});  // a beacon column visible from afar
+        } else {
+            wheel_fx_.erase(wg.id);
         }
 
         // The lamp: an emissive glow always, plus a warm light at night when near.

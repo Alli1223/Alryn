@@ -153,6 +153,7 @@ void write(ByteWriter& w, const Snapshot& s) {
         w.write_u8(wg.goods_aboard);
         w.write_u8(wg.goods_total);
         w.write_u8(wg.wheel_off);
+        w.write_u8(wg.wheel_index);
         w.write_vec3(wg.wheel_pos);
         w.write_u8(wg.repair);
     }
@@ -289,6 +290,7 @@ bool read(ByteReader& r, Snapshot& s) {
         wg.goods_aboard = r.read_u8();
         wg.goods_total = r.read_u8();
         wg.wheel_off = r.read_u8();
+        wg.wheel_index = r.read_u8();
         wg.wheel_pos = r.read_vec3();
         wg.repair = r.read_u8();
         s.wagons.push_back(wg);

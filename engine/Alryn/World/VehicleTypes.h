@@ -50,6 +50,7 @@ public:
     virtual CargoBed bed() const = 0;          // where the physical cargo crates ride + slide
     virtual Vec2 footprint() const { return Vec2{1.0f, 0.6f}; } // body half-extents (x,z) for
                                                                 // blocking players from walking through
+    virtual f32 deck_height() const { return 1.1f; } // local top-surface y a player stands on (ride-along)
 };
 
 // --- Concrete vehicles ----------------------------------------------------

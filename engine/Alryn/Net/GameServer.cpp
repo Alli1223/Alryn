@@ -194,10 +194,14 @@ void GameServer::tick(Timestep dt) {
             collider_scratch_.clear();
         }
         append_wagon_colliders(collider_scratch_); // can't walk through parked / hauled carts
-        // A bridge deck is walkable ground over the river it spans.
+        // A bridge deck is walkable ground over the river it spans; the active cart's bed is a
+        // moving platform you can jump on top of and ride.
         const u32 seed = sampler_.seed();
         player.controller.update(density, move, player.input.jump, dt, collider_scratch_,
-                                 [seed](f32 x, f32 z) { return roads::bridge_height(x, z, seed); });
+                                 [this, seed](f32 x, f32 z) {
+                                     return std::max(roads::bridge_height(x, z, seed),
+                                                     wagon_top_at(x, z));
+                                 });
     }
 
     // Step thrown rocks: gravity + bounce off terrain/props. With combat dormant they
@@ -301,6 +305,7 @@ void GameServer::tick(Timestep dt) {
         // Wheel-breakdown state only applies to the active cart.
         if (contract_phase_ != ContractPhase::Offer && w.id == active_.id && wheel_off_) {
             s.wheel_off = 1;
+            s.wheel_index = wheel_index_;
             s.wheel_pos = wheel_pos_;
             s.repair = static_cast<u8>(glm::clamp(wheel_repair_, 0.0f, 1.0f) * 255.0f);
         }

@@ -726,6 +726,15 @@ private:
     Mesh goods_mesh_;           // a cargo crate (spilled on the ground / carried by a player)
     std::unordered_map<u32, f32> wagon_roll_;  // accumulated wheel spin per wagon id
     std::unordered_map<u32, Vec3> wagon_prev_; // last wagon position (to derive roll)
+    // A shed wheel rolling on the ground: derive its heading + rolling spin from its networked
+    // position so the client can render it upright, rolling the way it travels.
+    struct FallenWheel {
+        Vec3 prev{0.0f};
+        Vec2 heading{1.0f, 0.0f};
+        f32 spin = 0.0f;
+        bool init = false;
+    };
+    std::unordered_map<u32, FallenWheel> wheel_fx_; // per wagon id, the loose wheel's roll state
     f32 horse_gait_ = 0.0f;     // horse leg-swing phase (from its motion)
     Vec3 horse_prev_{0.0f};
     // Verlet harness traces: two ropes (left/right) per horse-drawn wagon, simulated each
