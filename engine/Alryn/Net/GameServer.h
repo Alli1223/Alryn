@@ -50,18 +50,23 @@ public:
         f32 damage_boost_timer = 0.0f;        // Empower: x outgoing damage while > 0 (co-op buff)
         f32 haste_timer = 0.0f;               // War Horn: x walk speed while > 0 (co-op buff)
         u8 cast_fx = 0;                       // ability/spell that fired this tick (for the snapshot's VFX)
+        Equipment equipment;                  // authoritative worn gear (look + the stat bonus below)
+        u8 owned_tier = 0;                    // highest gear tier bought from a shop (clamps equipment)
 
-        // Multiplier applied to this player's outgoing damage (Empower buff).
-        f32 outgoing_mult() const { return damage_boost_timer > 0.0f ? kDamageBoostMult : 1.0f; }
+        // Multiplier applied to this player's outgoing damage (Empower buff x the weapon tier bonus).
+        f32 outgoing_mult() const {
+            return (damage_boost_timer > 0.0f ? kDamageBoostMult : 1.0f) *
+                   equipment_bonus(equipment).damage_mult;
+        }
         f32 water = 0.0f;                     // bucket fill for firefighting (dormant siege)
         i32 wood = 0;                         // barricades buildable today (dormant siege)
         bool carrying = false;                // hauling a spilled cargo crate back to the cart
 
-        // Incoming damage after role mitigation + a held shield block (Knight) + active bulwark.
+        // Incoming damage after role mitigation + the armour tier + a held shield block + bulwark.
         f32 mitigated(f32 raw) const {
             const bool guarding = input.block && role == PlayerRole::Knight; // Cleric block = channel
-            f32 r = role_stats(role).damage_reduction + (guarding ? kBlockReduction : 0.0f) +
-                    (bulwark_timer > 0.0f ? kBulwarkReduction : 0.0f);
+            f32 r = role_stats(role).damage_reduction + equipment_bonus(equipment).mitigation_add +
+                    (guarding ? kBlockReduction : 0.0f) + (bulwark_timer > 0.0f ? kBulwarkReduction : 0.0f);
             return raw * (1.0f - glm::clamp(r, 0.0f, 0.9f));
         }
 
@@ -155,6 +160,9 @@ public:
     f32 wheel_repair() const { return wheel_repair_; } // 0..1 re-attach progress
     void force_wheel_break();                        // trigger a break now (test / debug hook)
     void debug_place_player(net::PlayerId id, const Vec3& pos); // move a player (test / debug hook)
+    // Unlock a gear tier for a player (raises owned_tier so they can equip up to it). The town shop
+    // calls this on a purchase; also a test hook.
+    void unlock_tier(net::PlayerId id, u8 tier);
     usize villager_count() const { return villagers_.size(); }
     usize house_count() const { return houses_.size(); }
     usize barricade_count() const { return barricades_.size(); }

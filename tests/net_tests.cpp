@@ -37,6 +37,7 @@ TEST_CASE("Net: message serialization round-trips") {
     input.block = true;
     input.appearance = CharacterAppearance{3, 5, EyeStyle::Sleepy, EarStyle::Pointed,
                                            HairStyle::Ponytail};
+    input.equipment = Equipment{2, 1, 4, 1}; // outfit tier 2, weapon tier 1, tint 4, weapon 1
 
     ByteWriter w;
     write(w, input);
@@ -63,6 +64,7 @@ TEST_CASE("Net: message serialization round-trips") {
     CHECK(out.spell == static_cast<u8>(SpellId::RockWall));
     CHECK(out.block);
     CHECK(out.appearance == input.appearance); // cosmetics survive the round-trip
+    CHECK(out.equipment == input.equipment);   // gear loadout survives the round-trip
 
     Snapshot snapshot;
     snapshot.tick = 7;
@@ -295,6 +297,53 @@ TEST_CASE("Net: client/server loopback exchange over localhost") {
     REQUIRE(snapshot_out.players.size() == 1);
     CHECK(snapshot_out.players[0].id == assigned);
     CHECK(snapshot_out.players[0].position.y == doctest::Approx(2.0f));
+}
+
+// Gear is server-authoritative: a client can't equip a tier it hasn't bought, and once unlocked the
+// tier raises the player's stats. (The town shop calls unlock_tier on a purchase.)
+TEST_CASE("GameServer: gear tiers are owned-clamped and boost stats") {
+    GameServer server;
+    if (!server.start(24690, 4242u)) {
+        MESSAGE("Could not bind game server - skipping");
+        return;
+    }
+    NetClient c;
+    REQUIRE(c.connect("127.0.0.1", 24690));
+    PlayerId id = 0;
+    PlayerInput intent;
+    intent.role = static_cast<u8>(PlayerRole::Knight);
+    intent.equipment = Equipment{3, 3, 2, 0}; // request MASTER gear (tint 2)
+    auto pump = [&](int n) {
+        for (int i = 0; i < n; ++i) {
+            c.send_input(intent);
+            server.tick(Timestep{1.0f / 60.0f});
+            for (const ClientEvent& e : c.poll(1)) {
+                if (e.type == ClientEventType::WelcomeReceived) id = e.welcome.your_id;
+            }
+        }
+    };
+    pump(120);
+    REQUIRE(id != 0);
+
+    // owned_tier starts at 0, so despite requesting master the equipped tiers clamp to ragged...
+    {
+        const auto& sp = server.players().at(id);
+        CHECK(sp.equipment.outfit_tier == 0);
+        CHECK(sp.equipment.weapon_tier == 0);
+        CHECK(sp.equipment.outfit_tint == 2); // ...but the cosmetic tint is accepted
+        CHECK(sp.max_health == doctest::Approx(role_stats(PlayerRole::Knight).max_health)); // no bonus
+    }
+    const f32 base_hp = server.players().at(id).max_health;
+
+    // Buy master gear (what a shop does); now the requested tier takes effect + boosts health.
+    server.unlock_tier(id, 3);
+    pump(8);
+    {
+        const auto& sp = server.players().at(id);
+        CHECK(sp.equipment.outfit_tier == 3);
+        CHECK(sp.equipment.weapon_tier == 3);
+        CHECK(sp.max_health > base_hp + 50.0f); // armour added a meaningful chunk of health
+    }
 }
 
 // The full server-authoritative loop: two clients join a GameServer, the server

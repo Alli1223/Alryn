@@ -17,6 +17,18 @@ void read_appearance(ByteReader& r, CharacterAppearance& a) {
     a.ears = static_cast<EarStyle>(r.read_u8());
     a.hair = static_cast<HairStyle>(r.read_u8());
 }
+void write_equipment(ByteWriter& w, const Equipment& e) {
+    w.write_u8(e.outfit_tier);
+    w.write_u8(e.weapon_tier);
+    w.write_u8(e.outfit_tint);
+    w.write_u8(e.weapon_index);
+}
+void read_equipment(ByteReader& r, Equipment& e) {
+    e.outfit_tier = r.read_u8();
+    e.weapon_tier = r.read_u8();
+    e.outfit_tint = r.read_u8();
+    e.weapon_index = r.read_u8();
+}
 } // namespace
 
 void write(ByteWriter& w, const PlayerInput& in) {
@@ -39,6 +51,7 @@ void write(ByteWriter& w, const PlayerInput& in) {
     w.write_u8(in.spell);
     w.write_u8(in.block ? 1 : 0);
     write_appearance(w, in.appearance);
+    write_equipment(w, in.equipment);
 }
 
 bool read(ByteReader& r, PlayerInput& in) {
@@ -65,6 +78,7 @@ bool read(ByteReader& r, PlayerInput& in) {
     in.spell = r.read_u8();
     in.block = r.read_u8() != 0;
     read_appearance(r, in.appearance);
+    read_equipment(r, in.equipment);
     return r.ok();
 }
 
@@ -96,6 +110,7 @@ void write(ByteWriter& w, const Snapshot& s) {
         w.write_u8(p.shield);
         w.write_u8(p.buffs);
         write_appearance(w, p.appearance);
+        write_equipment(w, p.equipment);
     }
     w.write_u16(static_cast<u16>(s.projectiles.size()));
     for (const ProjectileState& pr : s.projectiles) {
@@ -209,6 +224,7 @@ bool read(ByteReader& r, Snapshot& s) {
         p.shield = r.read_u8();
         p.buffs = r.read_u8();
         read_appearance(r, p.appearance);
+        read_equipment(r, p.equipment);
         s.players.push_back(p);
     }
     const u16 proj_count = r.read_u16();

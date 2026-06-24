@@ -217,9 +217,14 @@ Asset build_character(int role) {
     CharacterModel model = CharacterModel::create(seed, app);
     // Equip a top-tier (master) outfit in a role-flavoured colour, to compare against the references.
     static const u8 role_tint[kRoleCount] = {0, 2, 5, 3}; // Knight blue, Hunter green, Cleric white, Mage violet
+    // ALRYN_TIER (0..3) overrides the tier so the ragged -> master progression can be previewed.
+    u8 tier = 3;
+    if (const char* t = std::getenv("ALRYN_TIER")) {
+        tier = static_cast<u8>(glm::clamp(std::atoi(t), 0, 3));
+    }
     Equipment eq;
-    eq.outfit_tier = 3;
-    eq.weapon_tier = 3;
+    eq.outfit_tier = tier;
+    eq.weapon_tier = tier;
     eq.outfit_tint = role_tint[static_cast<usize>(role) % kRoleCount];
     apply_outfit(model, outfit_kind_for_role(static_cast<u8>(role)), eq);
 

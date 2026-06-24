@@ -540,24 +540,20 @@ void ClientApp::on_shutdown() {
 }
 
 ClientApp::PlayerVisual& ClientApp::ensure_visual(net::PlayerId id,
-                                                  const CharacterAppearance& appearance, u8 role) {
+                                                  const CharacterAppearance& appearance, u8 role,
+                                                  const Equipment& equipment) {
     auto build = [&](PlayerVisual& v) {
         v.appearance = appearance;
         v.role = role;
+        v.equipment = equipment;
         v.model = CharacterModel::create(id, appearance);
-        // INTERIM (until equipment is networked - item 11): equip a master-tier outfit themed by the
-        // role, tinted per-player, so players show their class in-game. The real per-player Equipment
-        // (and the ragged->master progression) drives this once it rides in the snapshot.
-        Equipment eq;
-        eq.outfit_tier = 3;
-        eq.weapon_tier = 3;
-        eq.outfit_tint = static_cast<u8>(id % 8u);
-        apply_outfit(v.model, outfit_kind_for_role(role), eq);
+        apply_outfit(v.model, outfit_kind_for_role(role), equipment); // the networked, server-clamped gear
     };
     const auto it = visuals_.find(id);
     if (it != visuals_.end()) {
-        // Rebuild the model if the player changed their look or role.
-        if (!(it->second.appearance == appearance) || it->second.role != role) {
+        // Rebuild the model if the player changed their look, role, or gear.
+        if (!(it->second.appearance == appearance) || it->second.role != role ||
+            !(it->second.equipment == equipment)) {
             build(it->second);
         }
         return it->second;
@@ -679,7 +675,7 @@ void ClientApp::update_visuals(Timestep dt) {
         return;
     }
     for (const net::PlayerState& p : snapshot_.players) {
-        PlayerVisual& v = ensure_visual(p.id, p.appearance, p.role);
+        PlayerVisual& v = ensure_visual(p.id, p.appearance, p.role, p.equipment);
         f32 measured = 0.0f;
         if (v.has_last && dt.seconds > 0.0001f) {
             Vec3 d = p.position - v.last_pos;

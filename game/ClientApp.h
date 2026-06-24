@@ -152,7 +152,7 @@ protected:
     // player's RIGHT (the main-hand weapon), the *R* arm on their LEFT (the off-hand shield/dagger).
     // Built from the shared modular weapon_pieces (Character/Weapon.h).
     void draw_role_weapon(const CharacterModel& model, const std::vector<Mat4>& jmats,
-                          PlayerRole role);
+                          PlayerRole role, const Equipment& eq);
     void draw_weapon(WeaponType type, const Mat4& hand, const CharacterPalette& pal,
                      EquipmentTier tier);
     const Mesh& shape_mesh(BoneShape s) const; // BoneShape -> the matching unit shape mesh
@@ -201,6 +201,7 @@ private:
         CharacterModel model;
         CharacterAnimator animator;
         CharacterAppearance appearance;
+        Equipment equipment;  // the gear the model is built for (rebuild when it changes)
         u8 role = 255;  // PlayerRole the model is built for (255 = none yet -> force a build)
         Vec3 last_pos{0.0f};
         f32 speed = 0.0f;
@@ -218,7 +219,8 @@ private:
         u8 last_action = 0;
     };
 
-    PlayerVisual& ensure_visual(net::PlayerId id, const CharacterAppearance& appearance, u8 role);
+    PlayerVisual& ensure_visual(net::PlayerId id, const CharacterAppearance& appearance, u8 role,
+                                const Equipment& equipment);
 
     // Advances the time of day and feeds the renderer a moving sun + sky colour.
     // When connected, the server owns the clock (so lighting matches when villagers
@@ -538,6 +540,9 @@ private:
     // Character customisation + its turntable preview.
     static constexpr u32 kPreviewSeed = 7u;
     CharacterAppearance appearance_;
+    // The local player's gear loadout sent to the server (which clamps the tiers to what's owned).
+    // Tiers default to master = "equip the best I own"; the tint + weapon are set by customise/wardrobe.
+    Equipment equip_loadout_{3, 3, 0, 0};
     PlayerRole role_ = PlayerRole::Knight;          // chosen combat role (weapon + abilities)
     u8 pending_ability_ = 0;                         // ability index+1 invoked this frame (0 = none)
     // Mage elemental combo casting: hold Ctrl (casting_), tap element keys (1-4 or W/A/S/D) to fill

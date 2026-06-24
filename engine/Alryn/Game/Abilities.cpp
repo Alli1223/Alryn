@@ -18,13 +18,20 @@ namespace alryn {
 // keep health clamped to the role's max, and drive the controller's walk speed (with the
 // Hunter's dash boost folded in).
 void GameServer::sync_player_role(ServerPlayer& player) {
+    // Accept the player's cosmetic loadout choices; clamp the EARNED tiers to what they've bought
+    // (owned_tier), so a client can't claim master gear it didn't pay for.
+    player.equipment.outfit_tint = player.input.equipment.outfit_tint;
+    player.equipment.weapon_index = player.input.equipment.weapon_index;
+    player.equipment.outfit_tier = std::min<u8>(player.input.equipment.outfit_tier, player.owned_tier);
+    player.equipment.weapon_tier = std::min<u8>(player.input.equipment.weapon_tier, player.owned_tier);
+    const f32 hp_bonus = equipment_bonus(player.equipment).health_add; // armour adds max health
+
     const auto requested = static_cast<PlayerRole>(player.input.role % kRoleCount);
     if (requested != player.role) {
         player.role = requested;
-        player.max_health = role_stats(requested).max_health;
-        player.health = player.max_health; // a fresh kit starts whole
+        player.health = role_stats(requested).max_health + hp_bonus; // a fresh kit starts whole
     }
-    player.max_health = role_stats(player.role).max_health;
+    player.max_health = role_stats(player.role).max_health + hp_bonus;
     player.health = std::min(player.health, player.max_health);
     f32 speed = role_stats(player.role).move_speed;
     if (player.dash_timer > 0.0f) {

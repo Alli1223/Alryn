@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Alryn/Character/CharacterAppearance.h>
+#include <Alryn/Character/Equipment.h>
 #include <Alryn/Core/Math.h>
 #include <Alryn/Core/Types.h>
 #include <Alryn/Net/ByteBuffer.h>
@@ -45,6 +46,7 @@ struct PlayerInput {
     u8 spell = 0;        // Mage combo spell cast this tick (SpellId; 0 = none) - resolved client-side
     bool block = false;  // holding the shield up (Knight, right mouse) - guard + block pose
     CharacterAppearance appearance; // the player's chosen look (sent each tick)
+    Equipment equipment;            // the player's worn gear loadout (server clamps earned tiers)
 };
 
 struct PlayerState {
@@ -61,6 +63,7 @@ struct PlayerState {
     u8 shield = 0;                  // Aegis shield strength 0..255 (0 = none) -> shield sphere
     u8 buffs = 0;                   // co-op buff bitflags: bit0 = empowered, bit1 = hasted
     CharacterAppearance appearance; // so every client renders the right avatar
+    Equipment equipment;            // the authoritative worn gear (drives the outfit + weapon + stats)
 };
 
 // A live enemy, broadcast each tick so clients can render + animate it.

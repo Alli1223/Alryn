@@ -1015,6 +1015,14 @@ void GameServer::debug_place_player(net::PlayerId id, const Vec3& pos) {
     }
 }
 
+void GameServer::unlock_tier(net::PlayerId id, u8 tier) {
+    const auto it = players_.find(id);
+    if (it != players_.end()) {
+        it->second.owned_tier =
+            std::max(it->second.owned_tier, static_cast<u8>(std::min<u8>(tier, kTierCount - 1u)));
+    }
+}
+
 // Wheel-breakdown event: while rolling, a wheel can work loose (the cart then halts in update_wagon);
 // a player picks up the fallen wheel (E) and carries it back, and holding it by the cart channels the
 // re-attach. On refit the cart rolls again and the next break is armed.

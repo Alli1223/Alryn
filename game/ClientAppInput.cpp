@@ -364,6 +364,7 @@ void ClientApp::send_input() {
     // Right-mouse hold: Knight shield guard / Cleric heal channel.
     packet.block = blocking_ && (role_ == PlayerRole::Knight || role_ == PlayerRole::Cleric);
     packet.appearance = appearance_;
+    packet.equipment = equip_loadout_; // desired loadout; the server clamps tiers to what's owned
     client_.send_input(packet);
     pending_ability_ = 0;
     pending_spell_ = 0;

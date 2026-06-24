@@ -89,16 +89,18 @@ void ClientApp::draw_weapon(WeaponType type, const Mat4& hand, const CharacterPa
     }
 }
 
-void ClientApp::draw_role_weapon(const CharacterModel& model, const std::vector<Mat4>& jmats, PlayerRole role) {
-    // Modular weapons: the role's main-hand weapon on the L-suffixed arm (the player's right) and the
-    // off-hand (shield / dagger) on the R-suffixed arm, both built from the shared weapon_pieces.
+void ClientApp::draw_role_weapon(const CharacterModel& model, const std::vector<Mat4>& jmats,
+                                 PlayerRole role, const Equipment& eq) {
+    // Modular weapons: the role's main-hand weapon (the player's chosen weapon_index) on the
+    // L-suffixed arm (the player's right) and the off-hand (shield / dagger) on the R-suffixed arm,
+    // both built from the shared weapon_pieces at the equipment's tier + palette.
     const CharacterPalette& pal = model.palette();
     const u8 r = static_cast<u8>(role);
-    draw_weapon(role_weapon(r, 0), hand_frame(model, jmats, BonePart::LowerArmL), pal,
-                EquipmentTier::Master);
+    const EquipmentTier wt = eq.weapon();
+    draw_weapon(role_weapon(r, eq.weapon_index), hand_frame(model, jmats, BonePart::LowerArmL), pal, wt);
     const WeaponType off = role_offhand(r);
     if (off != WeaponType::None) {
-        draw_weapon(off, hand_frame(model, jmats, BonePart::LowerArmR), pal, EquipmentTier::Master);
+        draw_weapon(off, hand_frame(model, jmats, BonePart::LowerArmR), pal, wt);
     }
 }
 
@@ -141,7 +143,7 @@ void ClientApp::draw_character(PlayerVisual& v, const Vec3& feet, f32 yaw, bool 
         // the arm, unlike the box mats whose columns are scaled by box_size.
         const std::vector<Mat4> jmats = v.model.joint_matrices(root, pose);
         const PlayerRole r = static_cast<PlayerRole>(role % kRoleCount);
-        draw_role_weapon(v.model, jmats, r);
+        draw_role_weapon(v.model, jmats, r, v.equipment);
         // A steel motion trail off the real blade tip while a Knight is mid-swing (the sword
         // is on the player's right = the L-suffixed bone).
         if (r == PlayerRole::Knight && v.animator.swinging()) {
