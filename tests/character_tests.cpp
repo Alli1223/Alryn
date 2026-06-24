@@ -2,11 +2,56 @@
 
 #include <Alryn/Character/CharacterAnimator.h>
 #include <Alryn/Character/CharacterModel.h>
+#include <Alryn/Character/Equipment.h>
 
 #include <algorithm>
 #include <cmath>
 
 using namespace alryn;
+
+TEST_CASE("Equipment: tiers grant a monotonic, buyable power bonus") {
+    // Ragged (the starting gear) grants nothing.
+    const Equipment ragged; // all defaults = tier 0
+    const EquipBonus r = equipment_bonus(ragged);
+    CHECK(r.health_add == doctest::Approx(0.0f));
+    CHECK(r.mitigation_add == doctest::Approx(0.0f));
+    CHECK(r.damage_mult == doctest::Approx(1.0f));
+    CHECK(tier_price(EquipmentTier::Ragged) == 0u);
+
+    // Each tier is a clear step up in survivability + damage.
+    f32 last_hp = -1.0f, last_dmg = 0.0f;
+    u32 last_price = 0;
+    for (u8 t = 0; t < kTierCount; ++t) {
+        Equipment e;
+        e.outfit_tier = t;
+        e.weapon_tier = t;
+        const EquipBonus b = equipment_bonus(e);
+        CHECK(b.health_add >= last_hp);
+        CHECK(b.damage_mult >= last_dmg);
+        CHECK(b.mitigation_add < 1.0f);
+        last_hp = b.health_add;
+        last_dmg = b.damage_mult;
+        if (t > 0) {
+            CHECK(tier_price(static_cast<EquipmentTier>(t)) > last_price); // dearer each tier
+        }
+        last_price = tier_price(static_cast<EquipmentTier>(t));
+    }
+
+    // Master gear is a big, distinct upgrade over ragged.
+    Equipment master;
+    master.outfit_tier = 3;
+    master.weapon_tier = 3;
+    const EquipBonus mb = equipment_bonus(master);
+    CHECK(mb.health_add > 50.0f);
+    CHECK(mb.damage_mult > 1.4f);
+    CHECK(mb.mitigation_add > 0.0f);
+
+    // Palette lookups wrap safely; tiers carry distinct accents (rags vs gold).
+    CHECK(outfit_tints().size() == 8);
+    CHECK(outfit_tint_of(200) == outfit_tints()[200 % 8]);
+    CHECK(tier_accent(EquipmentTier::Master) != tier_accent(EquipmentTier::Ragged));
+    CHECK(tier_sheen(EquipmentTier::Master) > tier_sheen(EquipmentTier::Ragged));
+}
 
 TEST_CASE("CharacterModel: deterministic generation and valid hierarchy") {
     const CharacterModel a = CharacterModel::generate(7);
@@ -17,6 +62,8 @@ TEST_CASE("CharacterModel: deterministic generation and valid hierarchy") {
     CHECK(a.palette().skin == b.palette().skin);   // same seed => identical
     CHECK(a.palette().shirt == b.palette().shirt);
     CHECK(a.height() == doctest::Approx(b.height()));
+    CHECK(a.height() > 1.6f); // a proportioned adult (~1.8 m), not the old chibi blob (~0.9 m)
+    CHECK(a.height() < 2.0f);
 
     // Parents always precede their children (single-pass transform safe).
     for (usize i = 0; i < a.bones().size(); ++i) {
