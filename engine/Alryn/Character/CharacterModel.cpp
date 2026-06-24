@@ -210,6 +210,15 @@ CharacterModel CharacterModel::generate(u32 seed) {
     return m;
 }
 
+int CharacterModel::bone_index(BonePart part) const {
+    for (usize i = 0; i < bones_.size(); ++i) {
+        if (bones_[i].part == part) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
 std::vector<Mat4> CharacterModel::bone_matrices(const Mat4& root,
                                                 const std::vector<Quat>& pose) const {
     std::vector<Mat4> joint(bones_.size());

@@ -15,6 +15,8 @@
 #include "support/OffscreenRenderer.h"
 
 #include <Alryn/Character/CharacterModel.h>
+#include <Alryn/Character/Equipment.h>
+#include <Alryn/Character/Outfit.h>
 #include <Alryn/Core/Log.h>
 #include <Alryn/Game/Roles.h>
 #include <Alryn/Renderer/MeshPrimitives.h>
@@ -208,27 +210,46 @@ Asset build_character(int role) {
     const MeshData capsule = primitives::capsule(12, 3, Vec3{1.0f});
     const MeshData rounded = primitives::rounded_box(0.12f, Vec3{1.0f});
 
-    CharacterAppearance app; // a default look for now (role-themed outfits come in later loops)
+    CharacterAppearance app; // a plain face/body; the role-themed outfit goes on top
     const u32 seed = 1000u + static_cast<u32>(role);
-    const CharacterModel model = CharacterModel::create(seed, app);
+    CharacterModel model = CharacterModel::create(seed, app);
+    // Equip a top-tier (master) outfit in a role-flavoured colour, to compare against the references.
+    static const u8 role_tint[kRoleCount] = {0, 2, 5, 3}; // Knight blue, Hunter green, Cleric white, Mage violet
+    Equipment eq;
+    eq.outfit_tier = 3;
+    eq.weapon_tier = 3;
+    eq.outfit_tint = role_tint[static_cast<usize>(role) % kRoleCount];
+    apply_outfit(model, outfit_kind_for_role(static_cast<u8>(role)), eq);
+
     const std::vector<Quat> pose; // bind pose (arms at the sides) - good for a reference compare
     const std::vector<Mat4> mats = model.bone_matrices(Mat4{1.0f}, pose);
     const CharacterPalette& pal = model.palette();
     const std::vector<Bone>& bones = model.bones();
 
+    auto bone_color = [&](BoneColor c) -> Vec3 {
+        switch (c) {
+            case BoneColor::Skin: return pal.skin;
+            case BoneColor::Shirt: return pal.shirt;
+            case BoneColor::Pants: return pal.pants;
+            case BoneColor::Hair: return pal.hair;
+            case BoneColor::Eye: return pal.eye;
+            case BoneColor::Primary: return pal.primary;
+            case BoneColor::Accent: return pal.accent;
+            case BoneColor::Metal: return pal.metal;
+            case BoneColor::Dark: return pal.dark;
+            case BoneColor::Glow: return pal.glow * 1.7f; // brighten (no emissive pass in the preview)
+        }
+        return Vec3{1.0f};
+    };
+
     Asset a;
     for (usize i = 0; i < bones.size(); ++i) {
-        const Vec3 color = bones[i].color == BoneColor::Skin    ? pal.skin
-                           : bones[i].color == BoneColor::Shirt ? pal.shirt
-                           : bones[i].color == BoneColor::Pants ? pal.pants
-                           : bones[i].color == BoneColor::Hair  ? pal.hair
-                                                                : pal.eye;
         const MeshData& shape = bones[i].shape == BoneShape::Sphere       ? sphere
                                 : bones[i].shape == BoneShape::Cylinder   ? cylinder
                                 : bones[i].shape == BoneShape::Capsule    ? capsule
                                 : bones[i].shape == BoneShape::RoundedBox ? rounded
                                                                           : box;
-        a.parts.push_back({bake(shape, mats[i], color), Vec4{1.0f}});
+        a.parts.push_back({bake(shape, mats[i], bone_color(bones[i].color)), Vec4{1.0f}});
     }
     return a;
 }

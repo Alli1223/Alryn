@@ -10,6 +10,7 @@
 
 #include <Alryn/Character/CharacterAnimator.h>
 #include <Alryn/Character/CharacterModel.h>
+#include <Alryn/Character/Outfit.h>
 #include <Alryn/Combat/Enemy.h>
 #include <Alryn/Net/GameServer.h>
 #include <Alryn/Net/NetClient.h>
@@ -196,6 +197,7 @@ private:
         CharacterModel model;
         CharacterAnimator animator;
         CharacterAppearance appearance;
+        u8 role = 255;  // PlayerRole the model is built for (255 = none yet -> force a build)
         Vec3 last_pos{0.0f};
         f32 speed = 0.0f;
         bool has_last = false;
@@ -212,7 +214,7 @@ private:
         u8 last_action = 0;
     };
 
-    PlayerVisual& ensure_visual(net::PlayerId id, const CharacterAppearance& appearance);
+    PlayerVisual& ensure_visual(net::PlayerId id, const CharacterAppearance& appearance, u8 role);
 
     // Advances the time of day and feeds the renderer a moving sun + sky colour.
     // When connected, the server owns the clock (so lighting matches when villagers

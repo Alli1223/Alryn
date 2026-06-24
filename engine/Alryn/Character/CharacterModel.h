@@ -26,7 +26,10 @@ enum class BonePart : u8 {
     FootR,
 };
 
-enum class BoneColor : u8 { Skin, Shirt, Pants, Hair, Eye };
+// Skin/Shirt/Pants/Hair/Eye are the base body; Primary/Accent/Metal/Dark are equipment colours
+// (Primary = the player's chosen heraldic colour, Accent = the tier trim/gold, Metal = steel,
+// Dark = leather/straps). Glow marks an emissive piece (mage eyes, lit visor, gem).
+enum class BoneColor : u8 { Skin, Shirt, Pants, Hair, Eye, Primary, Accent, Metal, Dark, Glow };
 enum class BoneShape : u8 { Box, Sphere, Cylinder, RoundedBox, Capsule };
 
 struct Bone {
@@ -45,6 +48,12 @@ struct CharacterPalette {
     Vec3 pants{0.2f, 0.2f, 0.28f};
     Vec3 hair{0.3f, 0.2f, 0.12f};
     Vec3 eye{0.09f, 0.08f, 0.10f};
+    // Equipment colours (set by Character/Outfit from the worn Equipment).
+    Vec3 primary{0.30f, 0.40f, 0.66f}; // player's chosen heraldic / cloth colour
+    Vec3 accent{0.80f, 0.65f, 0.30f};  // tier trim (brass -> gold)
+    Vec3 metal{0.70f, 0.73f, 0.80f};   // steel / plate
+    Vec3 dark{0.20f, 0.16f, 0.12f};    // leather, straps, under-layers
+    Vec3 glow{0.4f, 0.8f, 1.0f};       // emissive accents (eyes / gems)
 };
 
 // A procedurally-generated low-poly humanoid: a small skeleton of boxes with
@@ -61,7 +70,14 @@ public:
 
     const std::vector<Bone>& bones() const { return bones_; }
     const CharacterPalette& palette() const { return palette_; }
+    CharacterPalette& palette() { return palette_; } // mutable, so Outfit can set equipment colours
     usize bone_count() const { return bones_.size(); }
+
+    // Index of the first bone with this part (-1 if none). Used by Character/Outfit to parent
+    // equipment pieces onto the body (e.g. a breastplate onto the torso).
+    int bone_index(BonePart part) const;
+    // Append an equipment/outfit bone (its `parent` must already exist - parents precede children).
+    void add_bone(const Bone& b) { bones_.push_back(b); }
 
     f32 height() const { return height_; }
     f32 eye_height() const { return eye_height_; }

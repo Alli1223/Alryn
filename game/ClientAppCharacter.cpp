@@ -9,17 +9,30 @@ void ClientApp::draw_rig(const CharacterModel& model, const std::vector<Mat4>& m
     const std::vector<Bone>& bones = model.bones();
     const CharacterPalette& pal = model.palette();
     for (usize i = 0; i < bones.size(); ++i) {
-        const Vec3 color = bones[i].color == BoneColor::Skin    ? pal.skin
-                           : bones[i].color == BoneColor::Shirt ? pal.shirt
-                           : bones[i].color == BoneColor::Pants ? pal.pants
-                           : bones[i].color == BoneColor::Hair  ? pal.hair
-                                                                : pal.eye;
+        Vec3 color{1.0f};
+        bool glow = false;
+        switch (bones[i].color) {
+            case BoneColor::Skin: color = pal.skin; break;
+            case BoneColor::Shirt: color = pal.shirt; break;
+            case BoneColor::Pants: color = pal.pants; break;
+            case BoneColor::Hair: color = pal.hair; break;
+            case BoneColor::Eye: color = pal.eye; break;
+            case BoneColor::Primary: color = pal.primary; break;
+            case BoneColor::Accent: color = pal.accent; break;
+            case BoneColor::Metal: color = pal.metal; break;
+            case BoneColor::Dark: color = pal.dark; break;
+            case BoneColor::Glow: color = pal.glow; glow = true; break;
+        }
         const Mesh& shape = bones[i].shape == BoneShape::Sphere       ? shape_sphere_
                             : bones[i].shape == BoneShape::Cylinder   ? shape_cylinder_
                             : bones[i].shape == BoneShape::Capsule    ? shape_capsule_
                             : bones[i].shape == BoneShape::RoundedBox ? shape_rounded_
                                                                       : shape_box_;
-        renderer_->draw(shape, mats[i], Vec4{color * tint, 1.0f});
+        if (glow) {
+            renderer_->draw_emissive(shape, mats[i], Vec4{color, 1.0f}); // lit eye-slit / arcane eyes
+        } else {
+            renderer_->draw(shape, mats[i], Vec4{color * tint, 1.0f});
+        }
     }
 }
 
