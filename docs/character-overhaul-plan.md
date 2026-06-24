@@ -74,3 +74,25 @@ reproportioned (item 3).
 - Keep it **headless-testable** (pure data + maths in `Character/`); the client only renders.
 - Re-render the affected role(s) with `make character` after each change and compare to the reference.
 - Every loop ends green (build + tests) and is committed.
+
+## Status: COMPLETE (all 15 items)
+The overhaul shipped over 10 self-paced loops. What's on the branch:
+- **`Character/Equipment.h`** - tiers (Ragged/Worn/Fine/Master), outfit tints, `equipment_bonus`
+  (health/mitigation/damage), `tier_price`.
+- **`CharacterModel`** - reproportioned to a realistic ~1.8 m humanoid (was a chibi blob); `BoneColor`
+  gained Primary/Accent/Metal/Dark/Glow, `Bone` gained `box_rotation`; `bone_index`/`add_bone`.
+- **`Character/Outfit.{h,cpp}`** - `apply_outfit(model, OutfitKind, Equipment)` builds the four
+  reference-matching outfits (Plate / Leather / Holy / Robe) as rig bones, tier-scaled + recolourable.
+- **`Character/Weapon.{h,cpp}`** - `weapon_pieces(type, tier, palette)` for sword/dagger/bow/staff/
+  mace/shield, shared by the client + the headless preview; `role_weapon`/`role_offhand` (cycleable).
+- **`CharacterAnimator`** - added a CAST overlay; walk + swing/cast/block blend (legs keep walking);
+  toned the wobble for the new proportions.
+- **Networking** - `Equipment` rides in `PlayerInput`/`PlayerState`; the server clamps tiers to
+  `owned_tier`, folds the bonus into stats; `PlayerInput.buy` + a town-gated, gold-gated purchase.
+- **UI** - the wardrobe overlay (`U`): buy upgrades, recolour, change weapon; the customise screen
+  drives the starting colour + previews the full outfit + weapon on the turntable.
+- **Harness** - `asset_preview character <role>` (+ `ALRYN_TIER` / `ALRYN_POSE`) renders a posed,
+  geared character to compare against the references; `char_final.png` / `char_grid.png` are the
+  baselines.
+- **Tests** - `character_tests` (equipment bonus, proportions, action blend incl. cast), `net_tests`
+  (equipment round-trip, owned-clamp + stat boost, town-shop purchase flow).

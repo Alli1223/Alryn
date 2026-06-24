@@ -120,6 +120,12 @@ protected:
 
     void rebuild_preview() {
         preview_model_ = CharacterModel::create(kPreviewSeed, appearance_);
+        // Show the role's full (master) outfit in the chosen colour, so the turntable previews the
+        // class + the colour pick (in-game you start ragged and buy up to this).
+        Equipment eq = equip_loadout_;
+        eq.outfit_tier = 3;
+        eq.weapon_tier = 3;
+        apply_outfit(preview_model_, outfit_kind_for_role(static_cast<u8>(role_)), eq);
     }
 
     void apply_resolution(usize idx);

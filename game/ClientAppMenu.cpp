@@ -214,7 +214,10 @@ void ClientApp::build_customise(f32 w, f32 h) {
               "ROLE",
               std::vector<std::string>{"KNIGHT (TANK)", "HUNTER (DMG)", "CLERIC (HEAL)", "MAGE (DMG)"},
               static_cast<usize>(role_),
-              [this](usize i) { role_ = static_cast<PlayerRole>(i % kRoleCount); }),
+              [this](usize i) {
+                  role_ = static_cast<PlayerRole>(i % kRoleCount);
+                  rebuild_preview();
+              }),
           46.0f);
 
     caption("SKIN TONE");
@@ -228,6 +231,16 @@ void ClientApp::build_customise(f32 w, f32 h) {
               std::vector<Vec3>(hair_colors().begin(), hair_colors().end()),
               appearance_.hair_color,
               [this](usize i) { appearance_.hair_color = static_cast<u8>(i); rebuild_preview(); }),
+          40.0f);
+
+    caption("OUTFIT COLOUR");
+    place(panel.add<ui::SwatchRow>(
+              std::vector<Vec3>(outfit_tints().begin(), outfit_tints().end()),
+              equip_loadout_.outfit_tint,
+              [this](usize i) {
+                  equip_loadout_.outfit_tint = static_cast<u8>(i);
+                  rebuild_preview();
+              }),
           40.0f);
 
     place(panel.add<ui::Stepper>(
@@ -366,6 +379,11 @@ void ClientApp::draw_preview() {
                       preview_anim_.body_offset(); // soft idle breathe on the turntable
     const std::vector<Quat> pose = preview_anim_.pose(preview_model_);
     draw_rig(preview_model_, preview_model_.bone_matrices(root, pose));
+    // Show the role's weapon in hand on the turntable too (master tier, the chosen colour).
+    Equipment preview_eq = equip_loadout_;
+    preview_eq.outfit_tier = 3;
+    preview_eq.weapon_tier = 3;
+    draw_role_weapon(preview_model_, preview_model_.joint_matrices(root, pose), role_, preview_eq);
 }
 
 } // namespace alryn::game
