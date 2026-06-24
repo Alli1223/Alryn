@@ -14,7 +14,9 @@
 
 #include "support/OffscreenRenderer.h"
 
+#include <Alryn/Character/CharacterModel.h>
 #include <Alryn/Core/Log.h>
+#include <Alryn/Game/Roles.h>
 #include <Alryn/Renderer/MeshPrimitives.h>
 #include <Alryn/World/PropLibrary.h>
 #include <Alryn/World/VehicleTypes.h>
@@ -71,6 +73,7 @@ Vec3 tree_foliage_tint(int variant) {
 
 // How many variants a category has (for the "render all" mode).
 int variant_count(const std::string& cat) {
+    if (cat == "character") return kRoleCount; // one per role
     if (cat == "house") return 8;
     if (cat == "tree") return 5;
     if (cat == "decor") return 8;
@@ -82,8 +85,13 @@ int variant_count(const std::string& cat) {
     return 1;
 }
 
+Asset build_character(int role); // defined below
+
 Asset build_asset(const std::string& cat, int v) {
     Asset a;
+    if (cat == "character") {
+        return build_character(v); // v = role (0 Knight / 1 Hunter / 2 Cleric / 3 Mage)
+    }
     if (cat == "house") {
         add_prop(a, PropLibrary::build_house(static_cast<u32>(v)));
     } else if (cat == "townhouse") {
@@ -176,6 +184,55 @@ Asset build_asset(const std::string& cat, int v) {
     return a;
 }
 
+// Bake a unit shape mesh, transformed by `m` and recoloured to `color`, into world space (so the
+// character's posed rig becomes a flat list of parts the previewer frames + renders like any asset).
+MeshData bake(const MeshData& src, const Mat4& m, const Vec3& color) {
+    MeshData out = src;
+    const Mat3 nrm{glm::transpose(glm::inverse(Mat3{m}))};
+    for (Vertex& v : out.vertices) {
+        v.position = Vec3{m * Vec4{v.position, 1.0f}};
+        v.normal = glm::normalize(nrm * v.normal);
+        v.color = color;
+    }
+    return out;
+}
+
+// The player character for a role, baked from its posed rig in the bind pose - so the headless
+// preview matches the in-game rig (same primitives the client uploads to shape_*_). This is the
+// iteration harness for the character overhaul: it'll grow role-themed outfits + weapons.
+Asset build_character(int role) {
+    // Unit shapes matching ClientApp's shape_box_/sphere_/cylinder_/capsule_/rounded_.
+    const MeshData box = primitives::cube(1.0f, Vec3{1.0f});
+    const MeshData sphere = primitives::sphere(10, 7, Vec3{1.0f});
+    const MeshData cylinder = primitives::cylinder(10, Vec3{1.0f});
+    const MeshData capsule = primitives::capsule(12, 3, Vec3{1.0f});
+    const MeshData rounded = primitives::rounded_box(0.12f, Vec3{1.0f});
+
+    CharacterAppearance app; // a default look for now (role-themed outfits come in later loops)
+    const u32 seed = 1000u + static_cast<u32>(role);
+    const CharacterModel model = CharacterModel::create(seed, app);
+    const std::vector<Quat> pose; // bind pose (arms at the sides) - good for a reference compare
+    const std::vector<Mat4> mats = model.bone_matrices(Mat4{1.0f}, pose);
+    const CharacterPalette& pal = model.palette();
+    const std::vector<Bone>& bones = model.bones();
+
+    Asset a;
+    for (usize i = 0; i < bones.size(); ++i) {
+        const Vec3 color = bones[i].color == BoneColor::Skin    ? pal.skin
+                           : bones[i].color == BoneColor::Shirt ? pal.shirt
+                           : bones[i].color == BoneColor::Pants ? pal.pants
+                           : bones[i].color == BoneColor::Hair  ? pal.hair
+                                                                : pal.eye;
+        const MeshData& shape = bones[i].shape == BoneShape::Sphere       ? sphere
+                                : bones[i].shape == BoneShape::Cylinder   ? cylinder
+                                : bones[i].shape == BoneShape::Capsule    ? capsule
+                                : bones[i].shape == BoneShape::RoundedBox ? rounded
+                                                                          : box;
+        a.parts.push_back({bake(shape, mats[i], color), Vec4{1.0f}});
+    }
+    return a;
+}
+
 // Combined local-space AABB of an asset's parts.
 void asset_bounds(const Asset& a, Vec3& lo, Vec3& hi) {
     lo = Vec3{1e9f};
@@ -220,7 +277,10 @@ bool render_one(test::OffscreenRenderer& r, const std::string& cat, int v, const
     const f32 fov = radians(34.0f);
     const f32 fit = std::min(fov, 2.0f * std::atan(std::tan(fov * 0.5f) * aspect));
     const f32 dist = radius / std::sin(fit * 0.5f) * 1.18f;
-    const Vec3 dir = glm::normalize(Vec3{0.62f, 0.52f, 0.62f});
+    // Characters face local +Z; frame them from a near-frontal 3/4 (like the reference art) rather
+    // than the high iso angle used for props.
+    const Vec3 dir = (cat == "character") ? glm::normalize(Vec3{0.45f, 0.32f, 1.0f})
+                                          : glm::normalize(Vec3{0.62f, 0.52f, 0.62f});
     const Vec3 eye = center + dir * dist;
     Mat4 proj = perspective(fov, aspect, 0.1f, dist * 4.0f);
     Mat4 view = look_at(eye, center, Vec3{0.0f, 1.0f, 0.0f});
@@ -237,7 +297,7 @@ bool render_one(test::OffscreenRenderer& r, const std::string& cat, int v, const
 int main(int argc, char** argv) {
     if (argc < 2) {
         std::printf("usage: asset_preview <category> [variant] [out.ppm]\n");
-        std::printf("  categories: house townhouse pub blacksmith tree bush rock log fence rail "
+        std::printf("  categories: character house townhouse pub blacksmith tree bush rock log fence rail "
                     "lantern well gate tower wall market fountain planter bridge stonebridge "
                     "archbridge plankbridge path river decor wagon wheel fern mushroom\n");
         std::printf("  no variant -> render every variant of the category to its own file\n");
