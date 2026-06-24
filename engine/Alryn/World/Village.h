@@ -229,11 +229,12 @@ struct Street {
     Vec2 a, b;
 };
 
-// The town's STREET NETWORK: a central HIGH STREET running through the plaza (aimed along the first
-// gate, so it leads out of town), a couple of perpendicular BRANCH streets off it, and an avenue
-// from the plaza out to each gate. Houses line these streets facing them and the ground is tinted as
-// worn dirt along them - so placement (`for_each_house`) and colouring (`town_path_amount`) always
-// agree. Writes the segments into `out`, returns the count. Allocation-free.
+// The town's STREET NETWORK, built AROUND a central market plaza rather than through it: a **ring
+// road** circling the market (so the centre stays a clear, prominent plaza - roads don't cut through
+// the stalls), an **avenue from the ring out to each gate** (the cart's way out of town), and a few
+// **radial spokes** off the ring so houses also line the outer town. Houses line these streets facing
+// them and the ground is tinted as worn dirt along them - so placement (`for_each_house`) and
+// colouring (`town_path_amount`) always agree. Writes the segments into `out`, returns the count.
 inline int town_streets(const worldgen::Village& v, u32 seed, const std::vector<VillageGate>& gates,
                         std::array<Street, 20>& out) {
     int n = 0;
@@ -241,18 +242,40 @@ inline int town_streets(const worldgen::Village& v, u32 seed, const std::vector<
         if (n < static_cast<int>(out.size())) out[n++] = {a, b};
     };
     const Vec2 c = v.center;
-    const f32 R = v.half * 0.92f;
-    const f32 ang = gates.empty()
-                        ? detail::hash01(detail::tree_hash(static_cast<int>(v.vseed), 0, 720u + seed)) * TwoPi
-                        : std::atan2(gates[0].pos.y - c.y, gates[0].pos.x - c.x);
-    const Vec2 md{std::cos(ang), std::sin(ang)}, mp{-md.y, md.x};
-    add(c - md * R, c + md * R); // the central high street, right through the plaza
-    for (f32 o : {-0.46f, 0.46f}) {
-        const Vec2 bc = c + md * (o * R); // two cross branches off the high street
-        add(bc - mp * (R * 0.6f), bc + mp * (R * 0.6f));
+    const f32 ring_r = kMarketHalf + 2.5f;  // the ring road, just OUTSIDE the market footprint
+    const f32 outer_r = v.half * 0.9f;       // how far the spokes reach toward the wall
+    const f32 base_ang =
+        gates.empty()
+            ? detail::hash01(detail::tree_hash(static_cast<int>(v.vseed), 0, 720u + seed)) * TwoPi
+            : std::atan2(gates[0].pos.y - c.y, gates[0].pos.x - c.x);
+    // 1. The plaza RING (an octagon around the market) - the roads go AROUND the prominent centre.
+    constexpr int ring_n = 8;
+    Vec2 prev{};
+    for (int i = 0; i <= ring_n; ++i) {
+        const f32 a = base_ang + TwoPi * static_cast<f32>(i) / static_cast<f32>(ring_n);
+        const Vec2 p = c + Vec2{std::cos(a), std::sin(a)} * ring_r;
+        if (i > 0) {
+            add(prev, p);
+        }
+        prev = p;
     }
+    // 2. An avenue from the ring out to each gate (the cart's route out of town) - meets the ring,
+    //    not the centre, so nothing drives through the market.
     for (const VillageGate& g : gates) {
-        add(c, g.pos); // an avenue from the plaza out to each gate (the cart's route)
+        Vec2 dir = g.pos - c;
+        const f32 len = glm::length(dir);
+        if (len < 1e-3f) {
+            continue;
+        }
+        dir /= len;
+        add(c + dir * ring_r, g.pos);
+    }
+    // 3. A few radial spokes off the ring (between the gates) so houses line the outer town too.
+    constexpr int spokes = 4;
+    for (int i = 0; i < spokes; ++i) {
+        const f32 a = base_ang + TwoPi * (static_cast<f32>(i) + 0.5f) / static_cast<f32>(spokes);
+        const Vec2 dir{std::cos(a), std::sin(a)};
+        add(c + dir * ring_r, c + dir * outer_r);
     }
     return n;
 }

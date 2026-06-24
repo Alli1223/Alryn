@@ -500,6 +500,9 @@ void GameServer::update_townsfolk(Timestep dt, const DensitySampler& density) {
                 if (glm::length(p - vg.home_center) > vg.home_half * 0.85f) {
                     return true; // outside the town
                 }
+                if (glm::length(p - vg.home_center) < detail::kMarketHalf + 1.0f) {
+                    return true; // keep out of the central market plaza (don't path into the stalls)
+                }
                 if (roads::distance(p.x, p.y, seed) < roads::road_half_width) {
                     return true; // on a road / street
                 }
