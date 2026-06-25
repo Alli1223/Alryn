@@ -294,6 +294,54 @@ void ClientApp::draw_ambient_life() {
             }
         }
     }
+    // Falling autumn LEAVES drifting down in the woods - tumbling, autumn-tinted, anchored to world
+    // cells (so you walk through the fall instead of dragging it along) and gated to FOREST biomes so
+    // they never appear over desert / snow / open water. Each cell sheds one leaf that falls + sways +
+    // tumbles, fading in at the top + out near the ground so the loop doesn't pop.
+    {
+        const f32 cs = 6.0f; // sparse - a gentle drift, not a blizzard
+        const int cr = 3;    // ~18 m of cells around the player
+        const int bcx = static_cast<int>(std::floor(feet.x / cs));
+        const int bcz = static_cast<int>(std::floor(feet.z / cs));
+        const Vec3 autumn[4] = {{0.82f, 0.58f, 0.18f},  // gold
+                                {0.86f, 0.42f, 0.14f},  // orange
+                                {0.70f, 0.26f, 0.15f},  // russet red
+                                {0.55f, 0.40f, 0.20f}}; // brown
+        for (int dz = -cr; dz <= cr; ++dz) {
+            for (int dx = -cr; dx <= cr; ++dx) {
+                const int cx = bcx + dx, cz = bcz + dz;
+                if (hcell(cx, cz, 21) > 0.55f) {
+                    continue; // ~55% of forest cells shed a leaf
+                }
+                const f32 ax = (static_cast<f32>(cx) + hcell(cx, cz, 23)) * cs;
+                const f32 az = (static_cast<f32>(cz) + hcell(cx, cz, 25)) * cs;
+                if (worldgen::biome_at(ax, az, world_seed_) != worldgen::Biome::Forest) {
+                    continue; // only in the woods
+                }
+                const f32 g = worldgen::height(ax, az, world_seed_);
+                if (g < worldgen::water_level + 0.4f) {
+                    continue;
+                }
+                const f32 ph = hcell(cx, cz, 27) * TwoPi;
+                const f32 fall = std::fmod(t * 0.16f + ph, 1.0f);          // 0 top .. 1 ground
+                const f32 px = ax + std::sin(t * 1.3f + ph * 3.0f) * 0.9f; // sway as it falls
+                const f32 pz = az + std::cos(t * 1.0f + ph * 2.0f) * 0.9f;
+                const f32 py = g + 0.2f + 4.4f * (1.0f - fall);
+                const f32 dxz = glm::length(Vec2{px - feet.x, pz - feet.z});
+                if (dxz > 17.0f) {
+                    continue;
+                }
+                const f32 edge = glm::smoothstep(17.0f, 11.0f, dxz);
+                const f32 life = glm::smoothstep(0.0f, 0.08f, fall) * glm::smoothstep(1.0f, 0.88f, fall);
+                const Vec3 col = autumn[static_cast<int>(hcell(cx, cz, 29) * 4.0f) & 3];
+                const Mat4 m = glm::translate(Mat4{1.0f}, Vec3{px, py, pz}) *
+                               glm::rotate(Mat4{1.0f}, t * 1.8f + ph, Vec3{0.0f, 1.0f, 0.0f}) *
+                               glm::rotate(Mat4{1.0f}, std::sin(t * 2.2f + ph) * 0.9f, Vec3{0.0f, 0.0f, 1.0f}) *
+                               glm::scale(Mat4{1.0f}, Vec3{0.18f, 0.04f, 0.22f}); // a small flat leaf
+                renderer_->draw_transparent(shape_sphere_, m, Vec4{col, 0.9f * edge * life});
+            }
+        }
+    }
     // (The day "bird flock" + night owl were removed - they orbited the camera at a fixed offset,
     // so they read as stationary shapes floating behind the player with shadows that didn't move.)
 }
