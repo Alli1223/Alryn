@@ -339,53 +339,70 @@ void build_holy(CharacterModel& m, const Equipment& eq) {
         piece(m, BonePart::Torso, Vec3{0.0f, y + s * 0.16f, ts.z * 0.64f}, Vec3{s * 0.5f, 0.02f, 0.025f},
               BoneColor::Accent, BoneShape::Box);
     };
+    // A vertical gold orphrey band running down the front of the robe.
+    auto orphrey = [&]() {
+        piece(m, BonePart::Torso, Vec3{0.0f, tc.y * 0.6f, ts.z * 0.62f}, Vec3{0.075f, ts.y * 1.5f, 0.03f},
+              BoneColor::Accent, BoneShape::Box);
+    };
+    // An angular amice collar over the shoulders (white cloth + a gold rim) - the priestly silhouette.
+    auto amice = [&](f32 w) {
+        piece(m, BonePart::Torso, Vec3{0.0f, ts.y * 0.84f, 0.0f}, Vec3{ts.x * w, ts.y * 0.46f, ts.z * 1.2f},
+              BoneColor::Primary, BoneShape::Box);
+        piece(m, BonePart::Torso, Vec3{0.0f, ts.y * 0.96f, 0.0f}, Vec3{ts.x * (w + 0.06f), 0.05f, ts.z * 1.3f},
+              BoneColor::Accent, BoneShape::Box); // gold rim
+    };
 
     if (vt == 0) {
-        // ACOLYTE - a plain monk hood over a shadowed face, a corded belt, a hung cross. Drab.
-        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.06f, -hs.z * 0.06f},
-              hs * Vec3{1.24f, 1.22f, 1.34f}, BoneColor::Primary); // hood
+        // ACOLYTE - an angular monk hood over a shadowed face, a corded belt, a hung cross. Drab.
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.08f, -hs.z * 0.06f},
+              hs * Vec3{1.26f, 1.28f, 1.34f}, BoneColor::Primary, BoneShape::Box); // hood (angular)
         piece(m, BonePart::Head, Vec3{0.0f, hc.y - hs.y * 0.04f, hs.z * 0.5f},
-              Vec3{hs.x * 0.72f, hs.y * 0.52f, 0.16f}, BoneColor::Dark, BoneShape::RoundedBox); // shadow
+              Vec3{hs.x * 0.72f, hs.y * 0.52f, 0.16f}, BoneColor::Dark, BoneShape::Box); // face shadow
         piece(m, BonePart::Pelvis, Vec3{0.0f, 0.04f, 0.0f},
-              part_size(m, BonePart::Pelvis) * Vec3{1.14f, 0.3f, 1.16f}, BoneColor::Dark); // cord belt
+              part_size(m, BonePart::Pelvis) * Vec3{1.16f, 0.32f, 1.18f}, BoneColor::Dark,
+              BoneShape::Box); // cord belt
         cross(tc.y * 0.4f, ts.y * 0.42f);
     } else if (vt == 1) {
-        // PRIEST - a circlet, a light clerical collar, a blue stole over the shoulders, gold crosses.
-        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.42f, 0.0f}, hs * Vec3{1.16f, 0.16f, 1.16f},
-              BoneColor::Accent, BoneShape::RoundedBox); // circlet
-        piece(m, BonePart::Torso, Vec3{0.0f, ts.y * 0.94f, ts.z * 0.16f},
-              Vec3{ts.x * 0.62f, ts.y * 0.2f, ts.z * 0.5f}, BoneColor::Metal); // light collar
-        // (the stole bands are simulated ClothInstances now - see ClientApp::setup_cloth)
-        cross(tc.y * 0.7f, ts.y * 0.42f);
-        cross(tc.y * 0.18f, ts.y * 0.32f);
+        // PRIEST - a circlet, an angular amice collar, a gold orphrey + cross, a belt + book.
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.42f, 0.0f}, hs * Vec3{1.18f, 0.18f, 1.18f},
+              BoneColor::Accent, BoneShape::Box); // circlet
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.52f, hs.z * 0.5f}, Vec3{0.05f, 0.06f, 0.05f},
+              BoneColor::Glow, BoneShape::Box); // circlet gem
+        amice(1.34f);
+        orphrey();
+        cross(tc.y * 0.66f, ts.y * 0.42f);
         piece(m, BonePart::Pelvis, Vec3{0.0f, 0.04f, 0.0f},
-              part_size(m, BonePart::Pelvis) * Vec3{1.16f, 0.34f, 1.18f}, BoneColor::Dark); // belt
+              part_size(m, BonePart::Pelvis) * Vec3{1.16f, 0.34f, 1.18f}, BoneColor::Dark,
+              BoneShape::Box); // belt
         piece(m, BonePart::Pelvis, Vec3{0.17f, 0.0f, ts.z * 0.32f}, Vec3{0.1f, 0.13f, 0.05f},
               BoneColor::Dark, BoneShape::Box); // book
     } else {
-        // HIGH PROPHET - a tall jewelled mitre, gold pauldrons + gems, a gold gorget, a cross stole, cape.
-        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.68f, 0.0f},
-              Vec3{hs.x * 0.82f, hs.y * 0.82f, hs.z * 0.5f}, BoneColor::Accent); // mitre body (tall)
-        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 1.2f, hs.z * 0.12f},
-              Vec3{hs.x * 0.6f, hs.y * 0.56f, 0.06f}, BoneColor::Accent, BoneShape::Box, pitch(0.16f));
-        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 1.2f, -hs.z * 0.12f},
-              Vec3{hs.x * 0.6f, hs.y * 0.56f, 0.06f}, BoneColor::Accent, BoneShape::Box, pitch(-0.16f));
-        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.86f, hs.z * 0.46f}, Vec3{0.05f, 0.06f, 0.05f},
-              BoneColor::Glow, BoneShape::Sphere); // mitre gem
-        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.4f, 0.0f},
-              hs * Vec3{1.04f, 0.12f, 1.06f}, BoneColor::Dark); // brow band
+        // HIGH PROPHET - a peaked jewelled MITRE (two plates leaning to a point + a glowing cross), an
+        // amice collar, angular gold pauldrons + gems, a gold orphrey band.
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.44f, 0.0f}, hs * Vec3{1.1f, 0.18f, 1.04f},
+              BoneColor::Accent, BoneShape::Box); // gold base band
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.94f, hs.z * 0.2f},
+              Vec3{hs.x * 0.92f, hs.y * 1.0f, 0.08f}, BoneColor::Accent, BoneShape::Box,
+              pitch(0.4f)); // front plate, leans back
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.94f, -hs.z * 0.2f},
+              Vec3{hs.x * 0.92f, hs.y * 1.0f, 0.08f}, BoneColor::Accent, BoneShape::Box,
+              pitch(-0.4f)); // back plate, leans forward -> they meet at a peak
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.78f, hs.z * 0.34f},
+              Vec3{0.028f, hs.y * 0.42f, 0.02f}, BoneColor::Glow, BoneShape::Box); // cross vertical
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.88f, hs.z * 0.36f},
+              Vec3{hs.x * 0.42f, 0.028f, 0.02f}, BoneColor::Glow, BoneShape::Box); // cross arms
+        amice(1.42f);
         for (BonePart up : {BonePart::UpperArmL, BonePart::UpperArmR}) {
-            piece(m, up, Vec3{0.0f, -part_size(m, up).y * 0.06f, 0.0f}, Vec3{0.24f, 0.14f, 0.25f},
-                  BoneColor::Accent); // gold pauldron
-            piece(m, up, Vec3{0.0f, -part_size(m, up).y * 0.06f, 0.1f}, Vec3{0.06f, 0.06f, 0.06f},
-                  BoneColor::Glow, BoneShape::Sphere); // gem
+            piece(m, up, Vec3{0.0f, -part_size(m, up).y * 0.04f, 0.0f}, Vec3{0.26f, 0.16f, 0.28f},
+                  BoneColor::Accent, BoneShape::Box); // gold pauldron (angular)
+            piece(m, up, Vec3{0.0f, part_size(m, up).y * 0.04f, 0.1f}, Vec3{0.06f, 0.06f, 0.06f},
+                  BoneColor::Glow, BoneShape::Box); // gem
         }
-        piece(m, BonePart::Torso, Vec3{0.0f, ts.y * 0.96f, 0.0f}, Vec3{ts.x * 1.2f, 0.07f, ts.z * 1.5f},
-              BoneColor::Accent); // gold gorget
-        // (the stole bands are simulated ClothInstances now - see ClientApp::setup_cloth)
-        cross(tc.y * 0.8f, ts.y * 0.42f);
-        cross(tc.y * 0.3f, ts.y * 0.34f);
-        // (the flowing cape is a simulated ClothInstance now - see ClientApp::setup_cloth)
+        orphrey();
+        cross(tc.y * 0.5f, ts.y * 0.4f);
+        piece(m, BonePart::Pelvis, Vec3{0.0f, 0.04f, 0.0f},
+              part_size(m, BonePart::Pelvis) * Vec3{1.18f, 0.36f, 1.2f}, BoneColor::Accent,
+              BoneShape::Box); // gold belt
     }
 }
 
