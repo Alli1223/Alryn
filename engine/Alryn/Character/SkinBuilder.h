@@ -136,9 +136,10 @@ inline void tube(SkinnedMesh& m, const std::vector<Vec3>& pts, const std::vector
     }
 }
 
-// A UV sphere centred at `center`, radius r, weighted to the given bone(s).
-inline void sphere(SkinnedMesh& m, const Vec3& center, f32 r, const Weights& w, BodyMaterial mat) {
-    constexpr int lat = 6, lon = 8;
+// A UV ellipsoid centred at `center` with per-axis radii, weighted to the given bone(s).
+inline void ellipsoid(SkinnedMesh& m, const Vec3& center, const Vec3& radii, const Weights& w,
+                      BodyMaterial mat) {
+    constexpr int lat = 7, lon = 9;
     std::vector<u32> prev;
     for (int j = 0; j <= lat; ++j) {
         const f32 theta = Pi * static_cast<f32>(j) / static_cast<f32>(lat);
@@ -148,8 +149,8 @@ inline void sphere(SkinnedMesh& m, const Vec3& center, f32 r, const Weights& w, 
             const f32 a = TwoPi * static_cast<f32>(i) / static_cast<f32>(lon);
             const Vec3 n{rr * std::cos(a), y, rr * std::sin(a)};
             SkinVertex sv;
-            sv.position = center + n * r;
-            sv.normal = n;
+            sv.position = center + n * radii;
+            sv.normal = glm::normalize(n / glm::max(radii, Vec3{1e-4f})); // ellipsoid surface normal
             sv.material = static_cast<u8>(mat);
             set_w(sv, w);
             cur.push_back(m.add_vertex(sv));
@@ -166,6 +167,11 @@ inline void sphere(SkinnedMesh& m, const Vec3& center, f32 r, const Weights& w, 
         }
         prev = cur;
     }
+}
+
+// A UV sphere centred at `center`, radius r, weighted to the given bone(s).
+inline void sphere(SkinnedMesh& m, const Vec3& center, f32 r, const Weights& w, BodyMaterial mat) {
+    ellipsoid(m, center, Vec3{r}, w, mat);
 }
 
 // Average face normals into shared vertices for a smooth-shaded surface.

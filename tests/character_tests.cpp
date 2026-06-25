@@ -256,9 +256,9 @@ TEST_CASE("CharacterModel: create() applies appearance and adds feature bones") 
         if (m.bones()[i].color == BoneColor::Hair) ++hair;
     }
     CHECK(eyes == 2);
-    CHECK(hair >= 1);
+    CHECK(hair >= 3); // 2 eyebrows (always) + at least one Mohawk bone
 
-    // A bald character adds no hair bones.
+    // A bald character adds no HAIRSTYLE bones - only the 2 always-present eyebrows remain.
     CharacterAppearance bald = look;
     bald.hair = HairStyle::Bald;
     const CharacterModel b = CharacterModel::create(7, bald);
@@ -266,7 +266,8 @@ TEST_CASE("CharacterModel: create() applies appearance and adds feature bones") 
     for (const Bone& bone : b.bones()) {
         if (bone.color == BoneColor::Hair) ++bald_hair;
     }
-    CHECK(bald_hair == 0);
+    CHECK(bald_hair == 2);   // the eyebrows
+    CHECK(hair > bald_hair); // the styled hair adds crown bones on top of the eyebrows
 }
 
 TEST_CASE("CharacterModel: bind pose stands upright (feet down, head up)") {

@@ -80,6 +80,18 @@ void CharacterModel::add_features(CharacterModel& m, const CharacterAppearance& 
         }
         add(Vec3{-ex, ey, fz}, size, BoneColor::Eye, shape);
         add(Vec3{ex, ey, fz}, size, BoneColor::Eye, shape);
+
+        // Brow ridge (skin) above the eyes + hair-coloured eyebrows, for a defined face rather than a
+        // bare ball with dots.
+        add(Vec3{0.0f, ey + r * 0.26f, c.z + r * 0.82f}, Vec3{hs * 0.62f, hs * 0.1f, hs * 0.18f},
+            BoneColor::Skin, BoneShape::RoundedBox);
+        for (f32 sx2 : {-1.0f, 1.0f}) {
+            add(Vec3{sx2 * ex, ey + r * 0.28f, fz - r * 0.06f}, Vec3{hs * 0.22f, hs * 0.055f, hs * 0.07f},
+                BoneColor::Hair, BoneShape::RoundedBox);
+        }
+        // Nose: a small wedge jutting from the centre of the face, just below the eyes.
+        add(Vec3{0.0f, ey - r * 0.26f, c.z + r * 0.98f}, Vec3{hs * 0.12f, hs * 0.26f, hs * 0.2f},
+            BoneColor::Skin, BoneShape::RoundedBox);
     }
 
     // ---- Ears (on the sides, ±X) ----

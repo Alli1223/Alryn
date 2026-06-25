@@ -56,14 +56,14 @@ SkinnedMesh build_body_mesh(const CharacterModel& model) {
          {{{iP, 1.0f}}, {{iP, 0.5f}, {iT, 0.5f}}, {{iT, 1.0f}}, {{iT, 0.85f}, {iH, 0.15f}}},
          BodyMaterial::Shirt, true, false);
 
-    // Neck + head.
-    const f32 hh = seg(BonePart::Head) < 0.0f ? 0.25f : 0.25f;
+    // Neck + head. The head is an OVOID (taller than wide, a touch deeper front-to-back) rather than a
+    // bare ball, so the face reads as a head once the nose/brow/eye features sit on it.
     const Vec3 head_c = neck + Vec3{0.0f, model.bones()[static_cast<usize>(iH)].box_center.y, 0.0f};
+    const Vec3 hbox = model.bones()[static_cast<usize>(iH)].box_size;
     tube(sm, {neck - Vec3{0, 0.02f, 0}, neck + Vec3{0, 0.06f, 0}}, {0.07f, 0.075f},
          {{{iT, 0.4f}, {iH, 0.6f}}, {{iH, 1.0f}}}, BodyMaterial::Skin, false, false);
-    sphere(sm, head_c, model.bones()[static_cast<usize>(iH)].box_size.x * 0.56f, {{iH, 1.0f}},
-           BodyMaterial::Skin);
-    (void)hh;
+    ellipsoid(sm, head_c, Vec3{hbox.x * 0.56f, hbox.y * 0.52f, hbox.z * 0.58f}, {{iH, 1.0f}},
+              BodyMaterial::Skin);
 
     // Arms: shoulder -> elbow -> wrist, weight-blended at the shoulder (torso) + elbow.
     auto arm = [&](BonePart up, BonePart lo) {
