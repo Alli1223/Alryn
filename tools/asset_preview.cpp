@@ -421,13 +421,10 @@ Asset build_character(int role) {
             build_cloth_mesh(s, Vec3{1.0f, 0.0f, 0.0f}, color, cm);
             a.parts.push_back({std::move(cm), Vec4{1.0f}});
         };
-        // Cape on cape-wearing roles; + the minor pieces (paladin tabard / cleric stole / warden mantle).
+        // Cape on cape-wearing roles (anchored at the neck); + the minor pieces (cleric stole / mantle).
         if (role == 0 || role == 2 || role == 1) {
-            make_sheet(neck + Vec3{0.0f, -0.05f, -0.12f}, Vec3{0.0f, -1.0f, -0.22f}, 5, 0.13f, 0.24f,
+            make_sheet(neck + Vec3{0.0f, 0.05f, -0.15f}, Vec3{0.0f, -1.0f, -0.28f}, 6, 0.12f, 0.24f,
                        role == 1 ? pal.dark : pal.primary);
-        }
-        if (role == 0) { // tabard down the chest front
-            make_sheet(torso + Vec3{0.0f, 0.32f, 0.14f}, Vec3{0.0f, -1.0f, 0.08f}, 4, 0.14f, 0.1f, pal.primary);
         }
         if (role == 2) { // stole - two front bands
             for (f32 ex : {-1.0f, 1.0f}) {
@@ -437,12 +434,15 @@ Asset build_character(int role) {
         if (role == 1) { // warden's short shoulder mantle
             make_sheet(neck + Vec3{0.0f, -0.02f, -0.12f}, Vec3{0.0f, -1.0f, -0.32f}, 3, 0.1f, 0.28f, pal.dark);
         }
-        // Robe skirt (ring tube) on the robe-wearers (Mage role 3 / Cleric role 2).
-        if (role == 3 || role == 2) {
+        // A flowing lower garment (ring tube) on EVERY role: robe (Mage/Cleric), surcoat (Knight),
+        // tunic skirt (Hunter).
+        {
             const int iP = model.bone_index(BonePart::Pelvis);
             const Vec3 hip = iP >= 0 ? Vec3{jmats[static_cast<usize>(iP)][3]} : Vec3{0.0f, 0.6f, 0.0f};
-            const int segs = role == 2 ? 7 : 6;
-            const f32 seg = 0.15f, flare = role == 2 ? 0.3f : 0.34f, radius = 0.17f;
+            const int segs = role == 2 ? 7 : role == 3 ? 6 : role == 0 ? 4 : 3;
+            const f32 seg = (role == 2 || role == 3) ? 0.15f : role == 0 ? 0.13f : 0.12f;
+            const f32 flare = role == 2 ? 0.3f : role == 3 ? 0.34f : role == 0 ? 0.26f : 0.3f;
+            const f32 radius = role == 0 ? 0.19f : 0.17f;
             constexpr int kN = 8;
             std::vector<ClothChain> skirt(kN);
             for (int i = 0; i < kN; ++i) {

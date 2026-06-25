@@ -34,8 +34,10 @@ void ClientApp::setup_cloth(PlayerVisual& v, PlayerRole role, const Equipment& e
         v.cloth.push_back(std::move(c));
     };
     auto add_cape = [&](const Vec3& color, f32 width, f32 wind_gain) {
-        add_sheet(BonePart::Head, Vec3{0.0f, -0.05f, -0.12f}, Vec3{0.0f, -1.0f, -0.22f},
-                  Vec3{1.0f, 0.0f, 0.0f}, 5, 0.13f, width, color, wind_gain);
+        // Anchor at the NECK (a touch up + well back, so the collar clears the pauldrons + reads as a
+        // neck cape), hanging down the back.
+        add_sheet(BonePart::Head, Vec3{0.0f, 0.05f, -0.15f}, Vec3{0.0f, -1.0f, -0.28f},
+                  Vec3{1.0f, 0.0f, 0.0f}, 6, 0.12f, width, color, wind_gain);
     };
 
     // A robe skirt: a ring of chains hanging off the waist, drawn as a closed tube around the legs.
@@ -66,20 +68,21 @@ void ClientApp::setup_cloth(PlayerVisual& v, PlayerRole role, const Equipment& e
     } else if (vt == 2 && role == PlayerRole::Hunter) {
         add_cape(pal.dark, 0.24f, 1.5f); // the beastmaster's tattered dark cape
     }
-    // Robe skirts on the robe-wearers (every tier): the Mage's mid-calf robe, the Cleric's long one.
+    // A flowing cloth LOWER GARMENT on every role (an 8-panel skirt/robe tube over the waist), so they
+    // all wear cloth, not just a cape - the Mage/Cleric's long robe, the Knight's surcoat over the
+    // plate, the Hunter's leather tunic skirt.
     if (role == PlayerRole::Mage) {
         add_skirt(pal.primary, 0.17f, 6, 0.15f, 0.34f, 1.0f);
     } else if (role == PlayerRole::Cleric) {
         add_skirt(pal.primary, 0.17f, 7, 0.15f, 0.3f, 0.9f);
+    } else if (role == PlayerRole::Knight) {
+        add_skirt(pal.primary, 0.19f, 4, 0.13f, 0.26f, 0.7f); // surcoat to mid-thigh
+    } else if (role == PlayerRole::Hunter) {
+        add_skirt(pal.primary, 0.17f, 3, 0.12f, 0.3f, 0.9f); // a short tunic skirt
     }
 
     // Minor flowing pieces.
     const Vec3 X{1.0f, 0.0f, 0.0f};
-    if (role == PlayerRole::Knight && vt == 2) {
-        // Paladin heraldic tabard: a sheet down the chest front.
-        add_sheet(BonePart::Torso, Vec3{0.0f, 0.32f, 0.14f}, Vec3{0.0f, -1.0f, 0.08f}, X, 4, 0.14f, 0.1f,
-                  pal.primary, 0.55f);
-    }
     if (role == PlayerRole::Cleric && vt >= 1) {
         // Priest / prophet stole: two narrow bands hanging from the shoulders down the front.
         for (f32 ex : {-1.0f, 1.0f}) {
