@@ -124,6 +124,42 @@ TEST_CASE("BodyMesh/OutfitMesh: skinned body + outfit are valid and deform with 
     }
 }
 
+TEST_CASE("BodyMesh: the action overlay deforms the skinned upper body (legs keep the walk)") {
+    CharacterModel model = CharacterModel::create(11u, CharacterAppearance{});
+    const SkinnedMesh body = build_body_mesh(model);
+
+    // Two animators advanced to the SAME locomotion phase (53 frames); one also plays a swing. So the
+    // legs match exactly and any difference in the skinned mesh is the upper-body action overlay alone.
+    const Timestep dt{1.0f / 60.0f};
+    CharacterAnimator walk_only, with_swing;
+    for (int k = 0; k < 53; ++k) {
+        walk_only.update(5.0f, dt);
+    }
+    for (int k = 0; k < 40; ++k) {
+        with_swing.update(5.0f, dt);
+    }
+    with_swing.play_swing();
+    for (int k = 0; k < 13; ++k) {
+        with_swing.update(5.0f, dt); // ~mid-chop, now at frame 53 like walk_only
+    }
+
+    std::vector<Vertex> a, b;
+    skin(body, model.joint_matrices(Mat4{1.0f}, walk_only.pose(model)), a);
+    skin(body, model.joint_matrices(Mat4{1.0f}, with_swing.pose(model)), b);
+    REQUIRE(a.size() == b.size());
+
+    f32 max_shift = 0.0f, leg_shift = 0.0f;
+    for (usize i = 0; i < a.size(); ++i) {
+        const f32 d = glm::length(b[i].position - a[i].position);
+        max_shift = std::max(max_shift, d);
+        if (a[i].position.y < 0.4f) {
+            leg_shift = std::max(leg_shift, d); // lower-leg / foot vertices
+        }
+    }
+    CHECK(max_shift > 0.1f);  // the swing visibly deforms the skinned mesh (the arm sweeps up)
+    CHECK(leg_shift < 0.02f); // the legs are untouched by the upper-body action (same walk phase)
+}
+
 TEST_CASE("Equipment: tiers grant a monotonic, buyable power bonus") {
     // Ragged (the starting gear) grants nothing.
     const Equipment ragged; // all defaults = tier 0
