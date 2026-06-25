@@ -96,9 +96,7 @@ void build_plate(CharacterModel& m, const Equipment& eq) {
               BoneColor::Accent, BoneShape::RoundedBox); // gold gorget
         piece(m, BonePart::Torso, Vec3{0.0f, tc.y * 1.08f, ts.z * 0.66f},
               Vec3{ts.x * 0.46f, ts.x * 0.46f, 0.03f}, BoneColor::Accent, BoneShape::Sphere); // sun emblem
-        piece(m, BonePart::Torso, Vec3{0.0f, tc.y * 0.62f, ts.z * 0.7f},
-              Vec3{ts.x * 0.5f, ts.y * 1.24f, 0.03f}, BoneColor::Primary, BoneShape::Box); // tabard
-        // (the flowing cape is a simulated ClothInstance now - see ClientApp::setup_cloth)
+        // (the flowing tabard + cape are simulated ClothInstances now - see ClientApp::setup_cloth)
         for (BonePart up : {BonePart::UpperArmL, BonePart::UpperArmR}) {
             piece(m, up, Vec3{0.0f, -part_size(m, up).y * 0.02f, 0.0f}, Vec3{0.31f, 0.27f, 0.32f},
                   BoneColor::Metal, BoneShape::Sphere); // big pauldron
@@ -238,9 +236,7 @@ void build_leather(CharacterModel& m, const Equipment& eq) {
               Vec3{hs.x * 0.92f, hs.y * 0.5f, hs.z * 0.7f}, BoneColor::Primary); // mask
     }
     if (vt == 1) {
-        // WARDEN - a shoulder mantle, a steel pauldron, an extra cross-strap, knee pads.
-        piece(m, BonePart::Torso, Vec3{0.0f, ts.y * 0.92f, -ts.z * 0.1f},
-              Vec3{ts.x * 1.4f, ts.y * 0.34f, ts.z * 1.3f}, BoneColor::Dark); // mantle
+        // WARDEN - a steel pauldron, an extra cross-strap, knee pads (the shoulder mantle is cloth now).
         piece(m, BonePart::UpperArmL, Vec3{0.0f, -part_size(m, BonePart::UpperArmL).y * 0.02f, 0.0f},
               Vec3{0.27f, 0.18f, 0.28f}, BoneColor::Metal, BoneShape::Sphere); // steel pauldron
         piece(m, BonePart::Torso, Vec3{0.0f, tc.y, ts.z * 0.62f}, Vec3{0.06f, ts.y * 1.3f, 0.04f},
@@ -302,10 +298,7 @@ void build_holy(CharacterModel& m, const Equipment& eq) {
               BoneColor::Accent, BoneShape::RoundedBox); // circlet
         piece(m, BonePart::Torso, Vec3{0.0f, ts.y * 0.94f, ts.z * 0.16f},
               Vec3{ts.x * 0.62f, ts.y * 0.2f, ts.z * 0.5f}, BoneColor::Metal); // light collar
-        for (f32 ex : {-1.0f, 1.0f}) {
-            piece(m, BonePart::Torso, Vec3{ex * ts.x * 0.32f, tc.y * 0.5f, ts.z * 0.6f},
-                  Vec3{ts.x * 0.16f, ts.y * 1.3f, 0.03f}, BoneColor::Dark, BoneShape::Box); // stole bands
-        }
+        // (the stole bands are simulated ClothInstances now - see ClientApp::setup_cloth)
         cross(tc.y * 0.7f, ts.y * 0.42f);
         cross(tc.y * 0.18f, ts.y * 0.32f);
         piece(m, BonePart::Pelvis, Vec3{0.0f, 0.04f, 0.0f},
@@ -332,10 +325,7 @@ void build_holy(CharacterModel& m, const Equipment& eq) {
         }
         piece(m, BonePart::Torso, Vec3{0.0f, ts.y * 0.96f, 0.0f}, Vec3{ts.x * 1.2f, 0.07f, ts.z * 1.5f},
               BoneColor::Accent); // gold gorget
-        for (f32 ex : {-1.0f, 1.0f}) {
-            piece(m, BonePart::Torso, Vec3{ex * ts.x * 0.32f, tc.y * 0.5f, ts.z * 0.62f},
-                  Vec3{ts.x * 0.16f, ts.y * 1.4f, 0.03f}, BoneColor::Primary, BoneShape::Box); // stole
-        }
+        // (the stole bands are simulated ClothInstances now - see ClientApp::setup_cloth)
         cross(tc.y * 0.8f, ts.y * 0.42f);
         cross(tc.y * 0.3f, ts.y * 0.34f);
         // (the flowing cape is a simulated ClothInstance now - see ClientApp::setup_cloth)

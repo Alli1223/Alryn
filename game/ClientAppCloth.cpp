@@ -13,23 +13,29 @@ void ClientApp::setup_cloth(PlayerVisual& v, PlayerRole role, const Equipment& e
     const int vt = outfit_design_tier(eq.outfit());
     const CharacterPalette& pal = v.model.palette();
 
-    // A flat back cape: one chain hanging off the upper back, drawn as a wide sheet.
-    auto add_cape = [&](const Vec3& color, f32 width, f32 wind_gain) {
+    // A flat cloth sheet (cape / tabard / stole / mantle): one chain hanging off `anchor` (+ local
+    // offset) along `hang`, drawn as a sheet `width` either side of `side`.
+    auto add_sheet = [&](BonePart anchor, const Vec3& anchor_local, const Vec3& hang, const Vec3& side,
+                         int segs, f32 seg, f32 width, const Vec3& color, f32 wind_gain) {
         ClothInstance c;
-        c.anchor = BonePart::Head; // the neck / upper-back joint
+        c.anchor = anchor;
         c.ring = false;
-        c.segments = 5;
-        c.seg = 0.13f;
+        c.segments = segs;
+        c.seg = seg;
         c.half_width = width;
         c.color = color;
-        c.side_local = Vec3{1.0f, 0.0f, 0.0f};
-        c.anchor_locals = {Vec3{0.0f, -0.05f, -0.12f}}; // just behind + below the neck
-        c.hang_locals = {Vec3{0.0f, -1.0f, -0.22f}};    // down + a touch back
+        c.side_local = side;
+        c.anchor_locals = {anchor_local};
+        c.hang_locals = {hang};
         c.chains.resize(1);
         c.chains[0].stiffness = 0.72f;
         c.chains[0].damping = 0.06f;
         c.chains[0].wind_gain = wind_gain;
         v.cloth.push_back(std::move(c));
+    };
+    auto add_cape = [&](const Vec3& color, f32 width, f32 wind_gain) {
+        add_sheet(BonePart::Head, Vec3{0.0f, -0.05f, -0.12f}, Vec3{0.0f, -1.0f, -0.22f},
+                  Vec3{1.0f, 0.0f, 0.0f}, 5, 0.13f, width, color, wind_gain);
     };
 
     // A robe skirt: a ring of chains hanging off the waist, drawn as a closed tube around the legs.
@@ -65,6 +71,26 @@ void ClientApp::setup_cloth(PlayerVisual& v, PlayerRole role, const Equipment& e
         add_skirt(pal.primary, 0.17f, 6, 0.15f, 0.34f, 1.0f);
     } else if (role == PlayerRole::Cleric) {
         add_skirt(pal.primary, 0.17f, 7, 0.15f, 0.3f, 0.9f);
+    }
+
+    // Minor flowing pieces.
+    const Vec3 X{1.0f, 0.0f, 0.0f};
+    if (role == PlayerRole::Knight && vt == 2) {
+        // Paladin heraldic tabard: a sheet down the chest front.
+        add_sheet(BonePart::Torso, Vec3{0.0f, 0.32f, 0.14f}, Vec3{0.0f, -1.0f, 0.08f}, X, 4, 0.14f, 0.1f,
+                  pal.primary, 0.55f);
+    }
+    if (role == PlayerRole::Cleric && vt >= 1) {
+        // Priest / prophet stole: two narrow bands hanging from the shoulders down the front.
+        for (f32 ex : {-1.0f, 1.0f}) {
+            add_sheet(BonePart::Torso, Vec3{ex * 0.09f, 0.42f, 0.1f}, Vec3{0.0f, -1.0f, 0.05f}, X, 4,
+                      0.12f, 0.045f, pal.dark, 0.5f);
+        }
+    }
+    if (role == PlayerRole::Hunter && vt == 1) {
+        // Warden's shoulder mantle: a short, wide cape off the upper back.
+        add_sheet(BonePart::Head, Vec3{0.0f, -0.02f, -0.12f}, Vec3{0.0f, -1.0f, -0.32f}, X, 3, 0.1f,
+                  0.28f, pal.dark, 1.3f);
     }
 }
 

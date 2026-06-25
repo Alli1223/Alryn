@@ -30,6 +30,18 @@ the skinned body) is permanent, so a character who loses their robe is still dec
   gravity (keeping its momentum), the whole piece drifts + tumbles to the ground and fades out. A
   client `ClothInstance` per piece per character holds the sim state + an `attached` flag.
 
+## Status: COMPLETE
+All phases done (branch `skinned-characters`). Every **flowing** outfit piece now simulates as
+spring-bone cloth that hangs, sways with movement, blows in the wind, drapes over the body, and can be
+**cut (on a hit), blown off (in a storm) or dropped (debug key `C`)** - fluttering to the ground and
+leaving the permanent under-layer (the body's tunic + shorts) on:
+- **Capes** (paladin / high prophet / beastmaster) + **robe skirts** (Mage / Cleric, an 8-panel tube) +
+  the minor pieces - **tabard** (paladin), **stole** (priest / prophet), **mantle** (warden).
+- The tight base (tunic torso, trousers, armour) + **hoods** stay rigid (a hood is snug on the head,
+  not flowing) - those are the under-layer / fixed gear.
+- Body-collision cylinder keeps skirts outside the legs; far-off characters skip the sim (perf).
+Commits: phase 1 `a5243e1`, 2a `5cf0659`, 2b `4c747bf`, 3 `5a9c961`, 4 `6683d15`, minor pieces (this).
+
 ## Phases (each ends green + committed)
 1. **Cloth sim core + a cape.** `ClothRig` spring-bone chain sim (gravity + wind + anchor inertia +
    damping) + a cloth-strip `SkinnedMesh` builder. Wire ONE piece - a back **cape** - into the client
