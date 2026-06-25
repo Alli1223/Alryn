@@ -254,6 +254,46 @@ void ClientApp::draw_ambient_life() {
         }
     }
 
+    // Daytime DUST / POLLEN motes drifting in the light - warm pale specks anchored to fixed world
+    // cells (like the fireflies), so you move THROUGH them rather than dragging them along. They
+    // swirl gently + bob up and down, twinkle as they catch the light, and fade out at the view edge.
+    if (night < 0.6f) {
+        const f32 day = 1.0f - night; // stronger in full daylight, gone by dusk
+        const f32 cs = 3.2f;          // cell size (mote spacing)
+        const int cr = 4;             // cells around the player
+        const int bcx = static_cast<int>(std::floor(feet.x / cs));
+        const int bcz = static_cast<int>(std::floor(feet.z / cs));
+        for (int dz = -cr; dz <= cr; ++dz) {
+            for (int dx = -cr; dx <= cr; ++dx) {
+                const int cx = bcx + dx, cz = bcz + dz;
+                if (hcell(cx, cz, 13) > 0.62f) {
+                    continue; // ~62% of cells host a mote
+                }
+                const f32 ax = (static_cast<f32>(cx) + hcell(cx, cz, 15)) * cs;
+                const f32 az = (static_cast<f32>(cz) + hcell(cx, cz, 17)) * cs;
+                const f32 g = worldgen::height(ax, az, world_seed_);
+                if (g < worldgen::water_level + 0.3f) {
+                    continue; // not out over the water
+                }
+                const f32 ph = hcell(cx, cz, 19) * TwoPi;
+                const f32 px = ax + std::sin(t * 0.32f + ph) * 1.3f + std::sin(t * 0.13f + ph * 2.1f) * 0.7f;
+                const f32 pz = az + std::cos(t * 0.27f + ph) * 1.3f;
+                const f32 py = g + 0.9f + 1.1f * (0.5f + 0.5f * std::sin(t * 0.4f + ph * 1.6f));
+                const f32 dxz = glm::length(Vec2{px - feet.x, pz - feet.z});
+                if (dxz > 16.0f) {
+                    continue;
+                }
+                const f32 edge = glm::smoothstep(16.0f, 10.0f, dxz);
+                const f32 twinkle =
+                    0.35f + 0.65f * std::pow(0.5f + 0.5f * std::sin(t * 1.3f + ph * 4.0f), 2.0f);
+                const f32 a = day * 0.7f * twinkle * edge;
+                renderer_->draw_glow(shape_sphere_,
+                                     glm::translate(Mat4{1.0f}, Vec3{px, py, pz}) *
+                                         glm::scale(Mat4{1.0f}, Vec3{0.06f}),
+                                     Vec4{1.0f, 0.95f, 0.74f, a}); // warm sun-catching pollen/dust
+            }
+        }
+    }
     // (The day "bird flock" + night owl were removed - they orbited the camera at a fixed offset,
     // so they read as stationary shapes floating behind the player with shadows that didn't move.)
 }
