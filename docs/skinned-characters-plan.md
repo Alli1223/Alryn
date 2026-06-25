@@ -15,33 +15,48 @@ the smooth, contoured reference art instead of reading as rounded boxes.
 - The skeleton stays `CharacterModel` (bones + `CharacterAnimator` poses). The body becomes a generated
   skinned mesh instead of per-bone primitives. Weapons keep attaching to the hand joint (rigid).
 
-## Task list (one item per loop)
-1. **[done] SkinnedMesh data model + CPU skinning.** `Character/SkinnedMesh.h` - a vertex with bone
-   indices + weights, the per-bone inverse-bind matrices, and `skin(mesh, jointMatrices) -> MeshData`.
-   Pure maths, tested (a vertex weighted to a bone follows it; bind pose = identity).
-2. **Mesh dynamic update.** `Mesh::update_vertices(MeshData)` re-uploads to the host-visible vertex
+## Task list (one item per loop) — COMPLETE
+1. **[done] SkinnedMesh data model + CPU skinning.** `Character/SkinnedMesh.{h,cpp}` - a vertex with
+   bone indices + weights, the per-bone inverse-bind matrices, and `skin(mesh, jointMatrices, out,
+   palette)`. Pure maths, tested (a vertex weighted to a bone follows it; bind pose = identity).
+2. **[done] Mesh dynamic update.** `Mesh::update_vertices(verts)` re-uploads to the host-visible vertex
    buffer in place (same vertex count), so a character mesh can be re-skinned every frame.
-3. **Procedural humanoid body mesh.** `Character/BodyMesh.{h,cpp}` - build a continuous low-poly
-   humanoid `SkinnedMesh` from the skeleton: lofted tube limbs that SHARE a ring at each joint (so
-   they're one surface), a torso, a head, hands + feet. Per-vertex bone weights blended across joints
-   so elbows/knees bend smoothly. The big, iterative piece - compare to the references.
-4. **Client skinned rendering.** A per-character dynamic `Mesh`; each frame skin by the animator's
-   joint matrices + upload + draw via the lit pipeline. Replace `draw_rig`'s primitive loop.
-5. **Headless preview.** Skin at a static / posed pose and render, so the harness compares the skinned
-   character to the references (`asset_preview character`).
-6. **Colour zones.** Vertices carry a material id (skin / cloth / hair / metal / accent / …) resolved
-   from the palette, so the one mesh is multi-coloured.
-7. **Skinned outfit / armour.** Per role, generate the outfit as additional skinned geometry (a
-   contoured breastplate, pauldrons that flow into the arms, a draping robe) deformed by the bones -
-   Plate / Leather / Holy / Robe - iterated against the references.
-8. **Animation blend.** Verify walk + swing/cast/block deform the skinned mesh smoothly (the joint
-   weights make the bends continuous); a headless check + posed renders.
-9. **NPCs.** Villagers / enemies use the same skinned body.
-10. **Perf.** Profile the per-frame skin + upload for many characters; cache / cull / LOD as needed.
-11. **Final pass.** Skin-maths + body-mesh tests, posed renders vs the references, full suite green,
-    docs.
+3. **[done] Procedural humanoid body mesh.** `Character/BodyMesh.{h,cpp}` - a continuous low-poly
+   humanoid `SkinnedMesh` from the skeleton: lofted octagonal tube limbs/torso/neck sharing a ring at
+   each joint, head/hand spheres, a foot sweep, rounded deltoid shoulders, smooth normals. Per-vertex
+   weights blended across joints so elbows/knees/shoulders/hips bend smoothly. Helpers live in
+   `Character/SkinBuilder.h` (shared with the outfit).
+4. **[done] Client skinned rendering.** Each `PlayerVisual` carries the body `SkinnedMesh` + a dynamic
+   `Mesh`; `skin_and_draw` skins in LOCAL space with the posed joints, re-uploads, and draws at the
+   world `root` via the lit pipeline. Face/hair/gear ride on top as primitives (`Bone::attachment`;
+   `draw_rig(attachments_only)`). The core body + joint fillers are the skinned mesh.
+5. **[done] Headless preview.** `asset_preview character <role>` mirrors the live path (skinned body +
+   outfit + attachment primitives + weapon); `ALRYN_POSE`/`ALRYN_TIER` drive posed/tiered renders.
+6. **[done] Colour zones.** `BodyMaterial` mirrors `BoneColor` 1:1 (skin/shirt/pants/hair + primary/
+   accent/metal/dark/glow); a shared `body_material_color(palette, mat)` resolves both body + outfit.
+7. **[done] Skinned outfit / armour.** `Character/OutfitMesh.{h,cpp}` builds the worn equipment as
+   continuous skinned geometry - armoured/clothed limbs, a torso shell, a draping skirt - weighted to
+   the same bones so it flows with the body. Plate / Robe / Holy / Leather. `Outfit.cpp` now emits only
+   the decorative silhouette pieces (pauldrons/helm/tabard/hood/quiver/…) on top.
+8. **[done] Animation blend.** Swing/cast/block overlay deforms the skinned mesh smoothly (verified by
+   posed renders + a headless test: the upper-body action shifts the mesh while the legs keep walking).
+9. **[done] NPCs.** Villagers + enemies render through the same `skin_and_draw` (per-kind tints, held
+   weapons on top). A deferred `mesh_graveyard_` frees a slain/culled NPC's GPU mesh past the frames
+   in flight.
+10. **[done] Perf.** Realistic counts are low (server-culled); `skin_and_draw` distance-culls beyond
+    `character::skin_cull_dist` (100 m) so a pathological town/battle doesn't skin far-off-screen NPCs.
+11. **[done] Final pass.** Skin-maths + body/outfit mesh tests + action-blend test; the four-role
+    roster renders as continuous skinned figures matching the reference style; full suite green.
+
+## Result
+The whole roster - players (Knight / Hunter / Cleric / Mage), villagers, guards, archers, and every
+enemy kind - now renders as a **single continuous skinned mesh that bends at the joints**, with the
+worn outfit as continuous skinned geometry over it, instead of stacked rigid primitives. Drawn through
+the existing lit pipeline (shadows / fog / hemispheric ambient / tonemap for free), re-skinned +
+re-uploaded each frame, distance-culled. CPU linear-blend skinning; no new shader, pipeline or
+descriptor. Branch `skinned-characters`.
 
 ## Conventions
 - Keep the skinning + mesh generation **headless-testable** (pure data + maths in `Character/`).
-- Re-render with `make character` after each change and compare to the reference art.
+- Re-render with `asset_preview character <role>` after each change and compare to the reference art.
 - Every loop ends green (build + tests) and is committed.
