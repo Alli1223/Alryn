@@ -39,6 +39,28 @@ Vec3 part_center(const CharacterModel& m, BonePart part) {
     const int i = m.bone_index(part);
     return i < 0 ? Vec3{0.0f} : m.bones()[static_cast<usize>(i)].box_center;
 }
+// The true length of a leg segment (the child joint's offset down from its parent).
+f32 leg_seg(const CharacterModel& m, BonePart child) {
+    const int i = m.bone_index(child);
+    return i < 0 ? 0.44f : -m.bones()[static_cast<usize>(i)].joint_offset.y;
+}
+
+// One CONTINUOUS robe skirt hanging from the pelvis over both legs (no gap between the legs), down to
+// `length_frac` of the lower leg. A tapered stack (narrower at the waist, flared at the hem) so it
+// reads as cloth rather than a slab.
+void robe_skirt(CharacterModel& m, BoneColor color, f32 length_frac, f32 flare) {
+    const f32 lu = leg_seg(m, BonePart::LowerLegL);
+    const f32 ll = leg_seg(m, BonePart::FootL);
+    const f32 bottom = -(lu + ll * length_frac);
+    const f32 top = 0.14f;     // start above the hip so it meets the robe body / belt (no bare thigh)
+    const f32 knee = -lu;
+    // upper (waist -> knee, snug) + lower (knee -> hem, flared) for an A-line; wide enough to fully
+    // enclose both legs so they never poke through.
+    piece(m, BonePart::Pelvis, Vec3{0.0f, (top + knee) * 0.5f, 0.0f},
+          Vec3{flare * 0.86f, top - knee, flare * 0.66f}, color);
+    piece(m, BonePart::Pelvis, Vec3{0.0f, (knee + bottom) * 0.5f, 0.0f},
+          Vec3{flare, knee - bottom, flare * 0.74f}, color);
+}
 
 // ------------------------------------------------------------------------------------------------
 // Knight - steel PLATE with gold trim, a plumed great-helm, a heraldic tabard in the chosen colour.
@@ -126,11 +148,8 @@ void build_robe(CharacterModel& m, const Equipment& eq) {
         piece(m, BonePart::Pelvis, Vec3{0.0f, 0.04f, part_size(m, BonePart::Pelvis).z * 0.62f},
               Vec3{0.07f, 0.06f, 0.04f}, BoneColor::Accent, BoneShape::Box);
     }
-    // Long robe skirt: a flared cover over the upper legs (the silhouette's defining piece).
-    for (BonePart up : {BonePart::UpperLegL, BonePart::UpperLegR}) {
-        const f32 ul = part_size(m, up).y;
-        piece(m, up, Vec3{0.0f, -ul * 0.7f, 0.0f}, Vec3{0.21f, ul * 1.7f, 0.23f}, BoneColor::Primary);
-    }
+    // One continuous robe skirt (no gap between the legs) to the calves.
+    robe_skirt(m, BoneColor::Primary, 0.66f, 0.52f);
     // Sleeves over the arms.
     for (BonePart up : {BonePart::UpperArmL, BonePart::UpperArmR}) {
         const f32 al = part_size(m, up).y;
@@ -239,22 +258,19 @@ void build_holy(CharacterModel& m, const Equipment& eq) {
         const f32 al = part_size(m, up).y;
         piece(m, up, Vec3{0.0f, -al * 0.55f, 0.0f}, Vec3{0.135f, al * 1.1f, 0.145f}, BoneColor::Primary);
     }
-    for (BonePart up : {BonePart::UpperLegL, BonePart::UpperLegR}) {
-        const f32 ul = part_size(m, up).y;
-        piece(m, up, Vec3{0.0f, -ul * 1.05f, 0.0f}, Vec3{0.22f, ul * 2.3f, 0.24f}, BoneColor::Primary);
-    }
-    // Steel helm with a lit visor slit, under a tall two-peaked golden mitre.
-    piece(m, BonePart::Head, hc, hs * Vec3{1.16f, 1.12f, 1.18f}, BoneColor::Metal);
-    piece(m, BonePart::Head, Vec3{0.0f, hc.y, hs.z * 0.62f}, Vec3{hs.x * 0.86f, hs.y * 0.14f, 0.04f},
+    robe_skirt(m, BoneColor::Primary, 0.95f, 0.54f); // long white robe to the ankles
+    // Steel helm with a lit visor slit, under a modest two-peaked golden mitre.
+    piece(m, BonePart::Head, hc, hs * Vec3{1.12f, 1.1f, 1.14f}, BoneColor::Metal);
+    piece(m, BonePart::Head, Vec3{0.0f, hc.y, hs.z * 0.6f}, Vec3{hs.x * 0.82f, hs.y * 0.13f, 0.04f},
           BoneColor::Glow, BoneShape::Box);
-    piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.85f, 0.0f}, Vec3{hs.x * 1.0f, hs.y * 0.9f, hs.z * 0.5f},
-          BoneColor::Accent); // mitre body
-    piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 1.35f, hs.z * 0.18f},
-          Vec3{hs.x * 0.9f, hs.y * 0.7f, 0.06f}, BoneColor::Accent, BoneShape::Box, pitch(0.18f)); // front peak
-    piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 1.35f, -hs.z * 0.18f},
-          Vec3{hs.x * 0.9f, hs.y * 0.7f, 0.06f}, BoneColor::Accent, BoneShape::Box, pitch(-0.18f)); // back peak
-    piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.5f, 0.0f}, Vec3{hs.x * 1.04f, hs.y * 0.12f, hs.z * 1.06f},
-          BoneColor::Dark); // blue brow band of the mitre
+    piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.74f, 0.0f},
+          Vec3{hs.x * 0.78f, hs.y * 0.6f, hs.z * 0.42f}, BoneColor::Accent); // mitre body (smaller)
+    piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 1.06f, hs.z * 0.13f},
+          Vec3{hs.x * 0.66f, hs.y * 0.48f, 0.06f}, BoneColor::Accent, BoneShape::Box, pitch(0.16f)); // front peak
+    piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 1.06f, -hs.z * 0.13f},
+          Vec3{hs.x * 0.66f, hs.y * 0.48f, 0.06f}, BoneColor::Accent, BoneShape::Box, pitch(-0.16f)); // back peak
+    piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.44f, 0.0f},
+          Vec3{hs.x * 1.0f, hs.y * 0.11f, hs.z * 1.02f}, BoneColor::Dark); // blue brow band
     // Blue coif draping at the back/shoulders.
     piece(m, BonePart::Torso, Vec3{0.0f, ts.y * 0.86f, -ts.z * 0.4f},
           Vec3{ts.x * 1.2f, ts.y * 0.5f, ts.z * 0.7f}, BoneColor::Dark);

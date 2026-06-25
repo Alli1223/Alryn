@@ -175,37 +175,65 @@ CharacterModel CharacterModel::generate(u32 seed) {
     };
 
     const f32 hip_w = 0.10f * build;            // half-spacing of the hip joints
-    const f32 shoulder_y = torso * 0.86f;       // shoulders near the top of the torso
-    const f32 shoulder_x = 0.21f * build + 0.02f; // half-spacing of the shoulder joints
+    const f32 shoulder_y = torso * 0.84f;       // shoulders near the top of the torso
+    const f32 shoulder_x = 0.20f * build + 0.03f; // half-spacing of the shoulder joints
+    const f32 arm_r = 0.085f * build;           // arm radius
+    const f32 leg_r = 0.125f * build;           // leg radius
 
-    // Parents always precede children (indices 0..12); the animator + the face/hair feature bones
-    // (parented to the head, index 2) rely on this layout.
-    add(BonePart::Pelvis, -1, {0.0f, leg_len, 0.0f}, {0.30f * build, 0.20f, 0.22f * build},
+    // Core skeleton, indices 0..12 - parts/order unchanged so the animator + the face/hair feature
+    // bones (parented to the head, index 2) still work. Limb segments are made a touch LONGER than
+    // their span so they overlap at the joints, and ball-joint fillers (added after) cover the seams,
+    // so the body reads as one connected figure rather than stacked blocks.
+    add(BonePart::Pelvis, -1, {0.0f, leg_len, 0.0f}, {0.30f * build, 0.24f, 0.23f * build},
         {0.0f, 0.0f, 0.0f}, BoneColor::Pants, BoneShape::RoundedBox);
-    add(BonePart::Torso, 0, {0.0f, 0.06f, 0.0f}, {0.42f * build, torso, 0.25f * build},
-        {0.0f, torso * 0.5f, 0.0f}, BoneColor::Shirt, BoneShape::RoundedBox);
+    add(BonePart::Torso, 0, {0.0f, 0.04f, 0.0f}, {0.40f * build, torso, 0.25f * build},
+        {0.0f, torso * 0.52f, 0.0f}, BoneColor::Shirt, BoneShape::RoundedBox);
     add(BonePart::Head, 1, {0.0f, torso + neck, 0.0f}, {head_w, head_h, head_w * 1.04f},
         {0.0f, head_h * 0.5f, 0.0f}, BoneColor::Skin, BoneShape::RoundedBox);
-    add(BonePart::UpperArmL, 1, {-shoulder_x, shoulder_y, 0.0f}, {0.115f, arm_upper, 0.125f},
+    add(BonePart::UpperArmL, 1, {-shoulder_x, shoulder_y, 0.0f}, {arm_r * 2.0f, arm_upper * 1.16f, arm_r * 2.1f},
         {0.0f, -arm_upper * 0.5f, 0.0f}, BoneColor::Shirt, BoneShape::Capsule);
-    add(BonePart::LowerArmL, 3, {0.0f, -arm_upper, 0.0f}, {0.10f, arm_lower, 0.105f},
+    add(BonePart::LowerArmL, 3, {0.0f, -arm_upper, 0.0f}, {arm_r * 1.7f, arm_lower * 1.2f, arm_r * 1.8f},
         {0.0f, -arm_lower * 0.5f, 0.0f}, BoneColor::Skin, BoneShape::Capsule);
-    add(BonePart::UpperArmR, 1, {shoulder_x, shoulder_y, 0.0f}, {0.115f, arm_upper, 0.125f},
+    add(BonePart::UpperArmR, 1, {shoulder_x, shoulder_y, 0.0f}, {arm_r * 2.0f, arm_upper * 1.16f, arm_r * 2.1f},
         {0.0f, -arm_upper * 0.5f, 0.0f}, BoneColor::Shirt, BoneShape::Capsule);
-    add(BonePart::LowerArmR, 5, {0.0f, -arm_upper, 0.0f}, {0.10f, arm_lower, 0.105f},
+    add(BonePart::LowerArmR, 5, {0.0f, -arm_upper, 0.0f}, {arm_r * 1.7f, arm_lower * 1.2f, arm_r * 1.8f},
         {0.0f, -arm_lower * 0.5f, 0.0f}, BoneColor::Skin, BoneShape::Capsule);
-    add(BonePart::UpperLegL, 0, {-hip_w, 0.0f, 0.0f}, {0.145f, leg_upper, 0.16f},
+    add(BonePart::UpperLegL, 0, {-hip_w, 0.0f, 0.0f}, {leg_r * 2.0f, leg_upper * 1.12f, leg_r * 2.1f},
         {0.0f, -leg_upper * 0.5f, 0.0f}, BoneColor::Pants, BoneShape::Capsule);
-    add(BonePart::LowerLegL, 7, {0.0f, -leg_upper, 0.0f}, {0.12f, leg_lower, 0.13f},
+    add(BonePart::LowerLegL, 7, {0.0f, -leg_upper, 0.0f}, {leg_r * 1.7f, leg_lower * 1.16f, leg_r * 1.8f},
         {0.0f, -leg_lower * 0.5f, 0.0f}, BoneColor::Pants, BoneShape::Capsule);
-    add(BonePart::UpperLegR, 0, {hip_w, 0.0f, 0.0f}, {0.145f, leg_upper, 0.16f},
+    add(BonePart::UpperLegR, 0, {hip_w, 0.0f, 0.0f}, {leg_r * 2.0f, leg_upper * 1.12f, leg_r * 2.1f},
         {0.0f, -leg_upper * 0.5f, 0.0f}, BoneColor::Pants, BoneShape::Capsule);
-    add(BonePart::LowerLegR, 9, {0.0f, -leg_upper, 0.0f}, {0.12f, leg_lower, 0.13f},
+    add(BonePart::LowerLegR, 9, {0.0f, -leg_upper, 0.0f}, {leg_r * 1.7f, leg_lower * 1.16f, leg_r * 1.8f},
         {0.0f, -leg_lower * 0.5f, 0.0f}, BoneColor::Pants, BoneShape::Capsule);
-    add(BonePart::FootL, 8, {0.0f, -leg_lower, 0.0f}, {0.15f, 0.13f, 0.30f}, {0.0f, -0.02f, 0.08f},
+    add(BonePart::FootL, 8, {0.0f, -leg_lower, 0.05f}, {0.15f, 0.14f, 0.32f}, {0.0f, -0.01f, 0.07f},
         BoneColor::Pants, BoneShape::RoundedBox);
-    add(BonePart::FootR, 10, {0.0f, -leg_lower, 0.0f}, {0.15f, 0.13f, 0.30f}, {0.0f, -0.02f, 0.08f},
+    add(BonePart::FootR, 10, {0.0f, -leg_lower, 0.05f}, {0.15f, 0.14f, 0.32f}, {0.0f, -0.01f, 0.07f},
         BoneColor::Pants, BoneShape::RoundedBox);
+
+    // Joint fillers + neck + hands (part = None, so they're not animated specially - they just ride
+    // their parent and fill the seam at each joint, connecting the limbs). Parented to the bone whose
+    // JOINT sits at the seam (a child's joint_offset is the seam relative to its parent's joint).
+    auto fill = [&](int parent, Vec3 at, f32 r, BoneColor color) {
+        m.bones_.push_back({BonePart::None, parent, Vec3{0.0f}, Vec3{r * 2.0f}, at, color,
+                            BoneShape::Sphere, QuatIdentity});
+    };
+    const int iTorso = 1, iHeadParent = 1;
+    const int iUAL = 3, iLAL = 4, iUAR = 5, iLAR = 6;
+    const int iULL = 7, iLLL = 8, iULR = 9, iLLR = 10;
+    fill(iHeadParent, {0.0f, torso + neck * 0.5f, 0.0f}, neck * 1.6f, BoneColor::Skin); // neck
+    fill(iTorso, {-shoulder_x, shoulder_y, 0.0f}, arm_r * 1.15f, BoneColor::Shirt);     // shoulders
+    fill(iTorso, {shoulder_x, shoulder_y, 0.0f}, arm_r * 1.15f, BoneColor::Shirt);
+    fill(iUAL, {0.0f, -arm_upper, 0.0f}, arm_r * 0.95f, BoneColor::Skin);               // elbows
+    fill(iUAR, {0.0f, -arm_upper, 0.0f}, arm_r * 0.95f, BoneColor::Skin);
+    fill(iLAL, {0.0f, -arm_lower, 0.0f}, arm_r * 1.0f, BoneColor::Skin);                // hands
+    fill(iLAR, {0.0f, -arm_lower, 0.0f}, arm_r * 1.0f, BoneColor::Skin);
+    fill(0, {-hip_w, 0.0f, 0.0f}, leg_r * 1.05f, BoneColor::Pants);                     // hips
+    fill(0, {hip_w, 0.0f, 0.0f}, leg_r * 1.05f, BoneColor::Pants);
+    fill(iULL, {0.0f, -leg_upper, 0.0f}, leg_r * 0.95f, BoneColor::Pants);              // knees
+    fill(iULR, {0.0f, -leg_upper, 0.0f}, leg_r * 0.95f, BoneColor::Pants);
+    fill(iLLL, {0.0f, -leg_lower, 0.0f}, leg_r * 0.85f, BoneColor::Pants);              // ankles
+    fill(iLLR, {0.0f, -leg_lower, 0.0f}, leg_r * 0.85f, BoneColor::Pants);
 
     return m;
 }

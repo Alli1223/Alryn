@@ -113,10 +113,12 @@ void ClientApp::on_init() {
     }
     // Shared white character shapes, tinted per bone with each player's palette.
     shape_box_.create(renderer_->device(), primitives::cube(1.0f, Vec3{1.0f}));
-    shape_sphere_.create(renderer_->device(), primitives::sphere(10, 7, Vec3{1.0f}));
-    shape_cylinder_.create(renderer_->device(), primitives::cylinder(10, Vec3{1.0f}));
-    shape_capsule_.create(renderer_->device(), primitives::capsule(12, 3, Vec3{1.0f}));
-    shape_rounded_.create(renderer_->device(), primitives::rounded_box(0.12f, Vec3{1.0f}));
+    // Smoother character shapes (more subdivisions + a stronger bevel) so the rig + gear read as
+    // rounded, contoured forms rather than hard blocks.
+    shape_sphere_.create(renderer_->device(), primitives::sphere(18, 12, Vec3{1.0f}));
+    shape_cylinder_.create(renderer_->device(), primitives::cylinder(16, Vec3{1.0f}));
+    shape_capsule_.create(renderer_->device(), primitives::capsule(18, 6, Vec3{1.0f}));
+    shape_rounded_.create(renderer_->device(), primitives::rounded_box(0.32f, Vec3{1.0f}));
 
     // Upload the prop catalogue (bushes, rocks, logs, fences, lanterns) to GPU.
     auto upload_props = [&](const std::vector<PropDef>& defs, std::vector<GpuProp>& out) {

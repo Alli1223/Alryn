@@ -57,8 +57,11 @@ TEST_CASE("CharacterModel: deterministic generation and valid hierarchy") {
     const CharacterModel a = CharacterModel::generate(7);
     const CharacterModel b = CharacterModel::generate(7);
 
-    REQUIRE(a.bone_count() == 13);
-    CHECK(b.bone_count() == 13);
+    // 13 core skeleton bones (parts 0..12) + joint fillers (neck/hands/ball joints) that connect them.
+    REQUIRE(a.bone_count() >= 13);
+    CHECK(b.bone_count() == a.bone_count());
+    CHECK(a.bone_index(BonePart::Head) == 2); // head stays index 2 (face/hair features parent to it)
+    CHECK(a.bone_index(BonePart::FootR) >= 0);
     CHECK(a.palette().skin == b.palette().skin);   // same seed => identical
     CHECK(a.palette().shirt == b.palette().shirt);
     CHECK(a.height() == doctest::Approx(b.height()));

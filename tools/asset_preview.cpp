@@ -207,10 +207,10 @@ MeshData bake(const MeshData& src, const Mat4& m, const Vec3& color) {
 Asset build_character(int role) {
     // Unit shapes matching ClientApp's shape_box_/sphere_/cylinder_/capsule_/rounded_.
     const MeshData box = primitives::cube(1.0f, Vec3{1.0f});
-    const MeshData sphere = primitives::sphere(10, 7, Vec3{1.0f});
-    const MeshData cylinder = primitives::cylinder(10, Vec3{1.0f});
-    const MeshData capsule = primitives::capsule(12, 3, Vec3{1.0f});
-    const MeshData rounded = primitives::rounded_box(0.12f, Vec3{1.0f});
+    const MeshData sphere = primitives::sphere(18, 12, Vec3{1.0f});
+    const MeshData cylinder = primitives::cylinder(16, Vec3{1.0f});
+    const MeshData capsule = primitives::capsule(18, 6, Vec3{1.0f});
+    const MeshData rounded = primitives::rounded_box(0.32f, Vec3{1.0f});
 
     CharacterAppearance app; // a plain face/body; the role-themed outfit goes on top
     const u32 seed = 1000u + static_cast<u32>(role);
@@ -353,9 +353,9 @@ bool render_one(test::OffscreenRenderer& r, const std::string& cat, int v, const
     const f32 fov = radians(34.0f);
     const f32 fit = std::min(fov, 2.0f * std::atan(std::tan(fov * 0.5f) * aspect));
     const f32 dist = radius / std::sin(fit * 0.5f) * 1.18f;
-    // Characters face local +Z; frame them from a near-frontal 3/4 (like the reference art) rather
+    // Characters face local +Z; frame them from a near eye-level 3/4 (like the reference art) rather
     // than the high iso angle used for props.
-    const Vec3 dir = (cat == "character") ? glm::normalize(Vec3{0.45f, 0.32f, 1.0f})
+    const Vec3 dir = (cat == "character") ? glm::normalize(Vec3{0.34f, 0.13f, 1.0f})
                                           : glm::normalize(Vec3{0.62f, 0.52f, 0.62f});
     const Vec3 eye = center + dir * dist;
     Mat4 proj = perspective(fov, aspect, 0.1f, dist * 4.0f);
