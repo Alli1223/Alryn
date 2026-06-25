@@ -47,6 +47,15 @@ TEST_CASE("Contract: modifiers vary pay + ambush, deterministic and a mix") {
     CHECK(nonstd < 180);
 }
 
+TEST_CASE("Contract: intact-delivery bonus rewards a healthy wagon") {
+    CHECK(intact_bonus_mult(1.0f) > intact_bonus_mult(0.5f));
+    CHECK(intact_bonus_mult(0.5f) > intact_bonus_mult(0.0f));
+    CHECK(intact_bonus_mult(0.0f) == doctest::Approx(1.0f));               // a wreck earns no bonus
+    CHECK(intact_bonus_mult(1.0f) == doctest::Approx(1.0f + kIntactBonus)); // full health = full bonus
+    CHECK(intact_bonus_mult(2.0f) == doctest::Approx(intact_bonus_mult(1.0f))); // clamped above 1
+    CHECK(intact_bonus_mult(-1.0f) == doctest::Approx(1.0f));                    // clamped below 0
+}
+
 TEST_CASE("Contract: bigger vehicles pay more (capacity multiplier)") {
     CHECK(capacity_reward_mult(1) == doctest::Approx(1.0f));     // a cart: baseline pay
     CHECK(capacity_reward_mult(2) > capacity_reward_mult(1));    // a wagon: more

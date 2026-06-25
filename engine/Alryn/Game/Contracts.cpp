@@ -783,12 +783,14 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
             w.goods_total > 0 ? static_cast<f32>(cargo_.size()) / static_cast<f32>(w.goods_total) : 1.0f;
         const f32 base = manual ? static_cast<f32>(w.reward) * kManualRewardMult
                                 : static_cast<f32>(w.reward);
-        money_ += static_cast<u32>(std::lround(base * frac));
+        // Bonus for delivering the wagon INTACT (scales with remaining health) - defending it pays.
+        const f32 intact = intact_bonus_mult(w.health / kWagonHealth);
+        money_ += static_cast<u32>(std::lround(base * frac * intact));
         contract_outcome_ = 1;
         contract_phase_ = ContractPhase::Settle;
         settle_timer_ = kSettleSeconds;
-        ALRYN_INFO("Wagon delivered ({}/{} crates)! Party money now {}", cargo_.size(), w.goods_total,
-                   money_);
+        ALRYN_INFO("Wagon delivered ({}/{} crates, {:.0f}% intact, x{:.2f} bonus)! Party money now {}",
+                   cargo_.size(), w.goods_total, 100.0f * w.health / kWagonHealth, intact, money_);
         end_contract_cleanup();
         return;
     }

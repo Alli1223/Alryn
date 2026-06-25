@@ -123,6 +123,11 @@ void ClientApp::draw_hud() {
                   3.0f);
         draw.rect(Vec4{24.0f, 22.0f + ts * 2.6f, 220.0f * std::max(wf, 0.0f), 12.0f},
                   Vec4{glm::mix(Vec3{0.8f, 0.3f, 0.2f}, Vec3{0.5f, 0.7f, 0.4f}, wf), 0.95f}, 3.0f);
+        // Intact-delivery bonus: keeping the wagon's health up earns up to +bonus pay on arrival, so
+        // it's worth fighting the ambushers off rather than just outrunning them.
+        const int ibonus = static_cast<int>(std::lround((intact_bonus_mult(wf) - 1.0f) * 100.0f));
+        draw.text(Vec2{252.0f, 22.0f + ts * 2.6f - 1.0f}, std::format("INTACT +{}% PAY", ibonus),
+                  ts * 0.62f, Vec4{glm::mix(Vec3{0.85f, 0.5f, 0.3f}, Vec3{0.6f, 0.86f, 0.5f}, wf), 1.0f});
         // Contextual E hint: righting a flipped cart / handling goods take priority.
         bool carrying = false;
         for (const net::PlayerState& pp : snapshot_.players) {

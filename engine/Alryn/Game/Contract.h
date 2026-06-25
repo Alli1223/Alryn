@@ -135,6 +135,16 @@ inline u32 contract_reward(f32 distance, u8 difficulty, bool manual) {
     return static_cast<u32>(std::lround(base * (manual ? kManualRewardMult : 1.0f)));
 }
 
+// An INTACT-delivery bonus: the payout scales up with the wagon's remaining health on arrival, so
+// actively DEFENDING the cart from ambushers (not merely surviving) pays off - a pristine arrival
+// earns the full bonus, a battered one earns little. (Cargo loss is already penalised separately by
+// the share-of-load delivered.)
+inline constexpr f32 kIntactBonus = 0.4f; // up to +40% pay for a full-health delivery
+inline f32 intact_bonus_mult(f32 health_frac) {
+    const f32 hf = health_frac < 0.0f ? 0.0f : (health_frac > 1.0f ? 1.0f : health_frac);
+    return 1.0f + kIntactBonus * hf;
+}
+
 // Per-contract MODIFIER: a deterministic flavour on each offer (derived from its id) that varies the
 // pay + ambush size, so the board mixes safe low-pay escorts with dangerous, well-paid hauls instead
 // of every contract feeling the same. The client derives the SAME modifier from the (networked) wagon
