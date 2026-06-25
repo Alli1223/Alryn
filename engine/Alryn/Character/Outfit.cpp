@@ -167,58 +167,71 @@ void build_robe(CharacterModel& m, const Equipment& eq) {
     const Vec3 ts = part_size(m, BonePart::Torso), tc = part_center(m, BonePart::Torso);
     const Vec3 hs = part_size(m, BonePart::Head), hc = part_center(m, BonePart::Head);
 
+    // A glowing/gold runic band down the robe front (the arcane orphrey).
+    auto runes = [&](BoneColor c, f32 w) {
+        piece(m, BonePart::Torso, Vec3{0.0f, tc.y * 0.7f, ts.z * 0.62f}, Vec3{w, ts.y * 1.42f, 0.03f}, c,
+              BoneShape::Box);
+    };
+    // An angular high collar / shoulder cowl standing up around the neck.
+    auto cowl = [&](f32 w) {
+        piece(m, BonePart::Torso, Vec3{0.0f, ts.y * 0.86f, 0.0f}, Vec3{ts.x * w, ts.y * 0.5f, ts.z * 1.22f},
+              BoneColor::Primary, BoneShape::Box);
+    };
+
     if (vt == 0) {
-        // APPRENTICE - a drawn-up hood over a shadowed face + a rope belt + a pouch. Drab, no trim.
-        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.06f, -hs.z * 0.06f},
-              hs * Vec3{1.24f, 1.22f, 1.34f}, BoneColor::Primary); // hood
+        // APPRENTICE - an angular drawn-up hood with a drooping point, a shadowed face, a rope belt + pouch.
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.08f, -hs.z * 0.04f},
+              hs * Vec3{1.26f, 1.26f, 1.34f}, BoneColor::Primary, BoneShape::Box); // hood shell
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.5f, -hs.z * 0.3f},
+              Vec3{hs.x * 0.5f, hs.y * 0.7f, hs.z * 0.6f}, BoneColor::Primary, BoneShape::Box,
+              pitch(-0.42f)); // drooping peak
         piece(m, BonePart::Head, Vec3{0.0f, hc.y - hs.y * 0.04f, hs.z * 0.5f},
-              Vec3{hs.x * 0.72f, hs.y * 0.52f, 0.16f}, BoneColor::Dark, BoneShape::RoundedBox); // shadow
+              Vec3{hs.x * 0.72f, hs.y * 0.52f, 0.16f}, BoneColor::Dark, BoneShape::Box); // face shadow
         piece(m, BonePart::Pelvis, Vec3{0.0f, 0.04f, 0.0f},
-              part_size(m, BonePart::Pelvis) * Vec3{1.14f, 0.3f, 1.16f}, BoneColor::Dark); // rope belt
+              part_size(m, BonePart::Pelvis) * Vec3{1.16f, 0.3f, 1.18f}, BoneColor::Dark,
+              BoneShape::Box); // rope belt
         piece(m, BonePart::Pelvis, Vec3{0.15f, -0.02f, ts.z * 0.4f}, Vec3{0.09f, 0.11f, 0.06f},
-              BoneColor::Dark); // pouch
+              BoneColor::Dark, BoneShape::Box); // pouch
     } else if (vt == 1) {
-        // ELEMENTALIST - a circlet (hair shows), a shoulder cowl, a runed front trim + belt + spellbook.
-        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.42f, 0.0f}, hs * Vec3{1.16f, 0.16f, 1.16f},
-              BoneColor::Accent, BoneShape::RoundedBox); // circlet
+        // ELEMENTALIST - a circlet + gem, an angular shoulder cowl, a runed orphrey, a belt + spellbook.
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.42f, 0.0f}, hs * Vec3{1.18f, 0.18f, 1.18f},
+              BoneColor::Accent, BoneShape::Box); // circlet
         piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.52f, hs.z * 0.5f}, Vec3{0.05f, 0.06f, 0.05f},
-              BoneColor::Glow, BoneShape::Sphere); // circlet gem
-        piece(m, BonePart::Torso, Vec3{0.0f, ts.y * 0.9f, 0.0f},
-              Vec3{ts.x * 1.34f, ts.y * 0.32f, ts.z * 1.34f}, BoneColor::Primary); // shoulder cowl
-        piece(m, BonePart::Torso, Vec3{0.0f, tc.y, ts.z * 0.62f}, Vec3{0.05f, ts.y * 1.04f, 0.04f},
-              BoneColor::Accent, BoneShape::Box); // runed front trim
+              BoneColor::Glow, BoneShape::Box); // circlet gem
+        cowl(1.34f);
+        runes(BoneColor::Accent, 0.055f);
         piece(m, BonePart::Pelvis, Vec3{0.0f, 0.04f, 0.0f},
-              part_size(m, BonePart::Pelvis) * Vec3{1.16f, 0.34f, 1.18f}, BoneColor::Dark); // belt
+              part_size(m, BonePart::Pelvis) * Vec3{1.16f, 0.34f, 1.18f}, BoneColor::Dark,
+              BoneShape::Box); // belt
         piece(m, BonePart::Pelvis, Vec3{0.17f, 0.0f, ts.z * 0.32f}, Vec3{0.1f, 0.13f, 0.05f},
               BoneColor::Dark, BoneShape::Box); // spellbook at the hip
     } else {
-        // ARCHMAGE - a gem crown, a high gold collar, gold pauldrons + gems, gold + glowing rune trim.
-        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.48f, 0.0f}, hs * Vec3{1.18f, 0.26f, 1.18f},
-              BoneColor::Accent, BoneShape::RoundedBox); // crown band
+        // ARCHMAGE - a pointed gem crown, an angular high collar, gold pauldrons + gems, gold + glowing runes.
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.46f, 0.0f}, hs * Vec3{1.16f, 0.24f, 1.16f},
+              BoneColor::Accent, BoneShape::Box); // crown band
         for (int i = 0; i < 5; ++i) {
             const f32 a = (-0.5f + static_cast<f32>(i) * 0.25f) * Pi;
             piece(m, BonePart::Head,
-                  Vec3{std::sin(a) * hs.x * 0.6f, hc.y + hs.y * 0.66f, std::cos(a) * hs.z * 0.6f},
-                  Vec3{0.04f, 0.12f, 0.04f}, BoneColor::Accent, BoneShape::Box); // crown points
+                  Vec3{std::sin(a) * hs.x * 0.62f, hc.y + hs.y * 0.72f, std::cos(a) * hs.z * 0.62f},
+                  Vec3{0.045f, 0.18f, 0.045f}, BoneColor::Accent, BoneShape::Box, roll(0.0f)); // tall points
         }
-        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.6f, hs.z * 0.58f}, Vec3{0.06f, 0.07f, 0.05f},
-              BoneColor::Glow, BoneShape::Sphere); // crown gem
-        piece(m, BonePart::Torso, Vec3{0.0f, ts.y * 0.92f, 0.0f},
-              Vec3{ts.x * 1.4f, ts.y * 0.36f, ts.z * 1.4f}, BoneColor::Primary); // high cowl
-        piece(m, BonePart::Torso, Vec3{0.0f, ts.y * 1.02f, 0.0f},
-              Vec3{ts.x * 1.46f, 0.05f, ts.z * 1.46f}, BoneColor::Accent, BoneShape::RoundedBox); // collar
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.62f, hs.z * 0.6f}, Vec3{0.06f, 0.07f, 0.05f},
+              BoneColor::Glow, BoneShape::Box); // front gem
+        cowl(1.42f);
+        piece(m, BonePart::Torso, Vec3{0.0f, ts.y * 1.0f, 0.0f}, Vec3{ts.x * 1.48f, 0.05f, ts.z * 1.46f},
+              BoneColor::Accent, BoneShape::Box); // gold collar rim
         for (BonePart up : {BonePart::UpperArmL, BonePart::UpperArmR}) {
-            piece(m, up, Vec3{0.0f, -part_size(m, up).y * 0.04f, 0.0f}, Vec3{0.24f, 0.12f, 0.25f},
-                  BoneColor::Accent, BoneShape::Sphere); // gold pauldron
-            piece(m, up, Vec3{0.0f, -part_size(m, up).y * 0.04f, 0.08f}, Vec3{0.06f, 0.06f, 0.06f},
-                  BoneColor::Glow, BoneShape::Sphere); // pauldron gem
+            piece(m, up, Vec3{0.0f, -part_size(m, up).y * 0.04f, 0.0f}, Vec3{0.24f, 0.14f, 0.26f},
+                  BoneColor::Accent, BoneShape::Box); // gold pauldron (angular)
+            piece(m, up, Vec3{0.0f, part_size(m, up).y * 0.04f, 0.08f}, Vec3{0.06f, 0.06f, 0.06f},
+                  BoneColor::Glow, BoneShape::Box); // gem
         }
-        piece(m, BonePart::Torso, Vec3{0.0f, tc.y, ts.z * 0.62f}, Vec3{0.06f, ts.y * 1.06f, 0.04f},
-              BoneColor::Accent, BoneShape::Box); // gold rune band
-        piece(m, BonePart::Torso, Vec3{0.0f, tc.y, ts.z * 0.64f}, Vec3{0.025f, ts.y * 0.94f, 0.03f},
+        runes(BoneColor::Accent, 0.07f); // gold rune band
+        piece(m, BonePart::Torso, Vec3{0.0f, tc.y * 0.7f, ts.z * 0.64f}, Vec3{0.028f, ts.y * 1.3f, 0.03f},
               BoneColor::Glow, BoneShape::Box); // glowing rune line
         piece(m, BonePart::Pelvis, Vec3{0.0f, 0.04f, 0.0f},
-              part_size(m, BonePart::Pelvis) * Vec3{1.18f, 0.4f, 1.2f}, BoneColor::Dark); // belt
+              part_size(m, BonePart::Pelvis) * Vec3{1.18f, 0.4f, 1.2f}, BoneColor::Dark,
+              BoneShape::Box); // belt
         piece(m, BonePart::Pelvis, Vec3{0.0f, 0.04f, part_size(m, BonePart::Pelvis).z * 0.62f},
               Vec3{0.07f, 0.06f, 0.04f}, BoneColor::Accent, BoneShape::Box); // gold buckle
     }
