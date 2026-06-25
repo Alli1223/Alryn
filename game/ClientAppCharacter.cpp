@@ -135,15 +135,7 @@ void ClientApp::draw_skinned_body(PlayerVisual& v, const Mat4& root, const std::
         v.body_skin = build_body_mesh(v.model); // safety net if a visual was created without it
     }
     const CharacterPalette& pal = v.model.palette();
-    auto body_palette = [&](u8 mat) -> Vec3 {
-        switch (static_cast<BodyMaterial>(mat)) {
-            case BodyMaterial::Shirt: return pal.shirt;
-            case BodyMaterial::Pants: return pal.pants;
-            case BodyMaterial::Hair: return pal.hair;
-            case BodyMaterial::Skin: break;
-        }
-        return pal.skin;
-    };
+    auto body_palette = [&](u8 mat) -> Vec3 { return body_material_color(pal, static_cast<BodyMaterial>(mat)); };
     // Skin in LOCAL space (pose only, no root) so the mesh's bind-pose bounding sphere * root gives a
     // correct cull sphere; `root` (translate+rotate+wobble) places it in the world as the model matrix.
     const std::vector<Mat4> local_jmats = v.model.joint_matrices(Mat4{1.0f}, pose);

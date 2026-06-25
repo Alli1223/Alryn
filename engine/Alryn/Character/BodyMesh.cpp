@@ -166,6 +166,22 @@ void smooth_normals(SkinnedMesh& m) {
 
 } // namespace
 
+Vec3 body_material_color(const CharacterPalette& pal, BodyMaterial mat) {
+    switch (mat) {
+        case BodyMaterial::Skin: return pal.skin;
+        case BodyMaterial::Shirt: return pal.shirt;
+        case BodyMaterial::Pants: return pal.pants;
+        case BodyMaterial::Hair: return pal.hair;
+        case BodyMaterial::Eye: return pal.eye;
+        case BodyMaterial::Primary: return pal.primary;
+        case BodyMaterial::Accent: return pal.accent;
+        case BodyMaterial::Metal: return pal.metal;
+        case BodyMaterial::Dark: return pal.dark;
+        case BodyMaterial::Glow: return pal.glow;
+    }
+    return pal.skin;
+}
+
 SkinnedMesh build_body_mesh(const CharacterModel& model) {
     SkinnedMesh sm;
     const std::vector<Mat4> J = model.joint_matrices(Mat4{1.0f}, {}); // bind joint frames

@@ -271,15 +271,7 @@ Asset build_character(int role) {
     Asset a;
     {
         const SkinnedMesh body = build_body_mesh(model);
-        auto body_palette = [&](u8 mat) -> Vec3 {
-            switch (static_cast<BodyMaterial>(mat)) {
-                case BodyMaterial::Skin: return pal.skin;
-                case BodyMaterial::Shirt: return pal.shirt;
-                case BodyMaterial::Pants: return pal.pants;
-                case BodyMaterial::Hair: return pal.hair;
-            }
-            return pal.skin;
-        };
+        auto body_palette = [&](u8 mat) -> Vec3 { return body_material_color(pal, static_cast<BodyMaterial>(mat)); };
         MeshData md;
         skin(body, jmats, md.vertices, body_palette);
         md.indices = body.indices;
