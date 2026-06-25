@@ -294,6 +294,7 @@ void ClientApp::on_update(Timestep dt) {
         update_visuals(dt);
         update_enemy_visuals(dt);
         update_villager_visuals(dt);
+        update_cloth_triggers(); // cut cloth on a hit / blow it off in a storm
         tick_mesh_graveyard(); // free retired NPC body meshes once their frames-in-flight have passed
         update_gates(dt);
         update_feedback(dt);

@@ -181,6 +181,17 @@ void ClientApp::on_event(Event& event) {
                 consumed = true;
                 return true;
             }
+            if (e.key() == key::C) {
+                // Debug: cut all of the local player's flowing cloth off (it flutters to the ground).
+                const auto vit = visuals_.find(my_id_);
+                if (vit != visuals_.end()) {
+                    for (ClothInstance& c : vit->second.cloth) {
+                        detach_cloth(c, rand_dir() * frand(0.04f, 0.07f) + Vec3{0.0f, 0.05f, 0.0f});
+                    }
+                }
+                consumed = true;
+                return true;
+            }
             if ((map_open_ || skills_open_ || wardrobe_open_) && e.key() == key::Escape) {
                 map_open_ = skills_open_ = wardrobe_open_ = false;
                 consumed = true;

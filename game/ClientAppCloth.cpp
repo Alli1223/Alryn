@@ -68,6 +68,49 @@ void ClientApp::setup_cloth(PlayerVisual& v, PlayerRole role, const Equipment& e
     }
 }
 
+void ClientApp::detach_cloth(ClothInstance& c, const Vec3& impulse) {
+    if (c.detached || !c.inited) {
+        return; // not seated yet, or already gone
+    }
+    c.detached = true;
+    c.detach_age = 0.0f;
+    for (ClothChain& ch : c.chains) {
+        ch.detach(); // unpin the anchor -> the whole chain free-falls
+        for (usize i = 0; i < ch.pos.size(); ++i) {
+            ch.prev[i] = ch.pos[i] - impulse; // a one-shot velocity kick so it flutters away
+        }
+    }
+}
+
+void ClientApp::update_cloth_triggers() {
+    if (!have_snapshot_) {
+        return;
+    }
+    const bool storm = weather_amt_ > 0.72f; // a strong storm tears cloth away
+    const f32 wdir = elapsed_ * 0.15f;
+    const Vec3 wind_dir{std::cos(wdir), 0.0f, std::sin(wdir)};
+    for (const net::PlayerState& p : snapshot_.players) {
+        const auto it = visuals_.find(p.id);
+        if (it == visuals_.end()) {
+            continue;
+        }
+        PlayerVisual& v = it->second;
+        const u8 h = p.health;                                             // 0..100 percent of role max
+        const bool hit = (v.last_health != 255 && h + 6u < v.last_health); // dropped > 6% since last tick
+        v.last_health = h;
+        for (ClothInstance& c : v.cloth) {
+            if (c.detached || !c.inited) {
+                continue;
+            }
+            if (hit && frand() < 0.4f) {
+                detach_cloth(c, rand_dir() * frand(0.03f, 0.06f) + Vec3{0.0f, 0.04f, 0.0f}); // cut
+            } else if (storm && frand() < frame_dt_ * 0.2f) {
+                detach_cloth(c, wind_dir * frand(0.05f, 0.09f) + Vec3{0.0f, 0.03f, 0.0f}); // blown off
+            }
+        }
+    }
+}
+
 void ClientApp::draw_cloth(PlayerVisual& v, const Mat4& root, const std::vector<Mat4>& jmats,
                            const Vec3& tint) {
     if (v.cloth.empty()) {
@@ -79,8 +122,10 @@ void ClientApp::draw_cloth(PlayerVisual& v, const Mat4& root, const std::vector<
     const Vec3 wind = Vec3{std::cos(wdir), 0.0f, std::sin(wdir)} * ws;
     const Mat4 inv_root = glm::inverse(root);
     const Mat3 root_rot{root};
+    constexpr f32 kLinger = 6.0f, kSink = 0.8f; // a fallen piece lies on the ground, then sinks + despawns
 
-    for (ClothInstance& c : v.cloth) {
+    for (usize ci = 0; ci < v.cloth.size();) {
+        ClothInstance& c = v.cloth[ci];
         const int bi = v.model.bone_index(c.anchor);
         const Mat4 abone = (bi >= 0) ? jmats[static_cast<usize>(bi)] : root;
         auto anchor_of = [&](usize k) {
@@ -93,37 +138,61 @@ void ClientApp::draw_cloth(PlayerVisual& v, const Mat4& root, const std::vector<
             }
             c.inited = true;
         }
-        for (usize k = 0; k < c.chains.size(); ++k) {
-            c.chains[k].step(anchor_of(k), wind, 9.5f, frame_dt_);
+
+        if (c.detached) {
+            c.detach_age += frame_dt_;
+            if (c.detach_age > kLinger + kSink) { // despawn the fallen piece
+                retire_mesh(std::move(c.mesh));
+                v.cloth.erase(v.cloth.begin() + static_cast<std::ptrdiff_t>(ci));
+                continue;
+            }
+            const f32 sink = (c.detach_age > kLinger) ? 1.8f * frame_dt_ : 0.0f; // sink into the ground at the end
+            for (ClothChain& ch : c.chains) {
+                ch.step(Vec3{0.0f}, wind, 9.5f, frame_dt_); // free-fall (anchor ignored) + catch the wind
+                if (sink > 0.0f) {
+                    for (usize i = 0; i < ch.pos.size(); ++i) {
+                        ch.pos[i].y -= sink;
+                        ch.prev[i].y -= sink;
+                    }
+                }
+            }
+        } else {
+            for (usize k = 0; k < c.chains.size(); ++k) {
+                c.chains[k].step(anchor_of(k), wind, 9.5f, frame_dt_);
+            }
         }
 
-        // Build the mesh in LOCAL space (positions relative to `root`) so the dynamic mesh's bounds
-        // stay near the body and frustum culling at `root` is correct; draw it at `root`.
-        MeshData md;
-        if (c.ring) {
-            std::vector<ClothChain> local = c.chains;
-            for (ClothChain& ch : local) {
+        // Attached: build the mesh in LOCAL space (relative to root) so it culls correctly + draw at
+        // root. Detached: the piece is a free WORLD object - build in world + draw with identity.
+        const bool world_space = c.detached;
+        auto localize = [&](ClothChain& ch) {
+            if (!world_space) {
                 for (Vec3& p : ch.pos) {
                     p = Vec3{inv_root * Vec4{p, 1.0f}};
                 }
             }
+        };
+        MeshData md;
+        if (c.ring) {
+            std::vector<ClothChain> local = c.chains;
+            for (ClothChain& ch : local) {
+                localize(ch);
+            }
             build_cloth_tube(local, true, c.color, md);
         } else {
             ClothChain local = c.chains[0];
-            for (Vec3& p : local.pos) {
-                p = Vec3{inv_root * Vec4{p, 1.0f}};
-            }
+            localize(local);
             build_cloth_mesh(local, glm::normalize(c.side_local), c.color, md);
         }
-        if (md.indices.empty()) {
-            continue;
+        if (!md.indices.empty()) {
+            if (!c.mesh.valid()) {
+                c.mesh.create(renderer_->device(), md);
+            } else {
+                c.mesh.update_vertices(md.vertices); // constant vertex count per piece
+            }
+            renderer_->draw(c.mesh, world_space ? Mat4{1.0f} : root, Vec4{tint, 1.0f});
         }
-        if (!c.mesh.valid()) {
-            c.mesh.create(renderer_->device(), md);
-        } else {
-            c.mesh.update_vertices(md.vertices); // constant vertex count per piece
-        }
-        renderer_->draw(c.mesh, root, Vec4{tint, 1.0f});
+        ++ci;
     }
 }
 

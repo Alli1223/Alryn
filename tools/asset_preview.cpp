@@ -411,6 +411,11 @@ Asset build_character(int role) {
             ClothChain cape;
             cape.init(anchor, Vec3{0.0f, -1.0f, -0.22f}, 5, 0.13f, 0.24f);
             for (int k = 0; k < 160; ++k) cape.step(anchor, wind, 9.0f, 1.0f / 60.0f);
+            if (std::getenv("ALRYN_CUT") != nullptr) { // detach + let it flutter down off the back
+                cape.detach();
+                for (Vec3& pp : cape.prev) pp = pp - Vec3{0.05f, 0.04f, -0.05f};
+                for (int k = 0; k < 32; ++k) cape.step(anchor, wind, 9.0f, 1.0f / 60.0f);
+            }
             MeshData cm;
             build_cloth_mesh(cape, Vec3{1.0f, 0.0f, 0.0f}, role == 1 ? pal.dark : pal.primary, cm);
             a.parts.push_back({std::move(cm), Vec4{1.0f}});

@@ -234,7 +234,15 @@ private:
         f32 seg = 0.13f;
         f32 half_width = 0.22f;
         bool inited = false;
+        bool detached = false; // cut / blown off: the chains free-fall in world space, then despawn
+        f32 detach_age = 0.0f; // seconds since detaching (lingers on the ground, then sinks + is removed)
     };
+
+    // Cut / blow a cloth piece off a character: free its chains (free-fall) with a velocity kick, so it
+    // flutters away. `impulse` is a per-step world velocity (the cut/wind direction).
+    void detach_cloth(ClothInstance& c, const Vec3& impulse);
+    // Per-frame detach triggers for all players' cloth: a cut when health drops, a blow-off in a storm.
+    void update_cloth_triggers();
 
     struct PlayerVisual {
         CharacterModel model;
@@ -245,7 +253,8 @@ private:
         Vec3 last_pos{0.0f};
         f32 speed = 0.0f;
         bool has_last = false;
-        u8 last_action = 0; // to fire a swing once on the rising edge of a networked action
+        u8 last_action = 0;     // to fire a swing once on the rising edge of a networked action
+        u8 last_health = 255;   // previous snapshot health % (255 = unseen) - a drop can cut cloth
         SkinnedMesh body_skin;  // continuous body geometry + bone weights (built with the model)
         Mesh body_mesh;         // dynamic GPU mesh, re-skinned from the posed joints every frame
         SkinnedMesh outfit_skin; // continuous worn equipment (armoured/clothed limbs, torso, skirt)
