@@ -41,6 +41,9 @@ struct Bone {
     BoneColor color = BoneColor::Skin;
     BoneShape shape = BoneShape::Box;
     Quat box_rotation = QuatIdentity; // bind-pose orientation of the shape (e.g. a diagonal strap)
+    // True for face/hair/equipment pieces that ride ON TOP of the skinned body (drawn as primitives);
+    // false for the core body + joint fillers, which the continuous skinned mesh (BodyMesh) replaces.
+    bool attachment = false;
 };
 
 struct CharacterPalette {

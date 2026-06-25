@@ -24,6 +24,7 @@ void piece(CharacterModel& m, BonePart parent, const Vec3& center, const Vec3& s
     b.box_rotation = rot;
     b.color = color;
     b.shape = shape;
+    b.attachment = true; // equipment rides on top of the skinned body
     m.add_bone(b);
 }
 // A rotation about the Z (roll) axis - handy for diagonal straps + angled crests.

@@ -48,9 +48,12 @@ void CharacterModel::add_features(CharacterModel& m, const CharacterAppearance& 
     const f32 r = hs * 0.5f;        // head half-extent
     const Vec3 c = head.box_center; // head centre in the head-joint frame
 
-    // A feature bone: joint at the head joint, geometry offset via box_center.
+    // A feature bone: joint at the head joint, geometry offset via box_center. Marked an attachment
+    // so it rides ON TOP of the skinned body (the continuous body mesh has no face/hair yet).
     auto add = [&](Vec3 center, Vec3 size, BoneColor color, BoneShape shape) {
-        m.bones_.push_back(Bone{BonePart::None, kHeadIndex, Vec3{0.0f}, size, center, color, shape});
+        Bone b{BonePart::None, kHeadIndex, Vec3{0.0f}, size, center, color, shape};
+        b.attachment = true;
+        m.bones_.push_back(b);
     };
 
     // ---- Eyes (on the front face, +Z) ----

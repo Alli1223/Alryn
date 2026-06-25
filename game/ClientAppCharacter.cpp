@@ -5,10 +5,14 @@
 
 namespace alryn::game {
 
-void ClientApp::draw_rig(const CharacterModel& model, const std::vector<Mat4>& mats, const Vec3& tint) {
+void ClientApp::draw_rig(const CharacterModel& model, const std::vector<Mat4>& mats, const Vec3& tint,
+                         bool attachments_only) {
     const std::vector<Bone>& bones = model.bones();
     const CharacterPalette& pal = model.palette();
     for (usize i = 0; i < bones.size(); ++i) {
+        if (attachments_only && !bones[i].attachment) {
+            continue; // the skinned body already covers the core body + joint fillers
+        }
         Vec3 color{1.0f};
         bool glow = false;
         switch (bones[i].color) {
@@ -125,6 +129,36 @@ void ClientApp::draw_cleric_staff(const CharacterModel& model, const std::vector
                              Vec4{0.65f, 0.55f, 1.0f, 1.0f}); // glowing orb at the head
 }
 
+void ClientApp::draw_skinned_body(PlayerVisual& v, const Mat4& root, const std::vector<Quat>& pose,
+                                  const Vec3& tint) {
+    if (v.body_skin.vertices.empty()) {
+        v.body_skin = build_body_mesh(v.model); // safety net if a visual was created without it
+    }
+    const CharacterPalette& pal = v.model.palette();
+    auto body_palette = [&](u8 mat) -> Vec3 {
+        switch (static_cast<BodyMaterial>(mat)) {
+            case BodyMaterial::Shirt: return pal.shirt;
+            case BodyMaterial::Pants: return pal.pants;
+            case BodyMaterial::Hair: return pal.hair;
+            case BodyMaterial::Skin: break;
+        }
+        return pal.skin;
+    };
+    // Skin in LOCAL space (pose only, no root) so the mesh's bind-pose bounding sphere * root gives a
+    // correct cull sphere; `root` (translate+rotate+wobble) places it in the world as the model matrix.
+    const std::vector<Mat4> local_jmats = v.model.joint_matrices(Mat4{1.0f}, pose);
+    skin(v.body_skin, local_jmats, skin_scratch_, body_palette);
+    if (!v.body_mesh.valid()) {
+        MeshData md;
+        md.vertices = skin_scratch_;
+        md.indices = v.body_skin.indices;
+        v.body_mesh.create(renderer_->device(), md);
+    } else {
+        v.body_mesh.update_vertices(skin_scratch_);
+    }
+    renderer_->draw(v.body_mesh, root, Vec4{tint, 1.0f});
+}
+
 void ClientApp::draw_character(PlayerVisual& v, const Vec3& feet, f32 yaw, bool seated, int role) {
     // Seated riders sink onto the bench (the sit pose folds the legs forward).
     const Vec3 base = seated ? feet - Vec3{0.0f, 0.42f, 0.0f} : feet;
@@ -136,8 +170,10 @@ void ClientApp::draw_character(PlayerVisual& v, const Vec3& feet, f32 yaw, bool 
     }
     const std::vector<Quat> pose =
         seated ? CharacterAnimator::sit_pose(v.model) : v.animator.pose(v.model);
+    // The continuous skinned body, then the face/hair/gear attachment primitives on top.
+    draw_skinned_body(v, root, pose);
     const std::vector<Mat4> mats = v.model.bone_matrices(root, pose);
-    draw_rig(v.model, mats);
+    draw_rig(v.model, mats, Vec3{1.0f}, /*attachments_only=*/true);
     if (role >= 0) {
         // Weapons attach to the JOINT frames (orientation + position) so they swing with
         // the arm, unlike the box mats whose columns are scaled by box_size.

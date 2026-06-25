@@ -8,9 +8,11 @@
 
 #include <Alryn/Alryn.h>
 
+#include <Alryn/Character/BodyMesh.h>
 #include <Alryn/Character/CharacterAnimator.h>
 #include <Alryn/Character/CharacterModel.h>
 #include <Alryn/Character/Outfit.h>
+#include <Alryn/Character/SkinnedMesh.h>
 #include <Alryn/Character/Weapon.h>
 #include <Alryn/Combat/Enemy.h>
 #include <Alryn/Net/GameServer.h>
@@ -140,10 +142,12 @@ protected:
     // (head to feet) always fits without clipping, in any window shape.
     void draw_preview();
 
-    // Draws every bone of a posed character with its palette colour (times `tint`)
-    // and shape mesh. The tint lets enemies read as hostile without new models.
+    // Draws a posed character's bones as primitives, each with its palette colour (times `tint`)
+    // and shape mesh. The tint lets enemies read as hostile without new models. With
+    // `attachments_only`, draws just the face/hair/equipment pieces that ride on top of the skinned
+    // body (Bone::attachment) - the continuous body mesh covers the core body + joint fillers.
     void draw_rig(const CharacterModel& model, const std::vector<Mat4>& mats,
-                  const Vec3& tint = Vec3{1.0f});
+                  const Vec3& tint = Vec3{1.0f}, bool attachments_only = false);
 
     // Draws a spear gripped in the character's right hand (anchored to the lower-arm
     // bone so it swings with the animation, not a stick floating beside them).
@@ -213,7 +217,14 @@ private:
         f32 speed = 0.0f;
         bool has_last = false;
         u8 last_action = 0; // to fire a swing once on the rising edge of a networked action
+        SkinnedMesh body_skin;  // continuous body geometry + bone weights (built with the model)
+        Mesh body_mesh;         // dynamic GPU mesh, re-skinned from the posed joints every frame
     };
+
+    // Skins the player's continuous body with the posed joints (local space) and draws it through the
+    // lit pipeline at `root`; the face/hair/gear attachment primitives are laid on top by the caller.
+    void draw_skinned_body(PlayerVisual& v, const Mat4& root, const std::vector<Quat>& pose,
+                           const Vec3& tint = Vec3{1.0f});
 
     // A networked enemy's renderable: one shared hostile model, animated from
     // snapshot position deltas (no animation data on the wire).
@@ -669,6 +680,7 @@ private:
     Mesh shape_cylinder_;
     Mesh shape_capsule_;
     Mesh shape_rounded_;
+    std::vector<Vertex> skin_scratch_; // reused buffer for CPU-skinning a body each frame (no per-frame alloc)
     Mesh marker_;
     Mesh water_mesh_;
     Mesh bridge_mesh_stone_; // unit stone arch bridge (x:-0.5..0.5), stretched per river crossing

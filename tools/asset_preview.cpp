@@ -214,9 +214,21 @@ Asset build_character(int role) {
     const MeshData capsule = primitives::capsule(18, 6, Vec3{1.0f});
     const MeshData rounded = primitives::rounded_box(0.32f, Vec3{1.0f});
 
-    CharacterAppearance app; // a plain face/body; the skinned body is built from the bind skeleton
+    CharacterAppearance app; // a plain face/body; the role-themed outfit goes on top
     const u32 seed = 1000u + static_cast<u32>(role);
     CharacterModel model = CharacterModel::create(seed, app);
+    // Equip a role-flavoured outfit so the preview matches the in-game render (skinned body + the
+    // outfit/face attachment primitives). ALRYN_TIER (0..3) overrides the ragged->master tier.
+    static const u8 role_tint[kRoleCount] = {0, 2, 5, 3}; // Knight blue, Hunter green, Cleric white, Mage violet
+    u8 tier = 3;
+    if (const char* t = std::getenv("ALRYN_TIER")) {
+        tier = static_cast<u8>(glm::clamp(std::atoi(t), 0, 3));
+    }
+    Equipment eq;
+    eq.outfit_tier = tier;
+    eq.weapon_tier = tier;
+    eq.outfit_tint = role_tint[static_cast<usize>(role) % kRoleCount];
+    apply_outfit(model, outfit_kind_for_role(static_cast<u8>(role)), eq);
 
     // Pose: bind by default (arms at the sides). Set ALRYN_POSE=walk|swing|cast|block to drive the
     // animator mid-action and verify the locomotion + action BLEND (legs walk while the arms act).
@@ -272,6 +284,31 @@ Asset build_character(int role) {
         skin(body, jmats, md.vertices, body_palette);
         md.indices = body.indices;
         a.parts.push_back({std::move(md), Vec4{1.0f}});
+    }
+
+    // Face/hair + outfit pieces ride ON TOP of the skinned body as primitives (Bone::attachment),
+    // exactly as the client's draw_rig(attachments_only) lays them over the skinned mesh.
+    auto bone_color = [&](BoneColor c) -> Vec3 {
+        switch (c) {
+            case BoneColor::Skin: return pal.skin;
+            case BoneColor::Shirt: return pal.shirt;
+            case BoneColor::Pants: return pal.pants;
+            case BoneColor::Hair: return pal.hair;
+            case BoneColor::Eye: return pal.eye;
+            case BoneColor::Primary: return pal.primary;
+            case BoneColor::Accent: return pal.accent;
+            case BoneColor::Metal: return pal.metal;
+            case BoneColor::Dark: return pal.dark;
+            case BoneColor::Glow: return pal.glow * 1.7f; // brighten (no emissive pass in the preview)
+        }
+        return Vec3{1.0f};
+    };
+    const std::vector<Mat4> mats = model.bone_matrices(root, pose);
+    for (usize i = 0; i < bones.size(); ++i) {
+        if (!bones[i].attachment) {
+            continue; // core body + joint fillers are the skinned mesh
+        }
+        a.parts.push_back({bake(shape_for(bones[i].shape), mats[i], bone_color(bones[i].color)), Vec4{1.0f}});
     }
 
     // Weapon(s) in hand: the L-suffixed arm is the player's RIGHT (main hand), R-suffixed the left
