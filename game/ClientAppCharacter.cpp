@@ -135,20 +135,29 @@ void ClientApp::draw_skinned_body(PlayerVisual& v, const Mat4& root, const std::
         v.body_skin = build_body_mesh(v.model); // safety net if a visual was created without it
     }
     const CharacterPalette& pal = v.model.palette();
-    auto body_palette = [&](u8 mat) -> Vec3 { return body_material_color(pal, static_cast<BodyMaterial>(mat)); };
-    // Skin in LOCAL space (pose only, no root) so the mesh's bind-pose bounding sphere * root gives a
+    auto palette = [&](u8 mat) -> Vec3 { return body_material_color(pal, static_cast<BodyMaterial>(mat)); };
+    // Skin in LOCAL space (pose only, no root) so each mesh's bind-pose bounding sphere * root gives a
     // correct cull sphere; `root` (translate+rotate+wobble) places it in the world as the model matrix.
     const std::vector<Mat4> local_jmats = v.model.joint_matrices(Mat4{1.0f}, pose);
-    skin(v.body_skin, local_jmats, skin_scratch_, body_palette);
-    if (!v.body_mesh.valid()) {
-        MeshData md;
-        md.vertices = skin_scratch_;
-        md.indices = v.body_skin.indices;
-        v.body_mesh.create(renderer_->device(), md);
-    } else {
-        v.body_mesh.update_vertices(skin_scratch_);
-    }
-    renderer_->draw(v.body_mesh, root, Vec4{tint, 1.0f});
+    // Skin a SkinnedMesh into its dynamic GPU Mesh (created on first use) and draw it through the lit
+    // pipeline. Body + outfit share the joints + the scratch buffer (uploaded to separate GPU meshes).
+    auto skin_draw = [&](const SkinnedMesh& src, Mesh& gpu) {
+        if (src.vertices.empty()) {
+            return;
+        }
+        skin(src, local_jmats, skin_scratch_, palette);
+        if (!gpu.valid()) {
+            MeshData md;
+            md.vertices = skin_scratch_;
+            md.indices = src.indices;
+            gpu.create(renderer_->device(), md);
+        } else {
+            gpu.update_vertices(skin_scratch_);
+        }
+        renderer_->draw(gpu, root, Vec4{tint, 1.0f});
+    };
+    skin_draw(v.body_skin, v.body_mesh);     // the bare body underneath
+    skin_draw(v.outfit_skin, v.outfit_mesh); // the continuous worn armour / cloth over it
 }
 
 void ClientApp::draw_character(PlayerVisual& v, const Vec3& feet, f32 yaw, bool seated, int role) {

@@ -552,8 +552,10 @@ ClientApp::PlayerVisual& ClientApp::ensure_visual(net::PlayerId id,
         v.role = role;
         v.equipment = equipment;
         v.model = CharacterModel::create(id, appearance);
-        apply_outfit(v.model, outfit_kind_for_role(role), equipment); // the networked, server-clamped gear
-        v.body_skin = build_body_mesh(v.model); // continuous body geometry for this character's proportions
+        const OutfitKind kind = outfit_kind_for_role(role);
+        apply_outfit(v.model, kind, equipment); // the networked, server-clamped gear (decorative attachments)
+        v.body_skin = build_body_mesh(v.model);            // continuous body for this character's proportions
+        v.outfit_skin = build_outfit_mesh(v.model, kind, equipment); // continuous worn armour/cloth
     };
     const auto it = visuals_.find(id);
     if (it != visuals_.end()) {

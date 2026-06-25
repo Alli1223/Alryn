@@ -19,6 +19,7 @@
 #include <Alryn/Character/CharacterModel.h>
 #include <Alryn/Character/Equipment.h>
 #include <Alryn/Character/Outfit.h>
+#include <Alryn/Character/OutfitMesh.h>
 #include <Alryn/Character/SkinnedMesh.h>
 #include <Alryn/Character/Weapon.h>
 #include <Alryn/Core/Log.h>
@@ -266,17 +267,22 @@ Asset build_character(int role) {
                                             : box;
     };
 
-    // The continuous skinned body: one mesh, vertices weighted to the bones, deformed by the posed
-    // joint frames (linear-blend skinning). Materials resolve to the character palette at skin time.
+    // The continuous skinned body + the continuous skinned outfit (armour/cloth that flows across the
+    // joints), both vertex-weighted to the bones and deformed by the posed joint frames (linear-blend
+    // skinning). Materials resolve to the character palette at skin time.
     Asset a;
-    {
-        const SkinnedMesh body = build_body_mesh(model);
-        auto body_palette = [&](u8 mat) -> Vec3 { return body_material_color(pal, static_cast<BodyMaterial>(mat)); };
+    auto palette = [&](u8 mat) -> Vec3 { return body_material_color(pal, static_cast<BodyMaterial>(mat)); };
+    auto add_skinned = [&](const SkinnedMesh& src) {
+        if (src.vertices.empty()) {
+            return;
+        }
         MeshData md;
-        skin(body, jmats, md.vertices, body_palette);
-        md.indices = body.indices;
+        skin(src, jmats, md.vertices, palette);
+        md.indices = src.indices;
         a.parts.push_back({std::move(md), Vec4{1.0f}});
-    }
+    };
+    add_skinned(build_body_mesh(model));
+    add_skinned(build_outfit_mesh(model, outfit_kind_for_role(static_cast<u8>(role)), eq));
 
     // Face/hair + outfit pieces ride ON TOP of the skinned body as primitives (Bone::attachment),
     // exactly as the client's draw_rig(attachments_only) lays them over the skinned mesh.

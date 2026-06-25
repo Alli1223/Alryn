@@ -12,6 +12,7 @@
 #include <Alryn/Character/CharacterAnimator.h>
 #include <Alryn/Character/CharacterModel.h>
 #include <Alryn/Character/Outfit.h>
+#include <Alryn/Character/OutfitMesh.h>
 #include <Alryn/Character/SkinnedMesh.h>
 #include <Alryn/Character/Weapon.h>
 #include <Alryn/Combat/Enemy.h>
@@ -219,6 +220,8 @@ private:
         u8 last_action = 0; // to fire a swing once on the rising edge of a networked action
         SkinnedMesh body_skin;  // continuous body geometry + bone weights (built with the model)
         Mesh body_mesh;         // dynamic GPU mesh, re-skinned from the posed joints every frame
+        SkinnedMesh outfit_skin; // continuous worn equipment (armoured/clothed limbs, torso, skirt)
+        Mesh outfit_mesh;        // dynamic GPU mesh for the outfit, re-skinned with the same joints
     };
 
     // Skins the player's continuous body with the posed joints (local space) and draws it through the

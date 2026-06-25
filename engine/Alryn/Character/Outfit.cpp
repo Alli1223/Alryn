@@ -40,29 +40,6 @@ Vec3 part_center(const CharacterModel& m, BonePart part) {
     const int i = m.bone_index(part);
     return i < 0 ? Vec3{0.0f} : m.bones()[static_cast<usize>(i)].box_center;
 }
-// The true length of a leg segment (the child joint's offset down from its parent).
-f32 leg_seg(const CharacterModel& m, BonePart child) {
-    const int i = m.bone_index(child);
-    return i < 0 ? 0.44f : -m.bones()[static_cast<usize>(i)].joint_offset.y;
-}
-
-// One CONTINUOUS robe skirt hanging from the pelvis over both legs (no gap between the legs), down to
-// `length_frac` of the lower leg. A tapered stack (narrower at the waist, flared at the hem) so it
-// reads as cloth rather than a slab.
-void robe_skirt(CharacterModel& m, BoneColor color, f32 length_frac, f32 flare) {
-    const f32 lu = leg_seg(m, BonePart::LowerLegL);
-    const f32 ll = leg_seg(m, BonePart::FootL);
-    const f32 bottom = -(lu + ll * length_frac);
-    const f32 top = 0.14f;     // start above the hip so it meets the robe body / belt (no bare thigh)
-    const f32 knee = -lu;
-    // upper (waist -> knee, snug) + lower (knee -> hem, flared) for an A-line; wide enough to fully
-    // enclose both legs so they never poke through.
-    piece(m, BonePart::Pelvis, Vec3{0.0f, (top + knee) * 0.5f, 0.0f},
-          Vec3{flare * 0.86f, top - knee, flare * 0.66f}, color);
-    piece(m, BonePart::Pelvis, Vec3{0.0f, (knee + bottom) * 0.5f, 0.0f},
-          Vec3{flare, knee - bottom, flare * 0.74f}, color);
-}
-
 // ------------------------------------------------------------------------------------------------
 // Knight - steel PLATE with gold trim, a plumed great-helm, a heraldic tabard in the chosen colour.
 // Tier scales the materials (cloth gambeson -> bright plate) and adds the plume + gold filigree.
@@ -72,8 +49,8 @@ void build_plate(CharacterModel& m, const Equipment& eq) {
     const Vec3 hs = part_size(m, BonePart::Head), hc = part_center(m, BonePart::Head);
     const BoneColor body = t >= 1 ? BoneColor::Metal : BoneColor::Primary; // plate vs gambeson
 
-    // Breastplate + back (a chunky shell over the torso).
-    piece(m, BonePart::Torso, Vec3{0.0f, tc.y, 0.01f}, ts * Vec3{1.16f, 1.04f, 1.34f}, body);
+    // The breastplate / armoured limbs are the continuous skinned OutfitMesh now; these are the
+    // decorative silhouette pieces layered on top.
     // Gold collar/gorget + chest filigree at the higher tiers.
     if (t >= 2) {
         piece(m, BonePart::Torso, Vec3{0.0f, ts.y * 0.96f, 0.0f}, Vec3{ts.x * 1.18f, 0.07f, ts.z * 1.5f},
@@ -84,15 +61,11 @@ void build_plate(CharacterModel& m, const Equipment& eq) {
     // Heraldic tabard in the player's colour hanging down the front.
     piece(m, BonePart::Torso, Vec3{0.0f, tc.y * 0.7f, ts.z * 0.7f},
           Vec3{ts.x * 0.46f, ts.y * 1.18f, 0.03f}, BoneColor::Primary, BoneShape::Box);
-    // Fauld (skirt of plates) at the waist.
-    piece(m, BonePart::Pelvis, Vec3{0.0f, -0.02f, 0.02f},
-          part_size(m, BonePart::Pelvis) * Vec3{1.25f, 1.1f, 1.35f}, body);
 
-    // Full armoured arms: a plate over the whole upper arm + a big rounded pauldron flowing off the
-    // shoulder, a vambrace down the forearm and a gauntlet, so the arm reads as one steel limb.
+    // A big rounded pauldron flowing off each shoulder + a gauntlet at each wrist + a knee cop - the
+    // rounded silhouette accents over the skinned steel limbs.
     for (BonePart up : {BonePart::UpperArmL, BonePart::UpperArmR}) {
         const f32 al = part_size(m, up).y;
-        piece(m, up, Vec3{0.0f, -al * 0.5f, 0.0f}, Vec3{0.21f, al * 1.06f, 0.22f}, body); // upper-arm plate
         piece(m, up, Vec3{0.0f, -al * 0.02f, 0.0f}, Vec3{0.29f, 0.26f, 0.30f}, body,
               BoneShape::Sphere); // rounded pauldron
         if (t >= 2) {
@@ -102,19 +75,11 @@ void build_plate(CharacterModel& m, const Equipment& eq) {
     }
     for (BonePart lo : {BonePart::LowerArmL, BonePart::LowerArmR}) {
         const f32 al = part_size(m, lo).y;
-        piece(m, lo, Vec3{0.0f, -al * 0.45f, 0.0f}, Vec3{0.165f, al * 1.06f, 0.175f}, body); // vambrace
         piece(m, lo, Vec3{0.0f, -al * 1.0f, 0.02f}, Vec3{0.15f, 0.13f, 0.16f}, body); // gauntlet
     }
-
-    // Armoured legs: a cuisse over the thigh, a knee cop, a greave over the shin (one steel leg).
     for (BonePart up : {BonePart::UpperLegL, BonePart::UpperLegR}) {
         const f32 ul = part_size(m, up).y;
-        piece(m, up, Vec3{0.0f, -ul * 0.5f, 0.0f}, Vec3{0.205f, ul * 1.04f, 0.215f}, body); // cuisse
         piece(m, up, Vec3{0.0f, -ul, 0.02f}, Vec3{0.2f, 0.16f, 0.2f}, body, BoneShape::Sphere); // knee cop
-    }
-    for (BonePart lo : {BonePart::LowerLegL, BonePart::LowerLegR}) {
-        const f32 ll = part_size(m, lo).y;
-        piece(m, lo, Vec3{0.0f, -ll * 0.48f, 0.0f}, Vec3{0.18f, ll * 1.04f, 0.19f}, body); // greave
     }
 
     // Great-helm enclosing the head (covers the face), a lit eye-slit, and a plume in the chosen colour.
@@ -143,8 +108,8 @@ void build_robe(CharacterModel& m, const Equipment& eq) {
     const Vec3 ts = part_size(m, BonePart::Torso), tc = part_center(m, BonePart::Torso);
     const Vec3 hs = part_size(m, BonePart::Head), hc = part_center(m, BonePart::Head);
 
-    // Robe body over the torso + a gold trim strip down the front opening.
-    piece(m, BonePart::Torso, Vec3{0.0f, tc.y, 0.0f}, ts * Vec3{1.14f, 1.04f, 1.2f}, BoneColor::Primary);
+    // The robe body / sleeves / skirt are the continuous skinned OutfitMesh now; a gold trim strip
+    // runs down the front opening over it.
     piece(m, BonePart::Torso, Vec3{0.0f, tc.y, ts.z * 0.62f}, Vec3{0.05f, ts.y * 1.04f, 0.04f},
           BoneColor::Accent, BoneShape::Box);
     // Shoulder cape (a wide cowl over the shoulders) + gold collar.
@@ -160,13 +125,6 @@ void build_robe(CharacterModel& m, const Equipment& eq) {
     if (t >= 1) {
         piece(m, BonePart::Pelvis, Vec3{0.0f, 0.04f, part_size(m, BonePart::Pelvis).z * 0.62f},
               Vec3{0.07f, 0.06f, 0.04f}, BoneColor::Accent, BoneShape::Box);
-    }
-    // One continuous robe skirt (no gap between the legs) to the calves.
-    robe_skirt(m, BoneColor::Primary, 0.66f, 0.52f);
-    // Sleeves over the arms.
-    for (BonePart up : {BonePart::UpperArmL, BonePart::UpperArmR}) {
-        const f32 al = part_size(m, up).y;
-        piece(m, up, Vec3{0.0f, -al * 0.55f, 0.0f}, Vec3{0.14f, al * 1.1f, 0.15f}, BoneColor::Primary);
     }
     // Hood drawn up over the head + a shadowed (dark) face, with glowing eyes at higher tiers.
     piece(m, BonePart::Head, Vec3{hc.x, hc.y + hs.y * 0.06f, -hs.z * 0.06f}, hs * Vec3{1.22f, 1.2f, 1.34f},
@@ -191,8 +149,8 @@ void build_leather(CharacterModel& m, const Equipment& eq) {
     const Vec3 ts = part_size(m, BonePart::Torso), tc = part_center(m, BonePart::Torso);
     const Vec3 hs = part_size(m, BonePart::Head), hc = part_center(m, BonePart::Head);
 
-    // Cloth tunic (primary) + a leather jerkin panel over the chest.
-    piece(m, BonePart::Torso, Vec3{0.0f, tc.y, 0.0f}, ts * Vec3{1.1f, 1.02f, 1.16f}, BoneColor::Primary);
+    // The olive tunic + trousers are the continuous skinned OutfitMesh now; a leather jerkin panel
+    // sits over the chest.
     piece(m, BonePart::Torso, Vec3{0.0f, tc.y * 0.95f, ts.z * 0.5f}, Vec3{ts.x * 0.8f, ts.y * 0.8f, 0.06f},
           BoneColor::Dark);
     // Diagonal bandolier strap across the chest + a couple of pouches.
@@ -210,18 +168,10 @@ void build_leather(CharacterModel& m, const Equipment& eq) {
         piece(m, BonePart::Pelvis, Vec3{0.0f, 0.03f, part_size(m, BonePart::Pelvis).z * 0.62f},
               Vec3{0.06f, 0.05f, 0.04f}, BoneColor::Accent, BoneShape::Box); // belt buckle
     }
-    // Bracers on the forearms; trousers + boots on the legs.
+    // Bracers on the forearms; boots over the skinned trousers.
     for (BonePart lo : {BonePart::LowerArmL, BonePart::LowerArmR}) {
         const f32 al = part_size(m, lo).y;
         piece(m, lo, Vec3{0.0f, -al * 0.55f, 0.0f}, Vec3{0.115f, al * 0.7f, 0.12f}, BoneColor::Dark);
-    }
-    for (BonePart up : {BonePart::UpperLegL, BonePart::UpperLegR}) {
-        const f32 ul = part_size(m, up).y;
-        piece(m, up, Vec3{0.0f, -ul * 0.5f, 0.0f}, Vec3{0.155f, ul * 0.95f, 0.17f}, BoneColor::Primary);
-    }
-    for (BonePart lo : {BonePart::LowerLegL, BonePart::LowerLegR}) {
-        const f32 ll = part_size(m, lo).y;
-        piece(m, lo, Vec3{0.0f, -ll * 0.45f, 0.0f}, Vec3{0.135f, ll * 0.85f, 0.15f}, BoneColor::Primary);
     }
     for (BonePart fp : {BonePart::FootL, BonePart::FootR}) {
         piece(m, fp, part_center(m, fp), part_size(m, fp) * Vec3{1.08f, 1.1f, 1.04f}, BoneColor::Dark);
@@ -251,8 +201,8 @@ void build_holy(CharacterModel& m, const Equipment& eq) {
     const Vec3 ts = part_size(m, BonePart::Torso), tc = part_center(m, BonePart::Torso);
     const Vec3 hs = part_size(m, BonePart::Head), hc = part_center(m, BonePart::Head);
 
-    // White robe body + a blue tabard panel down the front + gold trim.
-    piece(m, BonePart::Torso, Vec3{0.0f, tc.y, 0.0f}, ts * Vec3{1.14f, 1.04f, 1.2f}, BoneColor::Primary);
+    // The white robe body / sleeves / skirt are the continuous skinned OutfitMesh now; a blue tabard
+    // panel + gold trim run down the front over it.
     piece(m, BonePart::Torso, Vec3{0.0f, tc.y * 0.85f, ts.z * 0.62f}, Vec3{ts.x * 0.42f, ts.y * 1.15f, 0.03f},
           BoneColor::Dark, BoneShape::Box); // blue tabard
     piece(m, BonePart::Torso, Vec3{0.0f, tc.y * 0.85f, ts.z * 0.66f}, Vec3{ts.x * 0.1f, ts.y * 1.1f, 0.02f},
@@ -266,12 +216,6 @@ void build_holy(CharacterModel& m, const Equipment& eq) {
     }
     piece(m, BonePart::Torso, Vec3{0.0f, ts.y * 0.96f, 0.0f}, Vec3{ts.x * 1.2f, 0.07f, ts.z * 1.5f},
           BoneColor::Accent);
-    // Sleeves + a long white robe skirt to the ankles.
-    for (BonePart up : {BonePart::UpperArmL, BonePart::UpperArmR}) {
-        const f32 al = part_size(m, up).y;
-        piece(m, up, Vec3{0.0f, -al * 0.55f, 0.0f}, Vec3{0.135f, al * 1.1f, 0.145f}, BoneColor::Primary);
-    }
-    robe_skirt(m, BoneColor::Primary, 0.95f, 0.54f); // long white robe to the ankles
     // Steel helm with a lit visor slit, under a modest two-peaked golden mitre.
     piece(m, BonePart::Head, hc, hs * Vec3{1.12f, 1.1f, 1.14f}, BoneColor::Metal);
     piece(m, BonePart::Head, Vec3{0.0f, hc.y, hs.z * 0.6f}, Vec3{hs.x * 0.82f, hs.y * 0.13f, 0.04f},

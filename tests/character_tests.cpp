@@ -1,8 +1,11 @@
 #include <doctest/doctest.h>
 
+#include <Alryn/Character/BodyMesh.h>
 #include <Alryn/Character/CharacterAnimator.h>
 #include <Alryn/Character/CharacterModel.h>
 #include <Alryn/Character/Equipment.h>
+#include <Alryn/Character/Outfit.h>
+#include <Alryn/Character/OutfitMesh.h>
 #include <Alryn/Character/SkinnedMesh.h>
 
 #include <algorithm>
@@ -54,6 +57,71 @@ TEST_CASE("SkinnedMesh: linear-blend skinning deforms vertices with the bones") 
     });
     CHECK(called);
     CHECK(out[0].color == Vec3{0.2f, 0.4f, 0.6f});
+}
+
+TEST_CASE("BodyMesh/OutfitMesh: skinned body + outfit are valid and deform with the bones") {
+    CharacterAppearance app;
+    CharacterModel model = CharacterModel::create(7u, app);
+
+    const SkinnedMesh body = build_body_mesh(model);
+    REQUIRE(body.vertices.size() > 0);
+    REQUIRE(body.indices.size() % 3 == 0);
+    REQUIRE(body.inverse_bind.size() == model.bone_count());
+    // Every vertex references valid bones and carries a normalised weight set.
+    for (const SkinVertex& v : body.vertices) {
+        f32 wsum = 0.0f;
+        for (int k = 0; k < kMaxInfluences; ++k) {
+            CHECK(v.bones[k] >= 0);
+            CHECK(v.bones[k] < static_cast<int>(model.bone_count()));
+            wsum += v.weights[k];
+        }
+        CHECK(wsum == doctest::Approx(1.0f));
+    }
+
+    // Skinned at the bind pose, the body spans roughly the character's height (feet ~0, head ~height).
+    const std::vector<Mat4> bind = model.joint_matrices(Mat4{1.0f}, {});
+    std::vector<Vertex> out;
+    skin(body, bind, out);
+    REQUIRE(out.size() == body.vertices.size());
+    f32 lo = 1e9f, hi = -1e9f;
+    for (const Vertex& v : out) {
+        lo = std::min(lo, v.position.y);
+        hi = std::max(hi, v.position.y);
+    }
+    CHECK(lo < 0.3f);                  // feet near the ground
+    CHECK(hi > model.height() * 0.7f); // reaches up toward the head
+
+    // A posed joint moves the skinned surface: rotating the whole character lifts nothing but a bent
+    // knee pose should shift some lower-leg vertices relative to bind.
+    std::vector<Quat> pose(model.bone_count(), QuatIdentity);
+    const int knee = model.bone_index(BonePart::LowerLegL);
+    REQUIRE(knee >= 0);
+    pose[static_cast<usize>(knee)] = glm::angleAxis(0.6f, Vec3{1.0f, 0.0f, 0.0f});
+    std::vector<Vertex> posed;
+    skin(body, model.joint_matrices(Mat4{1.0f}, pose), posed);
+    f32 max_shift = 0.0f;
+    for (usize i = 0; i < out.size(); ++i) {
+        max_shift = std::max(max_shift, glm::length(posed[i].position - out[i].position));
+    }
+    CHECK(max_shift > 0.02f); // the knee bend visibly deforms the mesh
+
+    // The outfit mesh is built per role, valid, and weighted to the same skeleton.
+    for (OutfitKind kind : {OutfitKind::Plate, OutfitKind::Robe, OutfitKind::Leather, OutfitKind::Holy}) {
+        Equipment eq;
+        eq.outfit_tier = 3;
+        CharacterModel m2 = CharacterModel::create(7u, app);
+        apply_outfit(m2, kind, eq);
+        const SkinnedMesh outfit = build_outfit_mesh(m2, kind, eq);
+        REQUIRE(outfit.vertices.size() > 0);
+        REQUIRE(outfit.indices.size() % 3 == 0);
+        REQUIRE(outfit.inverse_bind.size() == m2.bone_count());
+        for (const SkinVertex& v : outfit.vertices) {
+            for (int k = 0; k < kMaxInfluences; ++k) {
+                CHECK(v.bones[k] >= 0);
+                CHECK(v.bones[k] < static_cast<int>(m2.bone_count()));
+            }
+        }
+    }
 }
 
 TEST_CASE("Equipment: tiers grant a monotonic, buyable power bonus") {
