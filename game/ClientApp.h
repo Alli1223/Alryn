@@ -228,8 +228,9 @@ private:
         Mesh mesh;                           // dynamic, rebuilt from the sim each frame
         Vec3 color{0.5f};
         BonePart anchor = BonePart::Torso;   // body joint the piece rides
-        Vec3 side_local{1.0f, 0.0f, 0.0f};   // sheet left-right axis (cape only)
-        bool ring = false;                   // closed tube (skirt) vs flat sheet (cape)
+        Vec3 side_local{1.0f, 0.0f, 0.0f};   // sheet left-right axis (single-chain sheet only)
+        bool ring = false;                   // multi-chain (cape/skirt via tube builder) vs 1-chain sheet
+        bool closed = true;                  // ring: closed tube (skirt) vs open sheet (cape)
         int segments = 5;
         f32 seg = 0.13f;
         f32 half_width = 0.22f;

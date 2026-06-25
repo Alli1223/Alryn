@@ -34,11 +34,34 @@ void ClientApp::setup_cloth(PlayerVisual& v, PlayerRole role, const Equipment& e
         c.chains[0].wind_gain = wind_gain;
         v.cloth.push_back(std::move(c));
     };
-    auto add_cape = [&](const Vec3& color, f32 width, f32 wind_gain) {
-        // Anchor at the NECK, set BEHIND the body's back surface (z ~ -0.27) so the cape starts outside
-        // the body, then hangs down + back; the body collision then rests it against the back.
-        add_sheet(BonePart::Head, Vec3{0.0f, 0.06f, -0.28f}, Vec3{0.0f, -1.0f, -0.18f},
-                  Vec3{1.0f, 0.0f, 0.0f}, 6, 0.12f, width, color, wind_gain);
+    auto add_cape = [&](const Vec3& color, f32 wind_gain) {
+        // A proper cloak: a ROW of panels anchored on a shallow ARC across the upper back (an open sheet,
+        // not a single thin strip), standing clear of the body so it drapes over the shoulders + down the
+        // back and never penetrates. Anchors ride just behind the body; the hanging cloth collides out to
+        // collide_r (> the body+gear max ~0.34), so it reads as a cape from every angle.
+        ClothInstance c;
+        c.anchor = BonePart::Head; // rides the neck / shoulder line
+        c.ring = true;             // multi-chain -> tube builder
+        c.closed = false;          // an OPEN sheet across the back, not a closed tube
+        c.segments = 6;
+        c.seg = 0.12f;
+        c.collide_r = 0.36f;       // stand clear of the body + gear so the whole cape rests outside it
+        c.color = color;
+        constexpr int kN = 6;      // panels shoulder-to-shoulder
+        constexpr f32 arc = 0.85f; // half-angle the collar wraps around the back (~49 deg each side)
+        for (int i = 0; i < kN; ++i) {
+            const f32 t = static_cast<f32>(i) / static_cast<f32>(kN - 1); // 0..1, left -> right
+            const f32 ang = glm::mix(-arc, arc, t);
+            const Vec3 dir{std::sin(ang), 0.0f, -std::cos(ang)};               // around the back (-Z behind)
+            c.anchor_locals.push_back(dir * 0.30f + Vec3{0.0f, 0.05f, 0.0f});  // collar arc, just off the body
+            c.hang_locals.push_back(glm::normalize(dir * 0.4f + Vec3{0.0f, -1.0f, 0.0f})); // down + fan out
+            ClothChain ch;
+            ch.stiffness = 0.66f;
+            ch.damping = 0.06f;
+            ch.wind_gain = wind_gain;
+            c.chains.push_back(ch);
+        }
+        v.cloth.push_back(std::move(c));
     };
 
     // A robe skirt: a ring of chains hanging off the waist, drawn as a closed tube around the legs.
@@ -66,9 +89,9 @@ void ClientApp::setup_cloth(PlayerVisual& v, PlayerRole role, const Equipment& e
 
     // Capes on the legendary tier of the cape-wearing roles (paladin / high prophet / beastmaster).
     if (vt == 2 && (role == PlayerRole::Knight || role == PlayerRole::Cleric)) {
-        add_cape(pal.primary, 0.26f, 1.2f);
+        add_cape(pal.primary, 1.2f);
     } else if (vt == 2 && role == PlayerRole::Hunter) {
-        add_cape(pal.dark, 0.24f, 1.5f); // the beastmaster's tattered dark cape
+        add_cape(pal.dark, 1.5f); // the beastmaster's tattered dark cape
     }
     // A flowing cloth LOWER GARMENT on every role (an 8-panel skirt/robe tube over the waist), so they
     // all wear cloth, not just a cape - the Mage/Cleric's long robe, the Knight's surcoat over the
@@ -237,7 +260,7 @@ void ClientApp::draw_cloth(PlayerVisual& v, const Mat4& root, const std::vector<
             for (ClothChain& ch : local) {
                 localize(ch);
             }
-            build_cloth_tube(local, true, c.color, md);
+            build_cloth_tube(local, c.closed, c.color, md);
         } else {
             ClothChain local = c.chains[0];
             localize(local);

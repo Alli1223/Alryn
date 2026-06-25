@@ -453,10 +453,42 @@ Asset build_character(int role) {
             build_cloth_mesh(s, Vec3{1.0f, 0.0f, 0.0f}, color, cm);
             a.parts.push_back({std::move(cm), Vec4{1.0f}});
         };
-        // Cape on cape-wearing roles (anchored at the neck); + the minor pieces (cleric stole / mantle).
+        // Cape on cape-wearing roles: a wide multi-panel cloak on a shallow ARC across the upper back
+        // (open sheet), standing clear of the body (mirrors ClientApp::add_cape).
         if (role == 0 || role == 2 || role == 1) {
-            make_sheet(neck + Vec3{0.0f, 0.06f, -0.28f}, Vec3{0.0f, -1.0f, -0.18f}, 6, 0.12f, 0.24f,
-                       role == 1 ? pal.dark : pal.primary);
+            constexpr int kN = 6;
+            constexpr f32 arc = 0.85f;
+            auto cape_anchor = [&](int i) {
+                const f32 a = glm::mix(-arc, arc, static_cast<f32>(i) / static_cast<f32>(kN - 1));
+                return neck + Vec3{std::sin(a), 0.0f, -std::cos(a)} * 0.30f + Vec3{0.0f, 0.05f, 0.0f};
+            };
+            std::vector<ClothChain> cape(kN);
+            for (int i = 0; i < kN; ++i) {
+                const f32 a = glm::mix(-arc, arc, static_cast<f32>(i) / static_cast<f32>(kN - 1));
+                const Vec3 dir{std::sin(a), 0.0f, -std::cos(a)};
+                cape[static_cast<usize>(i)].init(cape_anchor(i),
+                                                 glm::normalize(dir * 0.4f + Vec3{0.0f, -1.0f, 0.0f}), 6,
+                                                 0.12f, 0.0f);
+            }
+            for (int k = 0; k < 170; ++k) {
+                for (int i = 0; i < kN; ++i) {
+                    cape[static_cast<usize>(i)].step(cape_anchor(i), wind, 9.0f, 1.0f / 60.0f);
+                    collide_body(cape[static_cast<usize>(i)], 0.36f);
+                }
+            }
+            if (cut) {
+                for (ClothChain& ch : cape) {
+                    ch.detach();
+                }
+                for (int k = 0; k < 36; ++k) {
+                    for (ClothChain& ch : cape) {
+                        ch.step(Vec3{0.0f}, wind, 9.0f, 1.0f / 60.0f);
+                    }
+                }
+            }
+            MeshData cm;
+            build_cloth_tube(cape, false, role == 1 ? pal.dark : pal.primary, cm);
+            a.parts.push_back({std::move(cm), Vec4{1.0f}});
         }
         if (role == 2) { // stole - two front bands
             for (f32 ex : {-1.0f, 1.0f}) {
