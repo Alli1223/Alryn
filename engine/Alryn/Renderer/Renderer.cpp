@@ -1003,6 +1003,7 @@ void Renderer::on_shutdown() {
     pipeline_vegetation_.destroy();
     pipeline_shadow_.destroy();
     pipeline_ui_.destroy();
+    pipeline_sky_.destroy();
     if (shadow_sampler_ != VK_NULL_HANDLE) {
         vkDestroySampler(device_.handle(), shadow_sampler_, nullptr);
         shadow_sampler_ = VK_NULL_HANDLE;
