@@ -224,10 +224,22 @@ private:
         Mesh outfit_mesh;        // dynamic GPU mesh for the outfit, re-skinned with the same joints
     };
 
-    // Skins the player's continuous body with the posed joints (local space) and draws it through the
-    // lit pipeline at `root`; the face/hair/gear attachment primitives are laid on top by the caller.
+    // Skins one continuous SkinnedMesh with `model`'s posed joints (in LOCAL space) into the dynamic GPU
+    // mesh `gpu` (created on first use) and draws it at `root` (its model matrix) through the lit
+    // pipeline. Shared by players (body + outfit), villagers and enemies.
+    void skin_and_draw(const CharacterModel& model, const SkinnedMesh& src, Mesh& gpu, const Mat4& root,
+                       const std::vector<Quat>& pose, const Vec3& tint = Vec3{1.0f});
+
+    // Skins the player's continuous body + worn outfit and draws them; the face/hair/gear attachment
+    // primitives are laid on top by the caller.
     void draw_skinned_body(PlayerVisual& v, const Mat4& root, const std::vector<Quat>& pose,
                            const Vec3& tint = Vec3{1.0f});
+
+    // A dynamic GPU mesh can't be freed the instant its owner (a slain enemy / culled villager) goes
+    // away - a frame that drew it may still be in flight. Retire it here; tick_mesh_graveyard frees it
+    // a few frames later (mirrors the terrain mesh deferral).
+    void retire_mesh(Mesh&& m);
+    void tick_mesh_graveyard();
 
     // A networked enemy's renderable: one shared hostile model, animated from
     // snapshot position deltas (no animation data on the wire).
@@ -237,6 +249,8 @@ private:
         Vec3 last_pos{0.0f};
         f32 speed = 0.0f;
         u8 last_action = 0;
+        SkinnedMesh body_skin; // continuous body, built on first sight; re-skinned each frame
+        Mesh body_mesh;        // dynamic GPU mesh
     };
 
     PlayerVisual& ensure_visual(net::PlayerId id, const CharacterAppearance& appearance, u8 role,
@@ -684,6 +698,7 @@ private:
     Mesh shape_capsule_;
     Mesh shape_rounded_;
     std::vector<Vertex> skin_scratch_; // reused buffer for CPU-skinning a body each frame (no per-frame alloc)
+    std::vector<std::pair<int, Mesh>> mesh_graveyard_; // retired NPC body meshes, freed after a few frames
     Mesh marker_;
     Mesh water_mesh_;
     Mesh bridge_mesh_stone_; // unit stone arch bridge (x:-0.5..0.5), stretched per river crossing

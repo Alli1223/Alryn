@@ -24,6 +24,7 @@ void ClientApp::update_enemy_visuals(Timestep dt) {
         EnemyVisual& v = it->second;
         if (created) {
             v.model = CharacterModel::create(en.id ^ 0xE0E0u, enemy_look());
+            v.body_skin = build_body_mesh(v.model);
             v.last_pos = en.position;
         }
         f32 measured = 0.0f;
@@ -43,7 +44,12 @@ void ClientApp::update_enemy_visuals(Timestep dt) {
     for (auto it = enemy_visuals_.begin(); it != enemy_visuals_.end();) {
         const bool live = std::any_of(snapshot_.enemies.begin(), snapshot_.enemies.end(),
                                       [&](const net::EnemyState& e) { return e.id == it->first; });
-        it = live ? std::next(it) : enemy_visuals_.erase(it);
+        if (live) {
+            ++it;
+        } else {
+            retire_mesh(std::move(it->second.body_mesh)); // defer the GPU free past the frames in flight
+            it = enemy_visuals_.erase(it);
+        }
     }
 }
 
@@ -67,8 +73,13 @@ void ClientApp::draw_enemies() {
                           : en.kind == 2 ? Vec3{1.05f, 0.26f, 0.4f}
                           : en.kind == 3 ? Vec3{0.5f, 0.85f, 0.45f}
                                          : Vec3{1.3f, 0.32f, 0.3f};
-        const std::vector<Mat4> emats = v.model.bone_matrices(root, v.animator.pose(v.model));
-        draw_rig(v.model, emats, tint);
+        const std::vector<Quat> pose = v.animator.pose(v.model);
+        if (v.body_skin.vertices.empty()) {
+            v.body_skin = build_body_mesh(v.model);
+        }
+        skin_and_draw(v.model, v.body_skin, v.body_mesh, root, pose, tint); // continuous skinned body
+        const std::vector<Mat4> emats = v.model.bone_matrices(root, pose);
+        draw_rig(v.model, emats, tint, /*attachments_only=*/true); // face/hair on top
         if (en.kind == 3) {
             // A bow held out front (a curved stave + string).
             const Vec3 hand = en.position +
@@ -432,7 +443,13 @@ void ClientApp::update_villager_visuals(Timestep dt) {
     for (auto it = villager_visuals_.begin(); it != villager_visuals_.end();) {
         const bool live = std::any_of(snapshot_.villagers.begin(), snapshot_.villagers.end(),
                                       [&](const net::VillagerState& s) { return s.id == it->first; });
-        it = live ? std::next(it) : villager_visuals_.erase(it);
+        if (live) {
+            ++it;
+        } else {
+            retire_mesh(std::move(it->second.body_mesh)); // defer the GPU free past the frames in flight
+            retire_mesh(std::move(it->second.outfit_mesh));
+            it = villager_visuals_.erase(it);
+        }
     }
 }
 
@@ -445,6 +462,7 @@ ClientApp::PlayerVisual& ClientApp::ensure_villager_visual(u32 id,
     PlayerVisual v;
     v.appearance = appearance;
     v.model = CharacterModel::create(id ^ 0x55u, appearance);
+    v.body_skin = build_body_mesh(v.model);
     return villager_visuals_.emplace(id, std::move(v)).first->second;
 }
 
@@ -471,14 +489,20 @@ void ClientApp::draw_villagers() {
         }
         const std::vector<Quat> pose =
             seated ? CharacterAnimator::sit_pose(v.model) : v.animator.pose(v.model);
-        const std::vector<Mat4> mats = v.model.bone_matrices(root, pose);
         // Guards (kind 1) wear a steel tint + carry a spear; wall archers (kind 2) wear a
-        // leather/steel tint + hold a bow.
+        // leather/steel tint + hold a bow; the rest are plain townsfolk.
+        const Vec3 tint = vl.kind == 1   ? Vec3{0.72f, 0.76f, 0.86f}
+                          : vl.kind == 2 ? Vec3{0.66f, 0.70f, 0.80f}
+                                         : Vec3{1.0f};
+        if (v.body_skin.vertices.empty()) {
+            v.body_skin = build_body_mesh(v.model);
+        }
+        skin_and_draw(v.model, v.body_skin, v.body_mesh, root, pose, tint); // continuous skinned body
+        const std::vector<Mat4> mats = v.model.bone_matrices(root, pose);
+        draw_rig(v.model, mats, tint, /*attachments_only=*/true); // face/hair on top
         if (vl.kind == 1) {
-            draw_rig(v.model, mats, Vec3{0.72f, 0.76f, 0.86f});
             draw_held_spear(v.model, mats);
         } else if (vl.kind == 2) {
-            draw_rig(v.model, mats, Vec3{0.66f, 0.70f, 0.80f});
             const std::vector<Bone>& bones = v.model.bones();
             int hand = -1;
             for (usize i = 0; i < bones.size(); ++i) {
@@ -503,8 +527,6 @@ void ClientApp::draw_villagers() {
                                     wood); // recurved tips
                 }
             }
-        } else {
-            draw_rig(v.model, mats);
         }
     }
 }

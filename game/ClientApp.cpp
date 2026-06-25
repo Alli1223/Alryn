@@ -204,6 +204,10 @@ void ClientApp::return_to_menu() {
     visuals_.clear();
     enemy_visuals_.clear();
     villager_visuals_.clear();
+    for (auto& [frames, m] : mesh_graveyard_) {
+        m.destroy();
+    }
+    mesh_graveyard_.clear();
     have_snapshot_ = false;
     my_id_ = 0;
     state_ = AppState::Menu;
@@ -289,6 +293,7 @@ void ClientApp::on_update(Timestep dt) {
         update_visuals(dt);
         update_enemy_visuals(dt);
         update_villager_visuals(dt);
+        tick_mesh_graveyard(); // free retired NPC body meshes once their frames-in-flight have passed
         update_gates(dt);
         update_feedback(dt);
         update_ropes(dt);
@@ -496,7 +501,13 @@ void ClientApp::on_shutdown() {
     if (renderer_ != nullptr) {
         renderer_->device().wait_idle();
     }
-    visuals_.clear();
+    visuals_.clear();           // PlayerVisuals own dynamic body/outfit GPU meshes (freed via ~Mesh)
+    enemy_visuals_.clear();     // EnemyVisuals own a dynamic body mesh
+    villager_visuals_.clear();
+    for (auto& [frames, m] : mesh_graveyard_) {
+        m.destroy();
+    }
+    mesh_graveyard_.clear();
     shape_box_.destroy();
     shape_sphere_.destroy();
     shape_cylinder_.destroy();
