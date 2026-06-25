@@ -28,6 +28,7 @@ add_library(alryn STATIC
     Alryn/Character/CharacterAnimator.cpp
     Alryn/Character/Outfit.cpp
     Alryn/Character/Weapon.cpp
+    Alryn/Character/SkinnedMesh.cpp
     # ---- Renderer (Vulkan RHI) ---------------------------------------------
     Alryn/Renderer/Vulkan/VulkanCommon.cpp
     Alryn/Renderer/Vulkan/VulkanInstance.cpp

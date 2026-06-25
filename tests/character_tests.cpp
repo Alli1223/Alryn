@@ -3,11 +3,58 @@
 #include <Alryn/Character/CharacterAnimator.h>
 #include <Alryn/Character/CharacterModel.h>
 #include <Alryn/Character/Equipment.h>
+#include <Alryn/Character/SkinnedMesh.h>
 
 #include <algorithm>
 #include <cmath>
 
 using namespace alryn;
+
+TEST_CASE("SkinnedMesh: linear-blend skinning deforms vertices with the bones") {
+    // Two bones, both bound at the identity (inverse-bind = identity).
+    SkinnedMesh m;
+    m.inverse_bind = {Mat4{1.0f}, Mat4{1.0f}};
+
+    SkinVertex a; // fully weighted to bone 1
+    a.position = Vec3{1.0f, 0.0f, 0.0f};
+    a.set_weights({{1, 1.0f}});
+    SkinVertex b; // 50/50 between bone 0 (identity) and bone 1
+    b.position = Vec3{1.0f, 0.0f, 0.0f};
+    b.set_weights({{0, 1.0f}, {1, 1.0f}});
+    m.add_vertex(a);
+    m.add_vertex(b);
+
+    std::vector<Vertex> out;
+
+    // Bind pose (both joints identity): vertices stay put.
+    skin(m, {Mat4{1.0f}, Mat4{1.0f}}, out);
+    REQUIRE(out.size() == 2);
+    CHECK(glm::length(out[0].position - Vec3{1.0f, 0.0f, 0.0f}) < 1e-4f);
+
+    // Rotate bone 1 by +90deg about Z: (1,0,0) -> (0,1,0).
+    const Mat4 rot = glm::rotate(Mat4{1.0f}, HalfPi, Vec3{0.0f, 0.0f, 1.0f});
+    skin(m, {Mat4{1.0f}, rot}, out);
+    CHECK(glm::length(out[0].position - Vec3{0.0f, 1.0f, 0.0f}) < 1e-3f); // follows bone 1 fully
+    // The 50/50 vertex lands between (1,0,0) [bone 0] and (0,1,0) [bone 1] - the LBS average.
+    CHECK(out[1].position.x > 0.1f);
+    CHECK(out[1].position.x < 0.9f);
+    CHECK(out[1].position.y > 0.1f);
+    CHECK(out[1].position.y < 0.9f);
+
+    // A translating bone carries its vertices.
+    const Mat4 trans = glm::translate(Mat4{1.0f}, Vec3{0.0f, 2.0f, 0.0f});
+    skin(m, {Mat4{1.0f}, trans}, out);
+    CHECK(glm::length(out[0].position - Vec3{1.0f, 2.0f, 0.0f}) < 1e-4f);
+
+    // The palette resolves the material id to a colour.
+    bool called = false;
+    skin(m, {Mat4{1.0f}, Mat4{1.0f}}, out, [&](u8) {
+        called = true;
+        return Vec3{0.2f, 0.4f, 0.6f};
+    });
+    CHECK(called);
+    CHECK(out[0].color == Vec3{0.2f, 0.4f, 0.6f});
+}
 
 TEST_CASE("Equipment: tiers grant a monotonic, buyable power bonus") {
     // Ragged (the starting gear) grants nothing.
