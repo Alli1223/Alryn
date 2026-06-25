@@ -98,8 +98,7 @@ void build_plate(CharacterModel& m, const Equipment& eq) {
               Vec3{ts.x * 0.46f, ts.x * 0.46f, 0.03f}, BoneColor::Accent, BoneShape::Sphere); // sun emblem
         piece(m, BonePart::Torso, Vec3{0.0f, tc.y * 0.62f, ts.z * 0.7f},
               Vec3{ts.x * 0.5f, ts.y * 1.24f, 0.03f}, BoneColor::Primary, BoneShape::Box); // tabard
-        piece(m, BonePart::Torso, Vec3{0.0f, tc.y * 0.2f, -ts.z * 0.82f},
-              Vec3{ts.x * 1.5f, ts.y * 2.4f, 0.04f}, BoneColor::Primary, BoneShape::Box); // cape
+        // (the flowing cape is a simulated ClothInstance now - see ClientApp::setup_cloth)
         for (BonePart up : {BonePart::UpperArmL, BonePart::UpperArmR}) {
             piece(m, up, Vec3{0.0f, -part_size(m, up).y * 0.02f, 0.0f}, Vec3{0.31f, 0.27f, 0.32f},
                   BoneColor::Metal, BoneShape::Sphere); // big pauldron
@@ -266,8 +265,7 @@ void build_leather(CharacterModel& m, const Equipment& eq) {
             piece(m, up, Vec3{0.0f, part_size(m, up).y * 0.2f, -0.05f}, Vec3{0.05f, 0.22f, 0.05f},
                   BoneColor::Metal, BoneShape::Box, pitch(-0.35f)); // bone spike angled back
         }
-        piece(m, BonePart::Torso, Vec3{0.0f, tc.y * 0.3f, -ts.z * 0.82f},
-              Vec3{ts.x * 1.5f, ts.y * 2.3f, 0.04f}, BoneColor::Dark, BoneShape::Box); // tattered cape
+        // (the tattered cape is a simulated ClothInstance now - see ClientApp::setup_cloth)
         piece(m, BonePart::Torso, Vec3{0.0f, tc.y, ts.z * 0.6f}, Vec3{0.03f, ts.y * 1.0f, 0.03f},
               BoneColor::Glow, BoneShape::Box); // glowing rune line
     }
@@ -340,8 +338,7 @@ void build_holy(CharacterModel& m, const Equipment& eq) {
         }
         cross(tc.y * 0.8f, ts.y * 0.42f);
         cross(tc.y * 0.3f, ts.y * 0.34f);
-        piece(m, BonePart::Torso, Vec3{0.0f, tc.y * 0.2f, -ts.z * 0.82f},
-              Vec3{ts.x * 1.5f, ts.y * 2.4f, 0.04f}, BoneColor::Primary, BoneShape::Box); // cape
+        // (the flowing cape is a simulated ClothInstance now - see ClientApp::setup_cloth)
     }
 }
 

@@ -11,6 +11,7 @@
 #include <Alryn/Character/BodyMesh.h>
 #include <Alryn/Character/CharacterAnimator.h>
 #include <Alryn/Character/CharacterModel.h>
+#include <Alryn/Character/ClothRig.h>
 #include <Alryn/Character/Outfit.h>
 #include <Alryn/Character/OutfitMesh.h>
 #include <Alryn/Character/SkinnedMesh.h>
@@ -217,6 +218,23 @@ protected:
     void on_shutdown() override;
 
 private:
+    // A flowing cloth piece on a character: a spring-bone ClothChain simulated in WORLD space (so it
+    // lags with the body's motion), rebuilt into a dynamic mesh each frame. The anchor rides a body
+    // joint; the chain hangs along `hang_local` (the character's local frame). Detachable (phase 3).
+    struct ClothInstance {
+        ClothChain chain;
+        Mesh mesh;                          // dynamic, rebuilt from the sim each frame
+        Vec3 color{0.5f};
+        BonePart anchor = BonePart::Torso;  // body joint the top of the piece rides
+        Vec3 anchor_local{0.0f};            // offset from that joint, in the character's local frame
+        Vec3 hang_local{0.0f, -1.0f, -0.2f}; // rest hang direction (local)
+        Vec3 side_local{1.0f, 0.0f, 0.0f};  // sheet left-right axis (local)
+        int segments = 5;
+        f32 seg = 0.13f;
+        f32 half_width = 0.22f;
+        bool inited = false;
+    };
+
     struct PlayerVisual {
         CharacterModel model;
         CharacterAnimator animator;
@@ -231,7 +249,14 @@ private:
         Mesh body_mesh;         // dynamic GPU mesh, re-skinned from the posed joints every frame
         SkinnedMesh outfit_skin; // continuous worn equipment (armoured/clothed limbs, torso, skirt)
         Mesh outfit_mesh;        // dynamic GPU mesh for the outfit, re-skinned with the same joints
+        std::vector<ClothInstance> cloth; // simulated flowing pieces (cape, skirt, ...)
     };
+
+    // Set up a character's flowing cloth pieces for its role + gear (called when the visual is built).
+    void setup_cloth(PlayerVisual& v, PlayerRole role, const Equipment& eq);
+    // Step + rebuild + draw a character's cloth pieces. World-space sim (anchor from the posed joints,
+    // renderer wind), mesh localised to `root` so culling stays correct.
+    void draw_cloth(PlayerVisual& v, const Mat4& root, const std::vector<Mat4>& jmats, const Vec3& tint);
 
     // Skins one continuous SkinnedMesh with `model`'s posed joints (in LOCAL space) into the dynamic GPU
     // mesh `gpu` (created on first use) and draws it at `root` (its model matrix) through the lit
@@ -725,6 +750,7 @@ private:
     std::unordered_map<u64, f32> gate_open_; // eased open amount, keyed by gate position hash
 
     f32 elapsed_ = 0.0f;
+    f32 frame_dt_ = 1.0f / 60.0f; // last frame's dt, for per-frame sims stepped during rendering (cloth)
     f32 time_of_day_ = daynight::start_time; // 0=midnight, 0.25=sunrise, 0.5=noon, 0.75=sunset
     f32 day_seconds_ = daynight::default_day_seconds;
     f32 sun_intensity_ = 1.0f; // cached from the day/night cycle (0 night .. 1 day)

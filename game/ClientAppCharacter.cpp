@@ -268,6 +268,7 @@ void ClientApp::draw_character(PlayerVisual& v, const Vec3& feet, f32 yaw, bool 
         // Weapons attach to the JOINT frames (orientation + position) so they swing with
         // the arm, unlike the box mats whose columns are scaled by box_size.
         const std::vector<Mat4> jmats = v.model.joint_matrices(root, pose);
+        draw_cloth(v, root, jmats, Vec3{1.0f}); // simulated flowing cloth (cape, ...)
         const bool staff_user = (r == PlayerRole::Mage || r == PlayerRole::Cleric);
         if (idle_w > 0.5f && staff_user) {
             draw_planted_weapon(v.model, jmats, feet, r, v.equipment); // rest on the planted staff/mace

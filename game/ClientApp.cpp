@@ -216,6 +216,7 @@ void ClientApp::return_to_menu() {
 
 void ClientApp::on_update(Timestep dt) {
     elapsed_ += dt.seconds;
+    frame_dt_ = glm::clamp(dt.seconds, 1.0f / 240.0f, 1.0f / 20.0f); // clamp so a hitch can't explode the cloth
     if (renderer_ != nullptr) {
         renderer_->set_time(elapsed_);
     }
@@ -567,6 +568,7 @@ ClientApp::PlayerVisual& ClientApp::ensure_visual(net::PlayerId id,
         apply_outfit(v.model, kind, equipment); // the networked, server-clamped gear (decorative attachments)
         v.body_skin = build_body_mesh(v.model);            // continuous body for this character's proportions
         v.outfit_skin = build_outfit_mesh(v.model, kind, equipment); // continuous worn armour/cloth
+        setup_cloth(v, static_cast<PlayerRole>(role % kRoleCount), equipment); // flowing simulated cloth
     };
     const auto it = visuals_.find(id);
     if (it != visuals_.end()) {
