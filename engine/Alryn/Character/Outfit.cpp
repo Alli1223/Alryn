@@ -87,31 +87,43 @@ void build_plate(CharacterModel& m, const Equipment& eq) {
     piece(m, BonePart::Pelvis, Vec3{0.0f, -0.02f, 0.02f},
           part_size(m, BonePart::Pelvis) * Vec3{1.25f, 1.1f, 1.35f}, body);
 
-    // Pauldrons (shoulder caps) + vambraces.
+    // Full armoured arms: a plate over the whole upper arm + a big rounded pauldron flowing off the
+    // shoulder, a vambrace down the forearm and a gauntlet, so the arm reads as one steel limb.
     for (BonePart up : {BonePart::UpperArmL, BonePart::UpperArmR}) {
         const f32 al = part_size(m, up).y;
-        piece(m, up, Vec3{0.0f, -al * 0.12f, 0.0f}, Vec3{0.20f, 0.16f, 0.22f}, body);
+        piece(m, up, Vec3{0.0f, -al * 0.5f, 0.0f}, Vec3{0.21f, al * 1.06f, 0.22f}, body); // upper-arm plate
+        piece(m, up, Vec3{0.0f, -al * 0.02f, 0.0f}, Vec3{0.29f, 0.26f, 0.30f}, body,
+              BoneShape::Sphere); // rounded pauldron
+        if (t >= 2) {
+            piece(m, up, Vec3{0.0f, -al * 0.02f, 0.0f}, Vec3{0.31f, 0.08f, 0.32f}, BoneColor::Accent,
+                  BoneShape::Sphere); // gold pauldron rim
+        }
     }
     for (BonePart lo : {BonePart::LowerArmL, BonePart::LowerArmR}) {
         const f32 al = part_size(m, lo).y;
-        piece(m, lo, Vec3{0.0f, -al * 0.5f, 0.0f}, Vec3{0.14f, al * 1.02f, 0.15f}, body); // vambrace
-        piece(m, lo, Vec3{0.0f, -al * 1.0f, 0.02f}, Vec3{0.12f, 0.10f, 0.13f}, BoneColor::Metal); // gauntlet
+        piece(m, lo, Vec3{0.0f, -al * 0.45f, 0.0f}, Vec3{0.165f, al * 1.06f, 0.175f}, body); // vambrace
+        piece(m, lo, Vec3{0.0f, -al * 1.0f, 0.02f}, Vec3{0.15f, 0.13f, 0.16f}, body); // gauntlet
     }
 
-    // Greaves over the shins + plated sabatons (the feet box is already the boot).
-    for (BonePart lo : {BonePart::LowerLegL, BonePart::LowerLegR}) {
-        const f32 ll = part_size(m, lo).y;
-        piece(m, lo, Vec3{0.0f, -ll * 0.5f, 0.0f}, Vec3{0.155f, ll * 0.96f, 0.17f}, body);
-    }
+    // Armoured legs: a cuisse over the thigh, a knee cop, a greave over the shin (one steel leg).
     for (BonePart up : {BonePart::UpperLegL, BonePart::UpperLegR}) {
         const f32 ul = part_size(m, up).y;
-        piece(m, up, Vec3{0.0f, -ul * 0.5f, 0.0f}, Vec3{0.17f, ul * 0.9f, 0.18f}, body); // cuisse
+        piece(m, up, Vec3{0.0f, -ul * 0.5f, 0.0f}, Vec3{0.205f, ul * 1.04f, 0.215f}, body); // cuisse
+        piece(m, up, Vec3{0.0f, -ul, 0.02f}, Vec3{0.2f, 0.16f, 0.2f}, body, BoneShape::Sphere); // knee cop
+    }
+    for (BonePart lo : {BonePart::LowerLegL, BonePart::LowerLegR}) {
+        const f32 ll = part_size(m, lo).y;
+        piece(m, lo, Vec3{0.0f, -ll * 0.48f, 0.0f}, Vec3{0.18f, ll * 1.04f, 0.19f}, body); // greave
     }
 
-    // Great-helm over the head, with a dark visor slit, and a red-feel plume in the chosen colour.
-    piece(m, BonePart::Head, Vec3{hc.x, hc.y, hc.z}, hs * Vec3{1.2f, 1.16f, 1.22f}, body);
-    piece(m, BonePart::Head, Vec3{0.0f, hc.y - hs.y * 0.05f, hs.z * 0.62f},
-          Vec3{hs.x * 0.92f, hs.y * 0.16f, 0.04f}, BoneColor::Glow, BoneShape::Box); // lit eye-slit
+    // Great-helm enclosing the head (covers the face), a lit eye-slit, and a plume in the chosen colour.
+    piece(m, BonePart::Head, Vec3{hc.x, hc.y - hs.y * 0.04f, hc.z}, hs * Vec3{1.22f, 1.34f, 1.24f}, body);
+    piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.04f, hs.z * 0.64f},
+          Vec3{hs.x * 0.94f, hs.y * 0.14f, 0.05f}, BoneColor::Glow, BoneShape::Box); // lit eye-slit
+    if (t >= 2) { // a gold brow band on the helm
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.22f, hs.z * 0.5f},
+              Vec3{hs.x * 1.2f, 0.05f, hs.z * 0.9f}, BoneColor::Accent, BoneShape::Box);
+    }
     if (t >= 2) { // plume crest
         for (int i = 0; i < 4; ++i) {
             const f32 fz = -hs.z * 0.1f - static_cast<f32>(i) * hs.z * 0.18f;
@@ -283,7 +295,7 @@ void apply_outfit(CharacterModel& model, OutfitKind kind, const Equipment& equip
     CharacterPalette& pal = model.palette();
     pal.primary = outfit_tint_of(equip.outfit_tint);
     pal.accent = tier_accent(ot);
-    pal.metal = Vec3{0.62f, 0.66f, 0.74f} * tier_sheen(ot) + Vec3{0.06f}; // brighter steel at higher tiers
+    pal.metal = Vec3{0.74f, 0.78f, 0.86f} * tier_sheen(ot) + Vec3{0.12f}; // bright polished steel
     // `dark` is the secondary panel colour: royal blue for the Cleric's heraldry, leather brown else.
     pal.dark = (kind == OutfitKind::Holy) ? Vec3{0.20f, 0.26f, 0.58f} : Vec3{0.26f, 0.18f, 0.11f};
     pal.glow = (kind == OutfitKind::Plate) ? Vec3{0.45f, 0.7f, 1.0f} : Vec3{0.5f, 0.85f, 1.0f};
