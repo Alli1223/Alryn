@@ -1846,10 +1846,18 @@ PropDef PropLibrary::build_wagon() {
     add_box(m, {0.92f, 0.72f, -0.58f}, {1.0f, 1.05f, 0.58f}, wood);         // front board
     add_box(m, {-1.0f, 0.72f, -0.58f}, {-0.92f, 1.15f, 0.58f}, wood);       // back board (taller)
 
-    // Cargo crates on the bed.
-    add_box(m, {-0.55f, 0.72f, -0.34f}, {0.05f, 1.18f, 0.28f}, crate);
-    add_box(m, {0.12f, 0.72f, -0.1f}, {0.62f, 1.02f, 0.4f}, crate * 0.9f);
-    add_box(m, {0.18f, 0.72f, -0.42f}, {0.58f, 0.98f, -0.06f}, crate * 1.05f);
+    // Cargo: a varied, stacked, lashed load so the haul reads as properly loaded (not a couple of bare
+    // crates) - crates + burlap sacks tied down under rope straps.
+    const Vec3 sack{0.50f, 0.44f, 0.32f};
+    add_box(m, {-0.55f, 0.72f, -0.34f}, {0.05f, 1.18f, 0.28f}, crate);         // big crate (front-left)
+    add_box(m, {-0.5f, 1.18f, -0.26f}, {-0.04f, 1.44f, 0.2f}, crate * 1.08f);  // a crate stacked on top
+    add_box(m, {0.12f, 0.72f, -0.1f}, {0.62f, 1.02f, 0.4f}, crate * 0.9f);     // crate (right)
+    add_box(m, {0.18f, 0.72f, -0.42f}, {0.58f, 0.98f, -0.06f}, crate * 1.05f); // crate (right-back)
+    add_box(m, {-0.04f, 0.72f, 0.2f}, {0.32f, 0.96f, 0.46f}, sack);            // burlap sack in a gap
+    add_box(m, {0.36f, 1.02f, 0.04f}, {0.64f, 1.2f, 0.36f}, sack * 0.92f);     // sack atop the right crate
+    for (f32 rx : {-0.32f, 0.34f}) {                                           // rope straps over the load
+        add_box(m, {rx - 0.03f, 1.14f, -0.56f}, {rx + 0.03f, 1.2f, 0.56f}, dark);
+    }
 
     // Draw tongue + handle out the front.
     add_box(m, {1.0f, 0.5f, -0.07f}, {1.9f, 0.62f, 0.07f}, dark);
