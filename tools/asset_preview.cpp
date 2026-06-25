@@ -80,7 +80,7 @@ Vec3 tree_foliage_tint(int variant) {
 
 // How many variants a category has (for the "render all" mode).
 int variant_count(const std::string& cat) {
-    if (cat == "character") return kRoleCount; // one per role
+    if (cat == "character") return kRoleCount + 1; // one per role + a Peasant NPC (role index kRoleCount)
     if (cat == "house") return 8;
     if (cat == "tree") return 5;
     if (cat == "decor") return 8;
@@ -225,11 +225,14 @@ Asset build_character(int role) {
     if (const char* t = std::getenv("ALRYN_TIER")) {
         tier = static_cast<u8>(glm::clamp(std::atoi(t), 0, 3));
     }
+    // role == kRoleCount renders a generic Peasant NPC (no weapon).
+    const bool peasant = role >= kRoleCount;
+    const OutfitKind okind = peasant ? OutfitKind::Peasant : outfit_kind_for_role(static_cast<u8>(role));
     Equipment eq;
     eq.outfit_tier = tier;
     eq.weapon_tier = tier;
-    eq.outfit_tint = role_tint[static_cast<usize>(role) % kRoleCount];
-    apply_outfit(model, outfit_kind_for_role(static_cast<u8>(role)), eq);
+    eq.outfit_tint = peasant ? 0u : role_tint[static_cast<usize>(role) % kRoleCount];
+    apply_outfit(model, okind, eq);
 
     // Pose: bind by default (arms at the sides). Set ALRYN_POSE=walk|swing|cast|block to drive the
     // animator mid-action and verify the locomotion + action BLEND (legs walk while the arms act).
@@ -282,7 +285,7 @@ Asset build_character(int role) {
         a.parts.push_back({std::move(md), Vec4{1.0f}});
     };
     add_skinned(build_body_mesh(model));
-    add_skinned(build_outfit_mesh(model, outfit_kind_for_role(static_cast<u8>(role)), eq));
+    add_skinned(build_outfit_mesh(model, okind, eq));
 
     // Face/hair + outfit pieces ride ON TOP of the skinned body as primitives (Bone::attachment),
     // exactly as the client's draw_rig(attachments_only) lays them over the skinned mesh.
@@ -325,8 +328,10 @@ Asset build_character(int role) {
             a.parts.push_back({bake(shape_for(wp.shape), hand * wp.local, c), Vec4{1.0f}});
         }
     };
-    add_weapon(role_weapon(static_cast<u8>(role), 0), hand_frame(BonePart::LowerArmL));
-    if (role_offhand(static_cast<u8>(role)) != WeaponType::None) {
+    if (!peasant) {
+        add_weapon(role_weapon(static_cast<u8>(role), 0), hand_frame(BonePart::LowerArmL));
+    }
+    if (!peasant && role_offhand(static_cast<u8>(role)) != WeaponType::None) {
         add_weapon(role_offhand(static_cast<u8>(role)), hand_frame(BonePart::LowerArmR));
     }
     return a;

@@ -462,7 +462,12 @@ ClientApp::PlayerVisual& ClientApp::ensure_villager_visual(u32 id,
     PlayerVisual v;
     v.appearance = appearance;
     v.model = CharacterModel::create(id ^ 0x55u, appearance);
+    // Generic peasant garb (a belted tunic + trousers + cap), with a little per-NPC colour variety.
+    Equipment eq;
+    eq.outfit_tint = static_cast<u8>(id % 4u);
+    apply_outfit(v.model, OutfitKind::Peasant, eq);
     v.body_skin = build_body_mesh(v.model);
+    v.outfit_skin = build_outfit_mesh(v.model, OutfitKind::Peasant, eq);
     return villager_visuals_.emplace(id, std::move(v)).first->second;
 }
 
@@ -497,9 +502,10 @@ void ClientApp::draw_villagers() {
         if (v.body_skin.vertices.empty()) {
             v.body_skin = build_body_mesh(v.model);
         }
-        skin_and_draw(v.model, v.body_skin, v.body_mesh, root, pose, tint); // continuous skinned body
+        skin_and_draw(v.model, v.body_skin, v.body_mesh, root, pose, tint);     // continuous skinned body
+        skin_and_draw(v.model, v.outfit_skin, v.outfit_mesh, root, pose, tint); // peasant tunic + trousers
         const std::vector<Mat4> mats = v.model.bone_matrices(root, pose);
-        draw_rig(v.model, mats, tint, /*attachments_only=*/true); // face/hair on top
+        draw_rig(v.model, mats, tint, /*attachments_only=*/true); // face/hair/cap/apron on top
         if (vl.kind == 1) {
             draw_held_spear(v.model, mats);
         } else if (vl.kind == 2) {

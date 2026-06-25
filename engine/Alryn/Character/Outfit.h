@@ -5,13 +5,15 @@
 
 namespace alryn {
 
-// The four outfit themes, 1:1 with the playable roles. The caller maps PlayerRole -> OutfitKind so
-// the Character/ module stays independent of Game/Roles.
+// The outfit themes. The first four are 1:1 with the playable roles; Peasant is the generic NPC garb
+// (townsfolk). The caller maps PlayerRole -> OutfitKind so the Character/ module stays independent of
+// Game/Roles.
 enum class OutfitKind : u8 {
-    Plate = 0,   // Knight  - steel plate + gold trim, plumed helm
-    Leather = 1, // Hunter  - leather jerkin, hood + mask, back quiver
-    Holy = 2,    // Cleric  - white/blue/gold robe, mitre
-    Robe = 3,    // Mage    - hooded robe, gold trim
+    Plate = 0,   // Knight  - cloth gambeson -> chainmail -> steel plate
+    Leather = 1, // Hunter  - leather jerkin -> warden -> beastmaster
+    Holy = 2,    // Cleric  - monk robe -> priest -> high prophet
+    Robe = 3,    // Mage    - patched robe -> elementalist -> archmage
+    Peasant = 4, // NPC townsfolk - a plain tunic + trousers, no tiers
 };
 
 // Maps a role index (PlayerRole value) to its outfit theme.
@@ -22,6 +24,15 @@ inline OutfitKind outfit_kind_for_role(u8 role) {
         case 2: return OutfitKind::Holy;
         default: return OutfitKind::Robe;
     }
+}
+
+// The DESIGN tier (silhouette family) a gear tier renders as, matching the reference art's three looks:
+// 0 = basic cloth/leather (squire / apprentice / acolyte / hunter), 1 = rare (chainmail / elementalist
+// / priest / warden), 2 = legendary (paladin / archmage / high prophet / beastmaster). The starting
+// rags + worn kit share the basic silhouette (the trim accent still brightens per gear tier); a Fine
+// outfit is the rare design; Master is the legendary one.
+inline int outfit_design_tier(EquipmentTier t) {
+    return t == EquipmentTier::Master ? 2 : t == EquipmentTier::Fine ? 1 : 0;
 }
 
 // Sets the model's equipment palette from `equip` (primary = chosen colour, accent = tier trim,

@@ -98,17 +98,31 @@ SkinnedMesh build_outfit_mesh(const CharacterModel& model, OutfitKind kind, cons
     for (usize b = 0; b < r.J.size(); ++b) {
         sm.inverse_bind[b] = glm::inverse(r.J[b]);
     }
-    const u8 t = static_cast<u8>(equip.outfit());
+    const int vt = outfit_design_tier(equip.outfit());
 
     switch (kind) {
         case OutfitKind::Plate: {
-            // Full steel limbs + chest (gambeson Primary at the ragged tier, plate Metal above).
-            const BodyMaterial body = t >= 1 ? BodyMaterial::Metal : BodyMaterial::Primary;
-            clad_torso(sm, r, 1.22f, 0.86f, body);
-            clad_limb(sm, r, BonePart::UpperArmL, BonePart::LowerArmL, 1.28f, 1.0f, body, true);
-            clad_limb(sm, r, BonePart::UpperArmR, BonePart::LowerArmR, 1.28f, 1.0f, body, true);
-            clad_limb(sm, r, BonePart::UpperLegL, BonePart::LowerLegL, 1.22f, 0.95f, body, false);
-            clad_limb(sm, r, BonePart::UpperLegR, BonePart::LowerLegR, 1.22f, 0.95f, body, false);
+            // 0 squire: padded cloth gambeson; 1 knight: chainmail; 2 paladin: thick steel plate.
+            const BodyMaterial body = vt == 0 ? BodyMaterial::Primary : BodyMaterial::Metal;
+            const f32 bulk = vt == 2 ? 0.16f : vt == 1 ? 0.08f : 0.02f; // plate thickest, mail medium
+            clad_torso(sm, r, 1.12f + bulk, 0.86f, body);
+            clad_limb(sm, r, BonePart::UpperArmL, BonePart::LowerArmL, 1.16f + bulk, 1.0f, body, true);
+            clad_limb(sm, r, BonePart::UpperArmR, BonePart::LowerArmR, 1.16f + bulk, 1.0f, body, true);
+            clad_limb(sm, r, BonePart::UpperLegL, BonePart::LowerLegL, 1.12f + bulk, 0.95f, body, false);
+            clad_limb(sm, r, BonePart::UpperLegR, BonePart::LowerLegR, 1.12f + bulk, 0.95f, body, false);
+            if (vt == 0) {
+                skirt(sm, r, 0.16f, 0.34f, BodyMaterial::Primary); // a short padded gambeson skirt
+            }
+            break;
+        }
+        case OutfitKind::Peasant: {
+            // A plain belted tunic over the torso + cloth trousers; short sleeves leave the forearms bare.
+            clad_torso(sm, r, 1.1f, 0.9f, BodyMaterial::Primary);
+            clad_limb(sm, r, BonePart::UpperArmL, BonePart::LowerArmL, 1.08f, 0.45f, BodyMaterial::Primary, true);
+            clad_limb(sm, r, BonePart::UpperArmR, BonePart::LowerArmR, 1.08f, 0.45f, BodyMaterial::Primary, true);
+            clad_limb(sm, r, BonePart::UpperLegL, BonePart::LowerLegL, 1.08f, 0.92f, BodyMaterial::Pants, false);
+            clad_limb(sm, r, BonePart::UpperLegR, BonePart::LowerLegR, 1.08f, 0.92f, BodyMaterial::Pants, false);
+            skirt(sm, r, 0.12f, 0.3f, BodyMaterial::Primary); // a short tunic hem over the hips
             break;
         }
         case OutfitKind::Robe: {
