@@ -145,15 +145,15 @@ void CharacterAnimator::overlay_swing(const CharacterModel& model, std::vector<Q
     const f32 t = glm::clamp(swing_t_ / kSwingDur, 0.0f, 1.0f);
     const f32 env = glm::smoothstep(0.0f, 0.10f, t) * (1.0f - glm::smoothstep(0.86f, 1.0f, t));
 
-    f32 a; // shoulder pitch
-    if (t < 0.30f) {
-        a = glm::mix(0.0f, 2.3f, glm::smoothstep(0.0f, 0.30f, t)); // raise overhead + back
-    } else if (t < 0.60f) {
-        a = glm::mix(2.3f, -1.1f, glm::smoothstep(0.30f, 0.60f, t)); // chop down to the front
+    f32 a; // shoulder pitch (about local X: +raises the arm overhead-and-back, - drops it to the front)
+    if (t < 0.26f) {
+        a = glm::mix(0.0f, 2.55f, glm::smoothstep(0.0f, 0.26f, t)); // quick raise overhead (windup)
+    } else if (t < 0.55f) {
+        a = glm::mix(2.55f, -1.6f, glm::smoothstep(0.26f, 0.55f, t)); // CHOP down hard to the front
     } else {
-        a = glm::mix(-1.1f, 0.0f, glm::smoothstep(0.60f, 1.0f, t)); // recover to rest
+        a = glm::mix(-1.6f, 0.0f, glm::smoothstep(0.55f, 1.0f, t)); // recover to rest
     }
-    const f32 cock = glm::smoothstep(0.0f, 0.28f, t) * (1.0f - glm::smoothstep(0.30f, 0.56f, t));
+    const f32 cock = glm::smoothstep(0.0f, 0.24f, t) * (1.0f - glm::smoothstep(0.26f, 0.5f, t));
     const f32 lean = glm::smoothstep(0.32f, 0.58f, t) * (1.0f - glm::smoothstep(0.60f, 0.95f, t));
 
     const Vec3 ax{1.0f, 0.0f, 0.0f};

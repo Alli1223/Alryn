@@ -245,9 +245,13 @@ Asset build_character(int role) {
             anim.update(5.0f, dt); // walk up to a mid-stride
         }
         const std::string m = mode;
+        int action_frames = 13; // ALRYN_FRAMES overrides, to sweep an action's phase
+        if (const char* af = std::getenv("ALRYN_FRAMES")) {
+            action_frames = std::atoi(af);
+        }
         if (m == "swing") {
             anim.play_swing();
-            for (int k = 0; k < 13; ++k) anim.update(5.0f, dt); // ~mid-chop
+            for (int k = 0; k < action_frames; ++k) anim.update(5.0f, dt);
         } else if (m == "cast") {
             anim.play_cast();
             for (int k = 0; k < 17; ++k) anim.update(5.0f, dt); // ~mid-thrust
@@ -258,9 +262,25 @@ Asset build_character(int role) {
         pose = anim.pose(model);
         root = anim.body_offset();
     }
+    // ALRYN_YAW (degrees) spins the character on the spot - handy to view an action in profile.
+    if (const char* yw = std::getenv("ALRYN_YAW")) {
+        root = glm::rotate(Mat4{1.0f}, radians(static_cast<f32>(std::atof(yw))), Vec3{0.0f, 1.0f, 0.0f}) * root;
+    }
     const std::vector<Mat4> jmats = model.joint_matrices(root, pose);
     const CharacterPalette& pal = model.palette();
     const std::vector<Bone>& bones = model.bones();
+
+    // Trace the sword arm's pointing direction (down the forearm, local -Y) in world space, so the
+    // swing arc can be checked numerically: +z = the character's FORWARD/facing, +y = up.
+    if (std::getenv("ALRYN_DEBUG_TIP") != nullptr) {
+        const int bi = model.bone_index(BonePart::LowerArmL);
+        if (bi >= 0) {
+            const Vec3 down{-jmats[static_cast<usize>(bi)][1]}; // -local-Y axis = where the forearm/blade points
+            std::printf("blade dir  y=%+.2f  z=%+.2f  (%s, %s)\n", down.y, down.z,
+                        down.z > 0.1f ? "FRONT" : down.z < -0.1f ? "BACK" : "mid",
+                        down.y > 0.1f ? "up" : down.y < -0.1f ? "down" : "level");
+        }
+    }
 
     auto shape_for = [&](BoneShape s) -> const MeshData& {
         return s == BoneShape::Sphere       ? sphere
