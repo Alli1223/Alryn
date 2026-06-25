@@ -126,26 +126,34 @@ SkinnedMesh build_outfit_mesh(const CharacterModel& model, OutfitKind kind, cons
             break;
         }
         case OutfitKind::Robe: {
-            // Loose violet sleeves + a robe body + a long draping skirt.
+            // Apprentice: a short rough robe; elementalist/archmage: fuller, longer robes.
+            const f32 len = vt == 2 ? 0.84f : vt == 1 ? 0.72f : 0.6f;
             clad_torso(sm, r, 1.18f, 0.84f, BodyMaterial::Primary);
-            clad_limb(sm, r, BonePart::UpperArmL, BonePart::LowerArmL, 1.2f, 1.0f, BodyMaterial::Primary, true);
-            clad_limb(sm, r, BonePart::UpperArmR, BonePart::LowerArmR, 1.2f, 1.0f, BodyMaterial::Primary, true);
-            skirt(sm, r, 0.7f, 0.42f, BodyMaterial::Primary);
+            clad_limb(sm, r, BonePart::UpperArmL, BonePart::LowerArmL, vt == 0 ? 1.14f : 1.2f, 1.0f,
+                      BodyMaterial::Primary, true);
+            clad_limb(sm, r, BonePart::UpperArmR, BonePart::LowerArmR, vt == 0 ? 1.14f : 1.2f, 1.0f,
+                      BodyMaterial::Primary, true);
+            skirt(sm, r, len, vt == 0 ? 0.4f : 0.46f, BodyMaterial::Primary);
             break;
         }
         case OutfitKind::Holy: {
-            // White robe body + sleeves + a long robe skirt to the ankles.
+            // A long robe to the ankles at every tier (acolyte a touch shorter than priest/prophet).
             clad_torso(sm, r, 1.16f, 0.85f, BodyMaterial::Primary);
             clad_limb(sm, r, BonePart::UpperArmL, BonePart::LowerArmL, 1.16f, 1.0f, BodyMaterial::Primary, true);
             clad_limb(sm, r, BonePart::UpperArmR, BonePart::LowerArmR, 1.16f, 1.0f, BodyMaterial::Primary, true);
-            skirt(sm, r, 0.96f, 0.44f, BodyMaterial::Primary);
+            skirt(sm, r, vt == 0 ? 0.86f : 0.96f, 0.44f, BodyMaterial::Primary);
             break;
         }
         case OutfitKind::Leather: {
-            // Olive tunic over the chest + matching trousers over the legs (boots stay the body feet).
-            clad_torso(sm, r, 1.12f, 0.88f, BodyMaterial::Primary);
-            clad_limb(sm, r, BonePart::UpperLegL, BonePart::LowerLegL, 1.12f, 1.0f, BodyMaterial::Primary, false);
-            clad_limb(sm, r, BonePart::UpperLegR, BonePart::LowerLegR, 1.12f, 1.0f, BodyMaterial::Primary, false);
+            // Olive tunic + trousers (hunter/warden); the beastmaster's is dark scale armour with sleeves.
+            const BodyMaterial cloth = vt == 2 ? BodyMaterial::Dark : BodyMaterial::Primary;
+            clad_torso(sm, r, vt == 2 ? 1.18f : 1.12f, 0.88f, cloth);
+            clad_limb(sm, r, BonePart::UpperLegL, BonePart::LowerLegL, 1.12f, 1.0f, cloth, false);
+            clad_limb(sm, r, BonePart::UpperLegR, BonePart::LowerLegR, 1.12f, 1.0f, cloth, false);
+            if (vt == 2) { // scale sleeves over the arms
+                clad_limb(sm, r, BonePart::UpperArmL, BonePart::LowerArmL, 1.14f, 0.8f, cloth, true);
+                clad_limb(sm, r, BonePart::UpperArmR, BonePart::LowerArmR, 1.14f, 0.8f, cloth, true);
+            }
             break;
         }
     }

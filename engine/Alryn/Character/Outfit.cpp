@@ -130,136 +130,219 @@ void build_plate(CharacterModel& m, const Equipment& eq) {
 }
 
 // ------------------------------------------------------------------------------------------------
-// Mage - a long hooded ROBE in the chosen colour with gold trim, a shoulder cape, a belt, gloves and
-// a hood drawn up over a shadowed face (glowing eyes at the top tiers).
+// Mage - APPRENTICE (patched hooded robe + rope belt) -> ELEMENTALIST (runed robe + circlet + shoulder
+// cowl + spellbook) -> ARCHMAGE (ornate gold-trimmed robe + gem crown + gold pauldrons + glowing runes).
 void build_robe(CharacterModel& m, const Equipment& eq) {
-    const u8 t = static_cast<u8>(eq.outfit());
+    const int vt = outfit_design_tier(eq.outfit());
     const Vec3 ts = part_size(m, BonePart::Torso), tc = part_center(m, BonePart::Torso);
     const Vec3 hs = part_size(m, BonePart::Head), hc = part_center(m, BonePart::Head);
 
-    // The robe body / sleeves / skirt are the continuous skinned OutfitMesh now; a gold trim strip
-    // runs down the front opening over it.
-    piece(m, BonePart::Torso, Vec3{0.0f, tc.y, ts.z * 0.62f}, Vec3{0.05f, ts.y * 1.04f, 0.04f},
-          BoneColor::Accent, BoneShape::Box);
-    // Shoulder cape (a wide cowl over the shoulders) + gold collar.
-    piece(m, BonePart::Torso, Vec3{0.0f, ts.y * 0.9f, 0.0f}, Vec3{ts.x * 1.35f, ts.y * 0.34f, ts.z * 1.35f},
-          BoneColor::Primary);
-    if (t >= 2) {
-        piece(m, BonePart::Torso, Vec3{0.0f, ts.y * 1.0f, 0.0f},
-              Vec3{ts.x * 1.42f, 0.05f, ts.z * 1.42f}, BoneColor::Accent, BoneShape::RoundedBox);
-    }
-    // Belt + buckle.
-    piece(m, BonePart::Pelvis, Vec3{0.0f, 0.04f, 0.0f},
-          part_size(m, BonePart::Pelvis) * Vec3{1.18f, 0.45f, 1.22f}, BoneColor::Dark);
-    if (t >= 1) {
+    if (vt == 0) {
+        // APPRENTICE - a drawn-up hood over a shadowed face + a rope belt + a pouch. Drab, no trim.
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.06f, -hs.z * 0.06f},
+              hs * Vec3{1.24f, 1.22f, 1.34f}, BoneColor::Primary); // hood
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y - hs.y * 0.04f, hs.z * 0.5f},
+              Vec3{hs.x * 0.72f, hs.y * 0.52f, 0.16f}, BoneColor::Dark, BoneShape::RoundedBox); // shadow
+        piece(m, BonePart::Pelvis, Vec3{0.0f, 0.04f, 0.0f},
+              part_size(m, BonePart::Pelvis) * Vec3{1.14f, 0.3f, 1.16f}, BoneColor::Dark); // rope belt
+        piece(m, BonePart::Pelvis, Vec3{0.15f, -0.02f, ts.z * 0.4f}, Vec3{0.09f, 0.11f, 0.06f},
+              BoneColor::Dark); // pouch
+    } else if (vt == 1) {
+        // ELEMENTALIST - a circlet (hair shows), a shoulder cowl, a runed front trim + belt + spellbook.
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.42f, 0.0f}, hs * Vec3{1.16f, 0.16f, 1.16f},
+              BoneColor::Accent, BoneShape::RoundedBox); // circlet
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.52f, hs.z * 0.5f}, Vec3{0.05f, 0.06f, 0.05f},
+              BoneColor::Glow, BoneShape::Sphere); // circlet gem
+        piece(m, BonePart::Torso, Vec3{0.0f, ts.y * 0.9f, 0.0f},
+              Vec3{ts.x * 1.34f, ts.y * 0.32f, ts.z * 1.34f}, BoneColor::Primary); // shoulder cowl
+        piece(m, BonePart::Torso, Vec3{0.0f, tc.y, ts.z * 0.62f}, Vec3{0.05f, ts.y * 1.04f, 0.04f},
+              BoneColor::Accent, BoneShape::Box); // runed front trim
+        piece(m, BonePart::Pelvis, Vec3{0.0f, 0.04f, 0.0f},
+              part_size(m, BonePart::Pelvis) * Vec3{1.16f, 0.34f, 1.18f}, BoneColor::Dark); // belt
+        piece(m, BonePart::Pelvis, Vec3{0.17f, 0.0f, ts.z * 0.32f}, Vec3{0.1f, 0.13f, 0.05f},
+              BoneColor::Dark, BoneShape::Box); // spellbook at the hip
+    } else {
+        // ARCHMAGE - a gem crown, a high gold collar, gold pauldrons + gems, gold + glowing rune trim.
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.48f, 0.0f}, hs * Vec3{1.18f, 0.26f, 1.18f},
+              BoneColor::Accent, BoneShape::RoundedBox); // crown band
+        for (int i = 0; i < 5; ++i) {
+            const f32 a = (-0.5f + static_cast<f32>(i) * 0.25f) * Pi;
+            piece(m, BonePart::Head,
+                  Vec3{std::sin(a) * hs.x * 0.6f, hc.y + hs.y * 0.66f, std::cos(a) * hs.z * 0.6f},
+                  Vec3{0.04f, 0.12f, 0.04f}, BoneColor::Accent, BoneShape::Box); // crown points
+        }
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.6f, hs.z * 0.58f}, Vec3{0.06f, 0.07f, 0.05f},
+              BoneColor::Glow, BoneShape::Sphere); // crown gem
+        piece(m, BonePart::Torso, Vec3{0.0f, ts.y * 0.92f, 0.0f},
+              Vec3{ts.x * 1.4f, ts.y * 0.36f, ts.z * 1.4f}, BoneColor::Primary); // high cowl
+        piece(m, BonePart::Torso, Vec3{0.0f, ts.y * 1.02f, 0.0f},
+              Vec3{ts.x * 1.46f, 0.05f, ts.z * 1.46f}, BoneColor::Accent, BoneShape::RoundedBox); // collar
+        for (BonePart up : {BonePart::UpperArmL, BonePart::UpperArmR}) {
+            piece(m, up, Vec3{0.0f, -part_size(m, up).y * 0.04f, 0.0f}, Vec3{0.24f, 0.12f, 0.25f},
+                  BoneColor::Accent, BoneShape::Sphere); // gold pauldron
+            piece(m, up, Vec3{0.0f, -part_size(m, up).y * 0.04f, 0.08f}, Vec3{0.06f, 0.06f, 0.06f},
+                  BoneColor::Glow, BoneShape::Sphere); // pauldron gem
+        }
+        piece(m, BonePart::Torso, Vec3{0.0f, tc.y, ts.z * 0.62f}, Vec3{0.06f, ts.y * 1.06f, 0.04f},
+              BoneColor::Accent, BoneShape::Box); // gold rune band
+        piece(m, BonePart::Torso, Vec3{0.0f, tc.y, ts.z * 0.64f}, Vec3{0.025f, ts.y * 0.94f, 0.03f},
+              BoneColor::Glow, BoneShape::Box); // glowing rune line
+        piece(m, BonePart::Pelvis, Vec3{0.0f, 0.04f, 0.0f},
+              part_size(m, BonePart::Pelvis) * Vec3{1.18f, 0.4f, 1.2f}, BoneColor::Dark); // belt
         piece(m, BonePart::Pelvis, Vec3{0.0f, 0.04f, part_size(m, BonePart::Pelvis).z * 0.62f},
-              Vec3{0.07f, 0.06f, 0.04f}, BoneColor::Accent, BoneShape::Box);
-    }
-    // Hood drawn up over the head + a shadowed (dark) face, with glowing eyes at higher tiers.
-    piece(m, BonePart::Head, Vec3{hc.x, hc.y + hs.y * 0.06f, -hs.z * 0.06f}, hs * Vec3{1.22f, 1.2f, 1.34f},
-          BoneColor::Primary);
-    piece(m, BonePart::Head, Vec3{0.0f, hc.y - hs.y * 0.04f, hs.z * 0.5f},
-          Vec3{hs.x * 0.7f, hs.y * 0.5f, 0.16f}, BoneColor::Dark, BoneShape::RoundedBox); // shadowed face
-    if (t >= 1) {
-        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.92f, -hs.z * 0.1f},
-              Vec3{0.05f, hs.y * 0.2f, 0.05f}, BoneColor::Accent, BoneShape::Box); // hood peak trim
-    }
-    for (f32 ex : {-1.0f, 1.0f}) {
-        piece(m, BonePart::Head, Vec3{ex * hs.x * 0.22f, hc.y + hs.y * 0.06f, hs.z * 0.56f},
-              Vec3{hs.x * 0.16f, hs.y * 0.1f, 0.05f}, BoneColor::Glow, BoneShape::Sphere); // glowing eyes
+              Vec3{0.07f, 0.06f, 0.04f}, BoneColor::Accent, BoneShape::Box); // gold buckle
     }
 }
 
 // ------------------------------------------------------------------------------------------------
-// Hunter - LEATHER ranger: an olive tunic + leather jerkin, a diagonal bandolier, belt pouches,
-// bracers, a cap + face mask (only the eyes show), and a back quiver of arrows.
+// Hunter - HUNTER (leather jerkin + cap + mask + bandolier + quiver) -> WARDEN (a shoulder mantle +
+// steel pauldron + extra straps + knee pads) -> BEASTMASTER (a bone skull mask + bone spikes + a
+// tattered cape + glowing runes over dark scale).
 void build_leather(CharacterModel& m, const Equipment& eq) {
-    const u8 t = static_cast<u8>(eq.outfit());
+    const int vt = outfit_design_tier(eq.outfit());
     const Vec3 ts = part_size(m, BonePart::Torso), tc = part_center(m, BonePart::Torso);
     const Vec3 hs = part_size(m, BonePart::Head), hc = part_center(m, BonePart::Head);
 
-    // The olive tunic + trousers are the continuous skinned OutfitMesh now; a leather jerkin panel
-    // sits over the chest.
+    // Shared ranger kit: a jerkin panel, a bandolier, a belt + hip pouches, bracers, boots, a quiver.
     piece(m, BonePart::Torso, Vec3{0.0f, tc.y * 0.95f, ts.z * 0.5f}, Vec3{ts.x * 0.8f, ts.y * 0.8f, 0.06f},
-          BoneColor::Dark);
-    // Diagonal bandolier strap across the chest + a couple of pouches.
+          BoneColor::Dark); // jerkin
     piece(m, BonePart::Torso, Vec3{0.0f, tc.y, ts.z * 0.62f}, Vec3{0.07f, ts.y * 1.3f, 0.04f},
-          BoneColor::Dark, BoneShape::Box, roll(0.6f));
-    if (t >= 1) {
-        piece(m, BonePart::Pelvis, Vec3{0.0f, 0.03f, 0.0f},
-              part_size(m, BonePart::Pelvis) * Vec3{1.18f, 0.4f, 1.2f}, BoneColor::Dark); // belt
-        for (f32 ex : {-1.0f, 1.0f}) {
-            piece(m, BonePart::Pelvis, Vec3{ex * 0.16f, 0.0f, ts.z * 0.3f}, Vec3{0.09f, 0.11f, 0.07f},
-                  BoneColor::Dark); // hip pouches
-        }
+          BoneColor::Dark, BoneShape::Box, roll(0.6f)); // bandolier
+    piece(m, BonePart::Pelvis, Vec3{0.0f, 0.03f, 0.0f},
+          part_size(m, BonePart::Pelvis) * Vec3{1.18f, 0.4f, 1.2f}, BoneColor::Dark); // belt
+    for (f32 ex : {-1.0f, 1.0f}) {
+        piece(m, BonePart::Pelvis, Vec3{ex * 0.16f, 0.0f, ts.z * 0.3f}, Vec3{0.09f, 0.11f, 0.07f},
+              BoneColor::Dark); // hip pouches
     }
-    if (t >= 2) {
-        piece(m, BonePart::Pelvis, Vec3{0.0f, 0.03f, part_size(m, BonePart::Pelvis).z * 0.62f},
-              Vec3{0.06f, 0.05f, 0.04f}, BoneColor::Accent, BoneShape::Box); // belt buckle
-    }
-    // Bracers on the forearms; boots over the skinned trousers.
     for (BonePart lo : {BonePart::LowerArmL, BonePart::LowerArmR}) {
-        const f32 al = part_size(m, lo).y;
-        piece(m, lo, Vec3{0.0f, -al * 0.55f, 0.0f}, Vec3{0.115f, al * 0.7f, 0.12f}, BoneColor::Dark);
+        piece(m, lo, Vec3{0.0f, -part_size(m, lo).y * 0.55f, 0.0f}, Vec3{0.115f, part_size(m, lo).y * 0.7f, 0.12f},
+              BoneColor::Dark); // bracers
     }
     for (BonePart fp : {BonePart::FootL, BonePart::FootR}) {
-        piece(m, fp, part_center(m, fp), part_size(m, fp) * Vec3{1.08f, 1.1f, 1.04f}, BoneColor::Dark);
+        piece(m, fp, part_center(m, fp), part_size(m, fp) * Vec3{1.08f, 1.1f, 1.04f}, BoneColor::Dark); // boots
     }
-    // Leather cap over the crown + a face mask covering the lower face (only the eyes show).
-    piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.32f, 0.0f}, hs * Vec3{1.12f, 0.6f, 1.12f},
-          BoneColor::Dark);
-    piece(m, BonePart::Head, Vec3{0.0f, hc.y - hs.y * 0.22f, hs.z * 0.42f},
-          Vec3{hs.x * 0.92f, hs.y * 0.5f, hs.z * 0.7f}, BoneColor::Primary); // mask
-    // Back quiver + arrows jutting above the right shoulder.
     piece(m, BonePart::Torso, Vec3{0.16f, ts.y * 0.7f, -ts.z * 0.7f}, Vec3{0.1f, ts.y * 0.7f, 0.1f},
-          BoneColor::Dark, BoneShape::Cylinder);
+          BoneColor::Dark, BoneShape::Cylinder); // quiver
     for (int i = 0; i < 4; ++i) {
         const f32 ax = 0.10f + static_cast<f32>(i) * 0.045f;
         piece(m, BonePart::Torso, Vec3{ax, ts.y * 1.25f, -ts.z * 0.7f}, Vec3{0.012f, ts.y * 0.5f, 0.012f},
-              BoneColor::Dark, BoneShape::Box); // shaft
+              BoneColor::Dark, BoneShape::Box); // arrow shaft
         piece(m, BonePart::Torso, Vec3{ax, ts.y * 1.5f, -ts.z * 0.7f}, Vec3{0.05f, 0.07f, 0.012f},
-              BoneColor::Primary, BoneShape::Box); // fletching
+              vt == 0 ? BoneColor::Primary : BoneColor::Accent, BoneShape::Box); // fletching
+    }
+
+    if (vt == 0 || vt == 1) {
+        // Cloth cap over the crown + a face mask (only the eyes show).
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.32f, 0.0f}, hs * Vec3{1.12f, 0.6f, 1.12f},
+              BoneColor::Dark); // cap
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y - hs.y * 0.22f, hs.z * 0.42f},
+              Vec3{hs.x * 0.92f, hs.y * 0.5f, hs.z * 0.7f}, BoneColor::Primary); // mask
+    }
+    if (vt == 1) {
+        // WARDEN - a shoulder mantle, a steel pauldron, an extra cross-strap, knee pads.
+        piece(m, BonePart::Torso, Vec3{0.0f, ts.y * 0.92f, -ts.z * 0.1f},
+              Vec3{ts.x * 1.4f, ts.y * 0.34f, ts.z * 1.3f}, BoneColor::Dark); // mantle
+        piece(m, BonePart::UpperArmL, Vec3{0.0f, -part_size(m, BonePart::UpperArmL).y * 0.02f, 0.0f},
+              Vec3{0.27f, 0.18f, 0.28f}, BoneColor::Metal, BoneShape::Sphere); // steel pauldron
+        piece(m, BonePart::Torso, Vec3{0.0f, tc.y, ts.z * 0.62f}, Vec3{0.06f, ts.y * 1.3f, 0.04f},
+              BoneColor::Dark, BoneShape::Box, roll(-0.6f)); // second strap
+        for (BonePart up : {BonePart::UpperLegL, BonePart::UpperLegR}) {
+            piece(m, up, Vec3{0.0f, -part_size(m, up).y, 0.02f}, Vec3{0.17f, 0.12f, 0.18f}, BoneColor::Dark,
+                  BoneShape::Sphere); // knee pad
+        }
+    } else if (vt == 2) {
+        // BEASTMASTER - a bone skull mask, bone shoulder spikes, a tattered cape, glowing rune lines.
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y, hs.z * 0.18f}, hs * Vec3{1.14f, 1.12f, 1.12f},
+              BoneColor::Metal); // pale skull (metal reads as bone)
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y - hs.y * 0.34f, hs.z * 0.6f},
+              Vec3{hs.x * 0.5f, hs.y * 0.32f, hs.z * 0.4f}, BoneColor::Metal); // snout
+        for (f32 ex : {-1.0f, 1.0f}) {
+            piece(m, BonePart::Head, Vec3{ex * hs.x * 0.34f, hc.y + hs.y * 0.04f, hs.z * 0.6f},
+                  Vec3{0.045f, 0.06f, 0.04f}, BoneColor::Glow, BoneShape::Sphere); // glowing eye sockets
+        }
+        for (BonePart up : {BonePart::UpperArmL, BonePart::UpperArmR}) {
+            piece(m, up, Vec3{0.0f, -part_size(m, up).y * 0.02f, 0.0f}, Vec3{0.26f, 0.2f, 0.27f},
+                  BoneColor::Dark, BoneShape::Sphere); // bone pauldron
+            piece(m, up, Vec3{0.0f, part_size(m, up).y * 0.2f, -0.05f}, Vec3{0.05f, 0.22f, 0.05f},
+                  BoneColor::Metal, BoneShape::Box, pitch(-0.35f)); // bone spike angled back
+        }
+        piece(m, BonePart::Torso, Vec3{0.0f, tc.y * 0.3f, -ts.z * 0.82f},
+              Vec3{ts.x * 1.5f, ts.y * 2.3f, 0.04f}, BoneColor::Dark, BoneShape::Box); // tattered cape
+        piece(m, BonePart::Torso, Vec3{0.0f, tc.y, ts.z * 0.6f}, Vec3{0.03f, ts.y * 1.0f, 0.03f},
+              BoneColor::Glow, BoneShape::Box); // glowing rune line
     }
 }
 
 // ------------------------------------------------------------------------------------------------
-// Cleric - a white/blue/gold HOLY robe: gold-trimmed pauldrons + gorget, a blue tabard panel, a
-// steel helm under a tall golden bishop's MITRE, a long robe skirt. (dark = royal blue here.)
+// Cleric - ACOLYTE (plain monk hood + corded belt + hung cross) -> PRIEST (circlet + white collar +
+// a gold-cross stole + book) -> HIGH PROPHET (tall jewelled mitre + gold pauldrons + cross stole + cape).
 void build_holy(CharacterModel& m, const Equipment& eq) {
-    (void)eq; // the cleric look is the same across tiers (the materials brighten via the palette)
+    const int vt = outfit_design_tier(eq.outfit());
     const Vec3 ts = part_size(m, BonePart::Torso), tc = part_center(m, BonePart::Torso);
     const Vec3 hs = part_size(m, BonePart::Head), hc = part_center(m, BonePart::Head);
 
-    // The white robe body / sleeves / skirt are the continuous skinned OutfitMesh now; a blue tabard
-    // panel + gold trim run down the front over it.
-    piece(m, BonePart::Torso, Vec3{0.0f, tc.y * 0.85f, ts.z * 0.62f}, Vec3{ts.x * 0.42f, ts.y * 1.15f, 0.03f},
-          BoneColor::Dark, BoneShape::Box); // blue tabard
-    piece(m, BonePart::Torso, Vec3{0.0f, tc.y * 0.85f, ts.z * 0.66f}, Vec3{ts.x * 0.1f, ts.y * 1.1f, 0.02f},
-          BoneColor::Accent, BoneShape::Box); // gold tabard stripe
-    // Gold-edged pauldrons + a gold gorget collar.
-    for (BonePart up : {BonePart::UpperArmL, BonePart::UpperArmR}) {
-        piece(m, up, Vec3{0.0f, -part_size(m, up).y * 0.12f, 0.0f}, Vec3{0.2f, 0.15f, 0.22f},
-              BoneColor::Metal);
-        piece(m, up, Vec3{0.0f, -part_size(m, up).y * 0.02f, 0.0f}, Vec3{0.22f, 0.05f, 0.24f},
-              BoneColor::Accent);
+    // A small cross (vertical bar + arms) on the robe front at height y, size s.
+    auto cross = [&](f32 y, f32 s) {
+        piece(m, BonePart::Torso, Vec3{0.0f, y, ts.z * 0.64f}, Vec3{0.02f, s, 0.025f}, BoneColor::Accent,
+              BoneShape::Box);
+        piece(m, BonePart::Torso, Vec3{0.0f, y + s * 0.16f, ts.z * 0.64f}, Vec3{s * 0.5f, 0.02f, 0.025f},
+              BoneColor::Accent, BoneShape::Box);
+    };
+
+    if (vt == 0) {
+        // ACOLYTE - a plain monk hood over a shadowed face, a corded belt, a hung cross. Drab.
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.06f, -hs.z * 0.06f},
+              hs * Vec3{1.24f, 1.22f, 1.34f}, BoneColor::Primary); // hood
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y - hs.y * 0.04f, hs.z * 0.5f},
+              Vec3{hs.x * 0.72f, hs.y * 0.52f, 0.16f}, BoneColor::Dark, BoneShape::RoundedBox); // shadow
+        piece(m, BonePart::Pelvis, Vec3{0.0f, 0.04f, 0.0f},
+              part_size(m, BonePart::Pelvis) * Vec3{1.14f, 0.3f, 1.16f}, BoneColor::Dark); // cord belt
+        cross(tc.y * 0.4f, ts.y * 0.42f);
+    } else if (vt == 1) {
+        // PRIEST - a circlet, a light clerical collar, a blue stole over the shoulders, gold crosses.
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.42f, 0.0f}, hs * Vec3{1.16f, 0.16f, 1.16f},
+              BoneColor::Accent, BoneShape::RoundedBox); // circlet
+        piece(m, BonePart::Torso, Vec3{0.0f, ts.y * 0.94f, ts.z * 0.16f},
+              Vec3{ts.x * 0.62f, ts.y * 0.2f, ts.z * 0.5f}, BoneColor::Metal); // light collar
+        for (f32 ex : {-1.0f, 1.0f}) {
+            piece(m, BonePart::Torso, Vec3{ex * ts.x * 0.32f, tc.y * 0.5f, ts.z * 0.6f},
+                  Vec3{ts.x * 0.16f, ts.y * 1.3f, 0.03f}, BoneColor::Dark, BoneShape::Box); // stole bands
+        }
+        cross(tc.y * 0.7f, ts.y * 0.42f);
+        cross(tc.y * 0.18f, ts.y * 0.32f);
+        piece(m, BonePart::Pelvis, Vec3{0.0f, 0.04f, 0.0f},
+              part_size(m, BonePart::Pelvis) * Vec3{1.16f, 0.34f, 1.18f}, BoneColor::Dark); // belt
+        piece(m, BonePart::Pelvis, Vec3{0.17f, 0.0f, ts.z * 0.32f}, Vec3{0.1f, 0.13f, 0.05f},
+              BoneColor::Dark, BoneShape::Box); // book
+    } else {
+        // HIGH PROPHET - a tall jewelled mitre, gold pauldrons + gems, a gold gorget, a cross stole, cape.
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.68f, 0.0f},
+              Vec3{hs.x * 0.82f, hs.y * 0.82f, hs.z * 0.5f}, BoneColor::Accent); // mitre body (tall)
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 1.2f, hs.z * 0.12f},
+              Vec3{hs.x * 0.6f, hs.y * 0.56f, 0.06f}, BoneColor::Accent, BoneShape::Box, pitch(0.16f));
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 1.2f, -hs.z * 0.12f},
+              Vec3{hs.x * 0.6f, hs.y * 0.56f, 0.06f}, BoneColor::Accent, BoneShape::Box, pitch(-0.16f));
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.86f, hs.z * 0.46f}, Vec3{0.05f, 0.06f, 0.05f},
+              BoneColor::Glow, BoneShape::Sphere); // mitre gem
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.4f, 0.0f},
+              hs * Vec3{1.04f, 0.12f, 1.06f}, BoneColor::Dark); // brow band
+        for (BonePart up : {BonePart::UpperArmL, BonePart::UpperArmR}) {
+            piece(m, up, Vec3{0.0f, -part_size(m, up).y * 0.06f, 0.0f}, Vec3{0.24f, 0.14f, 0.25f},
+                  BoneColor::Accent); // gold pauldron
+            piece(m, up, Vec3{0.0f, -part_size(m, up).y * 0.06f, 0.1f}, Vec3{0.06f, 0.06f, 0.06f},
+                  BoneColor::Glow, BoneShape::Sphere); // gem
+        }
+        piece(m, BonePart::Torso, Vec3{0.0f, ts.y * 0.96f, 0.0f}, Vec3{ts.x * 1.2f, 0.07f, ts.z * 1.5f},
+              BoneColor::Accent); // gold gorget
+        for (f32 ex : {-1.0f, 1.0f}) {
+            piece(m, BonePart::Torso, Vec3{ex * ts.x * 0.32f, tc.y * 0.5f, ts.z * 0.62f},
+                  Vec3{ts.x * 0.16f, ts.y * 1.4f, 0.03f}, BoneColor::Primary, BoneShape::Box); // stole
+        }
+        cross(tc.y * 0.8f, ts.y * 0.42f);
+        cross(tc.y * 0.3f, ts.y * 0.34f);
+        piece(m, BonePart::Torso, Vec3{0.0f, tc.y * 0.2f, -ts.z * 0.82f},
+              Vec3{ts.x * 1.5f, ts.y * 2.4f, 0.04f}, BoneColor::Primary, BoneShape::Box); // cape
     }
-    piece(m, BonePart::Torso, Vec3{0.0f, ts.y * 0.96f, 0.0f}, Vec3{ts.x * 1.2f, 0.07f, ts.z * 1.5f},
-          BoneColor::Accent);
-    // Steel helm with a lit visor slit, under a modest two-peaked golden mitre.
-    piece(m, BonePart::Head, hc, hs * Vec3{1.12f, 1.1f, 1.14f}, BoneColor::Metal);
-    piece(m, BonePart::Head, Vec3{0.0f, hc.y, hs.z * 0.6f}, Vec3{hs.x * 0.82f, hs.y * 0.13f, 0.04f},
-          BoneColor::Glow, BoneShape::Box);
-    piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.74f, 0.0f},
-          Vec3{hs.x * 0.78f, hs.y * 0.6f, hs.z * 0.42f}, BoneColor::Accent); // mitre body (smaller)
-    piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 1.06f, hs.z * 0.13f},
-          Vec3{hs.x * 0.66f, hs.y * 0.48f, 0.06f}, BoneColor::Accent, BoneShape::Box, pitch(0.16f)); // front peak
-    piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 1.06f, -hs.z * 0.13f},
-          Vec3{hs.x * 0.66f, hs.y * 0.48f, 0.06f}, BoneColor::Accent, BoneShape::Box, pitch(-0.16f)); // back peak
-    piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.44f, 0.0f},
-          Vec3{hs.x * 1.0f, hs.y * 0.11f, hs.z * 1.02f}, BoneColor::Dark); // blue brow band
-    // Blue coif draping at the back/shoulders.
-    piece(m, BonePart::Torso, Vec3{0.0f, ts.y * 0.86f, -ts.z * 0.4f},
-          Vec3{ts.x * 1.2f, ts.y * 0.5f, ts.z * 0.7f}, BoneColor::Dark);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -302,6 +385,12 @@ void apply_outfit(CharacterModel& model, OutfitKind kind, const Equipment& equip
 
     const EquipmentTier ot = equip.outfit();
     pal.primary = outfit_tint_of(equip.outfit_tint);
+    // Basic-tier gear is rough undyed cloth/leather - desaturate the chosen colour toward a drab
+    // homespun so the starting kit reads as a squire/apprentice/acolyte, the rich colour arriving with
+    // the rare + legendary designs (matching the reference art).
+    if (outfit_design_tier(ot) == 0) {
+        pal.primary = glm::mix(pal.primary, Vec3{0.52f, 0.49f, 0.43f}, 0.55f);
+    }
     pal.accent = tier_accent(ot);
     pal.metal = Vec3{0.74f, 0.78f, 0.86f} * tier_sheen(ot) + Vec3{0.12f}; // bright polished steel
     // `dark` is the secondary panel colour: royal blue for the Cleric's heraldry, leather brown else.
