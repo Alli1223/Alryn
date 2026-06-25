@@ -297,6 +297,15 @@ void ClientApp::draw_contract_panel(ui::DrawList& draw, const net::WagonState& w
     iy += ts * 1.25f;
     draw.text(Vec2{ix, iy}, std::format("PAY        $ {}", wg.reward), ts * 0.9f,
               Vec4{0.98f, 0.88f, 0.42f, 1.0f});
+    // A per-contract modifier (derived from the wagon id) - hazardous / bulk / safe runs vary the
+    // pay + ambush so the board isn't all the same; standard runs show nothing.
+    if (const ContractModifier mod = contract_modifier(wg.id); mod != ContractModifier::Standard) {
+        iy += ts * 1.25f;
+        const Vec4 mcol = mod == ContractModifier::Safe   ? Vec4{0.6f, 0.85f, 0.95f, 1.0f}
+                          : mod == ContractModifier::Bulk ? Vec4{0.82f, 0.74f, 0.96f, 1.0f}
+                                                          : Vec4{0.98f, 0.55f, 0.45f, 1.0f};
+        draw.text(Vec2{ix, iy}, modifier_name(mod), ts * 0.85f, mcol);
+    }
 
     // Mode hint (toggled with H).
     const char* mode = vote_mode_ == 2 ? "HAUL MANUALLY (+pay)" : "HIRE A DRIVER";

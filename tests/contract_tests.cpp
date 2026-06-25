@@ -24,6 +24,29 @@ TEST_CASE("Contract: ambush count scales with difficulty") {
     CHECK(ambush_count(2) > ambush_count(1));
 }
 
+TEST_CASE("Contract: modifiers vary pay + ambush, deterministic and a mix") {
+    // Hazardous + bulk pay more and add raiders; safe pays + fights less.
+    CHECK(modifier_effect(ContractModifier::Hazardous).pay_mult > 1.0f);
+    CHECK(modifier_effect(ContractModifier::Hazardous).ambush_delta > 0);
+    CHECK(modifier_effect(ContractModifier::Bulk).pay_mult > 1.0f);
+    CHECK(modifier_effect(ContractModifier::Safe).pay_mult < 1.0f);
+    CHECK(modifier_effect(ContractModifier::Safe).ambush_delta < 0);
+    // ambush_count applies the delta, defaults to standard, and never drops below one.
+    CHECK(ambush_count(2, ContractModifier::Hazardous) == ambush_count(2) + 2u);
+    CHECK(ambush_count(1, ContractModifier::Standard) == ambush_count(1));
+    CHECK(ambush_count(1, ContractModifier::Safe) >= 1u);
+    // Deterministic per id, with a real mix across ids (most standard, a healthy fraction flavoured).
+    CHECK(contract_modifier(12345u) == contract_modifier(12345u));
+    int nonstd = 0;
+    for (u32 id = 1; id <= 200u; ++id) {
+        if (contract_modifier(id) != ContractModifier::Standard) {
+            ++nonstd;
+        }
+    }
+    CHECK(nonstd > 20);
+    CHECK(nonstd < 180);
+}
+
 TEST_CASE("Contract: bigger vehicles pay more (capacity multiplier)") {
     CHECK(capacity_reward_mult(1) == doctest::Approx(1.0f));     // a cart: baseline pay
     CHECK(capacity_reward_mult(2) > capacity_reward_mult(1));    // a wagon: more

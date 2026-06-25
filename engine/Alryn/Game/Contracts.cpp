@@ -413,8 +413,11 @@ void GameServer::generate_offers() {
         }
         type = static_cast<u8>(std::min<u32>(type, vehicle_type_count() - 1u));
         wg.type = type;
-        wg.reward = static_cast<u32>(std::lround(
-            contract_reward(dist, difficulty, false) * capacity_reward_mult(vehicle_type(type).capacity())));
+        // A per-offer modifier (hazardous / bulk / safe, deterministic from the id) varies the pay.
+        wg.reward = static_cast<u32>(
+            std::lround(contract_reward(dist, difficulty, false) *
+                        capacity_reward_mult(vehicle_type(type).capacity()) *
+                        modifier_effect(contract_modifier(wg.id)).pay_mult));
         // Face along the first leg of the route (the way it leaves town through its gate).
         Vec2 dir = dest.center - origin->center;
         if (route.size() >= 2) {
@@ -1205,7 +1208,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
     // spawn inside the town while it's still parked / crossing / being hitched.
     const bool left_town =
         glm::length(Vec2{w.position.x - w.source.x, w.position.z - w.source.y}) > w.source_half + 4.0f;
-    const u32 total = ambush_count(w.difficulty);
+    const u32 total = ambush_count(w.difficulty, contract_modifier(w.id));
     if (w.ambush_waves_spawned == 0) {
         if (!left_town) {
             return; // still in town - no ambush yet

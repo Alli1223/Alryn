@@ -135,9 +135,53 @@ inline u32 contract_reward(f32 distance, u8 difficulty, bool manual) {
     return static_cast<u32>(std::lround(base * (manual ? kManualRewardMult : 1.0f)));
 }
 
-// How many ambushers attack a contract of this difficulty over its journey.
-inline u32 ambush_count(u8 difficulty) {
-    return static_cast<u32>(difficulty) * kAmbushPerDifficulty;
+// Per-contract MODIFIER: a deterministic flavour on each offer (derived from its id) that varies the
+// pay + ambush size, so the board mixes safe low-pay escorts with dangerous, well-paid hauls instead
+// of every contract feeling the same. The client derives the SAME modifier from the (networked) wagon
+// id, so no extra wire field is needed.
+enum class ContractModifier : u8 {
+    Standard = 0,
+    Hazardous = 1, // dangerous + well paid
+    Bulk = 2,      // a big heavy load, extra pay + an extra raider
+    Safe = 3,      // an easy, lightly-paid escort
+};
+struct ModifierEffect {
+    f32 pay_mult;
+    int ambush_delta;
+};
+inline ModifierEffect modifier_effect(ContractModifier m) {
+    switch (m) {
+        case ContractModifier::Hazardous: return {1.6f, 2};
+        case ContractModifier::Bulk: return {1.35f, 1};
+        case ContractModifier::Safe: return {0.75f, -1};
+        default: return {1.0f, 0};
+    }
+}
+// Deterministic per offer id (so server + client agree). ~55% standard, then hazardous / bulk / safe.
+inline ContractModifier contract_modifier(u32 id) {
+    u32 h = id * 2654435761u;
+    h ^= h >> 13;
+    const u32 r = h % 100u;
+    if (r < 55u) return ContractModifier::Standard;
+    if (r < 73u) return ContractModifier::Hazardous;
+    if (r < 87u) return ContractModifier::Bulk;
+    return ContractModifier::Safe;
+}
+inline const char* modifier_name(ContractModifier m) {
+    switch (m) {
+        case ContractModifier::Hazardous: return "HAZARDOUS";
+        case ContractModifier::Bulk: return "BULK CARGO";
+        case ContractModifier::Safe: return "SAFE ROUTE";
+        default: return "STANDARD";
+    }
+}
+
+// How many ambushers attack a contract of this difficulty over its journey, adjusted by the modifier
+// (at least one). The default modifier keeps the old behaviour for existing callers/tests.
+inline u32 ambush_count(u8 difficulty, ContractModifier mod = ContractModifier::Standard) {
+    const int base = static_cast<int>(difficulty) * static_cast<int>(kAmbushPerDifficulty);
+    const int n = base + modifier_effect(mod).ambush_delta;
+    return static_cast<u32>(n < 1 ? 1 : n);
 }
 
 } // namespace alryn
