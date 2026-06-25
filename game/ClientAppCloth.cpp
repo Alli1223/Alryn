@@ -116,6 +116,27 @@ void ClientApp::draw_cloth(PlayerVisual& v, const Mat4& root, const std::vector<
     if (v.cloth.empty()) {
         return;
     }
+    // Perf: don't simulate / draw cloth for far-off characters (same generous cull as the body).
+    if (glm::distance(Vec3{root[3]}, camera_.position()) > character::skin_cull_dist) {
+        return;
+    }
+    // The body as a collision cylinder (feet axis), so attached cloth drapes OVER the legs/torso
+    // instead of sinking through them. Pushes hanging nodes out to its surface.
+    const Vec3 feet = Vec3{root[3]};
+    constexpr f32 kBodyR = 0.2f;
+    const f32 body_top = feet.y + 0.95f; // up to the lower chest
+    auto collide = [&](Vec3& p) {
+        if (p.y < feet.y - 0.05f || p.y > body_top) {
+            return;
+        }
+        const f32 dx = p.x - feet.x, dz = p.z - feet.z;
+        const f32 d2 = dx * dx + dz * dz;
+        if (d2 < kBodyR * kBodyR && d2 > 1e-6f) {
+            const f32 d = std::sqrt(d2);
+            p.x = feet.x + dx / d * kBodyR;
+            p.z = feet.z + dz / d * kBodyR;
+        }
+    };
     // World-space wind: a slowly-veering breeze that strengthens with the storminess (weather_amt_).
     const f32 ws = 1.2f + weather_amt_ * 9.0f + 0.8f * std::sin(elapsed_ * 1.7f);
     const f32 wdir = elapsed_ * 0.15f;
@@ -159,6 +180,11 @@ void ClientApp::draw_cloth(PlayerVisual& v, const Mat4& root, const std::vector<
         } else {
             for (usize k = 0; k < c.chains.size(); ++k) {
                 c.chains[k].step(anchor_of(k), wind, 9.5f, frame_dt_);
+                ClothChain& ch = c.chains[k];
+                for (usize i = 1; i < ch.pos.size(); ++i) { // node 0 is the pinned anchor - leave it
+                    collide(ch.pos[i]);
+                    collide(ch.prev[i]);
+                }
             }
         }
 

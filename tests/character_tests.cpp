@@ -190,6 +190,22 @@ TEST_CASE("ClothChain: hangs under gravity, blows in wind, and falls when detach
     }
     CHECK(c.pos.front().y < anchor.y - 0.2f); // the anchor end has dropped
 
+    // A detach with a sideways velocity kick (a cut / blow) drifts the piece horizontally as it falls.
+    ClothChain k2;
+    k2.init(anchor, Vec3{0.0f, -1.0f, 0.0f}, 4, 0.12f, 0.2f);
+    for (int i = 0; i < 60; ++i) {
+        k2.step(anchor, Vec3{0.0f}, 9.0f, dt); // settle
+    }
+    const f32 x0 = k2.pos.back().x;
+    k2.detach();
+    for (Vec3& pp : k2.prev) {
+        pp -= Vec3{0.06f, 0.0f, 0.0f}; // a +x velocity kick (prev behind pos)
+    }
+    for (int i = 0; i < 30; ++i) {
+        k2.step(anchor, Vec3{0.0f}, 9.0f, dt);
+    }
+    CHECK(k2.pos.back().x > x0 + 0.1f); // it flew off in +x, not straight down
+
     // The sheet mesh builds as valid double-sided geometry.
     MeshData md;
     build_cloth_mesh(c, Vec3{1.0f, 0.0f, 0.0f}, Vec3{0.4f, 0.3f, 0.6f}, md);

@@ -435,12 +435,27 @@ Asset build_character(int role) {
                 skirt[static_cast<usize>(i)].init(anchor, glm::normalize(radial * flare + Vec3{0, -1, 0}),
                                                   segs, seg, 0.0f);
             }
+            // Push hanging nodes out of the body cylinder (mirrors ClientApp::draw_cloth's collision).
+            auto collide = [&](Vec3& p) {
+                if (p.y < 0.0f || p.y > hip.y + 0.35f) return;
+                const f32 dx = p.x - hip.x, dz = p.z - hip.z, d2 = dx * dx + dz * dz;
+                if (d2 < 0.04f && d2 > 1e-6f) {
+                    const f32 d = std::sqrt(d2);
+                    p.x = hip.x + dx / d * 0.2f;
+                    p.z = hip.z + dz / d * 0.2f;
+                }
+            };
             for (int k = 0; k < 160; ++k) {
                 for (int i = 0; i < kN; ++i) {
                     const f32 ang = TwoPi * static_cast<f32>(i) / static_cast<f32>(kN);
                     const Vec3 radial{std::sin(ang), 0.0f, std::cos(ang)};
                     const Vec3 anchor = hip + radial * radius + Vec3{0.0f, 0.06f, 0.0f};
-                    skirt[static_cast<usize>(i)].step(anchor, wind, 9.0f, 1.0f / 60.0f);
+                    ClothChain& ch = skirt[static_cast<usize>(i)];
+                    ch.step(anchor, wind, 9.0f, 1.0f / 60.0f);
+                    for (usize n = 1; n < ch.pos.size(); ++n) {
+                        collide(ch.pos[n]);
+                        collide(ch.prev[n]);
+                    }
                 }
             }
             MeshData sm;
