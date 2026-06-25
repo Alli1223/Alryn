@@ -56,41 +56,36 @@ void CharacterModel::add_features(CharacterModel& m, const CharacterAppearance& 
         m.bones_.push_back(b);
     };
 
-    // ---- Eyes (on the front face, +Z) ----
+    // ---- Eyes + nose (on the front face, +Z) ----
+    // Kept SIMPLE: small dark eyes + a subtle nose, no big anime eyes or expressive brows - clean
+    // low-poly faces like the reference art.
     {
-        const f32 fz = c.z + r * 0.96f;       // front surface
-        const f32 ey = c.y + r * 0.12f;       // a touch above centre
-        f32 ex = r * 0.42f;                   // horizontal spacing
-        Vec3 size{hs * 0.16f, hs * 0.16f, hs * 0.10f};
+        const f32 fz = c.z + r * 0.97f;       // front surface
+        const f32 ey = c.y + r * 0.1f;        // a touch above centre
+        f32 ex = r * 0.36f;                   // horizontal spacing
+        Vec3 size{hs * 0.1f, hs * 0.11f, hs * 0.07f}; // small, understated
         BoneShape shape = BoneShape::Sphere;
         switch (app.eyes) {
             case EyeStyle::Round: break;
             case EyeStyle::Wide:
-                ex = r * 0.52f;
-                size = Vec3{hs * 0.20f, hs * 0.20f, hs * 0.10f};
+                ex = r * 0.42f;
+                size = Vec3{hs * 0.12f, hs * 0.12f, hs * 0.07f};
                 break;
             case EyeStyle::Sleepy:
-                size = Vec3{hs * 0.20f, hs * 0.08f, hs * 0.10f};
+                size = Vec3{hs * 0.13f, hs * 0.06f, hs * 0.07f};
                 shape = BoneShape::RoundedBox;
                 break;
             case EyeStyle::Sharp:
-                size = Vec3{hs * 0.18f, hs * 0.11f, hs * 0.10f};
+                size = Vec3{hs * 0.12f, hs * 0.07f, hs * 0.07f};
                 shape = BoneShape::Box;
                 break;
         }
         add(Vec3{-ex, ey, fz}, size, BoneColor::Eye, shape);
         add(Vec3{ex, ey, fz}, size, BoneColor::Eye, shape);
 
-        // Brow ridge (skin) above the eyes + hair-coloured eyebrows, for a defined face rather than a
-        // bare ball with dots.
-        add(Vec3{0.0f, ey + r * 0.26f, c.z + r * 0.82f}, Vec3{hs * 0.62f, hs * 0.1f, hs * 0.18f},
-            BoneColor::Skin, BoneShape::RoundedBox);
-        for (f32 sx2 : {-1.0f, 1.0f}) {
-            add(Vec3{sx2 * ex, ey + r * 0.28f, fz - r * 0.06f}, Vec3{hs * 0.22f, hs * 0.055f, hs * 0.07f},
-                BoneColor::Hair, BoneShape::RoundedBox);
-        }
-        // Nose: a small wedge jutting from the centre of the face, just below the eyes.
-        add(Vec3{0.0f, ey - r * 0.26f, c.z + r * 0.98f}, Vec3{hs * 0.12f, hs * 0.26f, hs * 0.2f},
+        // A small, subtle nose so the face isn't a bare ball - no brow ridge / eyebrows (those read
+        // anime). Skin-coloured and low-relief.
+        add(Vec3{0.0f, ey - r * 0.24f, c.z + r * 0.96f}, Vec3{hs * 0.09f, hs * 0.2f, hs * 0.13f},
             BoneColor::Skin, BoneShape::RoundedBox);
     }
 
