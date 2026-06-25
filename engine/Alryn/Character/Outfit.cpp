@@ -90,39 +90,72 @@ void build_plate(CharacterModel& m, const Equipment& eq) {
         }
         leather_belt();
     } else {
-        // PALADIN - great-helm with a winged lion crest, gold gorget + pauldrons, a sun emblem, a
-        // heraldic tabard, gauntlets, knee cops and a flowing cape.
-        piece(m, BonePart::Torso, Vec3{0.0f, ts.y * 0.96f, 0.0f}, Vec3{ts.x * 1.2f, 0.07f, ts.z * 1.5f},
-              BoneColor::Accent, BoneShape::RoundedBox); // gold gorget
-        piece(m, BonePart::Torso, Vec3{0.0f, tc.y * 1.08f, ts.z * 0.66f},
-              Vec3{ts.x * 0.46f, ts.x * 0.46f, 0.03f}, BoneColor::Accent, BoneShape::Sphere); // sun emblem
-        // (the flowing tabard + cape are simulated ClothInstances now - see ClientApp::setup_cloth)
-        for (BonePart up : {BonePart::UpperArmL, BonePart::UpperArmR}) {
-            piece(m, up, Vec3{0.0f, -part_size(m, up).y * 0.02f, 0.0f}, Vec3{0.31f, 0.27f, 0.32f},
-                  BoneColor::Metal, BoneShape::Sphere); // big pauldron
-            piece(m, up, Vec3{0.0f, -part_size(m, up).y * 0.02f, 0.0f}, Vec3{0.33f, 0.09f, 0.34f},
-                  BoneColor::Accent, BoneShape::Sphere); // gold rim
+        // PALADIN - angular faceted plate: a ridged breastplate, big layered pauldrons, tassets,
+        // greaves + sabatons, an armet helm with a winged crest. Hard-edged Box plates (not soft
+        // spheres) so each facet catches the light = a crisp low-poly knight. (Tabard + cape = cloth.)
+        // Faceted breastplate proud of the chest, with a raised central ridge + gold-trim border.
+        piece(m, BonePart::Torso, Vec3{0.0f, tc.y * 1.04f, ts.z * 0.52f},
+              Vec3{ts.x * 1.16f, ts.y * 1.16f, ts.z * 0.5f}, BoneColor::Metal, BoneShape::Box); // cuirass
+        piece(m, BonePart::Torso, Vec3{0.0f, tc.y * 1.18f, ts.z * 0.74f},
+              Vec3{0.07f, ts.y * 0.92f, 0.1f}, BoneColor::Metal, BoneShape::Box, roll(0.0f)); // centre ridge
+        piece(m, BonePart::Torso, Vec3{0.0f, ts.y * 0.5f, ts.z * 0.78f}, Vec3{ts.x * 1.18f, 0.05f, 0.05f},
+              BoneColor::Accent, BoneShape::Box); // gold belt-line of the breastplate
+        piece(m, BonePart::Torso, Vec3{0.0f, tc.y * 1.5f, ts.z * 0.6f},
+              Vec3{ts.x * 0.44f, ts.x * 0.44f, 0.04f}, BoneColor::Accent, BoneShape::Box, roll(0.78f)); // sun crest (diamond)
+        piece(m, BonePart::Torso, Vec3{0.0f, ts.y * 0.98f, 0.0f}, Vec3{ts.x * 1.22f, 0.08f, ts.z * 1.46f},
+              BoneColor::Accent, BoneShape::Box); // gold gorget collar
+        // Big angular pauldrons: a broad top plate tilted out + a smaller lame below (layered), gold rim.
+        for (f32 ex : {1.0f, -1.0f}) {
+            const BonePart up = ex > 0.0f ? BonePart::UpperArmL : BonePart::UpperArmR;
+            const f32 uy = part_size(m, up).y;
+            piece(m, up, Vec3{ex * 0.04f, -uy * 0.04f, 0.0f}, Vec3{0.34f, 0.2f, 0.36f}, BoneColor::Metal,
+                  BoneShape::Box, roll(ex * 0.34f)); // top plate, tilted outward
+            piece(m, up, Vec3{ex * 0.05f, -uy * 0.22f, 0.0f}, Vec3{0.32f, 0.13f, 0.34f}, BoneColor::Metal,
+                  BoneShape::Box, roll(ex * 0.28f)); // lower lame
+            piece(m, up, Vec3{ex * 0.03f, uy * 0.06f, 0.0f}, Vec3{0.36f, 0.05f, 0.38f}, BoneColor::Accent,
+                  BoneShape::Box, roll(ex * 0.34f)); // gold rim along the top
         }
+        // Angular gauntlets + greaves + sabatons (boxes, hard edges).
         for (BonePart lo : {BonePart::LowerArmL, BonePart::LowerArmR}) {
-            piece(m, lo, Vec3{0.0f, -part_size(m, lo).y * 1.0f, 0.02f}, Vec3{0.15f, 0.13f, 0.16f},
-                  BoneColor::Metal); // gauntlet
+            piece(m, lo, Vec3{0.0f, -part_size(m, lo).y * 0.95f, 0.02f}, Vec3{0.17f, 0.17f, 0.18f},
+                  BoneColor::Metal, BoneShape::Box); // gauntlet
+        }
+        for (BonePart lo : {BonePart::LowerLegL, BonePart::LowerLegR}) {
+            piece(m, lo, Vec3{0.0f, -part_size(m, lo).y * 0.2f, 0.03f},
+                  part_size(m, lo) * Vec3{1.3f, 0.86f, 1.32f}, BoneColor::Metal, BoneShape::Box); // greave
         }
         for (BonePart up : {BonePart::UpperLegL, BonePart::UpperLegR}) {
-            piece(m, up, Vec3{0.0f, -part_size(m, up).y, 0.02f}, Vec3{0.2f, 0.16f, 0.2f}, BoneColor::Metal,
-                  BoneShape::Sphere); // knee cop
+            piece(m, up, Vec3{0.0f, -part_size(m, up).y, 0.03f}, Vec3{0.21f, 0.14f, 0.22f}, BoneColor::Metal,
+                  BoneShape::Box); // knee cop (faceted)
         }
-        piece(m, BonePart::Head, Vec3{hc.x, hc.y - hs.y * 0.04f, hc.z}, hs * Vec3{1.22f, 1.34f, 1.24f},
-              BoneColor::Metal); // great-helm
-        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.04f, hs.z * 0.64f},
-              Vec3{hs.x * 0.94f, hs.y * 0.14f, 0.05f}, BoneColor::Glow, BoneShape::Box); // lit eye-slit
-        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.24f, hs.z * 0.5f},
-              Vec3{hs.x * 1.2f, 0.05f, hs.z * 0.9f}, BoneColor::Accent, BoneShape::Box); // gold brow
+        for (BonePart fp : {BonePart::FootL, BonePart::FootR}) {
+            piece(m, fp, part_center(m, fp), part_size(m, fp) * Vec3{1.16f, 1.2f, 1.12f}, BoneColor::Metal,
+                  BoneShape::Box); // sabaton
+        }
+        // Tassets: two angular plates hanging at the front of the hips.
+        for (f32 ex : {-1.0f, 1.0f}) {
+            piece(m, BonePart::Pelvis, Vec3{ex * 0.11f, -0.14f, part_size(m, BonePart::Pelvis).z * 0.55f},
+                  Vec3{0.16f, 0.2f, 0.05f}, BoneColor::Metal, BoneShape::Box, roll(ex * 0.12f)); // tasset
+            piece(m, BonePart::Pelvis, Vec3{ex * 0.11f, -0.04f, part_size(m, BonePart::Pelvis).z * 0.57f},
+                  Vec3{0.17f, 0.04f, 0.05f}, BoneColor::Accent, BoneShape::Box); // gold tasset rim
+        }
+        leather_belt();
+        // Armet helm: an angular dome + a brow guard + a lit visor slit + a winged gold crest.
+        piece(m, BonePart::Head, Vec3{hc.x, hc.y + hs.y * 0.04f, hc.z}, hs * Vec3{1.2f, 1.3f, 1.22f},
+              BoneColor::Metal, BoneShape::Box); // helm shell (angular)
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y - hs.y * 0.24f, hs.z * 0.5f},
+              Vec3{hs.x * 1.08f, hs.y * 0.4f, hs.z * 0.7f}, BoneColor::Metal, BoneShape::Box,
+              pitch(0.12f)); // angled chin visor
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.02f, hs.z * 0.74f},
+              Vec3{hs.x * 0.96f, hs.y * 0.12f, 0.05f}, BoneColor::Glow, BoneShape::Box); // lit eye-slit
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.26f, hs.z * 0.46f},
+              Vec3{hs.x * 1.24f, 0.06f, hs.z * 0.94f}, BoneColor::Accent, BoneShape::Box); // gold brow
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.4f, -hs.z * 0.1f},
+              Vec3{0.05f, hs.y * 0.62f, hs.z * 1.04f}, BoneColor::Accent, BoneShape::Box); // gold comb crest
         for (f32 ex : {-1.0f, 1.0f}) { // gold wings flaring off the crest
-            piece(m, BonePart::Head, Vec3{ex * hs.x * 0.52f, hc.y + hs.y * 0.62f, -hs.z * 0.04f},
-                  Vec3{0.06f, 0.1f, 0.3f}, BoneColor::Accent, BoneShape::RoundedBox, roll(ex * 0.5f));
+            piece(m, BonePart::Head, Vec3{ex * hs.x * 0.56f, hc.y + hs.y * 0.5f, -hs.z * 0.06f},
+                  Vec3{0.05f, 0.12f, 0.32f}, BoneColor::Accent, BoneShape::Box, roll(ex * 0.6f));
         }
-        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.96f, 0.0f}, Vec3{0.11f, 0.14f, 0.16f},
-              BoneColor::Accent, BoneShape::Sphere); // lion crest blob
     }
 }
 
@@ -379,7 +412,9 @@ void apply_outfit(CharacterModel& model, OutfitKind kind, const Equipment& equip
         pal.primary = glm::mix(pal.primary, Vec3{0.52f, 0.49f, 0.43f}, 0.55f);
     }
     pal.accent = tier_accent(ot);
-    pal.metal = Vec3{0.74f, 0.78f, 0.86f} * tier_sheen(ot) + Vec3{0.12f}; // bright polished steel
+    // Steel GREY (not near-white): a mid-tone so plates read as metal with crisp facet contrast against
+    // the body + gold trim. Polish (tier sheen) lifts it toward bright steel at legendary, stays dull at low tiers.
+    pal.metal = Vec3{0.46f, 0.50f, 0.58f} * tier_sheen(ot) + Vec3{0.14f};
     // `dark` is the secondary panel colour: royal blue for the Cleric's heraldry, leather brown else.
     pal.dark = (kind == OutfitKind::Holy) ? Vec3{0.20f, 0.26f, 0.58f} : Vec3{0.26f, 0.18f, 0.11f};
     pal.glow = (kind == OutfitKind::Plate) ? Vec3{0.45f, 0.7f, 1.0f} : Vec3{0.5f, 0.85f, 1.0f};
