@@ -222,13 +222,14 @@ private:
     // lags with the body's motion), rebuilt into a dynamic mesh each frame. The anchor rides a body
     // joint; the chain hangs along `hang_local` (the character's local frame). Detachable (phase 3).
     struct ClothInstance {
-        ClothChain chain;
-        Mesh mesh;                          // dynamic, rebuilt from the sim each frame
+        std::vector<ClothChain> chains;      // 1 = a flat sheet (cape); N = a ring tube (skirt / robe)
+        std::vector<Vec3> anchor_locals;     // per-chain anchor offset (local frame, from `anchor` bone)
+        std::vector<Vec3> hang_locals;       // per-chain rest hang direction (local)
+        Mesh mesh;                           // dynamic, rebuilt from the sim each frame
         Vec3 color{0.5f};
-        BonePart anchor = BonePart::Torso;  // body joint the top of the piece rides
-        Vec3 anchor_local{0.0f};            // offset from that joint, in the character's local frame
-        Vec3 hang_local{0.0f, -1.0f, -0.2f}; // rest hang direction (local)
-        Vec3 side_local{1.0f, 0.0f, 0.0f};  // sheet left-right axis (local)
+        BonePart anchor = BonePart::Torso;   // body joint the piece rides
+        Vec3 side_local{1.0f, 0.0f, 0.0f};   // sheet left-right axis (cape only)
+        bool ring = false;                   // closed tube (skirt) vs flat sheet (cape)
         int segments = 5;
         f32 seg = 0.13f;
         f32 half_width = 0.22f;

@@ -126,22 +126,19 @@ SkinnedMesh build_outfit_mesh(const CharacterModel& model, OutfitKind kind, cons
             break;
         }
         case OutfitKind::Robe: {
-            // Apprentice: a short rough robe; elementalist/archmage: fuller, longer robes.
-            const f32 len = vt == 2 ? 0.84f : vt == 1 ? 0.72f : 0.6f;
+            // Loose sleeves + a torso shell; the flowing skirt is a simulated ClothInstance now.
             clad_torso(sm, r, 1.18f, 0.84f, BodyMaterial::Primary);
             clad_limb(sm, r, BonePart::UpperArmL, BonePart::LowerArmL, vt == 0 ? 1.14f : 1.2f, 1.0f,
                       BodyMaterial::Primary, true);
             clad_limb(sm, r, BonePart::UpperArmR, BonePart::LowerArmR, vt == 0 ? 1.14f : 1.2f, 1.0f,
                       BodyMaterial::Primary, true);
-            skirt(sm, r, len, vt == 0 ? 0.4f : 0.46f, BodyMaterial::Primary);
             break;
         }
         case OutfitKind::Holy: {
-            // A long robe to the ankles at every tier (acolyte a touch shorter than priest/prophet).
+            // Sleeves + a torso shell; the long flowing robe skirt is a simulated ClothInstance now.
             clad_torso(sm, r, 1.16f, 0.85f, BodyMaterial::Primary);
             clad_limb(sm, r, BonePart::UpperArmL, BonePart::LowerArmL, 1.16f, 1.0f, BodyMaterial::Primary, true);
             clad_limb(sm, r, BonePart::UpperArmR, BonePart::LowerArmR, 1.16f, 1.0f, BodyMaterial::Primary, true);
-            skirt(sm, r, vt == 0 ? 0.86f : 0.96f, 0.44f, BodyMaterial::Primary);
             break;
         }
         case OutfitKind::Leather: {

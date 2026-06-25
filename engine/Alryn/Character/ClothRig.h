@@ -43,4 +43,10 @@ struct ClothChain {
 // sheet tapers slightly toward the hem. Suitable to upload to a dynamic Mesh and draw each frame.
 void build_cloth_mesh(const ClothChain& c, const Vec3& side, const Vec3& color, MeshData& out);
 
+// Build a (double-sided) cloth TUBE from a ring of chains (a skirt / robe): each adjacent pair of
+// chains is bridged row-by-row into quads, wrapping cyclically when `closed`. All chains must have the
+// same node count. `color` tints it.
+void build_cloth_tube(const std::vector<ClothChain>& chains, bool closed, const Vec3& color,
+                      MeshData& out);
+
 } // namespace alryn

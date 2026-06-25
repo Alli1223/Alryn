@@ -106,4 +106,44 @@ void build_cloth_mesh(const ClothChain& c, const Vec3& side, const Vec3& color, 
     }
 }
 
+void build_cloth_tube(const std::vector<ClothChain>& chains, bool closed, const Vec3& color,
+                      MeshData& out) {
+    out.vertices.clear();
+    out.indices.clear();
+    const usize nc = chains.size();
+    if (nc < 2 || chains[0].pos.size() < 2) {
+        return;
+    }
+    const usize rows = chains[0].pos.size();
+
+    auto tri = [&](const Vec3& a, const Vec3& b, const Vec3& d, const Vec3& nrm) {
+        const u32 base = static_cast<u32>(out.vertices.size());
+        out.vertices.push_back(Vertex{a, nrm, color, 0.0f});
+        out.vertices.push_back(Vertex{b, nrm, color, 0.0f});
+        out.vertices.push_back(Vertex{d, nrm, color, 0.0f});
+        out.indices.push_back(base);
+        out.indices.push_back(base + 1);
+        out.indices.push_back(base + 2);
+    };
+
+    for (usize i = 0; i + 1 < nc + (closed ? 1u : 0u); ++i) {
+        const usize j = (i + 1) % nc;
+        const ClothChain& ci = chains[i];
+        const ClothChain& cj = chains[j];
+        if (cj.pos.size() != rows) {
+            continue;
+        }
+        for (usize r = 0; r + 1 < rows; ++r) {
+            const Vec3 a = ci.pos[r], b = cj.pos[r];
+            const Vec3 d = cj.pos[r + 1], e = ci.pos[r + 1];
+            Vec3 nrm = glm::cross(b - a, e - a);
+            nrm = glm::length(nrm) > 1e-5f ? glm::normalize(nrm) : Vec3{0.0f, 0.0f, 1.0f};
+            tri(a, b, d, nrm);
+            tri(a, d, e, nrm);
+            tri(a, d, b, -nrm); // back face
+            tri(a, e, d, -nrm);
+        }
+    }
+}
+
 } // namespace alryn

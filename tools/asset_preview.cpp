@@ -399,21 +399,49 @@ Asset build_character(int role) {
         }
     }
 
-    // A simulated cape hanging off the upper back, settled under gravity + a light wind (proves the
-    // cloth sim + sheet mesh; ALRYN_POSE=cloth).
+    // Simulated cloth (cape sheet + robe-skirt tube) settled under gravity + a light wind - proves the
+    // sim + meshes (ALRYN_POSE=cloth). Mirrors ClientApp::setup_cloth's pieces.
     if (cloth_mode) {
-        const int iH = model.bone_index(BonePart::Head);
-        const Vec3 neck = iH >= 0 ? Vec3{jmats[static_cast<usize>(iH)][3]} : Vec3{0.0f, 1.0f, 0.0f};
-        const Vec3 anchor = neck + Vec3{0.0f, -0.05f, -0.13f}; // upper back, just behind the neck
-        ClothChain cape;
-        cape.init(anchor, Vec3{0.0f, -1.0f, -0.18f}, 5, 0.13f, 0.22f);
-        const Vec3 wind{2.5f, 0.0f, -1.2f};
-        for (int k = 0; k < 150; ++k) {
-            cape.step(anchor, wind, 9.0f, 1.0f / 60.0f);
+        const Vec3 wind{2.2f, 0.0f, -1.0f};
+        // Cape on cape-wearing roles (Knight/Cleric/Hunter).
+        if (role == 0 || role == 2 || role == 1) {
+            const int iH = model.bone_index(BonePart::Head);
+            const Vec3 neck = iH >= 0 ? Vec3{jmats[static_cast<usize>(iH)][3]} : Vec3{0.0f, 1.0f, 0.0f};
+            const Vec3 anchor = neck + Vec3{0.0f, -0.05f, -0.12f};
+            ClothChain cape;
+            cape.init(anchor, Vec3{0.0f, -1.0f, -0.22f}, 5, 0.13f, 0.24f);
+            for (int k = 0; k < 160; ++k) cape.step(anchor, wind, 9.0f, 1.0f / 60.0f);
+            MeshData cm;
+            build_cloth_mesh(cape, Vec3{1.0f, 0.0f, 0.0f}, role == 1 ? pal.dark : pal.primary, cm);
+            a.parts.push_back({std::move(cm), Vec4{1.0f}});
         }
-        MeshData cm;
-        build_cloth_mesh(cape, Vec3{1.0f, 0.0f, 0.0f}, pal.primary, cm);
-        a.parts.push_back({std::move(cm), Vec4{1.0f}});
+        // Robe skirt (ring tube) on the robe-wearers (Mage role 3 / Cleric role 2).
+        if (role == 3 || role == 2) {
+            const int iP = model.bone_index(BonePart::Pelvis);
+            const Vec3 hip = iP >= 0 ? Vec3{jmats[static_cast<usize>(iP)][3]} : Vec3{0.0f, 0.6f, 0.0f};
+            const int segs = role == 2 ? 7 : 6;
+            const f32 seg = 0.15f, flare = role == 2 ? 0.3f : 0.34f, radius = 0.17f;
+            constexpr int kN = 8;
+            std::vector<ClothChain> skirt(kN);
+            for (int i = 0; i < kN; ++i) {
+                const f32 ang = TwoPi * static_cast<f32>(i) / static_cast<f32>(kN);
+                const Vec3 radial{std::sin(ang), 0.0f, std::cos(ang)};
+                const Vec3 anchor = hip + radial * radius + Vec3{0.0f, 0.06f, 0.0f};
+                skirt[static_cast<usize>(i)].init(anchor, glm::normalize(radial * flare + Vec3{0, -1, 0}),
+                                                  segs, seg, 0.0f);
+            }
+            for (int k = 0; k < 160; ++k) {
+                for (int i = 0; i < kN; ++i) {
+                    const f32 ang = TwoPi * static_cast<f32>(i) / static_cast<f32>(kN);
+                    const Vec3 radial{std::sin(ang), 0.0f, std::cos(ang)};
+                    const Vec3 anchor = hip + radial * radius + Vec3{0.0f, 0.06f, 0.0f};
+                    skirt[static_cast<usize>(i)].step(anchor, wind, 9.0f, 1.0f / 60.0f);
+                }
+            }
+            MeshData sm;
+            build_cloth_tube(skirt, true, pal.primary, sm);
+            a.parts.push_back({std::move(sm), Vec4{1.0f}});
+        }
     }
     return a;
 }
