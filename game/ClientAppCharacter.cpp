@@ -129,6 +129,63 @@ void ClientApp::draw_cleric_staff(const CharacterModel& model, const std::vector
                              Vec4{0.65f, 0.55f, 1.0f, 1.0f}); // glowing orb at the head
 }
 
+void ClientApp::apply_idle_stance(const CharacterModel& model, std::vector<Quat>& pose, PlayerRole role,
+                                  f32 weight) const {
+    auto set = [&](BonePart p, const Quat& q) {
+        const int i = model.bone_index(p);
+        if (i >= 0 && static_cast<usize>(i) < pose.size()) {
+            // Ease from the locomotion pose into the rest stance so stopping/starting doesn't snap.
+            pose[static_cast<usize>(i)] = glm::slerp(pose[static_cast<usize>(i)], q, weight);
+        }
+    };
+    const Vec3 X{1.0f, 0.0f, 0.0f};
+    const Vec3 Z{0.0f, 0.0f, 1.0f};
+    // The weapon hand is the L-suffixed arm (the rig's labels are mirrored). -X about the shoulder
+    // brings the upper arm FORWARD/down; a bent elbow brings the hand in front.
+    if (role == PlayerRole::Mage || role == PlayerRole::Cleric) {
+        // Both hands rest on the weapon planted in front like a walking stick.
+        set(BonePart::UpperArmL, glm::angleAxis(-0.62f, X) * glm::angleAxis(-0.18f, Z));
+        set(BonePart::LowerArmL, glm::angleAxis(0.95f, X));
+    } else if (role == PlayerRole::Hunter) {
+        // Bow held lowered + a touch forward at the side.
+        set(BonePart::UpperArmL, glm::angleAxis(-0.32f, X));
+        set(BonePart::LowerArmL, glm::angleAxis(0.28f, X));
+    }
+}
+
+void ClientApp::draw_planted_weapon(const CharacterModel& model, const std::vector<Mat4>& jmats,
+                                    const Vec3& feet, PlayerRole role, const Equipment& eq) {
+    const CharacterPalette& pal = model.palette();
+    const Mat4 hand = hand_frame(model, jmats, BonePart::LowerArmL);
+    const Vec3 grip = Vec3{hand[3]};                       // where the hand grips the shaft
+    const Vec3 bottom{grip.x, feet.y, grip.z};             // stood straight on the ground
+    const Vec3 top = grip + Vec3{0.0f, 0.5f, 0.0f};        // a TALL shaft rising past the hand
+    const f32 len = std::max(0.6f, top.y - bottom.y);
+    const Vec3 mid = (top + bottom) * 0.5f;
+    renderer_->draw(shape_box_,
+                    glm::translate(Mat4{1.0f}, mid) * orient_to(bottom - top) *
+                        glm::scale(Mat4{1.0f}, Vec3{0.045f, 0.045f, len}),
+                    Vec4{0.42f, 0.29f, 0.16f, 1.0f}); // wooden shaft
+    if (role == PlayerRole::Mage) {
+        // a glowing arcane orb crowning the staff (up near the head)
+        renderer_->draw_emissive(shape_sphere_,
+                                 glm::translate(Mat4{1.0f}, top) * glm::scale(Mat4{1.0f}, Vec3{0.15f}),
+                                 Vec4{pal.glow * 1.7f, 1.0f});
+        renderer_->draw_glow(shape_sphere_,
+                             glm::translate(Mat4{1.0f}, top) * glm::scale(Mat4{1.0f}, Vec3{0.32f}),
+                             Vec4{pal.glow, 0.4f});
+    } else { // Cleric - a holy head crowning the shaft
+        renderer_->draw(shape_sphere_,
+                        glm::translate(Mat4{1.0f}, top) * glm::scale(Mat4{1.0f}, Vec3{0.13f}),
+                        Vec4{pal.accent, 1.0f});
+    }
+    // Keep the off-hand (the Cleric's shield) in hand.
+    const WeaponType off = role_offhand(static_cast<u8>(role));
+    if (off != WeaponType::None) {
+        draw_weapon(off, hand_frame(model, jmats, BonePart::LowerArmR), pal, eq.weapon());
+    }
+}
+
 void ClientApp::skin_and_draw(const CharacterModel& model, const SkinnedMesh& src, Mesh& gpu,
                               const Mat4& root, const std::vector<Quat>& pose, const Vec3& tint) {
     if (src.vertices.empty()) {
@@ -190,8 +247,19 @@ void ClientApp::draw_character(PlayerVisual& v, const Vec3& feet, f32 yaw, bool 
     if (!seated) {
         root = root * v.animator.body_offset();
     }
-    const std::vector<Quat> pose =
+    std::vector<Quat> pose =
         seated ? CharacterAnimator::sit_pose(v.model) : v.animator.pose(v.model);
+    // Standing still + not mid-action: strike a characterful idle stance instead of arms-straight-down
+    // (staff/mace users rest on their planted weapon; the Hunter lowers the bow).
+    const PlayerRole r = static_cast<PlayerRole>((role < 0 ? 0 : role) % kRoleCount);
+    f32 idle_w = 0.0f; // 1 = fully standing/resting, 0 = moving or acting
+    if (!seated && role >= 0 && !v.animator.swinging() && !v.animator.casting() &&
+        !v.animator.blocking()) {
+        idle_w = glm::smoothstep(0.55f, 0.15f, v.speed); // eases in as the player slows to a stop
+    }
+    if (idle_w > 0.01f) {
+        apply_idle_stance(v.model, pose, r, idle_w);
+    }
     // The continuous skinned body, then the face/hair/gear attachment primitives on top.
     draw_skinned_body(v, root, pose);
     const std::vector<Mat4> mats = v.model.bone_matrices(root, pose);
@@ -200,8 +268,12 @@ void ClientApp::draw_character(PlayerVisual& v, const Vec3& feet, f32 yaw, bool 
         // Weapons attach to the JOINT frames (orientation + position) so they swing with
         // the arm, unlike the box mats whose columns are scaled by box_size.
         const std::vector<Mat4> jmats = v.model.joint_matrices(root, pose);
-        const PlayerRole r = static_cast<PlayerRole>(role % kRoleCount);
-        draw_role_weapon(v.model, jmats, r, v.equipment);
+        const bool staff_user = (r == PlayerRole::Mage || r == PlayerRole::Cleric);
+        if (idle_w > 0.5f && staff_user) {
+            draw_planted_weapon(v.model, jmats, feet, r, v.equipment); // rest on the planted staff/mace
+        } else {
+            draw_role_weapon(v.model, jmats, r, v.equipment);
+        }
         // A steel motion trail off the real blade tip while a Knight is mid-swing (the sword
         // is on the player's right = the L-suffixed bone).
         if (r == PlayerRole::Knight && v.animator.swinging()) {

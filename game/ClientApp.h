@@ -174,6 +174,15 @@ protected:
     void draw_cleric_staff(const CharacterModel& model, const std::vector<Mat4>& jmats,
                            const Vec3& feet, const CharacterAnimator& anim, f32 yaw);
 
+    // Standing IDLE poses (when a player is still + not acting), so they don't just hang both arms
+    // down: a staff/mace user (Mage / Cleric) rests their weapon hand on the weapon planted like a
+    // walking stick; the Hunter holds the bow lowered at their side. apply_idle_stance overrides the
+    // weapon-arm bones in `pose`; draw_planted_weapon draws the weapon stood on the ground.
+    void apply_idle_stance(const CharacterModel& model, std::vector<Quat>& pose, PlayerRole role,
+                           f32 weight = 1.0f) const;
+    void draw_planted_weapon(const CharacterModel& model, const std::vector<Mat4>& jmats,
+                             const Vec3& feet, PlayerRole role, const Equipment& eq);
+
     // Cast an ability by its index (0..kAbilityCount-1) for the local player: gate on the client
     // cooldown estimate, queue it for the server (as index+1), mirror the cooldown for the HUD, and
     // play the cast VFX + any buff aura instantly so it feels responsive (server stays authoritative).

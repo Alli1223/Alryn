@@ -234,33 +234,53 @@ Asset build_character(int role) {
     eq.outfit_tint = peasant ? 0u : role_tint[static_cast<usize>(role) % kRoleCount];
     apply_outfit(model, okind, eq);
 
-    // Pose: bind by default (arms at the sides). Set ALRYN_POSE=walk|swing|cast|block to drive the
-    // animator mid-action and verify the locomotion + action BLEND (legs walk while the arms act).
+    // Pose: bind by default (arms at the sides). Set ALRYN_POSE=walk|swing|cast|block|idle to drive
+    // the animator mid-action and verify the locomotion + action BLEND, or the standing idle stance.
     std::vector<Quat> pose;          // empty => bind pose
     Mat4 root{1.0f};
+    bool idle_mode = false;
     if (const char* mode = std::getenv("ALRYN_POSE")) {
-        CharacterAnimator anim;
-        const Timestep dt{1.0f / 60.0f};
-        for (int k = 0; k < 40; ++k) {
-            anim.update(5.0f, dt); // walk up to a mid-stride
-        }
         const std::string m = mode;
-        int action_frames = 13; // ALRYN_FRAMES overrides, to sweep an action's phase
-        if (const char* af = std::getenv("ALRYN_FRAMES")) {
-            action_frames = std::atoi(af);
+        if (m == "idle") {
+            // The standing idle stance (mirrors ClientApp::apply_idle_stance): a staff/mace user (Cleric
+            // role 2 / Mage role 3) rests on a planted weapon, the Hunter (role 1) lowers the bow.
+            idle_mode = true;
+            pose.assign(model.bone_count(), QuatIdentity);
+            auto setq = [&](BonePart p, const Quat& q) {
+                const int i = model.bone_index(p);
+                if (i >= 0) pose[static_cast<usize>(i)] = q;
+            };
+            const Vec3 X{1.0f, 0.0f, 0.0f}, Z{0.0f, 0.0f, 1.0f};
+            if (role == 2 || role == 3) {
+                setq(BonePart::UpperArmL, glm::angleAxis(-0.62f, X) * glm::angleAxis(-0.18f, Z));
+                setq(BonePart::LowerArmL, glm::angleAxis(0.95f, X));
+            } else if (role == 1) {
+                setq(BonePart::UpperArmL, glm::angleAxis(-0.32f, X));
+                setq(BonePart::LowerArmL, glm::angleAxis(0.28f, X));
+            }
+        } else {
+            CharacterAnimator anim;
+            const Timestep dt{1.0f / 60.0f};
+            for (int k = 0; k < 40; ++k) {
+                anim.update(5.0f, dt); // walk up to a mid-stride
+            }
+            int action_frames = 13; // ALRYN_FRAMES overrides, to sweep an action's phase
+            if (const char* af = std::getenv("ALRYN_FRAMES")) {
+                action_frames = std::atoi(af);
+            }
+            if (m == "swing") {
+                anim.play_swing();
+                for (int k = 0; k < action_frames; ++k) anim.update(5.0f, dt);
+            } else if (m == "cast") {
+                anim.play_cast();
+                for (int k = 0; k < 17; ++k) anim.update(5.0f, dt); // ~mid-thrust
+            } else if (m == "block") {
+                anim.set_blocking(true);
+                for (int k = 0; k < 20; ++k) anim.update(5.0f, dt);
+            }
+            pose = anim.pose(model);
+            root = anim.body_offset();
         }
-        if (m == "swing") {
-            anim.play_swing();
-            for (int k = 0; k < action_frames; ++k) anim.update(5.0f, dt);
-        } else if (m == "cast") {
-            anim.play_cast();
-            for (int k = 0; k < 17; ++k) anim.update(5.0f, dt); // ~mid-thrust
-        } else if (m == "block") {
-            anim.set_blocking(true);
-            for (int k = 0; k < 20; ++k) anim.update(5.0f, dt);
-        }
-        pose = anim.pose(model);
-        root = anim.body_offset();
     }
     // ALRYN_YAW (degrees) spins the character on the spot - handy to view an action in profile.
     if (const char* yw = std::getenv("ALRYN_YAW")) {
@@ -348,11 +368,31 @@ Asset build_character(int role) {
             a.parts.push_back({bake(shape_for(wp.shape), hand * wp.local, c), Vec4{1.0f}});
         }
     };
-    if (!peasant) {
+    const bool staff_user = (role == 2 || role == 3);
+    if (!peasant && idle_mode && staff_user) {
+        // A planted vertical staff/mace the idle character rests on (mirrors draw_planted_weapon).
+        const Mat4 hand = hand_frame(BonePart::LowerArmL);
+        const Vec3 grip = Vec3{hand[3]};
+        const Vec3 bottom{grip.x, 0.0f, grip.z};        // stand it on the ground (y=0)
+        const Vec3 top = grip + Vec3{0.0f, 0.5f, 0.0f}; // a TALL shaft rising past the hand
+        const f32 len = std::max(0.6f, top.y - bottom.y);
+        const Vec3 mid = (top + bottom) * 0.5f;
+        a.parts.push_back({bake(box, glm::translate(Mat4{1.0f}, mid) * // vertical shaft (planted)
+                                          glm::scale(Mat4{1.0f}, Vec3{0.045f, len, 0.045f}),
+                                Vec3{0.42f, 0.29f, 0.16f}),
+                           Vec4{1.0f}});
+        a.parts.push_back({bake(sphere, glm::translate(Mat4{1.0f}, top) *
+                                            glm::scale(Mat4{1.0f}, Vec3{role == 3 ? 0.15f : 0.13f}),
+                                role == 3 ? pal.glow * 1.7f : pal.accent),
+                           Vec4{1.0f}});
+        if (role_offhand(static_cast<u8>(role)) != WeaponType::None) {
+            add_weapon(role_offhand(static_cast<u8>(role)), hand_frame(BonePart::LowerArmR));
+        }
+    } else if (!peasant) {
         add_weapon(role_weapon(static_cast<u8>(role), 0), hand_frame(BonePart::LowerArmL));
-    }
-    if (!peasant && role_offhand(static_cast<u8>(role)) != WeaponType::None) {
-        add_weapon(role_offhand(static_cast<u8>(role)), hand_frame(BonePart::LowerArmR));
+        if (role_offhand(static_cast<u8>(role)) != WeaponType::None) {
+            add_weapon(role_offhand(static_cast<u8>(role)), hand_frame(BonePart::LowerArmR));
+        }
     }
     return a;
 }
