@@ -203,19 +203,12 @@ struct RiverInfo {
     f32 half_width = 3.7f;   // channel half-width (water + banks), matches build_river
 };
 
-inline RiverInfo town_river(const worldgen::Village& v, u32 seed) {
-    RiverInfo r;
-    const int vid = static_cast<int>(v.vseed);
-    if (v.half < 36.0f || detail::hash01(detail::tree_hash(vid, 0, 6000u + seed)) > 0.5f) {
-        return r; // small towns + half of the rest stay on dry land
-    }
-    r.present = true;
-    const f32 ang = detail::hash01(detail::tree_hash(vid, 1, 6001u + seed)) * TwoPi;
-    r.dir = Vec2{std::cos(ang), std::sin(ang)};
-    r.normal = Vec2{-r.dir.y, r.dir.x};
-    const f32 side = detail::hash01(detail::tree_hash(vid, 2, 6002u + seed)) < 0.5f ? -1.0f : 1.0f;
-    r.offset = side * (kMarketHalf + 4.5f); // runs just past the market plaza on one side
-    return r;
+inline RiverInfo town_river(const worldgen::Village& /*v*/, u32 /*seed*/) {
+    // Town rivers are DISABLED: the in-town stone canal + its crossing bridges read badly, so every
+    // town now sits on dry land. The channel/bridge placement in village_props (gated on
+    // RiverInfo::present) plus build_river()/build_stone_bridge() stay dormant - re-enable by
+    // restoring the old eligibility test (big towns, ~half of them, offset to one side of the market).
+    return RiverInfo{}; // present = false
 }
 
 // Signed perpendicular distance of world point p from the river centreline; |.| < half_width
