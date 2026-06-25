@@ -605,7 +605,11 @@ bool render_one(test::OffscreenRenderer& r, const std::string& cat, int v, const
     const Vec3 sky = character ? Vec3{0.66f, 0.72f, 0.80f} : Vec3{0.52f, 0.60f, 0.70f};
     const Vec3 sun = character ? glm::normalize(Vec3{0.38f, 0.5f, 0.78f})
                                : glm::normalize(Vec3{0.4f, 0.86f, 0.3f});
-    r.render(draws, view, proj, sky, sun, out);
+    // Characters: a dimmer, warmer key (intensity 0.72, warm white) so steel/cloth read with proper
+    // tonal contrast instead of washing toward white - closer to the moodier in-game tonemap. Props keep
+    // the original full white key (default) so their scene-shot baselines are unchanged.
+    const Vec4 key = character ? Vec4{1.0f, 0.95f, 0.86f, 0.72f} : Vec4{1.0f};
+    r.render(draws, view, proj, sky, sun, out, key);
     ALRYN_INFO("wrote {}  ({}x{}, asset r={:.1f}m)", out, r.width(), r.height(), radius);
     return true;
 }

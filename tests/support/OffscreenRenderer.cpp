@@ -217,7 +217,8 @@ Mesh* OffscreenRenderer::upload(const MeshData& data) {
 
 std::vector<u8> OffscreenRenderer::render(const std::vector<Draw>& draws, const Mat4& view,
                                           const Mat4& proj, const Vec3& background,
-                                          const Vec3& sun_dir, const std::string& ppm_path) {
+                                          const Vec3& sun_dir, const std::string& ppm_path,
+                                          const Vec4& sun_color) {
     std::vector<u8> out(static_cast<usize>(width_) * height_ * 4, 0);
     if (!ready_) {
         return out;
@@ -285,8 +286,8 @@ std::vector<u8> OffscreenRenderer::render(const std::vector<Draw>& draws, const 
             push.light_vp = Mat4{1.0f};
             push.tint = d.tint;
             push.params = Vec4{0.0f};
-            push.sun = Vec4{glm::normalize(sun_dir), 1.0f};
-            push.sun_color = Vec4{1.0f, 1.0f, 1.0f, 0.0f}; // white sun, no shadows
+            push.sun = Vec4{glm::normalize(sun_dir), sun_color.w};       // w = intensity
+            push.sun_color = Vec4{Vec3{sun_color}, 0.0f};                // rgb = colour, no shadows
             vkCmdPushConstants(cmd, pipeline_.layout(),
                                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                                sizeof(PushConstants), &push);

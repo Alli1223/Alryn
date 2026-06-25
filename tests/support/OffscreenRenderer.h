@@ -45,9 +45,12 @@ public:
 
     // Renders the draws and returns RGBA8 pixels (width*height*4, row-major). When
     // ppm_path is non-empty also writes a binary P6 PPM there.
+    // `sun_color`: rgb = sun colour, w = intensity. Default {1,1,1,1} = the original full white key
+    // (scene-shot baselines unchanged). Pass a dimmer/warmer key (e.g. character previews) so surfaces
+    // don't blow out near-white and materials read with proper contrast - matching the moodier in-game look.
     std::vector<u8> render(const std::vector<Draw>& draws, const Mat4& view, const Mat4& proj,
-                           const Vec3& background, const Vec3& sun_dir,
-                           const std::string& ppm_path = "");
+                           const Vec3& background, const Vec3& sun_dir, const std::string& ppm_path = "",
+                           const Vec4& sun_color = Vec4{1.0f});
 
     void shutdown();
 
