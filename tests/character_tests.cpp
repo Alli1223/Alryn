@@ -216,8 +216,8 @@ TEST_CASE("CharacterModel: deterministic generation and valid hierarchy") {
     CHECK(a.palette().skin == b.palette().skin);   // same seed => identical
     CHECK(a.palette().shirt == b.palette().shirt);
     CHECK(a.height() == doctest::Approx(b.height()));
-    CHECK(a.height() > 1.6f); // a proportioned adult (~1.8 m), not the old chibi blob (~0.9 m)
-    CHECK(a.height() < 2.0f);
+    CHECK(a.height() > 1.2f); // cute chibi proportions (~1.45 m, big head + short limbs)
+    CHECK(a.height() < 1.7f);
 
     // Parents always precede their children (single-pass transform safe).
     for (usize i = 0; i < a.bones().size(); ++i) {

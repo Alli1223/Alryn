@@ -145,21 +145,22 @@ CharacterModel CharacterModel::generate(u32 seed) {
     Rng rng(seed);
     CharacterModel m;
 
-    const f32 hscale = rng.range(0.97f, 1.06f); // overall height (a realistic adult range)
+    const f32 hscale = rng.range(0.97f, 1.06f); // overall height
     const f32 build = rng.range(0.94f, 1.12f);  // width / bulk
 
-    // Realistic adult proportions (~7.5 heads, total ~1.8 m): a small head over a long torso with
-    // full-length limbs - the proportioned base the reference-grade outfits sit on (item 4+). The
-    // body masses are faceted rounded boxes; the limbs are capsules; the feet are boot boxes.
-    const f32 leg_upper = 0.46f * hscale;
-    const f32 leg_lower = 0.44f * hscale;
+    // Cute, stylised "chibi" proportions (~4.8 heads, total ~1.45 m): a big head over a compact torso
+    // with SHORT, chunky limbs - the look of the reference art, not a realistic 7.5-head adult. The
+    // body masses are faceted rounded boxes; the limbs are capsules; the feet are boot boxes. The
+    // skinned body + outfits read these segment lengths, so changing them re-proportions everything.
+    const f32 leg_upper = 0.31f * hscale; // short stubby legs
+    const f32 leg_lower = 0.29f * hscale;
     const f32 leg_len = leg_upper + leg_lower;
-    const f32 torso = 0.60f * hscale;
-    const f32 head_h = 0.25f * hscale; // head height
-    const f32 head_w = 0.20f * hscale; // head width
-    const f32 neck = 0.06f * hscale;   // gap above the shoulders (an implied neck)
-    const f32 arm_upper = 0.30f * hscale;
-    const f32 arm_lower = 0.28f * hscale;
+    const f32 torso = 0.52f * hscale;
+    const f32 head_h = 0.30f * hscale; // a big cute head
+    const f32 head_w = 0.25f * hscale;
+    const f32 neck = 0.045f * hscale;     // short neck
+    const f32 arm_upper = 0.23f * hscale; // short arms
+    const f32 arm_lower = 0.21f * hscale;
 
     // Palette (base skin + drab starting clothes; outfits recolour on top).
     static const Vec3 skin_tones[] = {{0.86f, 0.66f, 0.52f}, {0.80f, 0.58f, 0.45f},
@@ -180,8 +181,8 @@ CharacterModel CharacterModel::generate(u32 seed) {
     const f32 hip_w = 0.10f * build;            // half-spacing of the hip joints
     const f32 shoulder_y = torso * 0.84f;       // shoulders near the top of the torso
     const f32 shoulder_x = 0.20f * build + 0.03f; // half-spacing of the shoulder joints
-    const f32 arm_r = 0.085f * build;           // arm radius
-    const f32 leg_r = 0.125f * build;           // leg radius
+    const f32 arm_r = 0.098f * build;           // arm radius (chunky for the cute look)
+    const f32 leg_r = 0.135f * build;           // leg radius
 
     // Core skeleton, indices 0..12 - parts/order unchanged so the animator + the face/hair feature
     // bones (parented to the head, index 2) still work. Limb segments are made a touch LONGER than

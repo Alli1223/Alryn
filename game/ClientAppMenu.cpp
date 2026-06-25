@@ -5,6 +5,21 @@
 
 namespace alryn::game {
 
+namespace {
+// Magicka-style signature outfit colour per role (an index into outfit_tints): blue Knight, green
+// Hunter, white Cleric, violet Mage - so the four roles read as distinct colours by default. Picking
+// a role sets this as the starting outfit tint; the player can still recolour from the swatches.
+u8 signature_tint(PlayerRole r) {
+    switch (r) {
+        case PlayerRole::Knight: return 0; // royal blue
+        case PlayerRole::Hunter: return 2; // forest green
+        case PlayerRole::Cleric: return 5; // white / silver
+        case PlayerRole::Mage: return 3;   // arcane violet
+    }
+    return 0;
+}
+} // namespace
+
 void ClientApp::escape_pressed() {
     if (state_ == AppState::Menu) {
         menu_escape();
@@ -216,7 +231,8 @@ void ClientApp::build_customise(f32 w, f32 h) {
               static_cast<usize>(role_),
               [this](usize i) {
                   role_ = static_cast<PlayerRole>(i % kRoleCount);
-                  rebuild_preview();
+                  equip_loadout_.outfit_tint = signature_tint(role_); // role's signature colour
+                  rebuild_ui(); // re-lay so the outfit-colour swatch reflects the new role
               }),
           46.0f);
 
@@ -292,6 +308,7 @@ void ClientApp::build_class(f32 w, f32 h) {
         f32 y = card.y + pad;
         auto& b = panel.add<ui::Button>(names[i], [this, i] {
             role_ = static_cast<PlayerRole>(i);
+            equip_loadout_.outfit_tint = signature_tint(role_); // role's signature colour
             rebuild_ui(); // re-lay to highlight the new selection
         });
         b.primary = (static_cast<int>(role_) == i);
