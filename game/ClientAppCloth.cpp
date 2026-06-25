@@ -23,6 +23,7 @@ void ClientApp::setup_cloth(PlayerVisual& v, PlayerRole role, const Equipment& e
         c.segments = segs;
         c.seg = seg;
         c.half_width = width;
+        c.collide_r = 0.15f; // a flat cape/tabard rests close against the torso
         c.color = color;
         c.side_local = side;
         c.anchor_locals = {anchor_local};
@@ -34,9 +35,9 @@ void ClientApp::setup_cloth(PlayerVisual& v, PlayerRole role, const Equipment& e
         v.cloth.push_back(std::move(c));
     };
     auto add_cape = [&](const Vec3& color, f32 width, f32 wind_gain) {
-        // Anchor at the NECK (a touch up + well back, so the collar clears the pauldrons + reads as a
-        // neck cape), hanging down the back.
-        add_sheet(BonePart::Head, Vec3{0.0f, 0.05f, -0.15f}, Vec3{0.0f, -1.0f, -0.28f},
+        // Anchor at the NECK (a touch up + back, so the collar clears the pauldrons + reads as a neck
+        // cape), hanging mostly straight DOWN so the body collision rests it against the back.
+        add_sheet(BonePart::Head, Vec3{0.0f, 0.05f, -0.14f}, Vec3{0.0f, -1.0f, -0.1f},
                   Vec3{1.0f, 0.0f, 0.0f}, 6, 0.12f, width, color, wind_gain);
     };
 
@@ -47,6 +48,7 @@ void ClientApp::setup_cloth(PlayerVisual& v, PlayerRole role, const Equipment& e
         c.ring = true;
         c.segments = segs;
         c.seg = seg;
+        c.collide_r = 0.2f; // a skirt wraps the full leg cluster
         c.color = color;
         constexpr int kN = 8; // panels around the waist
         c.chains.resize(kN);
@@ -149,21 +151,25 @@ void ClientApp::draw_cloth(PlayerVisual& v, const Mat4& root, const std::vector<
     if (glm::distance(Vec3{root[3]}, camera_.position()) > character::skin_cull_dist) {
         return;
     }
-    // The body as a collision cylinder (feet axis), so attached cloth drapes OVER the legs/torso
-    // instead of sinking through them. Pushes hanging nodes out to its surface.
+    // The body as a collision cylinder (feet axis) up to the neck, so attached cloth drapes OVER /
+    // rests ON the body instead of clipping through it or hanging straight down behind it. Each piece
+    // uses its own radius (tight for a back cape against the torso, wide for a skirt around the legs).
     const Vec3 feet = Vec3{root[3]};
-    constexpr f32 kBodyR = 0.2f;
-    const f32 body_top = feet.y + 0.95f; // up to the lower chest
-    auto collide = [&](Vec3& p) {
+    const f32 body_top = feet.y + 1.25f; // up to the neck, so a cape rests on the upper back too
+    // `r_top` is the radius at the torso; it widens toward the legs so a cape rests tight on the back
+    // yet still clears the wider leg cluster lower down.
+    auto collide = [&](Vec3& p, f32 r_top) {
         if (p.y < feet.y - 0.05f || p.y > body_top) {
             return;
         }
+        const f32 t = glm::clamp((p.y - feet.y) / (body_top - feet.y), 0.0f, 1.0f); // 0 feet .. 1 neck
+        const f32 r = glm::mix(0.21f, r_top, glm::smoothstep(0.32f, 0.62f, t)); // legs wide, torso tight
         const f32 dx = p.x - feet.x, dz = p.z - feet.z;
         const f32 d2 = dx * dx + dz * dz;
-        if (d2 < kBodyR * kBodyR && d2 > 1e-6f) {
+        if (d2 < r * r && d2 > 1e-6f) {
             const f32 d = std::sqrt(d2);
-            p.x = feet.x + dx / d * kBodyR;
-            p.z = feet.z + dz / d * kBodyR;
+            p.x = feet.x + dx / d * r;
+            p.z = feet.z + dz / d * r;
         }
     };
     // World-space wind: a slowly-veering breeze that strengthens with the storminess (weather_amt_).
@@ -211,8 +217,8 @@ void ClientApp::draw_cloth(PlayerVisual& v, const Mat4& root, const std::vector<
                 c.chains[k].step(anchor_of(k), wind, 9.5f, frame_dt_);
                 ClothChain& ch = c.chains[k];
                 for (usize i = 1; i < ch.pos.size(); ++i) { // node 0 is the pinned anchor - leave it
-                    collide(ch.pos[i]);
-                    collide(ch.prev[i]);
+                    collide(ch.pos[i], c.collide_r);
+                    collide(ch.prev[i], c.collide_r);
                 }
             }
         }

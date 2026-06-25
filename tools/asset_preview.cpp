@@ -407,11 +407,30 @@ Asset build_character(int role) {
         const Vec3 neck = iH >= 0 ? Vec3{jmats[static_cast<usize>(iH)][3]} : Vec3{0.0f, 1.0f, 0.0f};
         const Vec3 torso = iT >= 0 ? Vec3{jmats[static_cast<usize>(iT)][3]} : Vec3{0.0f, 0.6f, 0.0f};
         const bool cut = std::getenv("ALRYN_CUT") != nullptr;
+        // Body collision (taper: wide at the legs, tight at the torso) so a cape rests on the back.
+        auto collide_body = [&](ClothChain& s, f32 r_top) {
+            for (usize n = 1; n < s.pos.size(); ++n) {
+                for (Vec3* pp : {&s.pos[n], &s.prev[n]}) {
+                    if (pp->y < 0.0f || pp->y > 1.25f) continue;
+                    const f32 t = glm::clamp(pp->y / 1.25f, 0.0f, 1.0f);
+                    const f32 r = glm::mix(0.21f, r_top, glm::smoothstep(0.32f, 0.62f, t));
+                    const f32 d2 = pp->x * pp->x + pp->z * pp->z;
+                    if (d2 < r * r && d2 > 1e-6f) {
+                        const f32 d = std::sqrt(d2);
+                        pp->x = pp->x / d * r;
+                        pp->z = pp->z / d * r;
+                    }
+                }
+            }
+        };
         auto make_sheet = [&](const Vec3& anchor, const Vec3& hang, int segs, f32 seg, f32 width,
                               const Vec3& color) {
             ClothChain s;
             s.init(anchor, hang, segs, seg, width);
-            for (int k = 0; k < 160; ++k) s.step(anchor, wind, 9.0f, 1.0f / 60.0f);
+            for (int k = 0; k < 160; ++k) {
+                s.step(anchor, wind, 9.0f, 1.0f / 60.0f);
+                collide_body(s, 0.15f);
+            }
             if (cut) {
                 s.detach();
                 for (Vec3& pp : s.prev) pp = pp - Vec3{0.05f, 0.04f, -0.05f};
@@ -423,7 +442,7 @@ Asset build_character(int role) {
         };
         // Cape on cape-wearing roles (anchored at the neck); + the minor pieces (cleric stole / mantle).
         if (role == 0 || role == 2 || role == 1) {
-            make_sheet(neck + Vec3{0.0f, 0.05f, -0.15f}, Vec3{0.0f, -1.0f, -0.28f}, 6, 0.12f, 0.24f,
+            make_sheet(neck + Vec3{0.0f, 0.05f, -0.14f}, Vec3{0.0f, -1.0f, -0.1f}, 6, 0.12f, 0.24f,
                        role == 1 ? pal.dark : pal.primary);
         }
         if (role == 2) { // stole - two front bands

@@ -233,6 +233,8 @@ private:
         int segments = 5;
         f32 seg = 0.13f;
         f32 half_width = 0.22f;
+        f32 collide_r = 0.2f; // body collision-cylinder radius for this piece (tight for a back cape,
+                              // wide for a leg skirt) - keeps it OUT of the body so it drapes/rests on it
         bool inited = false;
         bool detached = false; // cut / blown off: the chains free-fall in world space, then despawn
         f32 detach_age = 0.0f; // seconds since detaching (lingers on the ground, then sinks + is removed)
