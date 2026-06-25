@@ -2159,7 +2159,7 @@ PropDef PropLibrary::build_arch_bridge() {
         const f32 d0 = deck_top(x0), d1 = deck_top(x1);
         const f32 s0 = soffit(x0), s1 = soffit(x1);
         const Vec3 axis{(x0 + x1) * 0.5f, (d0 + s0) * 0.5f, 0.0f};
-        add_quad(m, {x0, d0, -hw}, {x1, d1, -hw}, {x1, d1, hw}, {x0, d0, hw}, cobble); // roadway
+        add_quad(m, {x0, d0, hw}, {x1, d1, hw}, {x1, d1, -hw}, {x0, d0, -hw}, cobble); // roadway (CCW: normal up)
         for (f32 sz : {-1.0f, 1.0f}) { // the two spandrel faces (the visible arch)
             const f32 z = sz * hw;
             emit_tri(m, {x0, s0, z}, {x1, s1, z}, {x1, d1, z}, axis, stone);
@@ -2180,8 +2180,8 @@ PropDef PropLibrary::build_arch_bridge() {
                 emit_tri(m, {x0, d0, z + zo}, {x1, d1 + 0.56f, z + zo}, {x0, d0 + 0.56f, z + zo}, axis,
                          stone);
             }
-            add_quad(m, {x0, d0 + 0.56f, z - 0.14f}, {x1, d1 + 0.56f, z - 0.14f},
-                     {x1, d1 + 0.56f, z + 0.14f}, {x0, d0 + 0.56f, z + 0.14f}, dark); // parapet cap
+            add_quad(m, {x0, d0 + 0.56f, z + 0.14f}, {x1, d1 + 0.56f, z + 0.14f},
+                     {x1, d1 + 0.56f, z - 0.14f}, {x0, d0 + 0.56f, z - 0.14f}, dark); // parapet cap (CCW: normal up)
         }
     }
     def.parts.push_back({std::move(m), PropLayer::Opaque});
@@ -2619,8 +2619,8 @@ PropDef PropLibrary::build_stone_bridge() {
             // deck plank between prev and current (a sloped box)
             const f32 x0 = prev_x, x1 = x;
             const f32 y0 = prev_y, y1 = y;
-            add_quad(m, {x0, y0 + 0.5f, -hw}, {x1, y1 + 0.5f, -hw}, {x1, y1 + 0.5f, hw}, {x0, y0 + 0.5f, hw},
-                     stone); // deck top
+            add_quad(m, {x0, y0 + 0.5f, hw}, {x1, y1 + 0.5f, hw}, {x1, y1 + 0.5f, -hw}, {x0, y0 + 0.5f, -hw},
+                     stone); // deck top (CCW: normal up)
             add_box(m, {std::min(x0, x1), -0.1f, -hw}, {std::max(x0, x1), std::min(y0, y1) + 0.5f, hw},
                     stone * 0.96f); // deck body down to the water
             // parapets
