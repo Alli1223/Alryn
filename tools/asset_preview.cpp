@@ -14,10 +14,12 @@
 
 #include "support/OffscreenRenderer.h"
 
+#include <Alryn/Character/BodyMesh.h>
 #include <Alryn/Character/CharacterAnimator.h>
 #include <Alryn/Character/CharacterModel.h>
 #include <Alryn/Character/Equipment.h>
 #include <Alryn/Character/Outfit.h>
+#include <Alryn/Character/SkinnedMesh.h>
 #include <Alryn/Character/Weapon.h>
 #include <Alryn/Core/Log.h>
 #include <Alryn/Game/Roles.h>
@@ -212,21 +214,9 @@ Asset build_character(int role) {
     const MeshData capsule = primitives::capsule(18, 6, Vec3{1.0f});
     const MeshData rounded = primitives::rounded_box(0.32f, Vec3{1.0f});
 
-    CharacterAppearance app; // a plain face/body; the role-themed outfit goes on top
+    CharacterAppearance app; // a plain face/body; the skinned body is built from the bind skeleton
     const u32 seed = 1000u + static_cast<u32>(role);
     CharacterModel model = CharacterModel::create(seed, app);
-    // Equip a top-tier (master) outfit in a role-flavoured colour, to compare against the references.
-    static const u8 role_tint[kRoleCount] = {0, 2, 5, 3}; // Knight blue, Hunter green, Cleric white, Mage violet
-    // ALRYN_TIER (0..3) overrides the tier so the ragged -> master progression can be previewed.
-    u8 tier = 3;
-    if (const char* t = std::getenv("ALRYN_TIER")) {
-        tier = static_cast<u8>(glm::clamp(std::atoi(t), 0, 3));
-    }
-    Equipment eq;
-    eq.outfit_tier = tier;
-    eq.weapon_tier = tier;
-    eq.outfit_tint = role_tint[static_cast<usize>(role) % kRoleCount];
-    apply_outfit(model, outfit_kind_for_role(static_cast<u8>(role)), eq);
 
     // Pose: bind by default (arms at the sides). Set ALRYN_POSE=walk|swing|cast|block to drive the
     // animator mid-action and verify the locomotion + action BLEND (legs walk while the arms act).
@@ -252,25 +242,9 @@ Asset build_character(int role) {
         pose = anim.pose(model);
         root = anim.body_offset();
     }
-    const std::vector<Mat4> mats = model.bone_matrices(root, pose);
+    const std::vector<Mat4> jmats = model.joint_matrices(root, pose);
     const CharacterPalette& pal = model.palette();
     const std::vector<Bone>& bones = model.bones();
-
-    auto bone_color = [&](BoneColor c) -> Vec3 {
-        switch (c) {
-            case BoneColor::Skin: return pal.skin;
-            case BoneColor::Shirt: return pal.shirt;
-            case BoneColor::Pants: return pal.pants;
-            case BoneColor::Hair: return pal.hair;
-            case BoneColor::Eye: return pal.eye;
-            case BoneColor::Primary: return pal.primary;
-            case BoneColor::Accent: return pal.accent;
-            case BoneColor::Metal: return pal.metal;
-            case BoneColor::Dark: return pal.dark;
-            case BoneColor::Glow: return pal.glow * 1.7f; // brighten (no emissive pass in the preview)
-        }
-        return Vec3{1.0f};
-    };
 
     auto shape_for = [&](BoneShape s) -> const MeshData& {
         return s == BoneShape::Sphere       ? sphere
@@ -280,14 +254,28 @@ Asset build_character(int role) {
                                             : box;
     };
 
+    // The continuous skinned body: one mesh, vertices weighted to the bones, deformed by the posed
+    // joint frames (linear-blend skinning). Materials resolve to the character palette at skin time.
     Asset a;
-    for (usize i = 0; i < bones.size(); ++i) {
-        a.parts.push_back({bake(shape_for(bones[i].shape), mats[i], bone_color(bones[i].color)), Vec4{1.0f}});
+    {
+        const SkinnedMesh body = build_body_mesh(model);
+        auto body_palette = [&](u8 mat) -> Vec3 {
+            switch (static_cast<BodyMaterial>(mat)) {
+                case BodyMaterial::Skin: return pal.skin;
+                case BodyMaterial::Shirt: return pal.shirt;
+                case BodyMaterial::Pants: return pal.pants;
+                case BodyMaterial::Hair: return pal.hair;
+            }
+            return pal.skin;
+        };
+        MeshData md;
+        skin(body, jmats, md.vertices, body_palette);
+        md.indices = body.indices;
+        a.parts.push_back({std::move(md), Vec4{1.0f}});
     }
 
     // Weapon(s) in hand: the L-suffixed arm is the player's RIGHT (main hand), R-suffixed the left
     // (off hand). Bake the modular weapon pieces at those hand-joint frames.
-    const std::vector<Mat4> jmats = model.joint_matrices(root, pose);
     auto hand_frame = [&](BonePart arm) -> Mat4 {
         const int bi = model.bone_index(arm);
         if (bi < 0) {
