@@ -2,6 +2,7 @@
 
 #include <Alryn/Character/BodyMesh.h>
 #include <Alryn/Character/CharacterAnimator.h>
+#include <Alryn/Character/ClothRig.h>
 #include <Alryn/Character/CharacterModel.h>
 #include <Alryn/Character/Equipment.h>
 #include <Alryn/Character/Outfit.h>
@@ -158,6 +159,42 @@ TEST_CASE("BodyMesh: the action overlay deforms the skinned upper body (legs kee
     }
     CHECK(max_shift > 0.1f);  // the swing visibly deforms the skinned mesh (the arm sweeps up)
     CHECK(leg_shift < 0.02f); // the legs are untouched by the upper-body action (same walk phase)
+}
+
+TEST_CASE("ClothChain: hangs under gravity, blows in wind, and falls when detached") {
+    const f32 dt = 1.0f / 60.0f;
+    const Vec3 anchor{0.0f, 1.5f, 0.0f};
+    ClothChain c;
+    c.init(anchor, Vec3{0.0f, -1.0f, 0.0f}, 4, 0.12f, 0.2f);
+    REQUIRE(c.pos.size() == 5);
+
+    // Settle under gravity (no wind): it hangs straight down below the anchor.
+    for (int k = 0; k < 180; ++k) {
+        c.step(anchor, Vec3{0.0f}, 9.0f, dt);
+    }
+    CHECK(c.pos.front().y == doctest::Approx(anchor.y)); // node 0 stays pinned to the anchor
+    CHECK(c.pos.back().y < anchor.y - 0.3f);             // the hem hangs well below
+    CHECK(std::abs(c.pos.back().x) < 0.05f);             // roughly straight down
+
+    // A steady wind along +x blows the hem downwind.
+    for (int k = 0; k < 180; ++k) {
+        c.step(anchor, Vec3{9.0f, 0.0f, 0.0f}, 9.0f, dt);
+    }
+    CHECK(c.pos.back().x > 0.08f);
+
+    // Detached: node 0 is no longer pinned, so the whole chain free-falls.
+    c.detach();
+    CHECK_FALSE(c.attached);
+    for (int k = 0; k < 90; ++k) {
+        c.step(anchor, Vec3{0.0f}, 9.0f, dt);
+    }
+    CHECK(c.pos.front().y < anchor.y - 0.2f); // the anchor end has dropped
+
+    // The sheet mesh builds as valid double-sided geometry.
+    MeshData md;
+    build_cloth_mesh(c, Vec3{1.0f, 0.0f, 0.0f}, Vec3{0.4f, 0.3f, 0.6f}, md);
+    CHECK(md.vertices.size() > 0);
+    CHECK(md.indices.size() % 3 == 0);
 }
 
 TEST_CASE("Equipment: tiers grant a monotonic, buyable power bonus") {

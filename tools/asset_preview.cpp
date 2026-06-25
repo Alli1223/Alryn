@@ -17,6 +17,7 @@
 #include <Alryn/Character/BodyMesh.h>
 #include <Alryn/Character/CharacterAnimator.h>
 #include <Alryn/Character/CharacterModel.h>
+#include <Alryn/Character/ClothRig.h>
 #include <Alryn/Character/Equipment.h>
 #include <Alryn/Character/Outfit.h>
 #include <Alryn/Character/OutfitMesh.h>
@@ -239,9 +240,12 @@ Asset build_character(int role) {
     std::vector<Quat> pose;          // empty => bind pose
     Mat4 root{1.0f};
     bool idle_mode = false;
+    bool cloth_mode = false;
     if (const char* mode = std::getenv("ALRYN_POSE")) {
         const std::string m = mode;
-        if (m == "idle") {
+        if (m == "cloth") {
+            cloth_mode = true; // bind pose + a simulated cape settled under gravity + wind
+        } else if (m == "idle") {
             // The standing idle stance (mirrors ClientApp::apply_idle_stance): a staff/mace user (Cleric
             // role 2 / Mage role 3) rests on a planted weapon, the Hunter (role 1) lowers the bow.
             idle_mode = true;
@@ -393,6 +397,23 @@ Asset build_character(int role) {
         if (role_offhand(static_cast<u8>(role)) != WeaponType::None) {
             add_weapon(role_offhand(static_cast<u8>(role)), hand_frame(BonePart::LowerArmR));
         }
+    }
+
+    // A simulated cape hanging off the upper back, settled under gravity + a light wind (proves the
+    // cloth sim + sheet mesh; ALRYN_POSE=cloth).
+    if (cloth_mode) {
+        const int iH = model.bone_index(BonePart::Head);
+        const Vec3 neck = iH >= 0 ? Vec3{jmats[static_cast<usize>(iH)][3]} : Vec3{0.0f, 1.0f, 0.0f};
+        const Vec3 anchor = neck + Vec3{0.0f, -0.05f, -0.13f}; // upper back, just behind the neck
+        ClothChain cape;
+        cape.init(anchor, Vec3{0.0f, -1.0f, -0.18f}, 5, 0.13f, 0.22f);
+        const Vec3 wind{2.5f, 0.0f, -1.2f};
+        for (int k = 0; k < 150; ++k) {
+            cape.step(anchor, wind, 9.0f, 1.0f / 60.0f);
+        }
+        MeshData cm;
+        build_cloth_mesh(cape, Vec3{1.0f, 0.0f, 0.0f}, pal.primary, cm);
+        a.parts.push_back({std::move(cm), Vec4{1.0f}});
     }
     return a;
 }
