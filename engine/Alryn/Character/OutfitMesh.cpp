@@ -61,9 +61,11 @@ void clad_torso(SkinnedMesh& sm, const Rig& r, f32 rscale, f32 squashz, BodyMate
     }
     const Vec3 pelvis = r.jp(BonePart::Pelvis), neck = r.jp(BonePart::Head);
     const f32 tw = 0.22f * rscale;
+    // Radii: even hip + waist, the widest point lifted to the CHEST (not a belly bulge), tapering to the
+    // shoulders - so the torso reads as a chest over a waist rather than a barrel.
     tube(sm,
          {pelvis - Vec3{0, 0.02f, 0}, glm::mix(pelvis, neck, 0.36f), glm::mix(pelvis, neck, 0.72f), neck},
-         {tw * 1.04f, tw * 1.12f, tw, tw * 0.84f},
+         {tw, tw * 0.99f, tw * 1.08f, tw * 0.86f},
          {{{iP, 1.0f}}, {{iP, 0.5f}, {iT, 0.5f}}, {{iT, 1.0f}}, {{iT, 0.82f}, {iH, 0.18f}}},
          mat, true, false, squashz);
 }

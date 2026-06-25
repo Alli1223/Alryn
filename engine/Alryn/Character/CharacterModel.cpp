@@ -63,7 +63,7 @@ void CharacterModel::add_features(CharacterModel& m, const CharacterAppearance& 
         const f32 fz = c.z + r * 0.97f;       // front surface
         const f32 ey = c.y + r * 0.1f;        // a touch above centre
         f32 ex = r * 0.36f;                   // horizontal spacing
-        Vec3 size{hs * 0.1f, hs * 0.11f, hs * 0.07f}; // small, understated
+        Vec3 size{hs * 0.12f, hs * 0.13f, hs * 0.08f}; // small + understated, but reads clearly
         BoneShape shape = BoneShape::Sphere;
         switch (app.eyes) {
             case EyeStyle::Round: break;
@@ -117,24 +117,30 @@ void CharacterModel::add_features(CharacterModel& m, const CharacterAppearance& 
         case HairStyle::Bald:
             break;
         case HairStyle::Short:
-            add(Vec3{c.x, c.y + r * 0.74f, c.z}, Vec3{hs * 1.04f, hs * 0.42f, hs * 1.04f},
-                BoneColor::Hair, BoneShape::RoundedBox);
+            add(Vec3{c.x, c.y + r * 0.74f, c.z}, Vec3{hs * 1.06f, hs * 0.46f, hs * 1.06f},
+                BoneColor::Hair, BoneShape::RoundedBox); // crown cap
+            add(Vec3{c.x, c.y + r * 0.34f, c.z + r * 0.78f}, Vec3{hs * 0.96f, hs * 0.26f, hs * 0.34f},
+                BoneColor::Hair, BoneShape::Box); // a swept fringe over the forehead
             break;
         case HairStyle::Spiky:
-            add(Vec3{c.x, c.y + r * 0.76f, c.z}, Vec3{hs * 1.02f, hs * 0.42f, hs * 1.02f},
-                BoneColor::Hair, BoneShape::RoundedBox);
-            add(Vec3{c.x, c.y + r * 1.2f, c.z}, Vec3{hs * 0.55f, hs * 0.7f, hs * 0.55f},
-                BoneColor::Hair, BoneShape::Sphere);
+            add(Vec3{c.x, c.y + r * 0.74f, c.z}, Vec3{hs * 1.04f, hs * 0.42f, hs * 1.04f},
+                BoneColor::Hair, BoneShape::RoundedBox); // base
+            for (f32 sx : {-0.42f, 0.0f, 0.42f}) { // a row of angular spikes (not one soft blob)
+                add(Vec3{c.x + sx * r, c.y + r * 1.12f, c.z}, Vec3{hs * 0.3f, hs * 0.62f, hs * 0.3f},
+                    BoneColor::Hair, BoneShape::Box);
+            }
             break;
         case HairStyle::Mohawk:
-            add(Vec3{c.x, c.y + r * 1.0f, c.z}, Vec3{hs * 0.18f, hs * 0.6f, hs * 1.0f},
-                BoneColor::Hair, BoneShape::RoundedBox);
+            add(Vec3{c.x, c.y + r * 1.0f, c.z}, Vec3{hs * 0.2f, hs * 0.64f, hs * 1.04f}, BoneColor::Hair,
+                BoneShape::Box); // angular crest
             break;
         case HairStyle::Ponytail:
-            add(Vec3{c.x, c.y + r * 0.74f, c.z}, Vec3{hs * 1.04f, hs * 0.42f, hs * 1.04f},
-                BoneColor::Hair, BoneShape::RoundedBox);
-            add(Vec3{c.x, c.y + r * 0.2f, c.z - r * 0.95f}, Vec3{hs * 0.34f, hs * 0.7f, hs * 0.34f},
-                BoneColor::Hair, BoneShape::Cylinder);
+            add(Vec3{c.x, c.y + r * 0.74f, c.z}, Vec3{hs * 1.06f, hs * 0.44f, hs * 1.06f},
+                BoneColor::Hair, BoneShape::RoundedBox); // crown
+            add(Vec3{c.x, c.y + r * 0.34f, c.z + r * 0.78f}, Vec3{hs * 0.92f, hs * 0.24f, hs * 0.32f},
+                BoneColor::Hair, BoneShape::Box); // fringe
+            add(Vec3{c.x, c.y + r * 0.2f, c.z - r * 0.95f}, Vec3{hs * 0.36f, hs * 0.74f, hs * 0.36f},
+                BoneColor::Hair, BoneShape::Cylinder); // tail
             break;
     }
 }
