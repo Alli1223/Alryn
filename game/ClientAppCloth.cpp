@@ -23,7 +23,7 @@ void ClientApp::setup_cloth(PlayerVisual& v, PlayerRole role, const Equipment& e
         c.segments = segs;
         c.seg = seg;
         c.half_width = width;
-        c.collide_r = 0.15f; // a flat cape/tabard rests close against the torso
+        c.collide_r = 0.3f; // rest on the body+outfit surface (measured ~0.27-0.3 at the torso)
         c.color = color;
         c.side_local = side;
         c.anchor_locals = {anchor_local};
@@ -35,9 +35,9 @@ void ClientApp::setup_cloth(PlayerVisual& v, PlayerRole role, const Equipment& e
         v.cloth.push_back(std::move(c));
     };
     auto add_cape = [&](const Vec3& color, f32 width, f32 wind_gain) {
-        // Anchor at the NECK (a touch up + back, so the collar clears the pauldrons + reads as a neck
-        // cape), hanging mostly straight DOWN so the body collision rests it against the back.
-        add_sheet(BonePart::Head, Vec3{0.0f, 0.05f, -0.14f}, Vec3{0.0f, -1.0f, -0.1f},
+        // Anchor at the NECK, set BEHIND the body's back surface (z ~ -0.27) so the cape starts outside
+        // the body, then hangs down + back; the body collision then rests it against the back.
+        add_sheet(BonePart::Head, Vec3{0.0f, 0.06f, -0.28f}, Vec3{0.0f, -1.0f, -0.18f},
                   Vec3{1.0f, 0.0f, 0.0f}, 6, 0.12f, width, color, wind_gain);
     };
 
@@ -48,7 +48,7 @@ void ClientApp::setup_cloth(PlayerVisual& v, PlayerRole role, const Equipment& e
         c.ring = true;
         c.segments = segs;
         c.seg = seg;
-        c.collide_r = 0.2f; // a skirt wraps the full leg cluster
+        c.collide_r = 0.28f; // a skirt wraps just outside the leg+outfit cluster (~0.25-0.27)
         c.color = color;
         constexpr int kN = 8; // panels around the waist
         c.chains.resize(kN);
@@ -93,8 +93,8 @@ void ClientApp::setup_cloth(PlayerVisual& v, PlayerRole role, const Equipment& e
         }
     }
     if (role == PlayerRole::Hunter && vt == 1) {
-        // Warden's shoulder mantle: a short, wide cape off the upper back.
-        add_sheet(BonePart::Head, Vec3{0.0f, -0.02f, -0.12f}, Vec3{0.0f, -1.0f, -0.32f}, X, 3, 0.1f,
+        // Warden's shoulder mantle: a short, wide cape off the upper back, anchored behind the back.
+        add_sheet(BonePart::Head, Vec3{0.0f, -0.02f, -0.26f}, Vec3{0.0f, -1.0f, -0.32f}, X, 3, 0.1f,
                   0.28f, pal.dark, 1.3f);
     }
 }
@@ -156,14 +156,12 @@ void ClientApp::draw_cloth(PlayerVisual& v, const Mat4& root, const std::vector<
     // uses its own radius (tight for a back cape against the torso, wide for a skirt around the legs).
     const Vec3 feet = Vec3{root[3]};
     const f32 body_top = feet.y + 1.25f; // up to the neck, so a cape rests on the upper back too
-    // `r_top` is the radius at the torso; it widens toward the legs so a cape rests tight on the back
-    // yet still clears the wider leg cluster lower down.
-    auto collide = [&](Vec3& p, f32 r_top) {
+    // Push cloth nodes OUT to radius `r` around the body axis. `r` must be >= the body+outfit surface
+    // (measured ~0.27 at the back, ~0.25 at the legs) so cloth rests ON the body, never inside it.
+    auto collide = [&](Vec3& p, f32 r) {
         if (p.y < feet.y - 0.05f || p.y > body_top) {
             return;
         }
-        const f32 t = glm::clamp((p.y - feet.y) / (body_top - feet.y), 0.0f, 1.0f); // 0 feet .. 1 neck
-        const f32 r = glm::mix(0.21f, r_top, glm::smoothstep(0.32f, 0.62f, t)); // legs wide, torso tight
         const f32 dx = p.x - feet.x, dz = p.z - feet.z;
         const f32 d2 = dx * dx + dz * dz;
         if (d2 < r * r && d2 > 1e-6f) {

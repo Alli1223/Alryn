@@ -402,18 +402,31 @@ Asset build_character(int role) {
     // Simulated cloth (cape sheet + robe-skirt tube) settled under gravity + a light wind - proves the
     // sim + meshes (ALRYN_POSE=cloth). Mirrors ClientApp::setup_cloth's pieces.
     if (cloth_mode) {
+        if (std::getenv("ALRYN_MEASURE") != nullptr) {
+            f32 r_torso = 0.0f, r_leg = 0.0f, z_back = 0.0f;
+            for (const AssetPart& p : a.parts) {
+                for (const Vertex& vv : p.mesh.vertices) {
+                    const f32 r = std::sqrt(vv.position.x * vv.position.x + vv.position.z * vv.position.z);
+                    if (vv.position.y > 0.85f && vv.position.y < 1.1f) {
+                        r_torso = std::max(r_torso, r);
+                        if (std::abs(vv.position.x) < 0.05f) z_back = std::min(z_back, vv.position.z);
+                    }
+                    if (vv.position.y > 0.25f && vv.position.y < 0.5f) r_leg = std::max(r_leg, r);
+                }
+            }
+            std::printf("body+outfit: torso r=%.3f  legs r=%.3f  back z=%.3f\n", r_torso, r_leg, z_back);
+        }
         const Vec3 wind{2.2f, 0.0f, -1.0f};
         const int iH = model.bone_index(BonePart::Head), iT = model.bone_index(BonePart::Torso);
         const Vec3 neck = iH >= 0 ? Vec3{jmats[static_cast<usize>(iH)][3]} : Vec3{0.0f, 1.0f, 0.0f};
         const Vec3 torso = iT >= 0 ? Vec3{jmats[static_cast<usize>(iT)][3]} : Vec3{0.0f, 0.6f, 0.0f};
         const bool cut = std::getenv("ALRYN_CUT") != nullptr;
-        // Body collision (taper: wide at the legs, tight at the torso) so a cape rests on the back.
-        auto collide_body = [&](ClothChain& s, f32 r_top) {
+        // Body collision: push nodes out to radius `r` (>= body+outfit surface ~0.27-0.3) so cloth
+        // rests ON the body instead of inside it. Mirrors ClientApp::draw_cloth.
+        auto collide_body = [&](ClothChain& s, f32 r) {
             for (usize n = 1; n < s.pos.size(); ++n) {
                 for (Vec3* pp : {&s.pos[n], &s.prev[n]}) {
                     if (pp->y < 0.0f || pp->y > 1.25f) continue;
-                    const f32 t = glm::clamp(pp->y / 1.25f, 0.0f, 1.0f);
-                    const f32 r = glm::mix(0.21f, r_top, glm::smoothstep(0.32f, 0.62f, t));
                     const f32 d2 = pp->x * pp->x + pp->z * pp->z;
                     if (d2 < r * r && d2 > 1e-6f) {
                         const f32 d = std::sqrt(d2);
@@ -429,7 +442,7 @@ Asset build_character(int role) {
             s.init(anchor, hang, segs, seg, width);
             for (int k = 0; k < 160; ++k) {
                 s.step(anchor, wind, 9.0f, 1.0f / 60.0f);
-                collide_body(s, 0.15f);
+                collide_body(s, 0.3f);
             }
             if (cut) {
                 s.detach();
@@ -442,7 +455,7 @@ Asset build_character(int role) {
         };
         // Cape on cape-wearing roles (anchored at the neck); + the minor pieces (cleric stole / mantle).
         if (role == 0 || role == 2 || role == 1) {
-            make_sheet(neck + Vec3{0.0f, 0.05f, -0.14f}, Vec3{0.0f, -1.0f, -0.1f}, 6, 0.12f, 0.24f,
+            make_sheet(neck + Vec3{0.0f, 0.06f, -0.28f}, Vec3{0.0f, -1.0f, -0.18f}, 6, 0.12f, 0.24f,
                        role == 1 ? pal.dark : pal.primary);
         }
         if (role == 2) { // stole - two front bands
@@ -451,7 +464,7 @@ Asset build_character(int role) {
             }
         }
         if (role == 1) { // warden's short shoulder mantle
-            make_sheet(neck + Vec3{0.0f, -0.02f, -0.12f}, Vec3{0.0f, -1.0f, -0.32f}, 3, 0.1f, 0.28f, pal.dark);
+            make_sheet(neck + Vec3{0.0f, -0.02f, -0.26f}, Vec3{0.0f, -1.0f, -0.32f}, 3, 0.1f, 0.28f, pal.dark);
         }
         // A flowing lower garment (ring tube) on EVERY role: robe (Mage/Cleric), surcoat (Knight),
         // tunic skirt (Hunter).
@@ -475,10 +488,10 @@ Asset build_character(int role) {
             auto collide = [&](Vec3& p) {
                 if (p.y < 0.0f || p.y > hip.y + 0.35f) return;
                 const f32 dx = p.x - hip.x, dz = p.z - hip.z, d2 = dx * dx + dz * dz;
-                if (d2 < 0.04f && d2 > 1e-6f) {
+                if (d2 < 0.28f * 0.28f && d2 > 1e-6f) {
                     const f32 d = std::sqrt(d2);
-                    p.x = hip.x + dx / d * 0.2f;
-                    p.z = hip.z + dz / d * 0.2f;
+                    p.x = hip.x + dx / d * 0.28f;
+                    p.z = hip.z + dz / d * 0.28f;
                 }
             };
             for (int k = 0; k < 160; ++k) {
