@@ -60,6 +60,13 @@ inline constexpr f32 near_plane = 0.5f;
 inline constexpr f32 far_plane = 400.0f;
 } // namespace cam
 
+namespace character {
+// Beyond this distance from the camera a character isn't CPU-skinned / uploaded / drawn (the renderer
+// would frustum-cull the draw anyway, but we'd still pay to skin it). Generous so anything that could
+// be on-screen even at max zoom-out always skins - this only spares a big town's far-flung NPCs.
+inline constexpr f32 skin_cull_dist = 100.0f;
+} // namespace character
+
 // Day/night cycle defaults (overridable via ALRYN_TIME / ALRYN_DAY_SECONDS).
 namespace daynight {
 inline constexpr f32 start_time = 0.35f;          // 0=midnight, 0.25=sunrise, 0.5=noon

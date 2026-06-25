@@ -134,6 +134,11 @@ void ClientApp::skin_and_draw(const CharacterModel& model, const SkinnedMesh& sr
     if (src.vertices.empty()) {
         return;
     }
+    // Distance cull: don't pay to CPU-skin + upload a character that's far outside the view. Generous
+    // (cam-distance based) so anything on-screen always skins; this only spares far-flung town NPCs.
+    if (glm::distance(Vec3{root[3]}, camera_.position()) > character::skin_cull_dist) {
+        return;
+    }
     const CharacterPalette& pal = model.palette();
     auto palette = [&](u8 mat) -> Vec3 { return body_material_color(pal, static_cast<BodyMaterial>(mat)); };
     // Skin in LOCAL space (pose only, no root) so the mesh's bind-pose bounding sphere * root gives a
