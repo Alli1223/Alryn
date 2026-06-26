@@ -2047,14 +2047,51 @@ PropDef PropLibrary::build_path_tile() {
 PropDef PropLibrary::build_planter() {
     PropDef def;
     def.name = "planter";
-    const Vec3 pot{0.46f, 0.36f, 0.28f};
-    const Vec3 soil{0.20f, 0.14f, 0.10f};
+    const Vec3 wood{0.44f, 0.30f, 0.17f};
+    const Vec3 band{0.20f, 0.17f, 0.14f};
+    const Vec3 soil{0.18f, 0.13f, 0.09f};
     MeshData op;
-    add_box(op, {-0.4f, 0.0f, -0.4f}, {0.4f, 0.5f, 0.4f}, pot);       // pot body
-    add_box(op, {-0.45f, 0.5f, -0.45f}, {0.45f, 0.6f, 0.45f}, pot * 1.1f); // rim
-    add_box(op, {-0.34f, 0.45f, -0.34f}, {0.34f, 0.52f, 0.34f}, soil);     // soil
+    // A round, tapered wooden tub (octagonal, narrower at the base) with iron-band hoops, a rim lip
+    // and soil - a proper barrel-planter, not a square box.
+    constexpr int sides = 8;
+    constexpr f32 rb = 0.30f, rt = 0.42f, h = 0.56f;
+    const Vec3 axis{0.0f, h * 0.5f, 0.0f};
+    auto pt = [](f32 r, f32 y, f32 a) { return Vec3{std::cos(a) * r, y, std::sin(a) * r}; };
+    auto ang = [](int s) { return TwoPi * (static_cast<f32>(s) + 0.5f) / static_cast<f32>(sides); };
+    // tapered stave walls (per-stave shade)
+    for (int s = 0; s < sides; ++s) {
+        const f32 a0 = ang(s), a1 = ang(s + 1);
+        const Vec3 b0 = pt(rb, 0.0f, a0), b1 = pt(rb, 0.0f, a1), t0 = pt(rt, h, a0), t1 = pt(rt, h, a1);
+        const Vec3 c = wood * (0.86f + 0.22f * hashf(static_cast<u32>(s) * 5u + 1u));
+        emit_tri(op, b0, b1, t1, axis, c);
+        emit_tri(op, b0, t1, t0, axis, c);
+    }
+    // two iron-band hoops + a lighter rim lip, each a short proud octagonal ring
+    auto ring_band = [&](f32 y0, f32 y1, f32 r, const Vec3& col) {
+        for (int s = 0; s < sides; ++s) {
+            const f32 a0 = ang(s), a1 = ang(s + 1);
+            emit_tri(op, pt(r, y0, a0), pt(r, y0, a1), pt(r, y1, a1), axis, col);
+            emit_tri(op, pt(r, y0, a0), pt(r, y1, a1), pt(r, y1, a0), axis, col);
+        }
+    };
+    ring_band(0.09f, 0.16f, rb + (rt - rb) * 0.16f + 0.02f, band); // lower hoop
+    ring_band(0.40f, 0.47f, rb + (rt - rb) * 0.78f + 0.02f, band); // upper hoop
+    ring_band(h - 0.02f, h + 0.06f, rt + 0.03f, wood * 1.12f);     // rim lip
+    // soil disc filling the top (a triangle fan, facing up)
+    const Vec3 below{0.0f, -1.0f, 0.0f};
+    const f32 sy = h - 0.02f;
+    for (int s = 0; s < sides; ++s) {
+        emit_tri(op, Vec3{0.0f, sy, 0.0f}, pt(rt - 0.05f, sy, ang(s)), pt(rt - 0.05f, sy, ang(s + 1)),
+                 below, soil);
+    }
     def.parts.push_back({std::move(op), PropLayer::Opaque});
-    def.parts.push_back({primitives::bush(0, Vec3{0.26f, 0.46f, 0.22f}), PropLayer::Foliage});
+    // A compact plant sitting IN the pot (shrunk + raised onto the soil) so the tub shows.
+    MeshData fol = primitives::bush(0, Vec3{0.26f, 0.46f, 0.22f});
+    for (Vertex& v : fol.vertices) {
+        v.position *= 0.60f;
+        v.position.y += 0.50f;
+    }
+    def.parts.push_back({std::move(fol), PropLayer::Foliage});
     BoxCollider c;
     c.half_extents = Vec2{0.42f, 0.42f};
     c.height = 0.6f;
