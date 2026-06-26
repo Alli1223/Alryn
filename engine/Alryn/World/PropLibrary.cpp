@@ -2510,6 +2510,24 @@ PropDef PropLibrary::build_glow_shroom(int variant) {
         v *= 0x2545F491u;
         return static_cast<f32>((v >> 9) & 0xFFFFu) / 65536.0f;
     };
+    // A domed, 8-sided mushroom cap (a lower flare band + a top cone to the apex) - reads as a
+    // toadstool cap, not a box. emit_tri orients each face's normal away from the cap centre.
+    auto glow_cap = [](MeshData& dst, f32 cx, f32 cz, f32 base_y, f32 r, f32 h, const Vec3& col) {
+        constexpr int sides = 8;
+        const Vec3 ctr{cx, base_y + h * 0.45f, cz};
+        const Vec3 apex{cx, base_y + h, cz};
+        const f32 r1 = r * 0.62f, y1 = base_y + h * 0.62f;
+        for (int s = 0; s < sides; ++s) {
+            const f32 a0 = TwoPi * static_cast<f32>(s) / sides, a1 = TwoPi * static_cast<f32>(s + 1) / sides;
+            const Vec3 b0{cx + std::cos(a0) * r, base_y, cz + std::sin(a0) * r};
+            const Vec3 b1{cx + std::cos(a1) * r, base_y, cz + std::sin(a1) * r};
+            const Vec3 m0{cx + std::cos(a0) * r1, y1, cz + std::sin(a0) * r1};
+            const Vec3 m1{cx + std::cos(a1) * r1, y1, cz + std::sin(a1) * r1};
+            emit_tri(dst, b0, b1, m1, ctr, col); // lower flare band (two facets)
+            emit_tri(dst, b0, m1, m0, ctr, col);
+            emit_tri(dst, m0, m1, apex, ctr, col); // top cone to the apex
+        }
+    };
     const int n = 3 + static_cast<int>(rnd(1) * 3.0f);
     for (int i = 0; i < n; ++i) {
         const f32 ang = TwoPi * (static_cast<f32>(i) / static_cast<f32>(n)) + rnd(i * 5 + 2);
@@ -2518,9 +2536,8 @@ PropDef PropLibrary::build_glow_shroom(int variant) {
         const f32 sc = (i == 0 ? 1.0f : 0.55f + rnd(i * 5 + 4) * 0.5f);
         const f32 sh = 0.32f * sc, cr = 0.2f * sc;
         add_box(op, {cxx - 0.05f * sc, 0.0f, czz - 0.05f * sc}, {cxx + 0.05f * sc, sh, czz + 0.05f * sc}, stem);
-        // glowing cap (emissive) - a little domed disc
-        add_box(em, {cxx - cr, sh, czz - cr}, {cxx + cr, sh + 0.1f * sc, czz + cr}, glow);
-        add_box(em, {cxx - cr * 0.6f, sh + 0.08f * sc, czz - cr * 0.6f}, {cxx + cr * 0.6f, sh + 0.16f * sc, czz + cr * 0.6f}, glow * 1.1f);
+        // glowing DOMED cap (emissive toadstool, not a box)
+        glow_cap(em, cxx, czz, sh, cr, 0.22f * sc, glow);
         // a faint underglow disc just above the ground
         add_box(em, {cxx - cr * 1.3f, 0.01f, czz - cr * 1.3f}, {cxx + cr * 1.3f, 0.04f, czz + cr * 1.3f}, glow * 0.5f);
     }
