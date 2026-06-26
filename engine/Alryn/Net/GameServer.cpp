@@ -179,7 +179,28 @@ void GameServer::tick(Timestep dt) {
             continue; // riding/driving the wagon - position is set by the contract update
         }
         Vec3 move = player.input.move;
-        if (id == tower_ && contract_phase_ == ContractPhase::Active) {
+        // DODGE ROLL: a quick burst in a locked direction with i-frames (take_damage evades while
+        // roll_timer > 0). Overrides walking / hauling for its brief duration.
+        if (player.roll_cd > 0.0f) {
+            player.roll_cd -= dt.seconds;
+        }
+        bool rolling = false;
+        if (player.roll_timer > 0.0f) {
+            player.roll_timer -= dt.seconds;
+            rolling = true;
+        } else if (player.input.dodge && player.roll_cd <= 0.0f) {
+            Vec3 d{player.input.move.x, 0.0f, player.input.move.z};
+            if (glm::length(d) < 0.1f) {
+                d = Vec3{std::cos(player.input.yaw), 0.0f, std::sin(player.input.yaw)}; // roll where you face
+            }
+            player.roll_dir = glm::normalize(d);
+            player.roll_timer = kRollDuration;
+            player.roll_cd = kRollCooldown;
+            rolling = true;
+        }
+        if (rolling) {
+            move = player.roll_dir * kRollBoost; // fast burst, overrides walking / hauling
+        } else if (id == tower_ && contract_phase_ == ContractPhase::Active) {
             // Hauling a cart is heavy work: slow the puller by the cart's size + damage, and by how
             // laden the bed is (a full load drags; it lightens + quickens as cargo spills).
             const f32 hf = active_.health / kWagonHealth;
@@ -240,7 +261,10 @@ void GameServer::tick(Timestep dt) {
         const f32 yaw = seated ? active_.yaw : player.input.yaw; // seated -> face the vehicle
         // Body action for the animation layer: blocking (held) wins, else a swing while the
         // attack input is held (the client sends it for one frame per click).
-        const u8 action = player.input.block ? 2u : (player.input.attack ? 1u : 0u);
+        const u8 action = player.roll_timer > 0.0f ? 3u // dodge roll -> client plays it + a dust puff
+                          : player.input.block      ? 2u
+                          : player.input.attack     ? 1u
+                                                    : 0u;
         const u8 shield = static_cast<u8>(
             glm::clamp(player.shield_hp / kAegisAmount, 0.0f, 1.0f) * 255.0f);
         const u8 buffs = static_cast<u8>((player.damage_boost_timer > 0.0f ? 1u : 0u) |

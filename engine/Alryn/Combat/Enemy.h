@@ -35,6 +35,12 @@ inline constexpr f32 kMeleeDamage = 34.0f;      // per swing
 inline constexpr f32 kMeleeConeCos = 0.35f;     // ~69° half-cone in front
 inline constexpr f32 kThrowDamage = 28.0f;      // a thrown rock hitting an enemy
 
+// Dodge roll: a quick burst in the move/facing direction with brief invulnerability (i-frames), so a
+// player can roll out of a telegraphed hit (e.g. the brute slam). Server-authoritative.
+inline constexpr f32 kRollDuration = 0.4f; // roll + i-frame window (seconds)
+inline constexpr f32 kRollBoost = 1.9f;    // x the player's walk speed during the roll
+inline constexpr f32 kRollCooldown = 1.2f; // recovery before the next roll
+
 // A server-simulated hostile NPC. It marches toward `home` (the town plaza it is
 // attacking), chases and strikes players that come near, and dies when its health
 // runs out. Only id/position/yaw/kind/health are networked; the rest is server

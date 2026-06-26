@@ -815,6 +815,7 @@ private:
     bool pending_fire_ = false;
     bool pending_attack_ = false;
     bool pending_build_ = false;
+    bool pending_dodge_ = false;       // dodge-roll this tick (Shift)
     bool pending_local_swing_ = false; // play our own swing animation this frame (left-click)
     bool blocking_ = false;            // Knight holding the shield up (right mouse held)
     bool pending_rally_ = false;

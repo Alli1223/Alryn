@@ -39,6 +39,9 @@ public:
         f32 max_health = kPlayerMaxHealth; // from the role; health is clamped to this
         f32 health = kPlayerMaxHealth;
         f32 since_hit = kPlayerRegenDelay;    // seconds since last damaged (regen gate)
+        f32 roll_timer = 0.0f;                // dodge roll: while > 0 the player is rolling (i-frames)
+        f32 roll_cd = 0.0f;                   // seconds until the next dodge roll is available
+        Vec3 roll_dir{0.0f};                  // locked roll direction (set when the roll begins)
         f32 melee_cd = 0.0f;                  // seconds until the next melee swing can land
         f32 ability_cd[kAbilityCount] = {}; // per-ability cooldown timers (indexed by ability)
         f32 bulwark_timer = 0.0f;             // Knight: extra damage reduction while > 0
@@ -73,6 +76,9 @@ public:
         // Apply `raw` incoming damage: mitigate it, then soak it into the Aegis shield first and
         // spill the rest onto health. Resets the regen gate.
         void take_damage(f32 raw) {
+            if (roll_timer > 0.0f) {
+                return; // i-frames: a dodge roll evades the hit entirely
+            }
             f32 d = mitigated(raw);
             if (shield_hp > 0.0f) {
                 const f32 absorbed = std::min(shield_hp, d);

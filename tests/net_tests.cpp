@@ -36,6 +36,7 @@ TEST_CASE("Net: message serialization round-trips") {
     input.ability = 2; // casting ability slot 2 (key 2)
     input.spell = static_cast<u8>(SpellId::RockWall); // a queued Mage combo spell
     input.block = true;
+    input.dodge = true;
     input.appearance = CharacterAppearance{3, 5, EyeStyle::Sleepy, EarStyle::Pointed,
                                            HairStyle::Ponytail};
     input.equipment = Equipment{2, 1, 4, 1}; // outfit tier 2, weapon tier 1, tint 4, weapon 1
@@ -65,6 +66,7 @@ TEST_CASE("Net: message serialization round-trips") {
     CHECK(out.ability == 2);
     CHECK(out.spell == static_cast<u8>(SpellId::RockWall));
     CHECK(out.block);
+    CHECK(out.dodge);
     CHECK(out.appearance == input.appearance); // cosmetics survive the round-trip
     CHECK(out.equipment == input.equipment);   // gear loadout survives the round-trip
     CHECK(out.buy_rig == 2);                   // wagon-rig purchase request survives
@@ -221,6 +223,19 @@ TEST_CASE("Net: message serialization round-trips") {
     PlayerInput partial;
     read(truncated, partial);
     CHECK_FALSE(truncated.ok());
+}
+
+TEST_CASE("GameServer: a dodge roll grants i-frames (no damage while rolling)") {
+    GameServer::ServerPlayer p;
+    p.role = PlayerRole::Knight;
+    p.health = 100.0f;
+    p.roll_timer = 0.3f; // mid dodge roll
+    p.take_damage(50.0f);
+    CHECK(p.health == doctest::Approx(100.0f)); // i-frames: the hit is evaded entirely
+    // Once the roll ends, the same hit lands (mitigated by the role's armour).
+    p.roll_timer = 0.0f;
+    p.take_damage(50.0f);
+    CHECK(p.health < 100.0f);
 }
 
 // Drives a real ENet client + server over localhost through the whole pipeline:

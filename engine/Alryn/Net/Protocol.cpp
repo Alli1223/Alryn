@@ -50,6 +50,7 @@ void write(ByteWriter& w, const PlayerInput& in) {
     w.write_u8(in.ability);
     w.write_u8(in.spell);
     w.write_u8(in.block ? 1 : 0);
+    w.write_u8(in.dodge ? 1 : 0);
     write_appearance(w, in.appearance);
     write_equipment(w, in.equipment);
     w.write_u8(in.buy);
@@ -79,6 +80,7 @@ bool read(ByteReader& r, PlayerInput& in) {
     in.ability = r.read_u8();
     in.spell = r.read_u8();
     in.block = r.read_u8() != 0;
+    in.dodge = r.read_u8() != 0;
     read_appearance(r, in.appearance);
     read_equipment(r, in.equipment);
     in.buy = r.read_u8();

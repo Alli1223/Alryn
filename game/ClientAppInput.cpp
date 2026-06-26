@@ -299,6 +299,8 @@ void ClientApp::on_event(Event& event) {
             escape_pressed(); // opens the pause menu
         } else if (e.key() == key::F) {
             pending_fire_ = true; // throw a rock toward the cursor
+        } else if (key::is_shift(e.key()) && !e.is_repeat()) {
+            pending_dodge_ = true; // dodge roll (a quick burst + brief i-frames)
         } else if (e.key() == key::E) {
             pending_grab_ = true; // hitch / unhitch the nearest wagon (manual haul)
         } else if (e.key() == key::H) {
@@ -365,6 +367,7 @@ void ClientApp::send_input() {
     packet.add = pending_add_;
     packet.fire = pending_fire_;
     packet.attack = pending_attack_;
+    packet.dodge = pending_dodge_;
     packet.build = pending_build_;
     packet.rally = pending_rally_;
     packet.grab = pending_grab_;
@@ -402,6 +405,7 @@ void ClientApp::send_input() {
     pending_add_ = false;
     pending_fire_ = false;
     pending_attack_ = false;
+    pending_dodge_ = false;
     pending_build_ = false;
     pending_rally_ = false;
     pending_grab_ = false;

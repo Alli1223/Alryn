@@ -745,6 +745,11 @@ void ClientApp::update_visuals(Timestep dt) {
         } else if (p.action == 1 && v.last_action != 1) {
             attack_anim(); // rising edge of a remote attack
         }
+        // Dodge roll: kick up a dust puff at the feet on the rising edge (local + remote).
+        if (p.action == 3 && v.last_action != 3) {
+            emit_burst(p.position + Vec3{0.0f, 0.12f, 0.0f}, Vec4{0.74f, 0.69f, 0.58f, 0.65f}, 12,
+                       2.4f, 0.45f, 0.14f, 1, 0.5f, 3.5f);
+        }
         v.last_action = p.action;
         v.animator.update(v.speed, dt);
     }

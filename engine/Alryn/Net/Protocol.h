@@ -45,6 +45,7 @@ struct PlayerInput {
     u8 ability = 0;      // ability invoked this tick: 0 = none, 1/2/3 = slot+1 (keys 1/2/3)
     u8 spell = 0;        // Mage combo spell cast this tick (SpellId; 0 = none) - resolved client-side
     bool block = false;  // holding the shield up (Knight, right mouse) - guard + block pose
+    bool dodge = false;  // dodge-roll this tick (Shift): a quick burst in the move/facing dir + i-frames
     CharacterAppearance appearance; // the player's chosen look (sent each tick)
     Equipment equipment;            // the player's worn gear loadout (server clamps earned tiers)
     u8 buy = 0;                     // shop: the gear tier the player is trying to OWN (0 = no request;
