@@ -576,7 +576,10 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
     }
     const VehicleType& vt = vehicle_type(w.type);
     const f32 hitch = vt.horse_drawn() ? vt.reach() + 1.8f : kHitchDist;
-    const f32 dmg = damage_speed_factor(w.health / kWagonHealth); // a battered cart moves slower
+    // A battered cart moves slower, and a fully-laden one is heavy (lightens as cargo spills). For a
+    // player hauling by hand this is applied to their walk speed instead (GameServer step loop).
+    const f32 dmg = damage_speed_factor(w.health / kWagonHealth) *
+                    load_speed_factor(static_cast<u32>(cargo_.size()), w.goods_total);
 
     // Walks a puller (horse or teamster) toward the next route waypoint, A*-routing around
     // obstacles so it never snags. It targets sparse, string-pulled nodes using the LIVE

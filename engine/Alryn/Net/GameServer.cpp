@@ -180,9 +180,11 @@ void GameServer::tick(Timestep dt) {
         }
         Vec3 move = player.input.move;
         if (id == tower_ && contract_phase_ == ContractPhase::Active) {
-            // Hauling a cart is heavy work: slow the puller by the cart's size + damage.
+            // Hauling a cart is heavy work: slow the puller by the cart's size + damage, and by how
+            // laden the bed is (a full load drags; it lightens + quickens as cargo spills).
             const f32 hf = active_.health / kWagonHealth;
-            const f32 f = tow_speed_factor(vehicle_type(active_.type).capacity(), hf);
+            const f32 f = tow_speed_factor(vehicle_type(active_.type).capacity(), hf) *
+                          load_speed_factor(static_cast<u32>(cargo_.size()), active_.goods_total);
             const f32 l = glm::length(Vec2{move.x, move.z});
             if (l > 1e-3f) {
                 move = move / l * f; // exact fraction of walk speed, any direction

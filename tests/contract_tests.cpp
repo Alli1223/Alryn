@@ -103,6 +103,23 @@ TEST_CASE("Contract: hauling a bigger / more damaged cart is slower") {
     CHECK(damage_speed_factor(0.0f) == doctest::Approx(kDamageSpeedFloor));
 }
 
+TEST_CASE("Contract: a laden cart tows slower, lightening + quickening as cargo spills") {
+    const u32 total = goods_for_capacity(2);
+    // An empty bed tows at full pace; a full load is the slowest.
+    CHECK(load_speed_factor(0, total) == doctest::Approx(1.0f));
+    CHECK(load_speed_factor(total, total) == doctest::Approx(1.0f - kLadenPenalty));
+    CHECK(load_speed_factor(total, total) < load_speed_factor(0, total));
+    // As crates spill, the cart speeds up monotonically (lighter load -> faster haul).
+    CHECK(load_speed_factor(total, total) < load_speed_factor(total / 2, total));
+    CHECK(load_speed_factor(total / 2, total) < load_speed_factor(0, total));
+    // It never drops below the floor, never exceeds full speed, and clamps an over-count.
+    CHECK(load_speed_factor(total, total) >= 1.0f - kLadenPenalty);
+    CHECK(load_speed_factor(0, total) <= 1.0f);
+    CHECK(load_speed_factor(total + 5, total) == doctest::Approx(1.0f - kLadenPenalty)); // clamp
+    // No cargo concept (total 0) is a no-op multiplier.
+    CHECK(load_speed_factor(0, 0) == doctest::Approx(1.0f));
+}
+
 TEST_CASE("Contract: bigger carts carry more goods, and lost goods cut the pay") {
     CHECK(goods_for_capacity(1) < goods_for_capacity(2));
     CHECK(goods_for_capacity(2) < goods_for_capacity(3));

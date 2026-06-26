@@ -69,6 +69,22 @@ inline f32 damage_speed_factor(f32 health_frac) {
     const f32 hf = health_frac < 0.0f ? 0.0f : (health_frac > 1.0f ? 1.0f : health_frac);
     return kDamageSpeedFloor + (1.0f - kDamageSpeedFloor) * hf;
 }
+// Laden weight: a full load is heavy, so a fully-loaded cart tows slower; as crates spill or are lost
+// the bed lightens and the haul quickens (though it pays less - reward scales by the share delivered).
+// This is DISTINCT from the static capacity penalty (which is the vehicle's SIZE): it tracks the LIVE
+// load `aboard` of `total`, so it's an emergent speed/pay tradeoff that shifts during the haul.
+// Returns a multiplier in [1 - kLadenPenalty, 1]: 1 when empty, 1 - kLadenPenalty at a full load.
+inline constexpr f32 kLadenPenalty = 0.25f; // a full load tows up to 25% slower than an empty bed
+inline f32 load_speed_factor(u32 aboard, u32 total) {
+    if (total == 0) {
+        return 1.0f;
+    }
+    f32 frac = static_cast<f32>(aboard) / static_cast<f32>(total);
+    if (frac > 1.0f) {
+        frac = 1.0f;
+    }
+    return 1.0f - kLadenPenalty * frac;
+}
 inline constexpr f32 kGoodPickupRange = 2.0f; // how close to pick up a spilled crate (E)
 inline constexpr f32 kGoodLoadRange = 3.0f;   // how close to the cart to load a carried crate (E)
 // Cargo box physics: each crate is a little body that slides on the cart bed. The bed walls are
