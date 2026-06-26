@@ -1592,9 +1592,37 @@ PropDef PropLibrary::build_gate() {
         add_box(op, {-mr, mt, o - 0.2f}, {-mr + 0.16f, mt + 0.36f, o + 0.2f}, stone); // -x edge
     }
 
-    // A brazier burning on the battlement.
-    add_box(op, {-0.16f, mt, -0.16f}, {0.16f, mt + 0.28f, 0.16f}, wood);          // basket
-    add_box(em, {-0.24f, mt + 0.28f, -0.24f}, {0.24f, mt + 0.64f, 0.24f}, fire);  // flame
+    // A fire-basket brazier on the battlement: a dark iron bowl (octagonal, tapering out to the rim)
+    // on a short stand, holding glowing coals with a few flame tongues licking up - a proper brazier
+    // rather than a glowing cube.
+    const Vec3 iron{0.17f, 0.15f, 0.15f};
+    const Vec3 coal{1.0f, 0.5f, 0.16f};
+    auto cup = [](MeshData& dst, f32 y0, f32 y1, f32 r0, f32 r1, const Vec3& col) {
+        const Vec3 ctr{0.0f, (y0 + y1) * 0.5f, 0.0f}; // axis point -> emit_tri faces normals outward
+        for (int i = 0; i < 8; ++i) {
+            const f32 a0 = static_cast<f32>(i) / 8.0f * TwoPi;
+            const f32 a1 = static_cast<f32>(i + 1) / 8.0f * TwoPi;
+            const Vec3 b0{r0 * std::cos(a0), y0, r0 * std::sin(a0)}, b1{r0 * std::cos(a1), y0, r0 * std::sin(a1)};
+            const Vec3 t0{r1 * std::cos(a0), y1, r1 * std::sin(a0)}, t1{r1 * std::cos(a1), y1, r1 * std::sin(a1)};
+            emit_tri(dst, b0, b1, t1, ctr, col);
+            emit_tri(dst, b0, t1, t0, ctr, col);
+        }
+    };
+    auto tongue = [](MeshData& dst, const Vec3& base, f32 h, f32 w, const Vec3& col) {
+        const Vec3 tip{base.x, base.y + h, base.z};
+        const Vec3 a{base.x - w, base.y, base.z - w}, b{base.x + w, base.y, base.z - w};
+        const Vec3 c{base.x + w, base.y, base.z + w}, d{base.x - w, base.y, base.z + w};
+        emit_tri(dst, a, b, tip, base, col);
+        emit_tri(dst, b, c, tip, base, col);
+        emit_tri(dst, c, d, tip, base, col);
+        emit_tri(dst, d, a, tip, base, col);
+    };
+    add_box(op, {-0.06f, mt - 0.1f, -0.06f}, {0.06f, mt + 0.04f, 0.06f}, iron); // short stand
+    cup(op, mt + 0.02f, mt + 0.3f, 0.09f, 0.2f, iron);                          // iron bowl (tapers out)
+    add_box(em, {-0.15f, mt + 0.18f, -0.15f}, {0.15f, mt + 0.3f, 0.15f}, coal); // glowing coals
+    tongue(em, {0.0f, mt + 0.28f, 0.0f}, 0.36f, 0.11f, fire);                   // central flame
+    tongue(em, {0.08f, mt + 0.28f, 0.05f}, 0.24f, 0.07f, fire);                 // side flame tongues
+    tongue(em, {-0.07f, mt + 0.28f, -0.06f}, 0.27f, 0.07f, fire);
 
     def.parts.push_back({std::move(op), PropLayer::Opaque});
     def.parts.push_back({std::move(em), PropLayer::Emissive});
