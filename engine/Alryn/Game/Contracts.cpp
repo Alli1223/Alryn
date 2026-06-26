@@ -556,6 +556,7 @@ void GameServer::accept_contract(const Wagon& chosen, WagonMode mode) {
     }
     contract_phase_ = ContractPhase::Active;
     contract_elapsed_ = 0.0f; // start the rush-bonus clock
+    contract_kills_ = 0;      // fresh kill-bounty tally for this haul
     ALRYN_INFO("Contract accepted ({}), reward {}", mode == WagonMode::Manual ? "manual" : "driver",
                active_.reward);
 }
@@ -802,7 +803,9 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
         const bool perfect = w.goods_total == 0 || cargo_.size() >= w.goods_total;
         delivery_streak_ = perfect ? std::min<u32>(delivery_streak_ + 1u, kStreakMax) : 0u;
         const f32 streak = streak_mult(delivery_streak_);
-        money_ += static_cast<u32>(std::lround(base * frac * intact * rush * fresh * streak));
+        // The reward (scaled by all the multipliers) PLUS a flat kill bounty for the raiders felled.
+        money_ += static_cast<u32>(std::lround(base * frac * intact * rush * fresh * streak)) +
+                  kill_bounty(contract_kills_);
         contract_outcome_ = 1;
         contract_phase_ = ContractPhase::Settle;
         settle_timer_ = kSettleSeconds;
@@ -1496,7 +1499,9 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
         }
     }
 
-    std::erase_if(ambush_, [](const Enemy& e) { return !e.alive || e.health <= 0.0f; });
+    // Cull the dead; each one removed here was felled by the party -> tally it for the kill bounty.
+    contract_kills_ +=
+        static_cast<u32>(std::erase_if(ambush_, [](const Enemy& e) { return !e.alive || e.health <= 0.0f; }));
 
     // Player health: regen out of combat, respawn at the town on death.
     for (auto& [id, pl] : players_) {

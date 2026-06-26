@@ -163,6 +163,14 @@ void ClientApp::draw_hud() {
             draw.text(Vec2{252.0f, 22.0f + ts * 2.6f + 13.0f}, std::format("RUSH +{}% PAY", rbonus),
                       ts * 0.62f, Vec4{0.95f, 0.78f, 0.42f, 1.0f});
         }
+        // Kill bounty: a running tally of raiders felled this haul + the bonus it pays on delivery
+        // (so fighting the ambush is rewarded, not just outrunning it).
+        if (snapshot_.contract_kills > 0) {
+            draw.text(Vec2{252.0f, 22.0f + ts * 2.6f + 26.0f},
+                      std::format("BOUNTY $ {}  ({} DOWN)", kill_bounty(snapshot_.contract_kills),
+                                  snapshot_.contract_kills),
+                      ts * 0.62f, Vec4{1.0f, 0.55f, 0.5f, 1.0f});
+        }
         // Contextual E hint: righting a flipped cart / handling goods take priority.
         bool carrying = false;
         for (const net::PlayerState& pp : snapshot_.players) {

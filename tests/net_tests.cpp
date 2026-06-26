@@ -102,6 +102,7 @@ TEST_CASE("Net: message serialization round-trips") {
     snapshot.contract_phase = static_cast<u8>(ContractPhase::Active);
     snapshot.contract_outcome = 1;
     snapshot.delivery_streak = 4;
+    snapshot.contract_kills = 9;
     snapshot.wagons.push_back({55u, Vec3{2.0f, 0.5f, 3.0f}, 0.9f, Vec3{40.0f, 0.0f, 60.0f},
                                Vec3{8.0f, 0.0f, 9.0f} /*source*/, Vec3{6.0f, 0.5f, 4.0f}, 1.2f, 500u,
                                2 /*carriage*/, 200, static_cast<u8>(WagonMode::Manual), 3, 1,
@@ -174,6 +175,7 @@ TEST_CASE("Net: message serialization round-trips") {
     CHECK(decoded.contract_phase == static_cast<u8>(ContractPhase::Active));
     CHECK(decoded.contract_outcome == 1);
     CHECK(decoded.delivery_streak == 4);
+    CHECK(decoded.contract_kills == 9);
     REQUIRE(decoded.wagons.size() == 1);
     CHECK(decoded.wagons[0].id == 55u);
     CHECK(decoded.wagons[0].reward == 500u);

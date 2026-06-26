@@ -146,6 +146,14 @@ TEST_CASE("Contract: a clean-delivery streak stacks a capped pay bonus") {
     CHECK(streak_mult(kStreakMax) > streak_mult(0)); // a full streak clearly pays more than none
 }
 
+TEST_CASE("Contract: a kill bounty pays per raider felled, rewarding fighting the ambush") {
+    CHECK(kill_bounty(0) == 0u);                  // no kills -> no bounty
+    CHECK(kill_bounty(1) == kBountyPerKill);      // one raider down
+    CHECK(kill_bounty(5) == 5u * kBountyPerKill); // scales linearly with kills
+    CHECK(kill_bounty(5) > kill_bounty(2));       // more kills -> more bounty
+    CHECK(kBountyPerKill > 0u);
+}
+
 TEST_CASE("Contract: bigger vehicles pay more (capacity multiplier)") {
     CHECK(capacity_reward_mult(1) == doctest::Approx(1.0f));     // a cart: baseline pay
     CHECK(capacity_reward_mult(2) > capacity_reward_mult(1));    // a wagon: more

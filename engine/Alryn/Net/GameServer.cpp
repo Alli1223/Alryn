@@ -247,6 +247,7 @@ void GameServer::tick(Timestep dt) {
     snapshot.weather = static_cast<u8>(glm::clamp(manager_.weather(), 0.0f, 1.0f) * 255.0f);
     snapshot.money = money_;
     snapshot.delivery_streak = static_cast<u8>(delivery_streak_);
+    snapshot.contract_kills = static_cast<u8>(std::min<u32>(contract_kills_, 255u));
     snapshot.rig_level = rig_level_;
     snapshot.contract_phase = static_cast<u8>(contract_phase_);
     snapshot.contract_outcome = contract_outcome_;

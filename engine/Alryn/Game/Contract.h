@@ -203,6 +203,13 @@ inline f32 streak_mult(u32 streak) {
     return 1.0f + kStreakBonusPer * static_cast<f32>(s);
 }
 
+// KILL BOUNTY: every ambusher the party cuts down on a haul adds a flat sum to the delivery payout -
+// so standing and FIGHTING the ambush pays off, pulling against the RUSH bonus (which rewards hurrying
+// past the raiders) and reinforcing the INTACT bonus (defend the cart). Added, not multiplied, so it
+// rewards the kills themselves regardless of the contract's size.
+inline constexpr u32 kBountyPerKill = 12; // money per raider felled
+inline u32 kill_bounty(u32 kills) { return kBountyPerKill * kills; }
+
 // FIELD REPAIR: between ambush waves (no raiders alive) a player who stays near the cargo wagon
 // patches it up, mending its health slowly back toward full - so clearing a wave then tending the
 // cart is rewarded, and a battered haul can recover if you make the time. Pure + server-applied.

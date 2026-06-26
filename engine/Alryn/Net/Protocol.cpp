@@ -103,6 +103,7 @@ void write(ByteWriter& w, const Snapshot& s) {
     w.write_u8(s.contract_phase);
     w.write_u8(s.contract_outcome);
     w.write_u8(s.delivery_streak);
+    w.write_u8(s.contract_kills);
     w.write_u16(static_cast<u16>(s.players.size()));
     for (const PlayerState& p : s.players) {
         w.write_u32(p.id);
@@ -217,6 +218,7 @@ bool read(ByteReader& r, Snapshot& s) {
     s.contract_phase = r.read_u8();
     s.contract_outcome = r.read_u8();
     s.delivery_streak = r.read_u8();
+    s.contract_kills = r.read_u8();
     const u16 count = r.read_u16();
     s.players.clear();
     s.players.reserve(count);

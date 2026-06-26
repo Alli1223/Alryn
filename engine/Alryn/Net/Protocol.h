@@ -188,6 +188,7 @@ struct Snapshot {
     u8 contract_phase = 0;   // ContractPhase (Offer / Active / Settle)
     u8 contract_outcome = 0; // 0 none, 1 delivered, 2 wrecked (for the settle banner)
     u8 delivery_streak = 0;  // consecutive PERFECT (full-cargo) deliveries -> a stacking pay bonus
+    u8 contract_kills = 0;   // ambushers felled on the active haul (-> a kill bounty on delivery)
     std::vector<PlayerState> players;
     std::vector<ProjectileState> projectiles;
     std::vector<EnemyState> enemies;
