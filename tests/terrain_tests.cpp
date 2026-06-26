@@ -623,6 +623,40 @@ TEST_CASE("Village: houses don't overlap the roads") {
     CHECK(on_road == 0); // no house overlaps a road
 }
 
+// Decorative town props (lanterns/planters/bushes/decor) must sit BESIDE the real (meandering) road,
+// never ON it - village_props' on_road() reject guards this (the idealised town_streets aren't enough
+// since the actual road winds away from them).
+TEST_CASE("Village: decorative props don't spawn on the roads") {
+    const u32 seed = 4242u;
+    int towns_checked = 0;
+    int decor_seen = 0;
+    int on_road = 0;
+    for (int cz = -8; cz <= 8 && towns_checked < 6; ++cz) {
+        for (int cx = -8; cx <= 8 && towns_checked < 6; ++cx) {
+            const auto v = worldgen::village_at(cx, cz, seed);
+            if (!v || roads::reachable_towns(v->center, seed, 1).empty()) {
+                continue;
+            }
+            ++towns_checked;
+            for (const PropInstance& p : village_props(*v, seed)) {
+                const bool decorative =
+                    p.category == PropCategory::Lantern || p.category == PropCategory::Planter ||
+                    p.category == PropCategory::Bush || p.category == PropCategory::Decor;
+                if (!decorative) {
+                    continue;
+                }
+                ++decor_seen;
+                if (roads::distance(p.position.x, p.position.z, seed) < roads::road_half_width) {
+                    ++on_road;
+                }
+            }
+        }
+    }
+    REQUIRE(towns_checked > 0);
+    REQUIRE(decor_seen > 0);
+    CHECK(on_road == 0); // nothing decorative sits in the road
+}
+
 // The streaming terrain meshes a fixed vertical band per column; the surface must never rise above
 // it, or a tall mountain lifts the (still-solid) density ground above the last meshed chunk and you
 // walk up an invisible floor. height() is capped to max_terrain_height (which sits below the band).

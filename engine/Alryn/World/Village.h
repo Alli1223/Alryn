@@ -485,6 +485,12 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
         return river.present &&
                std::abs(detail::river_dist(river, v.center, Vec2{x, z})) < river.half_width + 0.4f;
     };
+    // True when (x,z) sits on the ACTUAL (meandering) road that winds into the town - distinct from the
+    // idealised town_streets, so this is what truly keeps decorative props (lanterns/planters/bushes/
+    // decor) off the cart's road, not just off the straight street lines.
+    auto on_road = [&](f32 x, f32 z) {
+        return roads::distance(x, z, seed) < roads::road_half_width + 0.5f;
+    };
 
     // Shared occupancy so decor never overlaps a building/market/fountain/wagon spot.
     std::vector<std::pair<Vec2, f32>> occ;
@@ -568,7 +574,7 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
             for (int i = 0; i < 4; ++i) { // a ring of planters around the basin
                 const f32 a = TwoPi * (static_cast<f32>(i) + 0.5f) / 4.0f;
                 const Vec2 pp = fp + Vec2{std::cos(a), std::sin(a)} * 2.4f;
-                if (!occupied(pp, 0.6f)) {
+                if (!occupied(pp, 0.6f) && !on_road(pp.x, pp.y)) {
                     push(PropCategory::Planter, static_cast<u8>(i % 3), pp.x, pp.y, 0.0f);
                     occ.emplace_back(pp, 0.6f);
                 }
@@ -595,16 +601,21 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
         const int n = static_cast<int>(len / 8.5f);
         for (int k = 1; k <= n; ++k) {
             const f32 side = (k % 2 == 0) ? 1.0f : -1.0f;
-            const Vec2 lp = streets[s].a + dir * (static_cast<f32>(k) * 8.5f) + nrm * side * 2.7f;
-            if (glm::length(lp - v.center) < 9.0f || in_river(lp.x, lp.y)) {
-                continue; // keep the plaza + river clear
+            const Vec2 lp = streets[s].a + dir * (static_cast<f32>(k) * 8.5f) + nrm * side * 3.2f;
+            if (glm::length(lp - v.center) < 9.0f || in_river(lp.x, lp.y) || on_road(lp.x, lp.y)) {
+                continue; // keep the plaza, river + the actual road clear (lanterns sit BESIDE the road)
             }
             push(PropCategory::Lantern, 0, lp.x, lp.y, 0.0f);
         }
     }
     for (int i = 0; i < 6; ++i) {
         const f32 a = TwoPi * static_cast<f32>(i) / 6.0f + 0.4f;
-        push(PropCategory::Lantern, 0, cx + std::cos(a) * 10.5f, cz + std::sin(a) * 10.5f, 0.0f);
+        const Vec2 lp{cx + std::cos(a) * 10.5f, cz + std::sin(a) * 10.5f};
+        if (occupied(lp, 0.6f) || in_river(lp.x, lp.y) || on_road(lp.x, lp.y)) {
+            continue; // a plaza-ring lantern must not land on the avenue/road or a building
+        }
+        push(PropCategory::Lantern, 0, lp.x, lp.y, 0.0f);
+        occ.emplace_back(lp, 0.6f);
     }
 
     // Streets are plain worn-EARTH roads (coloured into the terrain by town_path_amount /
@@ -615,7 +626,7 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
     for (int i = 0; i < 5; ++i) {
         const f32 a = TwoPi * static_cast<f32>(i) / 5.0f + 1.1f;
         const Vec2 pp = v.center + Vec2{std::cos(a), std::sin(a)} * 11.0f;
-        if (!occupied(pp, 0.7f) && !in_river(pp.x, pp.y)) {
+        if (!occupied(pp, 0.7f) && !in_river(pp.x, pp.y) && !on_road(pp.x, pp.y)) {
             push(PropCategory::Planter, 0, pp.x, pp.y, 0.0f);
             occ.emplace_back(pp, 0.7f);
         }
@@ -630,7 +641,7 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
             continue; // stay inside the wall
         }
         const Vec2 bp = v.center + Vec2{std::cos(a), std::sin(a)} * rr;
-        if (occupied(bp, 1.0f) || in_river(bp.x, bp.y)) {
+        if (occupied(bp, 1.0f) || in_river(bp.x, bp.y) || on_road(bp.x, bp.y)) {
             continue;
         }
         const bool planter = detail::hash01(detail::tree_hash(vid, i, 7702u)) < 0.22f;
@@ -661,7 +672,7 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
         const Vec2 along{front.y, -front.x};                // along the street, beside the house front
         const f32 soff = (detail::hash01(detail::tree_hash(vid, static_cast<int>(hi), 8101u)) - 0.5f) * 1.2f;
         const Vec2 dp = h.pos + along * (detail::house_reach(h.variant) * 0.82f + 0.5f) + front * soff;
-        if (occupied(dp, 0.8f) || on_avenue(dp) || in_river(dp.x, dp.y)) {
+        if (occupied(dp, 0.8f) || on_avenue(dp) || in_river(dp.x, dp.y) || on_road(dp.x, dp.y)) {
             continue;
         }
         const u8 stored[5] = {0, 1, 6, 7, 2}; // barrel, crates, woodpile, sacks, hay
@@ -677,7 +688,7 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
             continue; // stay inside the wall
         }
         const Vec2 dp = v.center + Vec2{std::cos(a), std::sin(a)} * rr;
-        if (occupied(dp, 1.1f) || on_avenue(dp) || in_river(dp.x, dp.y)) {
+        if (occupied(dp, 1.1f) || on_avenue(dp) || in_river(dp.x, dp.y) || on_road(dp.x, dp.y)) {
             continue;
         }
         u8 var;
