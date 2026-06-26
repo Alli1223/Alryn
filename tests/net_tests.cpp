@@ -301,6 +301,25 @@ TEST_CASE("GameServer: rampage stacks kill momentum into outgoing damage, then f
     CHECK(kRampageMaxStacks > 0);
 }
 
+TEST_CASE("GameServer: a Knight parries within the window opened by raising the shield") {
+    GameServer::ServerPlayer p;
+    p.role = PlayerRole::Knight;
+    CHECK_FALSE(p.try_parry());    // idle, shield down: no parry
+    p.parry_window = kParryWindow; // the shield was just raised (rising edge -> window opens)
+    CHECK(p.try_parry());          // a blow landing now is turned
+    p.decay_parry(kParryWindow * 0.5f);
+    CHECK(p.try_parry()); // still inside the (brief) window
+    p.decay_parry(kParryWindow); // let the window lapse (too slow to react)
+    CHECK_FALSE(p.try_parry());  // the moment has passed - the blow lands
+
+    // Only a Knight parries; other roles raising block channel/mitigate but don't deflect+punish.
+    GameServer::ServerPlayer h;
+    h.role = PlayerRole::Hunter;
+    h.parry_window = kParryWindow;
+    CHECK_FALSE(h.try_parry());
+    CHECK(kParryWindow > 0.0f);
+}
+
 // Drives a real ENet client + server over localhost through the whole pipeline:
 // connect -> welcome -> input -> snapshot. Skips if the socket can't bind.
 //

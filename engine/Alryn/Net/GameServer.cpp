@@ -126,6 +126,10 @@ void GameServer::tick(Timestep dt) {
                 if (it == players_.end()) {
                     break;
                 }
+                // PARRY: raising the shield (block false->true) opens a brief parry window.
+                if (e.input.block && !it->second.input.block) {
+                    it->second.parry_window = kParryWindow;
+                }
                 it->second.input = e.input;
                 if (e.input.dig) {
                     sampler_.add_edit(e.input.aim, kEditRadius, kEditAmount);
@@ -179,6 +183,7 @@ void GameServer::tick(Timestep dt) {
             continue; // riding/driving the wagon - position is set by the contract update
         }
         Vec3 move = player.input.move;
+        player.decay_parry(dt.seconds); // the Knight parry window closes quickly after raising the shield
         // DODGE ROLL: a quick burst in a locked direction with i-frames (take_damage evades while
         // roll_timer > 0). Overrides walking / hauling for its brief duration.
         if (player.roll_cd > 0.0f) {

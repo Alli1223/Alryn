@@ -64,6 +64,12 @@ inline constexpr f32 kRollDuration = 0.4f; // roll + i-frame window (seconds)
 inline constexpr f32 kRollBoost = 1.9f;    // x the player's walk speed during the roll
 inline constexpr f32 kRollCooldown = 1.2f; // recovery before the next roll
 
+// PARRY: a Knight who raises the shield (block) at the right instant gets a brief window in which an
+// incoming melee blow is fully turned AND the attacker is staggered (reusing the heavy-hit stagger) -
+// a skill-timed defence distinct from the dodge roll (which evades) and a held block (which only
+// mitigates). The window opens on the RISING edge of block, so it rewards timing, not just holding.
+inline constexpr f32 kParryWindow = 0.28f; // seconds after raising the shield that a hit is parried
+
 // A server-simulated hostile NPC. It marches toward `home` (the town plaza it is
 // attacking), chases and strikes players that come near, and dies when its health
 // runs out. Only id/position/yaw/kind/health are networked; the rest is server

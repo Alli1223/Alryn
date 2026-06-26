@@ -55,6 +55,7 @@ public:
         f32 haste_timer = 0.0f;               // War Horn: x walk speed while > 0 (co-op buff)
         f32 rampage_timer = 0.0f;             // Rampage: kill-momentum window; stacks decay when it lapses
         u8 rampage_stacks = 0;                // current kill-momentum stacks (x outgoing damage)
+        f32 parry_window = 0.0f;              // Knight: a parry window opens when the shield is raised
         u8 cast_fx = 0;                       // ability/spell that fired this tick (for the snapshot's VFX)
         Equipment equipment;                  // authoritative worn gear (look + the stat bonus below)
         u8 owned_tier = 0;                    // highest gear tier bought from a shop (clamps equipment)
@@ -80,6 +81,13 @@ public:
                     rampage_timer = 0.0f;
                     rampage_stacks = 0;
                 }
+            }
+        }
+        // PARRY: a Knight inside the window it opened on raising the shield turns the next melee blow.
+        bool try_parry() const { return role == PlayerRole::Knight && parry_window > 0.0f; }
+        void decay_parry(f32 dt) {
+            if (parry_window > 0.0f) {
+                parry_window -= dt;
             }
         }
         f32 water = 0.0f;                     // bucket fill for firefighting (dormant siege)

@@ -1437,7 +1437,18 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
         if (e.attack_cd <= 0.0f) {
             const f32 reach = kEnemyAttackRange + kEnemyRadius;
             if (victim != nullptr && best < reach) {
-                victim->take_damage(dmg); // role armour / block / Aegis shield soak it
+                if (victim->try_parry()) {
+                    // PARRY: the shield turns the blow (no damage) AND staggers the attacker, opening a
+                    // punish window - a skill-timed reward for raising the guard right as it strikes.
+                    e.stagger = kStaggerDuration;
+                    Vec3 kdir = e.position - victim->controller.position();
+                    kdir.y = 0.0f;
+                    if (glm::length(kdir) > 1e-3f) {
+                        e.knockback = glm::normalize(kdir) * (kKnockbackMax * 0.5f);
+                    }
+                } else {
+                    victim->take_damage(dmg); // role armour / block / Aegis shield soak it
+                }
                 e.attack_cd = kEnemyAttackInterval;
             } else if (glm::length(w.position - e.position) < reach + 0.7f) {
                 w.health -= kWagonDamage * rig_damage_mult(rig_level_); // armored sides shrug off some
