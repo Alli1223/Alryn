@@ -1339,7 +1339,13 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             for (Enemy& e : ambush_) {
                 const Vec3 chest = e.position + Vec3{0.0f, 0.9f, 0.0f};
                 if (glm::length(chest - pr.position) < pr.radius + kEnemyRadius + 0.3f) {
-                    e.health -= (pr.damage > 0.0f ? pr.damage : kThrowDamage) * boost;
+                    const f32 dmg = (pr.damage > 0.0f ? pr.damage : kThrowDamage) * boost;
+                    e.health -= dmg;
+                    Vec3 kdir = pr.velocity; // shove along the shot's flight direction
+                    kdir.y = 0.0f;
+                    if (glm::length(kdir) > 1e-3f) {
+                        e.knockback = glm::normalize(kdir) * std::min(dmg * kKnockbackPerDamage, kKnockbackMax);
+                    }
                     pr.alive = false;
                 }
             }
@@ -1370,7 +1376,13 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
         }
         if (hit != nullptr) {
             // weapon hits as hard as the role, amplified while Empowered (co-op buff)
-            hit->health -= role_stats(pl.role).melee_damage * pl.outgoing_mult();
+            const f32 dmg = role_stats(pl.role).melee_damage * pl.outgoing_mult();
+            hit->health -= dmg;
+            Vec3 kdir = hit->position - pl.controller.position(); // shove away from the attacker
+            kdir.y = 0.0f;
+            if (glm::length(kdir) > 1e-3f) {
+                hit->knockback = glm::normalize(kdir) * std::min(dmg * kKnockbackPerDamage, kKnockbackMax);
+            }
             pl.melee_cd = 0.35f;
         }
     }

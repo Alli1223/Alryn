@@ -50,7 +50,14 @@ struct Enemy {
     u32 taunt_by = 0;     // player id that taunted it (forces it to target them)
     u8 kind = 0;
     bool alive = true;
+    Vec3 knockback{0.0f}; // a hit shoves it back; this velocity decays each step (server-only)
 };
+
+// Knockback on hits: an enemy gets shoved back along the hit direction at a velocity proportional to
+// the damage (capped), decaying over ~half a second - so a solid hit reads with impact + opens space.
+inline constexpr f32 kKnockbackPerDamage = 0.13f; // m/s of knockback per point of damage
+inline constexpr f32 kKnockbackMax = 6.5f;        // cap (a huge hit can't fling an enemy across the map)
+inline constexpr f32 kKnockbackDecay = 7.0f;      // exp decay rate (higher = snappier stop)
 
 // True if `target` lies within `range` and inside the cone of half-angle
 // acos(cone_cos) centred on the +xz heading `yaw`. Used for the player's melee
@@ -91,6 +98,19 @@ inline void step_enemy(Enemy& e, const DensitySampler& density,
         e.position.x = xz.x;
         e.position.z = xz.y;
         e.yaw = std::atan2(dir.z, dir.x);
+    }
+    // Knockback: a recent hit slides the enemy back (resolved against colliders), decaying to rest -
+    // so a solid blow reads with impact + briefly opens space before it presses on toward the goal.
+    if (const f32 kb = glm::length(Vec2{e.knockback.x, e.knockback.z}); kb > 0.05f) {
+        Vec2 kxz{e.position.x + e.knockback.x * dts, e.position.z + e.knockback.z * dts};
+        for (const Collider& c : colliders) {
+            kxz = resolve_collider(c, kxz, kEnemyRadius, e.position.y, kEnemyHeight);
+        }
+        e.position.x = kxz.x;
+        e.position.z = kxz.y;
+        e.knockback *= std::exp(-kKnockbackDecay * dts);
+    } else {
+        e.knockback = Vec3{0.0f};
     }
     // Follow the terrain surface (drop onto the ground from just above), or a bridge deck when
     // crossing one: the optional `platform` (e.g. roads::bridge_height) is used when it sits near the

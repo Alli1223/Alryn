@@ -95,6 +95,22 @@ TEST_CASE("Combat: an enemy marches toward its goal and stays on the ground") {
     CHECK(glm::length(goal - e.position) < 0.2f);
 }
 
+TEST_CASE("Combat: a hit knocks an enemy back, then it settles + presses on") {
+    const DensitySampler density = flat_ground();
+    const std::span<const Collider> none{};
+    Enemy e;
+    e.position = Vec3{0.0f, 0.0f, 0.0f};
+    e.knockback = Vec3{6.0f, 0.0f, 0.0f}; // shoved +x by a hit
+    const Vec3 goal = e.position;          // already at the goal, so only the knockback moves it first
+    step_enemy(e, density, none, goal, Timestep{1.0f / 60.0f});
+    CHECK(e.position.x > 0.0f);             // shoved in the knockback direction
+    CHECK(glm::length(e.knockback) < 6.0f); // and decaying
+    for (int i = 0; i < 90; ++i) {
+        step_enemy(e, density, none, goal, Timestep{1.0f / 60.0f});
+    }
+    CHECK(glm::length(e.knockback) < 0.1f); // settles to rest
+}
+
 TEST_CASE("Combat: a villager walks toward its goal (e.g. fleeing / heading to bed)") {
     const DensitySampler density = flat_ground();
     const std::span<const Collider> none{};
