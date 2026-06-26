@@ -242,6 +242,13 @@ inline f32 rig_max_health(u8 level) {
 inline f32 rig_damage_mult(u8 level) {
     return 1.0f - 0.12f * static_cast<f32>(clamp_rig(level));
 }
+// Tow-speed multiplier at a rig level: a reinforced rig has better axles + greased wheels, so it tows
+// a touch faster (+6% per level, +18% at the cap) - a third reason to invest in the rig. MUST be 1.0
+// at level 0 (stock) so the baseline haul speed - and the deterministic wheel/ambush tests that run on
+// a stock rig - are unchanged.
+inline f32 rig_speed_mult(u8 level) {
+    return 1.0f + 0.06f * static_cast<f32>(clamp_rig(level));
+}
 
 // Per-contract MODIFIER: a deterministic flavour on each offer (derived from its id) that varies the
 // pay + ambush size, so the board mixes safe low-pay escorts with dangerous, well-paid hauls instead

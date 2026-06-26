@@ -205,7 +205,8 @@ void GameServer::tick(Timestep dt) {
             // laden the bed is (a full load drags; it lightens + quickens as cargo spills).
             const f32 hf = active_.health / kWagonHealth;
             const f32 f = tow_speed_factor(vehicle_type(active_.type).capacity(), hf) *
-                          load_speed_factor(static_cast<u32>(cargo_.size()), active_.goods_total);
+                          load_speed_factor(static_cast<u32>(cargo_.size()), active_.goods_total) *
+                          rig_speed_mult(rig_level_); // a reinforced rig tows faster (1.0 at stock)
             const f32 l = glm::length(Vec2{move.x, move.z});
             if (l > 1e-3f) {
                 move = move / l * f; // exact fraction of walk speed, any direction

@@ -125,6 +125,15 @@ TEST_CASE("Contract: wagon rig upgrades cost more + make the cart tougher") {
     CHECK(rig_damage_mult(static_cast<u8>(kMaxRigLevel + 5)) == doctest::Approx(rig_damage_mult(kMaxRigLevel)));
 }
 
+TEST_CASE("Contract: a reinforced rig tows faster, and a stock rig is exactly unchanged") {
+    CHECK(rig_speed_mult(0) == doctest::Approx(1.0f)); // CRITICAL: stock rig = no tow-speed change
+    CHECK(rig_speed_mult(1) > 1.0f);                   // each level tows a bit faster
+    CHECK(rig_speed_mult(2) > rig_speed_mult(1));
+    CHECK(rig_speed_mult(kMaxRigLevel) > rig_speed_mult(0)); // a maxed rig clearly tows faster
+    CHECK(rig_speed_mult(static_cast<u8>(kMaxRigLevel + 5)) ==
+          doctest::Approx(rig_speed_mult(kMaxRigLevel))); // clamps above the cap
+}
+
 TEST_CASE("Contract: rush bonus rewards a fast delivery + decays to nothing") {
     const f32 exp = rush_expected_time(300.0f);
     CHECK(exp > 0.0f);

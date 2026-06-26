@@ -582,7 +582,9 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
     // route is what the wheel-breakdown physics (a shed wheel rolling + settling) depend on, so
     // perturbing it by the live cargo count would land the wheel in a different, sometimes unreachable
     // spot.
-    const f32 dmg = damage_speed_factor(w.health / kWagonHealth);
+    // (A reinforced rig also tows faster - rig_speed_mult is 1.0 at stock level 0, so the deterministic
+    // wheel/ambush tests, which run on a stock rig, are unaffected.)
+    const f32 dmg = damage_speed_factor(w.health / kWagonHealth) * rig_speed_mult(rig_level_);
 
     // Walks a puller (horse or teamster) toward the next route waypoint, A*-routing around
     // obstacles so it never snags. It targets sparse, string-pulled nodes using the LIVE
