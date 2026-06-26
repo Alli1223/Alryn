@@ -2679,10 +2679,25 @@ PropDef PropLibrary::build_watchtower() {
     add_box(m, {-r, ph + 0.14f, -r}, {-r + 0.14f, ph + 1.6f, r * 0.4f}, wood);  // side posts
     add_box(m, {r - 0.14f, ph + 0.14f, -r}, {r, ph + 1.6f, r * 0.4f}, wood);
     const f32 ry = ph + 1.6f;
-    add_tri(m, {-r - 0.2f, ry, r + 0.2f}, {r + 0.2f, ry, r + 0.2f}, {0.0f, ry + 0.7f, -r * 0.3f}, roof);
-    add_tri(m, {r + 0.2f, ry, -r - 0.2f}, {-r - 0.2f, ry, -r - 0.2f}, {0.0f, ry + 0.7f, -r * 0.3f}, roof * 0.92f);
-    add_tri(m, {r + 0.2f, ry, r + 0.2f}, {r + 0.2f, ry, -r - 0.2f}, {0.0f, ry + 0.7f, -r * 0.3f}, roof);
-    add_tri(m, {-r - 0.2f, ry, -r - 0.2f}, {-r - 0.2f, ry, r + 0.2f}, {0.0f, ry + 0.7f, -r * 0.3f}, roof);
+    // Stepped (tiered) wooden roof - reads as a tiled pagoda-ish cap, not a flat pyramid slab.
+    const f32 br = r + 0.25f;
+    add_box(m, {-br, ry, -br}, {br, ry + 0.22f, br}, roof);
+    add_box(m, {-br * 0.66f, ry + 0.20f, -br * 0.66f}, {br * 0.66f, ry + 0.44f, br * 0.66f}, roof * 0.93f);
+    add_box(m, {-br * 0.34f, ry + 0.42f, -br * 0.34f}, {br * 0.34f, ry + 0.66f, br * 0.34f}, roof * 1.06f);
+    // a flagpole + red pennant on the peak (a watchtower signal), drawn both sides
+    add_box(m, {-0.04f, ry + 0.66f, -0.04f}, {0.04f, ry + 1.5f, 0.04f}, dark);
+    add_tri(m, {0.04f, ry + 1.42f, 0.0f}, {0.04f, ry + 1.12f, 0.0f}, {0.52f, ry + 1.27f, 0.0f},
+            Vec3{0.72f, 0.2f, 0.16f});
+    add_tri(m, {0.04f, ry + 1.12f, 0.0f}, {0.04f, ry + 1.42f, 0.0f}, {0.52f, ry + 1.27f, 0.0f},
+            Vec3{0.6f, 0.16f, 0.13f});
+    // a ladder climbing the +x face from the ground up to the platform (two rails + rungs)
+    const f32 lx = r + 0.32f;
+    for (const f32 lz : {-0.32f, 0.32f}) {
+        add_box(m, {lx - 0.04f, 0.0f, lz - 0.04f}, {lx + 0.04f, ph + 0.1f, lz + 0.04f}, dark);
+    }
+    for (f32 lr = 0.35f; lr < ph; lr += 0.42f) {
+        add_box(m, {lx - 0.06f, lr, -0.34f}, {lx + 0.07f, lr + 0.06f, 0.34f}, wood * 0.9f);
+    }
     def.parts.push_back({std::move(m), PropLayer::Opaque});
     // colliders on the four legs (the bay between them is walkable)
     for (f32 sx : {-1.0f, 1.0f}) {
