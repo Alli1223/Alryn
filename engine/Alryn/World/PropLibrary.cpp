@@ -2198,12 +2198,18 @@ PropDef PropLibrary::build_decor(int variant) {
             add_box(m, {-0.95f, 0.95f, -0.04f}, {-0.05f, 1.3f, 0.04f}, cream * 0.92f); // board (-x)
             collider(0.1f, 0.1f, 1.6f);
             break;
-        case 5: // a stone water trough
+        case 5: { // a stone water trough - a HOLLOW basin holding water (was a solid block hiding it)
             def.name = "trough";
-            add_box(m, {-0.95f, 0.0f, -0.42f}, {0.95f, 0.5f, 0.42f}, stone);
-            add_box(m, {-0.8f, 0.16f, -0.3f}, {0.8f, 0.46f, 0.3f}, water); // water surface inside
+            constexpr f32 ox = 0.95f, oz = 0.42f, th = 0.5f, wl = 0.13f;
+            add_box(m, {-ox, 0.0f, -oz}, {ox, th, -oz + wl}, stone);             // -z wall
+            add_box(m, {-ox, 0.0f, oz - wl}, {ox, th, oz}, stone * 0.96f);        // +z wall
+            add_box(m, {-ox, 0.0f, -oz + wl}, {-ox + wl, th, oz - wl}, stone * 1.04f); // -x end
+            add_box(m, {ox - wl, 0.0f, -oz + wl}, {ox, th, oz - wl}, stone * 1.04f);    // +x end
+            add_box(m, {-ox + wl, 0.0f, -oz + wl}, {ox - wl, 0.14f, oz - wl}, stone * 0.88f); // floor
+            add_box(m, {-ox + wl, 0.14f, -oz + wl}, {ox - wl, 0.42f, oz - wl}, water);  // water (now visible)
             collider(0.95f, 0.42f, 0.5f);
             break;
+        }
         case 6: // a stacked woodpile (split logs)
             def.name = "woodpile";
             for (int row = 0; row < 3; ++row) {
