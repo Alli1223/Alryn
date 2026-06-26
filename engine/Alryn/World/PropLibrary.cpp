@@ -1566,17 +1566,31 @@ PropDef PropLibrary::build_tower() {
     PropDef def;
     def.name = "tower";
     const Vec3 stone{0.53f, 0.55f, 0.59f}; // cool blue-grey (matches the wall)
+    const Vec3 slitc{0.10f, 0.11f, 0.14f}; // dark arrow-slit recess
     MeshData op;
     constexpr f32 r = 0.55f;
     constexpr f32 gh = 3.6f;
     add_box(op, {-r - 0.08f, 0.0f, -r - 0.08f}, {r + 0.08f, 0.5f, r + 0.08f}, stone * 0.94f); // battered base
     add_box(op, {-r, 0.0f, -r}, {r, gh, r}, stone);
-    stone_face(op, true, r, 1.0f, -r, r, 0.5f, gh, stone, 71u);
+    // Textured running-bond masonry on ALL FOUR faces (was just one), so the tower reads as stone
+    // from every angle it's seen along the wall, not flat on its sides.
+    stone_face(op, true, r, 1.0f, -r, r, 0.5f, gh, stone, 71u);    // +z
+    stone_face(op, true, -r, -1.0f, -r, r, 0.5f, gh, stone, 83u);  // -z
+    stone_face(op, false, r, 1.0f, -r, r, 0.5f, gh, stone, 91u);   // +x
+    stone_face(op, false, -r, -1.0f, -r, r, 0.5f, gh, stone, 97u); // -x
+    // A tall arrow slit on each face (a dark recess set just proud of the masonry).
+    add_box(op, {-0.05f, gh * 0.46f, r - 0.02f}, {0.05f, gh * 0.72f, r + 0.07f}, slitc);
+    add_box(op, {-0.05f, gh * 0.46f, -r - 0.07f}, {0.05f, gh * 0.72f, -r + 0.02f}, slitc);
+    add_box(op, {r - 0.02f, gh * 0.30f, -0.05f}, {r + 0.07f, gh * 0.56f, 0.05f}, slitc);
+    add_box(op, {-r - 0.07f, gh * 0.30f, -0.05f}, {-r + 0.02f, gh * 0.56f, 0.05f}, slitc);
     add_box(op, {-r - 0.1f, gh, -r - 0.1f}, {r + 0.1f, gh + 0.14f, r + 0.1f}, stone * 1.05f); // parapet lip
+    // Crenellations ringing ALL FOUR sides (were only on +z / -z), for a complete battlement.
     for (int i = -1; i <= 1; ++i) {
         const f32 o = static_cast<f32>(i) * (r * 0.9f);
-        add_box(op, {o - 0.14f, gh + 0.14f, r - 0.1f}, {o + 0.14f, gh + 0.46f, r + 0.1f}, stone * 1.07f); // +z merlons
-        add_box(op, {o - 0.14f, gh + 0.14f, -r - 0.1f}, {o + 0.14f, gh + 0.46f, -r + 0.1f}, stone * 1.07f);
+        add_box(op, {o - 0.14f, gh + 0.14f, r - 0.1f}, {o + 0.14f, gh + 0.46f, r + 0.1f}, stone * 1.07f); // +z
+        add_box(op, {o - 0.14f, gh + 0.14f, -r - 0.1f}, {o + 0.14f, gh + 0.46f, -r + 0.1f}, stone * 1.07f); // -z
+        add_box(op, {r - 0.1f, gh + 0.14f, o - 0.14f}, {r + 0.1f, gh + 0.46f, o + 0.14f}, stone * 1.07f); // +x
+        add_box(op, {-r - 0.1f, gh + 0.14f, o - 0.14f}, {-r + 0.1f, gh + 0.46f, o + 0.14f}, stone * 1.07f); // -x
     }
     def.parts.push_back({std::move(op), PropLayer::Opaque});
     BoxCollider c;
