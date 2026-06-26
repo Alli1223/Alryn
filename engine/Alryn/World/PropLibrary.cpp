@@ -2551,14 +2551,26 @@ PropDef PropLibrary::build_campfire() {
     add_box(op, {-0.42f, 0.05f, -0.1f}, {0.42f, 0.18f, 0.1f}, char_);
     add_box(op, {-0.1f, 0.05f, -0.42f}, {0.1f, 0.18f, 0.42f}, wood * 0.7f);
     add_box(em, {-0.22f, 0.1f, -0.22f}, {0.22f, 0.24f, 0.22f}, Vec3{0.4f, 0.12f, 0.05f}); // embers
-    // flickering flame tongues (emissive) + an additive bloom (glow pass)
+    // Layered TAPERED flame tongues (emissive pyramids to a point) rising from the embers - orange
+    // outside, yellow inside, a white-hot core - so the fire reads as flickering flames, not a box.
+    auto flame = [&](f32 cx, f32 cz, f32 base_r, f32 h, const Vec3& col) {
+        const Vec3 apex{cx, h, cz};
+        const Vec3 ctr{cx, h * 0.45f, cz}; // for emit_tri's outward-normal orientation
+        const Vec3 b0{cx - base_r, 0.16f, cz - base_r}, b1{cx + base_r, 0.16f, cz - base_r};
+        const Vec3 b2{cx + base_r, 0.16f, cz + base_r}, b3{cx - base_r, 0.16f, cz + base_r};
+        emit_tri(em, b0, b1, apex, ctr, col);
+        emit_tri(em, b1, b2, apex, ctr, col);
+        emit_tri(em, b2, b3, apex, ctr, col);
+        emit_tri(em, b3, b0, apex, ctr, col);
+    };
     for (int i = 0; i < 5; ++i) {
         const f32 a = TwoPi * static_cast<f32>(i) / 5.0f;
-        const f32 fx = std::cos(a) * 0.12f, fz = std::sin(a) * 0.12f;
-        const f32 fh = 0.5f + 0.35f * std::abs(std::sin(static_cast<f32>(i) * 1.7f));
-        add_box(em, {fx - 0.1f, 0.18f, fz - 0.1f}, {fx + 0.1f, fh, fz + 0.1f}, fire * (0.95f + 0.1f * static_cast<f32>(i % 2)));
+        const f32 fx = std::cos(a) * 0.14f, fz = std::sin(a) * 0.14f;
+        const f32 fh = 0.40f + 0.30f * std::abs(std::sin(static_cast<f32>(i) * 1.7f));
+        flame(fx, fz, 0.11f, fh, fire * (0.92f + 0.12f * static_cast<f32>(i % 2))); // outer orange tongues
     }
-    add_box(em, {-0.14f, 0.22f, -0.14f}, {0.14f, 0.95f, 0.14f}, Vec3{1.6f, 1.0f, 0.4f}); // bright core
+    flame(0.0f, 0.02f, 0.11f, 0.92f, Vec3{1.35f, 0.85f, 0.28f}); // tall yellow inner tongue
+    flame(0.0f, 0.0f, 0.07f, 1.05f, Vec3{1.7f, 1.15f, 0.5f});    // white-hot core
     PropLight l;
     l.offset = Vec3{0.0f, 0.6f, 0.0f};
     l.direction = Vec3{0.0f, 1.0f, 0.0f};
