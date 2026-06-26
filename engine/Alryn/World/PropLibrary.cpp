@@ -2228,13 +2228,28 @@ PropDef PropLibrary::build_decor(int variant) {
             collider(1.0f, 0.45f, 0.85f);
             break;
         }
-        case 4: // a signpost with two pointing boards
+        case 4: { // a signpost with two POINTED directional boards + a capped post
             def.name = "signpost";
             add_box(m, {-0.07f, 0.0f, -0.07f}, {0.07f, 1.85f, 0.07f}, wood);
-            add_box(m, {0.05f, 1.35f, -0.04f}, {0.95f, 1.7f, 0.04f}, cream);          // board (+x)
-            add_box(m, {-0.95f, 0.95f, -0.04f}, {-0.05f, 1.3f, 0.04f}, cream * 0.92f); // board (-x)
+            add_box(m, {-0.1f, 1.85f, -0.1f}, {0.1f, 1.95f, 0.1f}, wood * 0.85f); // post cap
+            // A plank that points: a rectangle from x0 to x1 with a pyramidal arrow tip beyond x1.
+            auto board = [&](f32 x0, f32 x1, f32 ymid, f32 dir, const Vec3& col) {
+                constexpr f32 yh = 0.17f, zh = 0.04f;
+                const f32 lo = x0 < x1 ? x0 : x1, hi = x0 < x1 ? x1 : x0;
+                add_box(m, {lo, ymid - yh, -zh}, {hi, ymid + yh, zh}, col);
+                const Vec3 P{x1 + dir * 0.22f, ymid, 0.0f}, ctr{x1, ymid, 0.0f};
+                const Vec3 A{x1, ymid + yh, zh}, B{x1, ymid - yh, zh}, C{x1, ymid - yh, -zh},
+                    D{x1, ymid + yh, -zh};
+                emit_tri(m, A, B, P, ctr, col);
+                emit_tri(m, B, C, P, ctr, col);
+                emit_tri(m, C, D, P, ctr, col);
+                emit_tri(m, D, A, P, ctr, col);
+            };
+            board(0.05f, 0.82f, 1.55f, 1.0f, cream);            // upper board points +x
+            board(-0.05f, -0.82f, 1.12f, -1.0f, cream * 0.92f); // lower board points -x
             collider(0.1f, 0.1f, 1.6f);
             break;
+        }
         case 5: { // a stone water trough - a HOLLOW basin holding water (was a solid block hiding it)
             def.name = "trough";
             constexpr f32 ox = 0.95f, oz = 0.42f, th = 0.5f, wl = 0.13f;
