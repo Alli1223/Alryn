@@ -1500,6 +1500,19 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             ALRYN_INFO("Player {} was slain and respawned", id);
         }
     }
+
+    // FIELD REPAIR: between waves (no raiders alive), a player staying near the cart patches it up,
+    // mending its health slowly - so clearing a wave then tending the cart lets a battered haul recover.
+    if (w.health > 0.0f && ambush_.empty()) {
+        bool tended = false;
+        for (const auto& [pid, pl] : players_) {
+            if (glm::length(pl.controller.position() - w.position) < kFieldRepairRange) {
+                tended = true;
+                break;
+            }
+        }
+        w.health = field_repair(w.health, rig_max_health(rig_level_), tended, dt.seconds);
+    }
 }
 
 } // namespace alryn

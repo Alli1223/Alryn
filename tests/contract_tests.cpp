@@ -101,6 +101,17 @@ TEST_CASE("Contract: last stand ramps the defenders' damage as the wagon nears w
     CHECK(intact_bonus_mult(0.1f) < intact_bonus_mult(1.0f));
 }
 
+TEST_CASE("Contract: a tended cart field-repairs between waves, capped at full") {
+    const f32 max = 200.0f, dt = 1.0f;
+    CHECK(field_repair(100.0f, max, true, dt) > 100.0f); // tended + damaged -> mends
+    CHECK(field_repair(100.0f, max, true, dt) == doctest::Approx(100.0f + kFieldRepairRate));
+    CHECK(field_repair(100.0f, max, false, dt) == doctest::Approx(100.0f)); // untended -> no change
+    CHECK(field_repair(max, max, true, dt) == doctest::Approx(max));        // already full -> no change
+    CHECK(field_repair(max - 1.0f, max, true, dt) == doctest::Approx(max)); // caps at full (no overshoot)
+    CHECK(field_repair(100.0f, max, true, 0.0f) == doctest::Approx(100.0f)); // no time -> no change
+    CHECK(field_repair(50.0f, max, true, dt) >= 50.0f);                      // only ever heals up
+}
+
 TEST_CASE("Contract: wagon rig upgrades cost more + make the cart tougher") {
     CHECK(rig_price(2) > rig_price(1)); // escalating cost
     CHECK(rig_price(3) > rig_price(2));

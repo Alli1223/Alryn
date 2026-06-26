@@ -143,6 +143,10 @@ void ClientApp::draw_hud() {
             draw.text(Vec2{24.0f, 22.0f + ts * 2.6f + 16.0f},
                       std::format("LAST STAND  +{}% DMG", lsb), ts * 0.82f,
                       Vec4{1.0f, 0.3f + 0.25f * pulse, 0.2f, 1.0f});
+        } else if (wf > 0.0f && wf < 0.999f && snapshot_.enemies.empty()) {
+            // Damaged + no raiders left: prompt the field-repair (stay near the cart to mend it).
+            draw.text(Vec2{24.0f, 22.0f + ts * 2.6f + 16.0f}, "TEND THE CART TO REPAIR IT",
+                      ts * 0.78f, Vec4{0.55f, 0.9f, 0.65f, 1.0f});
         }
         // Intact-delivery bonus: keeping the wagon's health up earns up to +bonus pay on arrival, so
         // it's worth fighting the ambushers off rather than just outrunning them.

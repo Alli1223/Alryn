@@ -203,6 +203,19 @@ inline f32 streak_mult(u32 streak) {
     return 1.0f + kStreakBonusPer * static_cast<f32>(s);
 }
 
+// FIELD REPAIR: between ambush waves (no raiders alive) a player who stays near the cargo wagon
+// patches it up, mending its health slowly back toward full - so clearing a wave then tending the
+// cart is rewarded, and a battered haul can recover if you make the time. Pure + server-applied.
+inline constexpr f32 kFieldRepairRange = 3.5f; // how close a player tends the cart
+inline constexpr f32 kFieldRepairRate = 9.0f;  // hp/sec a tended cart mends (only when safe)
+inline f32 field_repair(f32 health, f32 max_health, bool tended, f32 dt) {
+    if (!tended || health >= max_health || dt <= 0.0f) {
+        return health;
+    }
+    const f32 mended = health + kFieldRepairRate * dt;
+    return mended > max_health ? max_health : mended;
+}
+
 // --- Wagon RIG upgrades (a money sink) -----------------------------------------
 // The party spends money in town to permanently REINFORCE their rig - a tougher wagon that takes the
 // road's punishment better. The first upgrade axis: more max health + an ambush-damage resist. Each
