@@ -257,6 +257,23 @@ TEST_CASE("GameServer: heal mends health, capped at the role max (melee-kill lif
     CHECK(kMeleeKillHeal > 0.0f);
 }
 
+TEST_CASE("GameServer: second wind catches the first lethal blow of a haul, once") {
+    GameServer::ServerPlayer p;
+    p.role = PlayerRole::Hunter;
+    p.max_health = 95.0f;
+    p.health = -5.0f;                                     // a lethal blow
+    CHECK(p.try_second_wind());                           // 1st death this haul -> clutch save
+    CHECK(p.health == doctest::Approx(kSecondWindHealth)); // left clinging on at low HP
+    CHECK(p.used_second_wind);
+    p.health = -5.0f;                                    // a 2nd lethal blow this haul
+    CHECK_FALSE(p.try_second_wind());                    // not caught - they respawn
+    // A new haul re-arms it (reset at contract start).
+    p.used_second_wind = false;
+    p.health = -1.0f;
+    CHECK(p.try_second_wind());
+    CHECK(kSecondWindHealth > 0.0f);
+}
+
 // Drives a real ENet client + server over localhost through the whole pipeline:
 // connect -> welcome -> input -> snapshot. Skips if the socket can't bind.
 //

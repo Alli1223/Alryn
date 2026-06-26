@@ -39,6 +39,7 @@ public:
         f32 max_health = kPlayerMaxHealth; // from the role; health is clamped to this
         f32 health = kPlayerMaxHealth;
         f32 since_hit = kPlayerRegenDelay;    // seconds since last damaged (regen gate)
+        bool used_second_wind = false;        // a once-per-haul clutch save (reset at contract start)
         f32 roll_timer = 0.0f;                // dodge roll: while > 0 the player is rolling (i-frames)
         f32 roll_cd = 0.0f;                   // seconds until the next dodge roll is available
         Vec3 roll_dir{0.0f};                  // locked roll direction (set when the roll begins)
@@ -95,6 +96,19 @@ public:
 
         // Mend `amount` health, capped at the role's max (e.g. a melee-kill lifesteal).
         void heal(f32 amount) { health = std::min(max_health, health + amount); }
+
+        // SECOND WIND: the first lethal blow of a haul leaves the player clinging on at kSecondWindHealth
+        // instead of dying - a once-per-contract clutch save. Returns true if it triggered (so the death
+        // handler skips the respawn).
+        bool try_second_wind() {
+            if (used_second_wind) {
+                return false;
+            }
+            used_second_wind = true;
+            health = kSecondWindHealth;
+            since_hit = 0.0f; // still in combat - no regen yet
+            return true;
+        }
     };
 
     // A cargo crate that bounced out of the bed and is lying on the ground (world position)

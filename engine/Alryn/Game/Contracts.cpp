@@ -557,6 +557,9 @@ void GameServer::accept_contract(const Wagon& chosen, WagonMode mode) {
     contract_phase_ = ContractPhase::Active;
     contract_elapsed_ = 0.0f; // start the rush-bonus clock
     contract_kills_ = 0;      // fresh kill-bounty tally for this haul
+    for (auto& [pid, pl] : players_) {
+        pl.used_second_wind = false; // each player gets one clutch second wind per haul
+    }
     ALRYN_INFO("Contract accepted ({}), reward {}", mode == WagonMode::Manual ? "manual" : "driver",
                active_.reward);
 }
@@ -1535,7 +1538,9 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
         if (pl.health > 0.0f && pl.since_hit > kPlayerRegenDelay) {
             pl.health = std::min(pl.max_health, pl.health + kPlayerRegen * dt.seconds);
         }
-        if (pl.health <= 0.0f) {
+        // A lethal blow: the once-per-haul SECOND WIND catches the first one (clinging on at low HP for
+        // a clutch comeback); after that, slain players respawn at the town.
+        if (pl.health <= 0.0f && !pl.try_second_wind()) {
             pl.controller.set_position(spawn_point(id));
             pl.health = pl.max_health;
             pl.since_hit = kPlayerRegenDelay;

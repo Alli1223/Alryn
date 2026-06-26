@@ -42,6 +42,7 @@ inline constexpr f32 kEnemyAttackInterval = 1.1f; // seconds between swings
 inline constexpr f32 kPlayerMaxHealth = 100.0f;
 inline constexpr f32 kPlayerRegen = 5.0f;       // hp/sec once out of combat
 inline constexpr f32 kPlayerRegenDelay = 6.0f;  // seconds after a hit before regen
+inline constexpr f32 kSecondWindHealth = 25.0f; // once per haul, a lethal blow leaves you at this (clutch)
 
 inline constexpr f32 kMeleeRange = 2.7f;        // player melee reach
 inline constexpr f32 kMeleeDamage = 34.0f;      // per swing
