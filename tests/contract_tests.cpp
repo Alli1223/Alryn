@@ -69,6 +69,17 @@ TEST_CASE("Contract: wagon rig upgrades cost more + make the cart tougher") {
     CHECK(rig_damage_mult(static_cast<u8>(kMaxRigLevel + 5)) == doctest::Approx(rig_damage_mult(kMaxRigLevel)));
 }
 
+TEST_CASE("Contract: rush bonus rewards a fast delivery + decays to nothing") {
+    const f32 exp = rush_expected_time(300.0f);
+    CHECK(exp > 0.0f);
+    CHECK(rush_expected_time(600.0f) > exp);                                 // longer route = more budget
+    CHECK(rush_bonus_mult(0.0f, exp) == doctest::Approx(1.0f + kRushBonus)); // instant = full bonus
+    CHECK(rush_bonus_mult(exp, exp) == doctest::Approx(1.0f));               // at the budget = none
+    CHECK(rush_bonus_mult(exp * 2.0f, exp) == doctest::Approx(1.0f));        // over budget = none (clamped)
+    CHECK(rush_bonus_mult(exp * 0.4f, exp) > rush_bonus_mult(exp * 0.8f, exp)); // faster = more
+    CHECK(rush_bonus_mult(10.0f, 0.0f) == doctest::Approx(1.0f));            // guard: no budget = no bonus
+}
+
 TEST_CASE("Contract: bigger vehicles pay more (capacity multiplier)") {
     CHECK(capacity_reward_mult(1) == doctest::Approx(1.0f));     // a cart: baseline pay
     CHECK(capacity_reward_mult(2) > capacity_reward_mult(1));    // a wagon: more

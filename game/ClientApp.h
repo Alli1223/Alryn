@@ -764,6 +764,7 @@ private:
     std::unordered_map<u64, f32> gate_open_; // eased open amount, keyed by gate position hash
 
     f32 elapsed_ = 0.0f;
+    f32 haul_elapsed_ = 0.0f; // seconds the active haul has run (client-side, for the rush-bonus HUD)
     f32 frame_dt_ = 1.0f / 60.0f; // last frame's dt, for per-frame sims stepped during rendering (cloth)
     f32 time_of_day_ = daynight::start_time; // 0=midnight, 0.25=sunrise, 0.5=noon, 0.75=sunset
     f32 day_seconds_ = daynight::default_day_seconds;

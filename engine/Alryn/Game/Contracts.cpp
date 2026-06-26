@@ -556,12 +556,14 @@ void GameServer::accept_contract(const Wagon& chosen, WagonMode mode) {
         make_driver(2, Vec3{ahead.x, worldgen::height(ahead.x, ahead.y, seed), ahead.y});
     }
     contract_phase_ = ContractPhase::Active;
+    contract_elapsed_ = 0.0f; // start the rush-bonus clock
     ALRYN_INFO("Contract accepted ({}), reward {}", mode == WagonMode::Manual ? "manual" : "driver",
                active_.reward);
 }
 
 void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
     Wagon& w = active_;
+    contract_elapsed_ += dt.seconds; // the rush-bonus clock runs the whole haul (even while stranded)
     const u32 wseed = sampler_.seed(); // so the cart + its puller ride bridges over rivers
     // A wheel is off: the cart is stranded - it can't roll until a player refits the wheel. Keep it
     // grounded + zero its velocity (so cargo settles), but don't tow or advance it.
@@ -785,7 +787,9 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
                                 : static_cast<f32>(w.reward);
         // Bonus for delivering the wagon INTACT (scales with remaining health) - defending it pays.
         const f32 intact = intact_bonus_mult(w.health / kWagonHealth);
-        money_ += static_cast<u32>(std::lround(base * frac * intact));
+        // RUSH bonus: a fast delivery pays extra (decays over the route's time budget).
+        const f32 rush = rush_bonus_mult(contract_elapsed_, rush_expected_time(roads::route_length(w.route)));
+        money_ += static_cast<u32>(std::lround(base * frac * intact * rush));
         contract_outcome_ = 1;
         contract_phase_ = ContractPhase::Settle;
         settle_timer_ = kSettleSeconds;

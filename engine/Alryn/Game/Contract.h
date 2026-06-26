@@ -145,6 +145,23 @@ inline f32 intact_bonus_mult(f32 health_frac) {
     return 1.0f + kIntactBonus * hf;
 }
 
+// A RUSH bonus for a fast delivery: the payout gets a bonus that DECAYS from +kRushBonus when the haul
+// starts down to 0 by the time a steady run would take (rush_expected_time). Hurrying - and risking the
+// ambushers rather than stopping to fight them off (which the INTACT bonus rewards) - pays off too, so
+// speed and safety pull against each other: a deliberate risk/reward choice, not one optimal play.
+inline constexpr f32 kRushBonus = 0.25f; // up to +25% pay for a very fast delivery
+inline f32 rush_expected_time(f32 route_dist) {
+    return route_dist / kWagonManualSpeed * 1.6f; // a generous time budget (hitching, turns, ambushes)
+}
+inline f32 rush_bonus_mult(f32 elapsed, f32 expected) {
+    if (expected <= 0.0f) {
+        return 1.0f;
+    }
+    f32 t = 1.0f - elapsed / expected; // 1 at the start, 0 once the budget is spent
+    t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+    return 1.0f + kRushBonus * t;
+}
+
 // --- Wagon RIG upgrades (a money sink) -----------------------------------------
 // The party spends money in town to permanently REINFORCE their rig - a tougher wagon that takes the
 // road's punishment better. The first upgrade axis: more max health + an ambush-damage resist. Each

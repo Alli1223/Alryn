@@ -217,6 +217,10 @@ void ClientApp::return_to_menu() {
 void ClientApp::on_update(Timestep dt) {
     elapsed_ += dt.seconds;
     frame_dt_ = glm::clamp(dt.seconds, 1.0f / 240.0f, 1.0f / 20.0f); // clamp so a hitch can't explode the cloth
+    // Client-side haul clock for the rush-bonus HUD readout (the server's payout is authoritative).
+    haul_elapsed_ = (snapshot_.contract_phase == static_cast<u8>(ContractPhase::Active))
+                        ? haul_elapsed_ + dt.seconds
+                        : 0.0f;
     if (renderer_ != nullptr) {
         renderer_->set_time(elapsed_);
     }

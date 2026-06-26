@@ -133,6 +133,16 @@ void ClientApp::draw_hud() {
         const int ibonus = static_cast<int>(std::lround((intact_bonus_mult(wf) - 1.0f) * 100.0f));
         draw.text(Vec2{252.0f, 22.0f + ts * 2.6f - 1.0f}, std::format("INTACT +{}% PAY", ibonus),
                   ts * 0.62f, Vec4{glm::mix(Vec3{0.85f, 0.5f, 0.3f}, Vec3{0.6f, 0.86f, 0.5f}, wf), 1.0f});
+        // Rush bonus: delivering fast pays extra (it decays over the route), so there's a real choice -
+        // hurry past the ambushers, or stop and fight for the intact bonus. Approximate client estimate
+        // (route ~ 1.3x the straight line); the server's payout is authoritative.
+        const f32 sld = glm::length(Vec2{wg.dest.x - wg.source.x, wg.dest.z - wg.source.z}) * 1.3f;
+        const int rbonus =
+            static_cast<int>(std::lround((rush_bonus_mult(haul_elapsed_, rush_expected_time(sld)) - 1.0f) * 100.0f));
+        if (rbonus > 0) {
+            draw.text(Vec2{252.0f, 22.0f + ts * 2.6f + 13.0f}, std::format("RUSH +{}% PAY", rbonus),
+                      ts * 0.62f, Vec4{0.95f, 0.78f, 0.42f, 1.0f});
+        }
         // Contextual E hint: righting a flipped cart / handling goods take priority.
         bool carrying = false;
         for (const net::PlayerState& pp : snapshot_.players) {
