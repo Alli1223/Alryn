@@ -209,6 +209,16 @@ TEST_CASE("Combat: the archer's aimed shot is heavy, telegraphed (dodgeable), an
     CHECK(kAimedArrowSpeed > 0.0f);                // and fast once it's loosed
 }
 
+TEST_CASE("Combat: the lone last raider enrages (faster + harder), but a brute never does") {
+    CHECK(is_enraged(1, 0));            // the last grunt -> berserk
+    CHECK(is_enraged(1, kEnemyShield)); // the last shield-bearer -> berserk
+    CHECK(is_enraged(1, 3));            // the last archer -> berserk
+    CHECK_FALSE(is_enraged(2, 0));      // more than one still up -> not yet
+    CHECK_FALSE(is_enraged(5, 0));
+    CHECK_FALSE(is_enraged(1, 2));      // a brute never enrages (already a slow, tough wall)
+    CHECK(kEnrageMult > 1.0f);          // it really is a boost
+}
+
 TEST_CASE("Combat: a villager walks toward its goal (e.g. fleeing / heading to bed)") {
     const DensitySampler density = flat_ground();
     const std::span<const Collider> none{};

@@ -68,6 +68,14 @@ inline constexpr f32 kAimWindup = 0.7f;       // telegraph time before the arrow
 inline constexpr f32 kAimedShotDamage = 20.0f; // a heavy aimed hit (vs the old ~8 snap arrow)
 inline constexpr f32 kAimedArrowSpeed = 26.0f; // faster than a snap shot once it's loosed
 
+// LAST-RAIDER ENRAGE: when only one ambusher is left, the FINAL raider goes berserk - faster + hits
+// harder - so clearing a wave ends on a "finish it" climax rather than mopping up a straggler. Brutes
+// are excluded (already a slow, heavy wall). Pure + headless-testable.
+inline constexpr f32 kEnrageMult = 1.45f; // x march speed + strike damage for the lone last raider
+inline bool is_enraged(usize enemies_alive, u8 kind) {
+    return enemies_alive <= 1 && kind != 2u;
+}
+
 // Knockback on hits: an enemy gets shoved back along the hit direction at a velocity proportional to
 // the damage (capped), decaying over ~half a second - so a solid hit reads with impact + opens space.
 inline constexpr f32 kKnockbackPerDamage = 0.13f; // m/s of knockback per point of damage

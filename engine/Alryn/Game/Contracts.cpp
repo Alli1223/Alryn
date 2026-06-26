@@ -1390,9 +1390,12 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             continue;
         }
 
-        const f32 spd = e.kind == kEnemyShield ? kEnemySpeed * 0.85f // shield-bearer is weighed down
-                                               : kEnemySpeed;
-        const f32 dmg = kEnemyAttackDamage;
+        // The lone last raider goes berserk - a faster, harder "finish it" climax (not the brute).
+        const f32 enrage = is_enraged(ambush_.size(), e.kind) ? kEnrageMult : 1.0f;
+        const f32 spd = (e.kind == kEnemyShield ? kEnemySpeed * 0.85f // shield-bearer is weighed down
+                                                : kEnemySpeed) *
+                        enrage;
+        const f32 dmg = kEnemyAttackDamage * enrage;
         step_enemy(e, density, collider_scratch_, goal, dt, spd, bridge);
         if (e.attack_cd <= 0.0f) {
             const f32 reach = kEnemyAttackRange + kEnemyRadius;

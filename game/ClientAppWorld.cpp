@@ -83,6 +83,15 @@ void ClientApp::draw_enemies() {
         skin_and_draw(v.model, v.body_skin, v.body_mesh, root, pose, tint); // continuous skinned body
         const std::vector<Mat4> emats = v.model.bone_matrices(root, pose);
         draw_rig(v.model, emats, tint, /*attachments_only=*/true); // face/hair on top
+        // The lone last raider is ENRAGED (server gives it a speed/damage boost) - a red angry aura
+        // so the climax reads (derived from the snapshot: one non-brute ambusher left).
+        if (snapshot_.enemies.size() == 1 && en.kind != 2) {
+            const f32 puls = 0.6f + 0.4f * std::sin(elapsed_ * 14.0f);
+            renderer_->draw_glow(shape_sphere_,
+                                 glm::translate(Mat4{1.0f}, en.position + Vec3{0.0f, 1.0f, 0.0f}) *
+                                     glm::scale(Mat4{1.0f}, Vec3{1.3f}),
+                                 Vec4{1.0f, 0.18f, 0.12f, 0.4f * puls});
+        }
         if (en.kind == 2 && (en.action == 2 || en.action == 3)) {
             // Brute slam telegraph: a pulsing red danger ring on the ground while it winds up
             // (action 2 - dodge out of it!), then a bright shockwave burst on the strike (action 3).
