@@ -111,6 +111,44 @@ TEST_CASE("Combat: a hit knocks an enemy back, then it settles + presses on") {
     CHECK(glm::length(e.knockback) < 0.1f); // settles to rest
 }
 
+TEST_CASE("Combat: a heavy hit staggers an enemy - it reels in place until the stun wears off") {
+    const DensitySampler density = flat_ground();
+    const std::span<const Collider> none{};
+    const Vec3 goal{12.0f, 0.0f, 0.0f};
+    const Timestep step{1.0f / 60.0f};
+
+    Enemy e;
+    e.position = Vec3{0.0f, 0.0f, 0.0f};
+    e.stagger = kStaggerDuration; // just took a heavy hit
+    const f32 start = glm::length(goal - e.position);
+
+    // While reeling (< kStaggerDuration s) it makes NO progress toward the goal.
+    for (int i = 0; i < 20; ++i) { // 20/60 s < kStaggerDuration
+        step_enemy(e, density, none, goal, step);
+    }
+    CHECK(glm::length(goal - e.position) == doctest::Approx(start).epsilon(0.01)); // held in place
+    CHECK(e.stagger > 0.0f);          // still reeling
+    CHECK(e.stagger < kStaggerDuration); // but the stun is wearing off
+
+    // Let it fully wear off, then it presses on toward the goal again.
+    for (int i = 0; i < 120; ++i) {
+        step_enemy(e, density, none, goal, step);
+    }
+    CHECK(e.stagger <= 0.0f);
+    CHECK(glm::length(goal - e.position) < start - 1.0f); // recovered: advancing again
+
+    // Knockback still shoves a staggered enemy, so a heavy blow reads with impact even mid-stun.
+    Enemy s;
+    s.position = Vec3{0.0f, 0.0f, 0.0f};
+    s.stagger = kStaggerDuration;
+    s.knockback = Vec3{6.0f, 0.0f, 0.0f};
+    step_enemy(s, density, none, s.position, step);
+    CHECK(s.position.x > 0.0f); // shoved despite reeling
+
+    CHECK(kStaggerThreshold > kMeleeDamage); // a basic swing doesn't reach it -> no stun-lock
+    CHECK(kStaggerDuration > 0.0f);
+}
+
 TEST_CASE("Combat: a shield-bearer blocks frontal hits but is open from the flank/rear") {
     Enemy e;
     e.kind = kEnemyShield;

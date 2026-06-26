@@ -1286,6 +1286,12 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
         if (e.taunt_cd > 0.0f) {
             e.taunt_cd -= dt.seconds;
         }
+        if (e.stagger > 0.0f) {
+            // Reeling from a heavy hit: no movement or attack this frame (step_enemy still resolves
+            // knockback + terrain + ticks the stagger timer down), opening a follow-up combo window.
+            step_enemy(e, density, collider_scratch_, e.position, dt, 0.0f, bridge);
+            continue;
+        }
         Vec3 goal = w.position;
         f32 best = kAggroRadius;
         ServerPlayer* victim = nullptr;
@@ -1479,6 +1485,9 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                     if (e.kind == kEnemyShield && raw >= kSunderThreshold) {
                         e.sunder_cd = kSunderDuration;
                     }
+                    if (raw >= kStaggerThreshold) {
+                        e.stagger = kStaggerDuration; // a heavy hit reels any enemy (combo window)
+                    }
                     Vec3 kdir = pr.velocity; // shove along the shot's flight direction (less if blocked)
                     kdir.y = 0.0f;
                     if (glm::length(kdir) > 1e-3f) {
@@ -1536,6 +1545,9 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             // A HEAVY swing (e.g. an Empowered Knight blow) staggers it, breaking its guard a while.
             if (hit->kind == kEnemyShield && raw >= kSunderThreshold) {
                 hit->sunder_cd = kSunderDuration;
+            }
+            if (raw >= kStaggerThreshold) {
+                hit->stagger = kStaggerDuration; // a heavy hit reels any enemy (combo window)
             }
             Vec3 kdir = hit->position - pl.controller.position(); // shove away from the attacker (less if blocked)
             kdir.y = 0.0f;

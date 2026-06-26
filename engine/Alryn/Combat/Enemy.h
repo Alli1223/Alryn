@@ -82,6 +82,7 @@ struct Enemy {
     Vec3 knockback{0.0f}; // a hit shoves it back; this velocity decays each step (server-only)
     f32 sunder_cd = 0.0f;   // shield-bearer: while > 0 its guard is broken (a heavy blow staggered it)
     f32 slam_windup = 0.0f; // brute slam / archer aim: while > 0 it is winding up a telegraphed attack
+    f32 stagger = 0.0f;     // while > 0 it reels from a heavy hit: no move + no attack (combo window)
 };
 
 // Archer (kind 3) AIMED SHOT: instead of weak snap-arrows the archer now winds up (a telegraph the
@@ -115,6 +116,14 @@ inline constexpr f32 kShieldReduction = 0.80f; // fraction of a frontal hit the 
 // threshold, basic attacks just bounce off the front (the shield stays meaningful - flank or hit hard).
 inline constexpr f32 kSunderThreshold = 55.0f; // raw damage that breaks the guard (basics 14-42 don't)
 inline constexpr f32 kSunderDuration = 2.5f;   // seconds the guard stays down after a sunder
+
+// STAGGER: a single HEAVY blow (above this threshold - a charged ability, a rampage/empower/last-stand
+// buffed swing) briefly STUNS any enemy: it reels in place, unable to move or attack, opening a
+// follow-up combo window so a big hit feels meaty. Distinct from sunder (a shield-guard break) and
+// knockback (a positional shove) - all three can stack. Basic attacks (14-42) don't reach the
+// threshold, so there's no stun-lock; only genuine burst hits stagger.
+inline constexpr f32 kStaggerThreshold = 50.0f; // raw damage that staggers any enemy
+inline constexpr f32 kStaggerDuration = 0.6f;   // brief reel before it presses on again
 
 // Brute (kind 2) SLAM: instead of a single-target swing the brute winds up (a telegraph the players
 // can read + dodge), then smashes the ground for a RADIAL AoE that hits everyone within kSlamRadius -
@@ -209,7 +218,9 @@ inline void step_enemy(Enemy& e, const DensitySampler& density,
     Vec3 to = goal - e.position;
     to.y = 0.0f;
     const f32 d = glm::length(to);
-    if (d > 0.05f) {
+    // While reeling from a heavy hit (staggered) the enemy can't pursue its goal - but knockback below
+    // still shoves it, so a solid blow visibly stops it in its tracks and opens a follow-up window.
+    if (e.stagger <= 0.0f && d > 0.05f) {
         const Vec3 dir = to / d;
         const f32 step = std::min(d, speed * dts);
         Vec2 xz{e.position.x + dir.x * step, e.position.z + dir.z * step};
@@ -253,6 +264,9 @@ inline void step_enemy(Enemy& e, const DensitySampler& density,
     }
     if (e.sunder_cd > 0.0f) {
         e.sunder_cd -= dts; // the shield-bearer's guard recovers after a sunder
+    }
+    if (e.stagger > 0.0f) {
+        e.stagger -= dts; // the brief reel from a heavy hit wears off
     }
 }
 
