@@ -75,7 +75,8 @@ void ClientApp::draw_enemies() {
                           : en.kind == 3 ? Vec3{0.5f, 0.85f, 0.45f}
                           : en.kind == 4 ? Vec3{0.62f, 0.66f, 0.78f}
                           : en.kind == 5 ? Vec3{0.78f, 0.82f, 0.70f}
-                                         : Vec3{1.3f, 0.32f, 0.3f};
+                          : en.kind == kEnemySapper ? Vec3{0.5f, 0.42f, 0.30f} // dark, hunched
+                                                    : Vec3{1.3f, 0.32f, 0.3f};
         const std::vector<Quat> pose = v.animator.pose(v.model);
         if (v.body_skin.vertices.empty()) {
             v.body_skin = build_body_mesh(v.model);
@@ -115,6 +116,27 @@ void ClientApp::draw_enemies() {
                                                                      kSlamRadius * 1.2f}),
                                      Vec4{1.0f, 0.55f, 0.25f, 0.6f});
             }
+        }
+        if (en.kind == kEnemySapper) {
+            // A lit-fuse satchel charge on its back: a dark box + a fast-sparking emissive fuse tip,
+            // so the bomber reads as "intercept me before I reach the cart!".
+            const Vec3 back = en.position -
+                              Vec3{std::cos(en.yaw), 0.0f, std::sin(en.yaw)} * 0.22f +
+                              Vec3{0.0f, 1.05f, 0.0f};
+            renderer_->draw(shape_box_,
+                            glm::translate(Mat4{1.0f}, back) *
+                                glm::scale(Mat4{1.0f}, Vec3{0.26f, 0.26f, 0.18f}),
+                            Vec4{0.22f, 0.18f, 0.13f, 1.0f}); // satchel charge
+            const f32 spark = 0.6f + 0.4f * std::sin(elapsed_ * 26.0f + en.position.x);
+            const Vec3 fuse = back + Vec3{0.0f, 0.22f, 0.0f};
+            renderer_->draw_emissive(shape_sphere_,
+                                     glm::translate(Mat4{1.0f}, fuse) *
+                                         glm::scale(Mat4{1.0f}, Vec3{0.09f * spark}),
+                                     Vec4{1.0f, 0.7f, 0.2f, 1.0f});
+            renderer_->draw_glow(shape_sphere_,
+                                 glm::translate(Mat4{1.0f}, fuse) *
+                                     glm::scale(Mat4{1.0f}, Vec3{0.42f}),
+                                 Vec4{1.0f, 0.5f, 0.15f, 0.5f * spark});
         }
         if (en.kind == 3) {
             // A bow held out front (a curved stave + string).

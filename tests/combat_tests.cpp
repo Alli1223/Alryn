@@ -219,6 +219,14 @@ TEST_CASE("Combat: the lone last raider enrages (faster + harder), but a brute n
     CHECK(kEnrageMult > 1.0f);          // it really is a boost
 }
 
+TEST_CASE("Combat: a sapper is a fragile, fast bomber that hits the cargo hard") {
+    CHECK(enemy_max_health(kEnemySapper) < enemy_max_health(0)); // fragile -> intercept it fast
+    CHECK(kSapperSpeed > kEnemySpeed);                           // it rushes the cart
+    CHECK(kSapperDamage > kEnemyAttackDamage);                   // a heavy detonation vs a basic hit
+    CHECK(kSapperBlastRadius > 0.0f);                            // and a small player blast
+    CHECK(kSapperBlastDamage > 0.0f);
+}
+
 TEST_CASE("Combat: a villager walks toward its goal (e.g. fleeing / heading to bed)") {
     const DensitySampler density = flat_ground();
     const std::span<const Collider> none{};

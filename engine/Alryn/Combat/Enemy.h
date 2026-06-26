@@ -18,7 +18,20 @@ inline constexpr f32 kBruteMaxHealth = 170.0f; // a brute (kind 2) is a tough, s
 
 // Enemy kinds: 0 = grunt, 1 = torch-bearer (lights the night + burns houses),
 // 2 = brute (bigger, much tougher, slower, hits harder).
-inline f32 enemy_max_health(u8 kind) { return kind == 2 ? kBruteMaxHealth : kEnemyMaxHealth; }
+// SAPPER (kind 6): ignores the players and rushes the WAGON, then DETONATES on contact for heavy cargo
+// damage + a small player blast - so the party must INTERCEPT it (it's fragile) before it reaches the
+// cart. A "protect the cargo" threat distinct from the player-hunters.
+inline constexpr u8 kEnemySapper = 6u;
+inline constexpr f32 kSapperMaxHealth = 36.0f;          // fragile - cut it down before it arrives
+inline constexpr f32 kSapperSpeed = 3.1f;               // rushes the cart (faster than a grunt)
+inline constexpr f32 kSapperRange = 1.9f;               // detonates within this of the wagon
+inline constexpr f32 kSapperDamage = 60.0f;             // heavy hit to the cargo wagon on detonation
+inline constexpr f32 kSapperBlastRadius = 2.6f;         // players caught this close take the blast
+inline constexpr f32 kSapperBlastDamage = 18.0f;
+
+inline f32 enemy_max_health(u8 kind) {
+    return kind == 2 ? kBruteMaxHealth : kind == kEnemySapper ? kSapperMaxHealth : kEnemyMaxHealth;
+}
 inline constexpr f32 kEnemySpeed = 2.7f;       // march speed (m/s)
 inline constexpr f32 kEnemyRadius = 0.4f;      // collision radius (xz)
 inline constexpr f32 kEnemyHeight = 1.7f;      // capsule height for prop collision

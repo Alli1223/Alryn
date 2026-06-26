@@ -1218,12 +1218,13 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                                             7000u);
             Enemy e;
             e.id = next_ambush_id_++;
-            const u32 roll = h % 7u;
-            // ~1/7 each of brute / archer / shield-bearer / healer, the rest grunts.
+            const u32 roll = h % 8u;
+            // ~1/8 each of brute / archer / shield-bearer / healer / sapper, the rest grunts.
             e.kind = roll == 0u   ? 2u
                      : roll == 1u ? 3u
                      : roll == 2u ? kEnemyShield
                      : roll == 3u ? kEnemyHealer
+                     : roll == 4u ? kEnemySapper
                                   : 0u;
             e.health = enemy_max_health(e.kind);
             const f32 a = detail::hash01(h) * TwoPi;
@@ -1357,6 +1358,22 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                 if (e.attack_cd <= 0.0f && td < kArcherShootRange) {
                     e.slam_windup = kAimWindup; // start the aim telegraph
                 }
+            }
+            continue;
+        }
+
+        if (e.kind == kEnemySapper) {
+            // Sapper: ignores the players and rushes the WAGON, then DETONATES on contact - a heavy
+            // hit to the cargo + a small blast on nearby players. Intercept it before it arrives!
+            step_enemy(e, density, collider_scratch_, w.position, dt, kSapperSpeed, bridge);
+            if (glm::length(w.position - e.position) < kSapperRange) {
+                w.health -= kSapperDamage * rig_damage_mult(rig_level_);
+                for (auto& [pid, pl] : players_) {
+                    if (glm::length(pl.controller.position() - e.position) < kSapperBlastRadius) {
+                        pl.take_damage(kSapperBlastDamage); // i-frames (a dodge roll) evade the blast
+                    }
+                }
+                e.alive = false; // it's spent - blew itself up on the cart
             }
             continue;
         }
