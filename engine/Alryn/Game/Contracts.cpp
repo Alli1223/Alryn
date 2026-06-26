@@ -634,6 +634,19 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
                 collision_->gather(pos, collider_scratch_);
             }
             append_walls(pos, collider_scratch_); // the teamster A* routes AROUND Mage rock walls
+            // Inside a town, keep the cart OUT of the central market plaza: add the market footprint as
+            // a circular keep-out so the driver rounds it on the streets instead of cutting across (the
+            // open plaza has no stall colliders, so the A* would otherwise barrel straight through it).
+            // Sized < kDeliverRadius so the cart can still reach the plaza edge to deliver.
+            if (const auto town = worldgen::village_containing(pos.x, pos.z, wseed, kMarketKeepout)) {
+                Collider mk;
+                mk.shape = Collider::Shape::Cylinder;
+                mk.center = Vec3{town->center.x, pos.y, town->center.y};
+                mk.radius = kMarketKeepout;
+                mk.y_min = pos.y - 1.0f;
+                mk.y_max = pos.y + 2.0f;
+                collider_scratch_.push_back(mk);
+            }
             driver_path_ = astar_path({pos.x, pos.z}, wp, collider_scratch_, vt.reach() + 0.2f, pos.y);
             driver_path_i_ = 0;
             driver_repath_ = 0.6f;

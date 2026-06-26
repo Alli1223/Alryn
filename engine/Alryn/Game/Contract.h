@@ -40,6 +40,9 @@ inline constexpr f32 kCartTurnRate = 2.6f;     // max rad/s the towed cart can s
 inline constexpr f32 kManualRewardMult = 1.6f; // hauling it yourself pays more
 inline constexpr u32 kAmbushPerDifficulty = 3; // enemies per difficulty star
 inline constexpr f32 kDeliverRadius = 11.0f;   // within this of the dest centre = delivered
+inline constexpr f32 kMarketKeepout = 7.0f;    // the hired driver routes AROUND a town's central market
+                                               // (this radius), not across the plaza; < kDeliverRadius
+                                               // so the cart still reaches the edge to deliver
 inline constexpr f32 kCarriageSpeed = 5.0f;    // player-driven carriage top speed (m/s)
 inline constexpr f32 kCarriageTurnRate = 1.6f; // rein steering rate (rad/s)
 

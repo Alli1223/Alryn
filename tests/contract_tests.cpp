@@ -192,6 +192,11 @@ TEST_CASE("Contract: a handed-back cart resumes the driver from the route node n
     CHECK(nearest_route_index({100.0f, 0.0f}, route) == 4); // past the end clamps to the last node
     CHECK(nearest_route_index({-9.0f, 0.0f}, route) == 0);  // before the start clamps to the first
     CHECK(nearest_route_index({5.0f, 0.0f}, std::vector<Vec2>{}) == 0); // an empty route is safe
+
+    // The market keep-out (the driver rounds the plaza instead of crossing it) must stay UNDER the
+    // deliver radius, or the cart could never reach the plaza edge to complete the haul.
+    CHECK(kMarketKeepout < kDeliverRadius);
+    CHECK(kMarketKeepout > 0.0f);
 }
 
 TEST_CASE("Contract: bigger vehicles pay more (capacity multiplier)") {
