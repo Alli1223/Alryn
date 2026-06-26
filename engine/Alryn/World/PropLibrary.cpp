@@ -1765,21 +1765,30 @@ PropDef PropLibrary::build_market() {
                 add_box(m, {ex - 0.06f, 0.0f, ez - 0.06f}, {ex + 0.06f, ph, ez + 0.06f}, dark);
             }
         }
-        // Striped awning sloping down toward the plaza (the customer side).
+        // Striped awning sloping down toward the plaza, with a scalloped striped valance (fringe)
+        // hanging off its front lip - the classic market-stall look (was just a flat sloped quad).
         constexpr int strips = 4;
         const f32 back = axis == 0 ? cz - sdir * (hd + 0.2f) : cx - sdir * (hd + 0.2f);
         const f32 front = axis == 0 ? cz + sdir * (hd + 0.55f) : cx + sdir * (hd + 0.55f);
+        auto P = [&](f32 u, f32 y, f32 perp) {
+            return axis == 0 ? Vec3{cx + u, y, perp} : Vec3{perp, y, cz + u};
+        };
+        const Vec3 sc{cx, ph, cz}; // stall-top centre, to orient the fringe normals outward
         for (int k = 0; k < strips; ++k) {
             const f32 u0 = -hw + (2.0f * hw) * static_cast<f32>(k) / static_cast<f32>(strips);
             const f32 u1 = -hw + (2.0f * hw) * static_cast<f32>(k + 1) / static_cast<f32>(strips);
+            const f32 um = 0.5f * (u0 + u1);
             const Vec3 c = (k % 2 == 0) ? cloth : cream;
+            add_quad(m, P(u0, ph + 0.45f, back), P(u1, ph + 0.45f, back), P(u1, ph, front),
+                     P(u0, ph, front), c); // awning panel
+            // Valance: a striped band off the front lip + a downward scallop point per strip.
             if (axis == 0) {
-                add_quad(m, {cx + u0, ph + 0.45f, back}, {cx + u1, ph + 0.45f, back},
-                         {cx + u1, ph, front}, {cx + u0, ph, front}, c);
+                add_box(m, {cx + u0, ph - 0.18f, front - 0.03f}, {cx + u1, ph, front + 0.03f}, c);
             } else {
-                add_quad(m, {back, ph + 0.45f, cz + u0}, {back, ph + 0.45f, cz + u1},
-                         {front, ph, cz + u1}, {front, ph, cz + u0}, c);
+                add_box(m, {front - 0.03f, ph - 0.18f, cz + u0}, {front + 0.03f, ph, cz + u1}, c);
             }
+            emit_tri(m, P(u0, ph - 0.18f, front), P(u1, ph - 0.18f, front), P(um, ph - 0.36f, front),
+                     sc, c);
         }
         BoxCollider col;
         col.center = Vec3{cx, 0.0f, cz};
