@@ -77,7 +77,11 @@ public:
         // spill the rest onto health. Resets the regen gate.
         void take_damage(f32 raw) {
             if (roll_timer > 0.0f) {
-                return; // i-frames: a dodge roll evades the hit entirely
+                // i-frames: a dodge roll evades the hit entirely - and a PERFECT DODGE (rolling through
+                // a hit) rewards a brief outgoing-damage boost (reuses the empower buff): dodge into
+                // danger, hit harder. Short + refreshed per evaded hit, capped by the roll cooldown.
+                damage_boost_timer = std::max(damage_boost_timer, kPerfectDodgeBuff);
+                return;
             }
             f32 d = mitigated(raw);
             if (shield_hp > 0.0f) {

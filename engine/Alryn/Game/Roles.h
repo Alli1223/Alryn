@@ -287,6 +287,10 @@ inline constexpr f32 kHealBloomRadius = 9.0f;
 // --- Co-op / team buffs (the inter-player abilities) -------------------------------------------
 inline constexpr f32 kDamageBoostMult = 1.5f;     // Empower: x outgoing damage while active
 inline constexpr f32 kDamageBoostDuration = 8.0f;
+// PERFECT DODGE: evading a hit with the roll's i-frames briefly grants the same outgoing-damage boost
+// (dodge into danger -> hit harder). Kept SHORT - it refreshes on each evaded hit, but the roll's
+// cooldown caps the i-frame uptime, so it can't be held up by spamming dodge.
+inline constexpr f32 kPerfectDodgeBuff = 1.6f;    // seconds of damage boost on a perfect dodge
 inline constexpr f32 kEmpowerRange = 18.0f;       // Cleric Empower: how far an ally can be blessed
 inline constexpr f32 kHasteMult = 1.4f;           // War Horn: x walk speed while active
 inline constexpr f32 kHasteDuration = 6.0f;

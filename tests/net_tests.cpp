@@ -227,17 +227,21 @@ TEST_CASE("Net: message serialization round-trips") {
     CHECK_FALSE(truncated.ok());
 }
 
-TEST_CASE("GameServer: a dodge roll grants i-frames (no damage while rolling)") {
+TEST_CASE("GameServer: a dodge roll grants i-frames + a perfect-dodge damage boost") {
     GameServer::ServerPlayer p;
     p.role = PlayerRole::Knight;
     p.health = 100.0f;
     p.roll_timer = 0.3f; // mid dodge roll
     p.take_damage(50.0f);
-    CHECK(p.health == doctest::Approx(100.0f)); // i-frames: the hit is evaded entirely
-    // Once the roll ends, the same hit lands (mitigated by the role's armour).
+    CHECK(p.health == doctest::Approx(100.0f));                  // i-frames: the hit is evaded entirely
+    CHECK(p.damage_boost_timer == doctest::Approx(kPerfectDodgeBuff)); // perfect dodge -> a brief boost
+    CHECK(p.outgoing_mult() > 1.0f);                            // and that boost amplifies damage
+    // Once the roll ends, the same hit lands (mitigated by the role's armour) and grants no boost.
     p.roll_timer = 0.0f;
+    p.damage_boost_timer = 0.0f;
     p.take_damage(50.0f);
     CHECK(p.health < 100.0f);
+    CHECK(p.damage_boost_timer == doctest::Approx(0.0f));
 }
 
 // Drives a real ENet client + server over localhost through the whole pipeline:
