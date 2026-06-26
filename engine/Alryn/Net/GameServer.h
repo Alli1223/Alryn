@@ -53,14 +53,34 @@ public:
         f32 spell_cd = 0.0f;                  // Mage: seconds until the next combo spell can cast
         f32 damage_boost_timer = 0.0f;        // Empower: x outgoing damage while > 0 (co-op buff)
         f32 haste_timer = 0.0f;               // War Horn: x walk speed while > 0 (co-op buff)
+        f32 rampage_timer = 0.0f;             // Rampage: kill-momentum window; stacks decay when it lapses
+        u8 rampage_stacks = 0;                // current kill-momentum stacks (x outgoing damage)
         u8 cast_fx = 0;                       // ability/spell that fired this tick (for the snapshot's VFX)
         Equipment equipment;                  // authoritative worn gear (look + the stat bonus below)
         u8 owned_tier = 0;                    // highest gear tier bought from a shop (clamps equipment)
 
-        // Multiplier applied to this player's outgoing damage (Empower buff x the weapon tier bonus).
+        // Multiplier applied to this player's outgoing damage (Empower buff x kill-momentum rampage x
+        // the weapon tier bonus).
         f32 outgoing_mult() const {
-            return (damage_boost_timer > 0.0f ? kDamageBoostMult : 1.0f) *
+            return (damage_boost_timer > 0.0f ? kDamageBoostMult : 1.0f) * rampage_mult() *
                    equipment_bonus(equipment).damage_mult;
+        }
+        // RAMPAGE: kill momentum. 1.0 at 0 stacks (idle/default), so it never perturbs an idle player.
+        f32 rampage_mult() const { return 1.0f + kRampagePerStack * static_cast<f32>(rampage_stacks); }
+        // Felling a raider adds a stack (capped) and refreshes the momentum window.
+        void on_kill() {
+            rampage_stacks = std::min<u8>(static_cast<u8>(rampage_stacks + 1), kRampageMaxStacks);
+            rampage_timer = kRampageDuration;
+        }
+        // Tick the momentum window down; when it lapses the stacks clear.
+        void decay_rampage(f32 dt) {
+            if (rampage_timer > 0.0f) {
+                rampage_timer -= dt;
+                if (rampage_timer <= 0.0f) {
+                    rampage_timer = 0.0f;
+                    rampage_stacks = 0;
+                }
+            }
         }
         f32 water = 0.0f;                     // bucket fill for firefighting (dormant siege)
         i32 wood = 0;                         // barricades buildable today (dormant siege)

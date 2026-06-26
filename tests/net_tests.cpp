@@ -274,6 +274,33 @@ TEST_CASE("GameServer: second wind catches the first lethal blow of a haul, once
     CHECK(kSecondWindHealth > 0.0f);
 }
 
+TEST_CASE("GameServer: rampage stacks kill momentum into outgoing damage, then fades") {
+    GameServer::ServerPlayer p;
+    p.role = PlayerRole::Knight;
+    // Idle (no kills) = exactly baseline, so an idle player + the deterministic haul tests are unperturbed.
+    CHECK(p.rampage_mult() == doctest::Approx(1.0f));
+    const f32 base_out = p.outgoing_mult();
+
+    p.on_kill();
+    CHECK(p.rampage_mult() == doctest::Approx(1.0f + kRampagePerStack)); // one kill -> one stack
+    CHECK(p.outgoing_mult() > base_out);                                 // and it amplifies outgoing damage
+    p.on_kill();
+    CHECK(p.rampage_mult() > 1.0f + kRampagePerStack); // chaining kills stacks higher
+
+    for (int i = 0; i < 10; ++i) {
+        p.on_kill(); // way past the cap
+    }
+    CHECK(p.rampage_stacks == kRampageMaxStacks); // capped
+    CHECK(p.rampage_mult() == doctest::Approx(1.0f + kRampagePerStack * kRampageMaxStacks));
+
+    p.decay_rampage(kRampageDuration * 0.5f);
+    CHECK(p.rampage_stacks == kRampageMaxStacks); // window still open -> momentum held
+    p.decay_rampage(kRampageDuration);            // let the window lapse
+    CHECK(p.rampage_stacks == 0);                 // momentum gone
+    CHECK(p.rampage_mult() == doctest::Approx(1.0f));
+    CHECK(kRampageMaxStacks > 0);
+}
+
 // Drives a real ENet client + server over localhost through the whole pipeline:
 // connect -> welcome -> input -> snapshot. Skips if the socket can't bind.
 //

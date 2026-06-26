@@ -50,6 +50,14 @@ inline constexpr f32 kMeleeConeCos = 0.35f;     // ~69° half-cone in front
 inline constexpr f32 kThrowDamage = 28.0f;      // a thrown rock hitting an enemy
 inline constexpr f32 kMeleeKillHeal = 7.0f;     // lifesteal: felling a raider in melee mends you a little
 
+// RAMPAGE (kill momentum): felling a raider stokes a brief, stacking outgoing-damage buff that
+// refreshes with each kill and fades if you let up - so chaining kills through an ambush hits ever
+// harder, rewarding aggression. 1.0 at 0 stacks (the idle/default state), so it never perturbs an
+// idle player or the deterministic haul tests (whose players never attack).
+inline constexpr u8 kRampageMaxStacks = 4;      // stacks cap
+inline constexpr f32 kRampagePerStack = 0.10f;  // +10% outgoing damage per stack (max +40%)
+inline constexpr f32 kRampageDuration = 4.0f;   // seconds the momentum lasts (refreshed on each kill)
+
 // Dodge roll: a quick burst in the move/facing direction with brief invulnerability (i-frames), so a
 // player can roll out of a telegraphed hit (e.g. the brute slam). Server-authoritative.
 inline constexpr f32 kRollDuration = 0.4f; // roll + i-frame window (seconds)

@@ -559,6 +559,8 @@ void GameServer::accept_contract(const Wagon& chosen, WagonMode mode) {
     contract_kills_ = 0;      // fresh kill-bounty tally for this haul
     for (auto& [pid, pl] : players_) {
         pl.used_second_wind = false; // each player gets one clutch second wind per haul
+        pl.rampage_stacks = 0;       // fresh kill momentum for the new haul
+        pl.rampage_timer = 0.0f;
     }
     ALRYN_INFO("Contract accepted ({}), reward {}", mode == WagonMode::Manual ? "manual" : "driver",
                active_.reward);
@@ -1467,6 +1469,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                     if (enemy_blocks_hit(e, pr.position - pr.velocity * 0.1f)) {
                         dmg *= (1.0f - kShieldReduction);
                     }
+                    const f32 e_before = e.health;
                     e.health -= dmg;
                     // A HEAVY shot (a charged ability) staggers a shield-bearer, dropping its guard for
                     // follow-ups - even one this hit blocked (the shield took the brunt + cracked).
@@ -1477,6 +1480,10 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                     kdir.y = 0.0f;
                     if (glm::length(kdir) > 1e-3f) {
                         e.knockback = glm::normalize(kdir) * std::min(dmg * kKnockbackPerDamage, kKnockbackMax);
+                    }
+                    // RAMPAGE: the felling shot stokes the shooter's kill momentum (crossing zero this hit).
+                    if (e.health <= 0.0f && e_before > 0.0f && ownit != players_.end()) {
+                        ownit->second.on_kill();
                     }
                     pr.alive = false;
                 }
@@ -1514,10 +1521,14 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             if (enemy_blocks_hit(*hit, pl.controller.position())) {
                 dmg *= (1.0f - kShieldReduction);
             }
+            const f32 hit_before = hit->health;
             hit->health -= dmg;
             // LIFESTEAL: felling a raider in melee mends the attacker a little (sustain by fighting).
             if (hit->health <= 0.0f) {
                 pl.heal(kMeleeKillHeal);
+                if (hit_before > 0.0f) {
+                    pl.on_kill(); // RAMPAGE: the felling blow stokes kill momentum
+                }
             }
             // A HEAVY swing (e.g. an Empowered Knight blow) staggers it, breaking its guard a while.
             if (hit->kind == kEnemyShield && raw >= kSunderThreshold) {
@@ -1539,6 +1550,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
     // Player health: regen out of combat, respawn at the town on death.
     for (auto& [id, pl] : players_) {
         pl.since_hit += dt.seconds;
+        pl.decay_rampage(dt.seconds); // kill momentum fades if you stop felling raiders
         if (pl.health > 0.0f && pl.since_hit > kPlayerRegenDelay) {
             pl.health = std::min(pl.max_health, pl.health + kPlayerRegen * dt.seconds);
         }
