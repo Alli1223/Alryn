@@ -79,6 +79,11 @@ void ClientApp::draw_hud() {
     draw.text(Vec2{W - draw.text_width(money, ts) - 24.0f, 22.0f}, money, ts,
               Vec4{0.96f, 0.86f, 0.4f, 1.0f});
 
+    // Always-on corner minimap (hidden while the full M map is open).
+    if (!map_open_) {
+        draw_minimap(draw, feet, W, H);
+    }
+
     if (phase == static_cast<u8>(ContractPhase::Offer)) {
         draw.text(Vec2{24.0f, 22.0f}, "WALK UP TO A WAGON TO VIEW ITS CONTRACT", ts,
                   Vec4{0.94f, 0.86f, 0.58f, 1.0f});
@@ -637,6 +642,54 @@ void ClientApp::draw_dest_arrow(ui::DrawList& draw, const Vec3& from, const Vec3
     draw.line(tip, tip - d * hw - perp * hw, 6.0f, amber);
     draw.text(Vec2{c.x - draw.text_width("DESTINATION", 16.0f) * 0.5f, c.y + 22.0f},
               "DESTINATION", 16.0f, amber);
+}
+
+// An always-on corner minimap: a small north-up window around the player showing nearby roads, the
+// active haul's destination (clamped to the edge if off-window), enemy threats, and the player at
+// centre with a facing tick. Cheap (lines + dots, no terrain raster) - the full M map stays the
+// detailed pannable view.
+void ClientApp::draw_minimap(ui::DrawList& draw, const Vec3& feet, f32 W, f32 H) {
+    const f32 sz = glm::clamp(H * 0.2f, 132.0f, 200.0f);
+    const Vec4 box{W - sz - 18.0f, 54.0f, sz, sz}; // top-right, just below the money counter
+    const Vec2 c{box.x + sz * 0.5f, box.y + sz * 0.5f};
+    constexpr f32 mm_radius = 120.0f; // world metres from centre to edge
+    const f32 scale = (sz * 0.5f) / mm_radius;
+    draw.rect(box, Vec4{0.04f, 0.05f, 0.07f, 0.62f}, Vec4{0.72f, 0.62f, 0.4f, 0.8f}, 2.0f, 8.0f);
+
+    const Vec2 pxz{feet.x, feet.z};
+    auto to_mm = [&](Vec2 wxz) { return c + Vec2{(wxz.x - pxz.x) * scale, (wxz.y - pxz.y) * scale}; };
+    auto inside = [&](const Vec2& p) {
+        return p.x >= box.x + 3.0f && p.x <= box.x + sz - 3.0f && p.y >= box.y + 3.0f &&
+               p.y <= box.y + sz - 3.0f;
+    };
+
+    if (world_seed_ != 0) {
+        for (const roads::Segment& s : roads::gather(pxz, mm_radius, world_seed_)) {
+            const Vec2 a = to_mm(s.a), b = to_mm(s.b);
+            if (inside(a) && inside(b)) {
+                draw.line(a, b, 2.5f, Vec4{0.64f, 0.52f, 0.34f, 0.9f});
+            }
+        }
+    }
+    for (const net::EnemyState& e : snapshot_.enemies) { // threats, red
+        const Vec2 p = to_mm(Vec2{e.position.x, e.position.z});
+        if (inside(p)) {
+            draw.rect(Vec4{p.x - 2.5f, p.y - 2.5f, 5.0f, 5.0f}, Vec4{0.92f, 0.27f, 0.2f, 1.0f}, 2.5f);
+        }
+    }
+    if (snapshot_.contract_phase == static_cast<u8>(ContractPhase::Active) && !snapshot_.wagons.empty()) {
+        const net::WagonState& wg = snapshot_.wagons.front(); // gold destination, edge-clamped
+        Vec2 d = to_mm(Vec2{wg.dest.x, wg.dest.z});
+        const f32 r = sz * 0.5f - 7.0f;
+        if (const Vec2 off = d - c; glm::length(off) > r) {
+            d = c + glm::normalize(off) * r;
+        }
+        draw.rect(Vec4{d.x - 4.0f, d.y - 4.0f, 8.0f, 8.0f}, Vec4{0.98f, 0.82f, 0.3f, 1.0f}, 4.0f);
+    }
+    // The player at centre + a heading tick.
+    const Vec2 fwd{std::cos(face_yaw_), std::sin(face_yaw_)};
+    draw.line(c, c + fwd * 11.0f, 2.5f, Vec4{0.9f, 0.95f, 1.0f, 1.0f});
+    draw.rect(Vec4{c.x - 3.0f, c.y - 3.0f, 6.0f, 6.0f}, Vec4{0.95f, 0.97f, 1.0f, 1.0f}, 3.0f);
 }
 
 void ClientApp::rebuild_map_raster(const Vec4& panel, f32 ppm) {

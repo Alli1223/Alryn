@@ -514,6 +514,7 @@ private:
     // A bold arrow near the top of the screen pointing from the player toward the wagon's
     // destination (world bearing mapped through the fixed iso camera).
     void draw_dest_arrow(ui::DrawList& draw, const Vec3& from, const Vec3& to, f32 W);
+    void draw_minimap(ui::DrawList& draw, const Vec3& feet, f32 W, f32 H);
 
     // Full-screen world map: the towns near the player and the roads between them
     // (computed deterministically from the shared seed via roads::gather + village_at),
