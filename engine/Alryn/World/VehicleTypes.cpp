@@ -202,19 +202,25 @@ MeshData build_deer_body() {
     const Vec3 belly{0.8f, 0.68f, 0.52f};
     const Vec3 dark{0.3f, 0.2f, 0.12f};
     const Vec3 antler{0.72f, 0.62f, 0.46f};
-    add_box(m, {-0.48f, 0.98f, -0.17f}, {0.38f, 1.3f, 0.17f}, hide);  // body
-    add_box(m, {-0.46f, 0.94f, -0.15f}, {0.36f, 1.02f, 0.15f}, belly); // pale belly
-    add_box(m, {0.32f, 1.2f, -0.1f}, {0.56f, 1.68f, 0.1f}, hide);     // neck (up-forward)
-    add_box(m, {0.5f, 1.58f, -0.09f}, {0.78f, 1.82f, 0.09f}, hide);   // head
-    add_box(m, {0.74f, 1.6f, -0.07f}, {0.92f, 1.74f, 0.07f}, hide * 0.95f); // muzzle
+    // Body: a deeper chest/shoulder mass up front (higher withers) and a lower, tapering haunch
+    // behind - a sloped topline rather than one flat box, for a lither deer silhouette.
+    add_box(m, {0.02f, 0.98f, -0.17f}, {0.4f, 1.36f, 0.17f}, hide);    // chest/shoulder (withers)
+    add_box(m, {-0.5f, 0.98f, -0.15f}, {0.06f, 1.28f, 0.15f}, hide);   // barrel + haunch (lower, tapering)
+    add_box(m, {-0.46f, 0.92f, -0.13f}, {0.34f, 1.02f, 0.13f}, belly); // pale belly
+    // Neck: a forward-leaning wedge stepping up from the shoulder to the head (not a vertical post).
+    add_box(m, {0.32f, 1.18f, -0.11f}, {0.5f, 1.46f, 0.11f}, hide); // lower neck (off the chest)
+    add_box(m, {0.42f, 1.4f, -0.1f}, {0.6f, 1.62f, 0.1f}, hide);    // upper neck (up-forward)
+    add_box(m, {0.52f, 1.56f, -0.09f}, {0.74f, 1.82f, 0.09f}, hide);        // head
+    add_box(m, {0.72f, 1.58f, -0.07f}, {0.94f, 1.74f, 0.07f}, hide * 0.95f); // muzzle
     for (f32 sz : {-1.0f, 1.0f}) {
-        add_box(m, {0.46f, 1.76f, sz * 0.07f - 0.03f}, {0.54f, 1.94f, sz * 0.07f + 0.03f}, dark); // ear
+        add_box(m, {0.48f, 1.78f, sz * 0.07f - 0.03f}, {0.56f, 1.96f, sz * 0.07f + 0.03f}, dark); // ear
         // a small forked antler
-        add_box(m, {0.52f, 1.8f, sz * 0.06f - 0.03f}, {0.58f, 2.18f, sz * 0.06f + 0.03f}, antler);
-        add_box(m, {0.5f, 2.02f, sz * 0.16f - 0.03f}, {0.6f, 2.1f, sz * 0.16f + 0.03f}, antler);
-        add_box(m, {0.52f, 1.96f, sz * 0.22f - 0.03f}, {0.58f, 2.12f, sz * 0.22f + 0.03f}, antler);
+        add_box(m, {0.54f, 1.8f, sz * 0.06f - 0.03f}, {0.6f, 2.18f, sz * 0.06f + 0.03f}, antler);
+        add_box(m, {0.52f, 2.04f, sz * 0.16f - 0.03f}, {0.62f, 2.12f, sz * 0.16f + 0.03f}, antler);
+        add_box(m, {0.54f, 1.98f, sz * 0.22f - 0.03f}, {0.6f, 2.14f, sz * 0.22f + 0.03f}, antler);
     }
-    add_box(m, {-0.52f, 1.12f, -0.05f}, {-0.44f, 1.34f, 0.05f}, Vec3{0.93f, 0.9f, 0.85f}); // white tail
+    add_box(m, {-0.52f, 1.04f, -0.05f}, {-0.46f, 1.26f, 0.05f},
+            Vec3{0.93f, 0.9f, 0.85f}); // white scut at the rump (hangs at the rear, not on the spine)
     return m;
 }
 MeshData build_deer_leg() {
