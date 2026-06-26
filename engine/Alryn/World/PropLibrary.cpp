@@ -2233,18 +2233,34 @@ PropDef PropLibrary::build_decor(int variant) {
         c.height = h;
         def.colliders.push_back(c);
     };
+    // A wooden CRATE: a light planked body framed by darker reinforcing corner posts + a base rail
+    // and a lid seam band (each standing a hair proud), so it reads as a slatted crate rather than a
+    // plain coloured box. Shared by the crate stack + the market-stall goods crate.
+    auto crate = [&](const Vec3& lo, const Vec3& hi, const Vec3& body) {
+        add_box(m, lo, hi, body);
+        const Vec3 frame = dark * 1.2f;
+        constexpr f32 p = 0.045f, e = 0.014f;
+        for (f32 sx : {lo.x, hi.x}) { // four vertical corner posts (edge reinforcement)
+            for (f32 sz : {lo.z, hi.z}) {
+                add_box(m, {sx - p, lo.y - e, sz - p}, {sx + p, hi.y + e, sz + p}, frame);
+            }
+        }
+        const f32 lid = hi.y - 0.16f * (hi.y - lo.y); // a lid seam near the top
+        add_box(m, {lo.x - e, lid - 0.02f, lo.z - e}, {hi.x + e, lid + 0.02f, hi.z + e}, frame * 0.92f);
+        add_box(m, {lo.x - e, lo.y + 0.05f, lo.z - e}, {hi.x + e, lo.y + 0.09f, hi.z + e},
+                frame * 0.92f); // base band
+    };
     switch (variant % static_cast<int>(kDecorVariants)) {
         case 0: // a belled wooden barrel (shared with the yard helper)
             def.name = "barrel";
             belled_barrel(m, Vec3{0.0f, 0.0f, 0.0f}, 0.38f, 0.9f, wood, dark);
             collider(0.38f, 0.38f, 0.9f);
             break;
-        case 1: // a stack of crates
+        case 1: // a stack of reinforced wooden crates
             def.name = "crates";
-            add_box(m, {-0.42f, 0.0f, -0.42f}, {0.42f, 0.72f, 0.42f}, wood * 1.08f);
-            add_box(m, {-0.44f, 0.31f, -0.44f}, {0.44f, 0.4f, 0.44f}, dark); // banding
-            add_box(m, {-0.18f, 0.72f, -0.36f}, {0.5f, 1.34f, 0.3f}, wood);   // crate on top
-            add_box(m, {-0.5f, 0.0f, 0.16f}, {0.04f, 0.52f, 0.66f}, wood * 0.92f); // crate beside
+            crate({-0.42f, 0.0f, -0.42f}, {0.42f, 0.72f, 0.42f}, wood * 1.08f); // base crate
+            crate({-0.18f, 0.72f, -0.36f}, {0.5f, 1.34f, 0.3f}, wood);          // crate on top
+            crate({-0.5f, 0.0f, 0.16f}, {0.04f, 0.52f, 0.66f}, wood * 0.92f);   // crate beside
             collider(0.58f, 0.58f, 0.72f);
             break;
         case 2: // hay bales
@@ -2271,7 +2287,7 @@ PropDef PropLibrary::build_decor(int variant) {
                 const Vec3 c = (k % 2 == 0) ? cloth : cream;
                 add_quad(m, {x0, 2.3f, -0.6f}, {x1, 2.3f, -0.6f}, {x1, 2.0f, 0.7f}, {x0, 2.0f, 0.7f}, c);
             }
-            add_box(m, {-0.7f, 0.92f, -0.2f}, {-0.3f, 1.2f, 0.2f}, wood * 1.1f);         // crate of goods
+            crate({-0.7f, 0.92f, -0.2f}, {-0.3f, 1.2f, 0.2f}, wood * 1.1f);             // crate of goods
             add_box(m, {0.2f, 0.92f, -0.2f}, {0.6f, 1.12f, 0.2f}, Vec3{0.6f, 0.5f, 0.3f}); // sacks
             collider(1.0f, 0.45f, 0.85f);
             break;
