@@ -245,6 +245,8 @@ private:
     void generate_offers();                       // offer wagons from the town players are in
     void accept_contract(const Wagon& chosen, WagonMode mode);
     void update_wagon(Timestep dt, const DensitySampler& density);  // drive / tow the cargo
+    void resync_driver_progress();  // when a player hands the cart back, resume the AI driver from the
+                                    // route node nearest the cart's CURRENT position (no backtracking)
     void update_wheel(Timestep dt, const DensitySampler& density);  // wheel break / fetch / refit
     void update_cargo(Timestep dt, const DensitySampler& density);  // slide the bed crates, eject on bumps
     void end_contract_cleanup();                // clear haul state on delivery / wreck

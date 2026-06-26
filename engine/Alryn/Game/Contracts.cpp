@@ -301,6 +301,9 @@ void GameServer::update_contracts(Timestep dt, const DensitySampler& density) {
                     riders_.erase(id);
                 } else if (tower_ == id) {
                     tower_ = 0;
+                    if (active_mode_ == WagonMode::Driver) {
+                        resync_driver_progress(); // hand the cart back to the AI driver from here on
+                    }
                 } else if (pilot_ == id) {
                     pilot_ = 0;
                 } else if (glm::length(ppos - active_.position) < kWagonGrabRange + vt.reach()) {
@@ -317,7 +320,10 @@ void GameServer::update_contracts(Timestep dt, const DensitySampler& density) {
                 }
             }
             if (tower_ != 0 && players_.count(tower_) == 0u) {
-                tower_ = 0;
+                tower_ = 0; // the hauling player vanished - hand the cart back to the AI driver from here
+                if (active_mode_ == WagonMode::Driver) {
+                    resync_driver_progress();
+                }
             }
             if (pilot_ != 0 && players_.count(pilot_) == 0u) {
                 pilot_ = 0;
@@ -565,6 +571,27 @@ void GameServer::accept_contract(const Wagon& chosen, WagonMode mode) {
     }
     ALRYN_INFO("Contract accepted ({}), reward {}", mode == WagonMode::Manual ? "manual" : "driver",
                active_.reward);
+}
+
+void GameServer::resync_driver_progress() {
+    // A player took the handles, towed the cart (maybe well past several route waypoints), then let go.
+    // Resume the hired teamster from the route node NEAREST the cart's CURRENT position - continuing
+    // forward from there - instead of marching back to the stale waypoint it was heading for. The
+    // cached A* path is dropped so the driver re-routes fresh from where the cart now sits.
+    if (active_.route.empty()) {
+        return;
+    }
+    const Vec2 here{active_.position.x, active_.position.z};
+    const int besti = nearest_route_index(here, active_.route);
+    // Aim at the node just AHEAD of the nearest, so the driver heads onward (not back to a node it has
+    // effectively already reached).
+    const int last = static_cast<int>(active_.route.size()) - 1;
+    active_.progress = static_cast<f32>(besti + 1 < last ? besti + 1 : last);
+    driver_path_.clear();
+    driver_path_i_ = 0;
+    driver_repath_ = 0.0f;
+    driver_stuck_ = 0.0f;
+    driver_best_dist_ = 1e9f;
 }
 
 void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {

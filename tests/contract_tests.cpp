@@ -184,6 +184,16 @@ TEST_CASE("Contract: an unscathed (no-casualty) haul pays a premium that fades w
     CHECK(kUnscathedBonus > 0.0f);
 }
 
+TEST_CASE("Contract: a handed-back cart resumes the driver from the route node nearest the cart") {
+    const std::vector<Vec2> route = {{0, 0}, {10, 0}, {20, 0}, {30, 0}, {40, 0}};
+    CHECK(nearest_route_index({0.5f, 0.0f}, route) == 0);   // still near the start
+    CHECK(nearest_route_index({19.0f, 1.0f}, route) == 2);  // towed up to ~node 2 -> resume from there
+    CHECK(nearest_route_index({31.0f, -2.0f}, route) == 3); // ...or node 3, not back at node 0
+    CHECK(nearest_route_index({100.0f, 0.0f}, route) == 4); // past the end clamps to the last node
+    CHECK(nearest_route_index({-9.0f, 0.0f}, route) == 0);  // before the start clamps to the first
+    CHECK(nearest_route_index({5.0f, 0.0f}, std::vector<Vec2>{}) == 0); // an empty route is safe
+}
+
 TEST_CASE("Contract: bigger vehicles pay more (capacity multiplier)") {
     CHECK(capacity_reward_mult(1) == doctest::Approx(1.0f));     // a cart: baseline pay
     CHECK(capacity_reward_mult(2) > capacity_reward_mult(1));    // a wagon: more

@@ -143,6 +143,22 @@ struct Wagon {
     u8 goods_total = 0;           // crates a full load carries (reward scales by aboard/total)
 };
 
+// Index of the route node nearest `pos` (the cart's current spot). Used to resume a hired driver from
+// where a player left the cart (continuing forward from there) instead of its stale waypoint, so the
+// haul never backtracks after a player hands it back. Returns 0 for an empty route.
+inline int nearest_route_index(const Vec2& pos, const std::vector<Vec2>& route) {
+    int besti = 0;
+    f32 best = 1e18f;
+    for (int i = 0; i < static_cast<int>(route.size()); ++i) {
+        const f32 d = glm::length(route[static_cast<usize>(i)] - pos);
+        if (d < best) {
+            best = d;
+            besti = i;
+        }
+    }
+    return besti;
+}
+
 // Payout for delivering a contract of this `distance` (world units) + `difficulty`,
 // hauled manually or by a hired driver. Longer + harder + manual = more money.
 inline u32 contract_reward(f32 distance, u8 difficulty, bool manual) {
