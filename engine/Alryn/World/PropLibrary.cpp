@@ -2281,11 +2281,18 @@ PropDef PropLibrary::build_decor(int variant) {
                     add_box(m, {ex - 0.05f, 0.0f, ez - 0.05f}, {ex + 0.05f, 2.1f, ez + 0.05f}, dark);
                 }
             }
-            for (int k = 0; k < 4; ++k) { // striped awning sloping to the front
+            // Striped awning sloping to the front. Emit via emit_tri with a centre BELOW so the
+            // normals face UP and the visible top is lit (a plain add_quad here faced its normal
+            // down, leaving the awning near-black). A short valance hangs off the lit front edge.
+            for (int k = 0; k < 4; ++k) {
                 const f32 x0 = -1.0f + 0.5f * static_cast<f32>(k);
                 const f32 x1 = -1.0f + 0.5f * static_cast<f32>(k + 1);
                 const Vec3 c = (k % 2 == 0) ? cloth : cream;
-                add_quad(m, {x0, 2.3f, -0.6f}, {x1, 2.3f, -0.6f}, {x1, 2.0f, 0.7f}, {x0, 2.0f, 0.7f}, c);
+                const Vec3 below{0.5f * (x0 + x1), 0.6f, 0.05f}; // under the awning -> normals point up
+                const Vec3 p0{x0, 2.3f, -0.6f}, p1{x1, 2.3f, -0.6f}, p2{x1, 2.0f, 0.7f}, p3{x0, 2.0f, 0.7f};
+                emit_tri(m, p0, p1, p2, below, c);
+                emit_tri(m, p0, p2, p3, below, c);
+                add_box(m, {x0, 1.78f, 0.66f}, {x1, 2.0f, 0.72f}, c * 0.92f); // valance off the front edge
             }
             crate({-0.7f, 0.92f, -0.2f}, {-0.3f, 1.2f, 0.2f}, wood * 1.1f);             // crate of goods
             add_box(m, {0.2f, 0.92f, -0.2f}, {0.6f, 1.12f, 0.2f}, Vec3{0.6f, 0.5f, 0.3f}); // sacks
