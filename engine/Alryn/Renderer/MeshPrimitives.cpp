@@ -613,14 +613,28 @@ MeshData fallen_log(int variant, const Vec3& color) {
         const Vec3 bark = (top ? glm::mix(color, moss, 0.5f) : color) * (0.85f + vrnd(h, i + 3) * 0.3f);
         add_quad(m, {x0, r0.y, r0.z}, {x1, r0.y, r0.z}, {x1, r1.y, r1.z}, {x0, r1.y, r1.z}, nrm, bark);
     }
-    // Cut ends (tris fanned to the axis).
-    for (int i = 0; i < sides; ++i) {
-        const Vec3 r0 = ring(i);
-        const Vec3 r1 = ring(i + 1);
-        emit_tri(m, {x1, radius, 0.0f}, {x1, r0.y, r0.z}, {x1, r1.y, r1.z}, {x1 - 1.0f, radius, 0.0f},
-                 end_c);
-        emit_tri(m, {x0, radius, 0.0f}, {x0, r0.y, r0.z}, {x0, r1.y, r1.z}, {x0 + 1.0f, radius, 0.0f},
-                 end_c);
+    // Cut ends with concentric end-grain RINGS (dark heartwood -> pale -> dark bark edge), so a cut
+    // log reads as a real cut log rather than a flat blank disc.
+    const Vec3 ring_cols[3] = {end_c * 0.74f, end_c * 1.06f, end_c * 0.86f};
+    const f32 bands[4] = {0.0f, 0.4f, 0.72f, 1.0f};
+    auto endv = [&](f32 x, int i, f32 t) {
+        const Vec3 r = ring(i); // scale the rim vertex toward the centre (0, radius, 0)
+        return Vec3{x, radius + (r.y - radius) * t, r.z * t};
+    };
+    for (const f32 ex : {x1, x0}) {
+        const Vec3 nrm{ex > 0.0f ? 1.0f : -1.0f, 0.0f, 0.0f};
+        const Vec3 inward{ex + (ex > 0.0f ? -1.0f : 1.0f), radius, 0.0f};
+        for (int b = 0; b < 3; ++b) {
+            for (int i = 0; i < sides; ++i) {
+                if (b == 0) { // innermost band: a fan to the centre point
+                    emit_tri(m, {ex, radius, 0.0f}, endv(ex, i, bands[1]), endv(ex, i + 1, bands[1]),
+                             inward, ring_cols[0]);
+                } else { // outer bands: rings of quads
+                    add_quad(m, endv(ex, i, bands[b]), endv(ex, i + 1, bands[b]),
+                             endv(ex, i + 1, bands[b + 1]), endv(ex, i, bands[b + 1]), nrm, ring_cols[b]);
+                }
+            }
+        }
     }
     return m;
 }
