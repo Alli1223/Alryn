@@ -2205,14 +2205,40 @@ PropDef PropLibrary::build_decor(int variant) {
         def.colliders.push_back(c);
     };
     switch (variant % static_cast<int>(kDecorVariants)) {
-        case 0: // a barrel
+        case 0: { // a BELLED wooden barrel - round octagonal staves (wide in the middle) + iron hoops
             def.name = "barrel";
-            add_box(m, {-0.33f, 0.0f, -0.33f}, {0.33f, 0.9f, 0.33f}, wood);
-            add_box(m, {-0.37f, 0.16f, -0.37f}, {0.37f, 0.28f, 0.37f}, dark);  // iron hoop
-            add_box(m, {-0.37f, 0.56f, -0.37f}, {0.37f, 0.68f, 0.37f}, dark);  // iron hoop
-            add_box(m, {-0.29f, 0.9f, -0.29f}, {0.29f, 0.96f, 0.29f}, wood * 0.9f); // lid
-            collider(0.36f, 0.36f, 0.9f);
+            constexpr int sides = 8;
+            constexpr f32 H = 0.9f;
+            auto ang = [](int s) { return TwoPi * (static_cast<f32>(s) + 0.5f) / static_cast<f32>(sides); };
+            auto pt = [](f32 r, f32 y, f32 a) { return Vec3{std::cos(a) * r, y, std::sin(a) * r}; };
+            auto rad = [](f32 t) { return 0.30f + 0.10f * std::sin(t * Pi); }; // narrow ends, wide middle
+            const Vec3 axis{0.0f, H * 0.5f, 0.0f};
+            constexpr int rings = 5;
+            for (int s = 0; s < sides; ++s) {
+                const f32 a0 = ang(s), a1 = ang(s + 1);
+                const Vec3 sc = wood * (0.86f + 0.22f * hashf(static_cast<u32>(s) * 5u + 1u));
+                for (int r = 0; r < rings; ++r) {
+                    const f32 t0 = static_cast<f32>(r) / rings, t1 = static_cast<f32>(r + 1) / rings;
+                    const Vec3 b0 = pt(rad(t0), t0 * H, a0), b1 = pt(rad(t0), t0 * H, a1);
+                    const Vec3 u0 = pt(rad(t1), t1 * H, a0), u1 = pt(rad(t1), t1 * H, a1);
+                    emit_tri(m, b0, b1, u1, axis, sc);
+                    emit_tri(m, b0, u1, u0, axis, sc);
+                }
+                emit_tri(m, Vec3{0.0f, H, 0.0f}, pt(rad(1.0f) * 0.97f, H, a0),
+                         pt(rad(1.0f) * 0.97f, H, a1), Vec3{0.0f, -1.0f, 0.0f}, wood * 0.95f); // lid fan
+            }
+            // two iron hoops: short proud octagonal bands at the upper + lower thirds
+            for (const f32 t : {0.22f, 0.78f}) {
+                const f32 y = t * H, r = rad(t) + 0.02f;
+                for (int s = 0; s < sides; ++s) {
+                    const f32 a0 = ang(s), a1 = ang(s + 1);
+                    emit_tri(m, pt(r, y - 0.05f, a0), pt(r, y - 0.05f, a1), pt(r, y + 0.05f, a1), axis, dark);
+                    emit_tri(m, pt(r, y - 0.05f, a0), pt(r, y + 0.05f, a1), pt(r, y + 0.05f, a0), axis, dark);
+                }
+            }
+            collider(0.38f, 0.38f, 0.9f);
             break;
+        }
         case 1: // a stack of crates
             def.name = "crates";
             add_box(m, {-0.42f, 0.0f, -0.42f}, {0.42f, 0.72f, 0.42f}, wood * 1.08f);
