@@ -1592,30 +1592,58 @@ PropDef PropLibrary::build_tower() {
 PropDef PropLibrary::build_well() {
     PropDef def;
     def.name = "well";
-    const Vec3 stone{0.52f, 0.51f, 0.49f};
+    const Vec3 stone{0.50f, 0.50f, 0.49f};
+    const Vec3 coping{0.61f, 0.60f, 0.57f};
     const Vec3 wood{0.36f, 0.25f, 0.15f};
-    const Vec3 water{0.12f, 0.26f, 0.34f};
+    const Vec3 darkwood{0.25f, 0.17f, 0.10f};
+    const Vec3 shingle{0.46f, 0.30f, 0.20f};
+    const Vec3 rope{0.60f, 0.52f, 0.36f};
+    const Vec3 iron{0.30f, 0.31f, 0.34f};
+    const Vec3 water{0.09f, 0.20f, 0.28f};
     MeshData m;
-    constexpr f32 ro = 0.95f; // rim outer half-extent
-    constexpr f32 ri = 0.62f; // rim inner half-extent
-    constexpr f32 rim_h = 0.62f;
-    // Square stone rim (four kerb walls) around the shaft.
+    constexpr f32 ro = 0.95f;   // rim outer half-extent
+    constexpr f32 ri = 0.60f;   // rim inner half-extent (the shaft opening)
+    constexpr f32 rim_h = 0.66f;
+    // Solid square stone curb (four kerb walls) around the shaft...
     add_box(m, {-ro, 0.0f, -ro}, {ro, rim_h, -ri}, stone);
     add_box(m, {-ro, 0.0f, ri}, {ro, rim_h, ro}, stone);
     add_box(m, {-ro, 0.0f, -ri}, {-ri, rim_h, ri}, stone);
     add_box(m, {ri, 0.0f, -ri}, {ro, rim_h, ri}, stone);
-    add_box(m, {-ri, 0.05f, -ri}, {ri, 0.42f, ri}, water); // dark water surface
-    // Two posts + crossbeam carrying a bucket.
-    add_box(m, {-ro + 0.05f, rim_h, -0.12f}, {-ro + 0.25f, rim_h + 1.6f, 0.12f}, wood);
-    add_box(m, {ro - 0.25f, rim_h, -0.12f}, {ro - 0.05f, rim_h + 1.6f, 0.12f}, wood);
-    add_box(m, {-ro, rim_h + 1.55f, -0.1f}, {ro, rim_h + 1.72f, 0.1f}, wood);
-    add_box(m, {-0.22f, rim_h + 0.55f, -0.22f}, {0.22f, rim_h + 0.95f, 0.22f}, wood * 0.85f); // bucket
-    // Little gable roof.
-    const f32 yr = rim_h + 1.72f;
-    add_quad(m, {-ro - 0.15f, yr, ro + 0.15f}, {ro + 0.15f, yr, ro + 0.15f},
-             {ro + 0.15f, yr + 0.55f, 0.0f}, {-ro - 0.15f, yr + 0.55f, 0.0f}, wood * 1.1f);
-    add_quad(m, {ro + 0.15f, yr, -ro - 0.15f}, {-ro - 0.15f, yr, -ro - 0.15f},
-             {-ro - 0.15f, yr + 0.55f, 0.0f}, {ro + 0.15f, yr + 0.55f, 0.0f}, wood * 1.0f);
+    // ...textured with proud, shade-jittered running-bond blocks on the four outer faces.
+    stone_face(m, true, -ro, -1.0f, -ro, ro, 0.0f, rim_h, stone, 11u);
+    stone_face(m, true, ro, 1.0f, -ro, ro, 0.0f, rim_h, stone, 23u);
+    stone_face(m, false, -ro, -1.0f, -ro, ro, 0.0f, rim_h, stone, 37u);
+    stone_face(m, false, ro, 1.0f, -ro, ro, 0.0f, rim_h, stone, 51u);
+    // A lighter coping cap lipping over the curb (a ring of four boxes, shaft left open).
+    const f32 cy0 = rim_h, cy1 = rim_h + 0.11f, co = ro + 0.07f;
+    add_box(m, {-co, cy0, -co}, {co, cy1, -ri}, coping);
+    add_box(m, {-co, cy0, ri}, {co, cy1, co}, coping);
+    add_box(m, {-co, cy0, -ri}, {-ri, cy1, ri}, coping);
+    add_box(m, {ri, cy0, -ri}, {co, cy1, ri}, coping);
+    add_box(m, {-ri + 0.04f, 0.30f, -ri + 0.04f}, {ri - 0.04f, 0.40f, ri - 0.04f}, water); // dark water below
+    // Two posts rising from the cap to carry the roof + windlass.
+    const f32 post_top = cy1 + 1.70f;
+    for (f32 px : {-0.80f, 0.80f}) {
+        add_box(m, {px - 0.09f, cy1, -0.09f}, {px + 0.09f, post_top, 0.09f}, wood);
+    }
+    // The windlass: a horizontal wooden roller spanning the posts, with a wound rope and an
+    // iron crank handle you'd turn to raise the bucket.
+    const f32 wy = post_top - 0.20f;
+    add_box(m, {-0.80f, wy - 0.10f, -0.10f}, {0.80f, wy + 0.10f, 0.10f}, darkwood);     // roller
+    add_box(m, {-0.30f, wy - 0.11f, -0.11f}, {0.30f, wy + 0.11f, 0.11f}, rope * 0.85f); // rope wound on it
+    add_box(m, {0.80f, wy - 0.04f, 0.10f}, {0.90f, wy + 0.04f, 0.36f}, iron);           // crank arm
+    add_box(m, {0.80f, wy - 0.30f, 0.30f}, {0.90f, wy + 0.04f, 0.38f}, wood);           // crank grip
+    // The bucket: a staved wooden pail with two iron bands + a bail, hung on a rope from the
+    // windlass, dangling just above the rim.
+    const f32 bb0 = cy1 + 0.30f, bb1 = bb0 + 0.34f;
+    add_box(m, {-0.02f, bb1 + 0.12f, -0.02f}, {0.02f, wy, 0.02f}, rope); // rope down from the roller
+    add_box(m, {-0.17f, bb0, -0.17f}, {0.17f, bb1, 0.17f}, wood * 0.92f);
+    add_box(m, {-0.185f, bb0 + 0.03f, -0.185f}, {0.185f, bb0 + 0.08f, 0.185f}, iron); // lower band
+    add_box(m, {-0.185f, bb1 - 0.08f, -0.185f}, {0.185f, bb1 - 0.03f, 0.185f}, iron); // upper band
+    add_box(m, {-0.17f, bb1, -0.02f}, {0.17f, bb1 + 0.12f, 0.02f}, iron);             // bail handle
+    // A proper shingled gable roof on the posts (shared stepped-shingle builder); a modest
+    // footprint + rise keeps the eave "swoop" gentle at this small scale.
+    gable_roof(m, ro + 0.16f, ro + 0.16f, post_top, 0.42f, 0.14f, false, shingle, darkwood, wood, 7u);
     def.parts.push_back({std::move(m), PropLayer::Opaque});
     BoxCollider c;
     c.half_extents = Vec2{ro, ro};
