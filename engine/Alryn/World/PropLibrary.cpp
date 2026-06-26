@@ -317,16 +317,45 @@ f32 gable_roof(MeshData& shell, f32 w, f32 d, f32 h, f32 rr, f32 oh, bool thatch
 }
 
 // ---- Shared yard decor (used by houses + the pub garden) ------------------------------------
-// A low-poly barrel (stacked boxes, slightly belled, with dark iron hoops).
+// A belled wooden barrel centred at `c`: octagonal staves bowing out at mid-height (a sin profile),
+// per-stave shade, an octagonal lid + two proud octagonal iron hoops. Shared by the yard decor helper
+// and the standalone barrel decor prop, so a round belled barrel looks the same everywhere.
+void belled_barrel(MeshData& m, const Vec3& c, f32 r, f32 ht, const Vec3& stave, const Vec3& hoop) {
+    constexpr int sides = 8;
+    auto ang = [](int s) { return TwoPi * (static_cast<f32>(s) + 0.5f) / static_cast<f32>(sides); };
+    auto pt = [&](f32 rr, f32 y, f32 a) {
+        return Vec3{c.x + std::cos(a) * rr, c.y + y, c.z + std::sin(a) * rr};
+    };
+    auto rad = [&](f32 t) { return r * (0.82f + 0.28f * std::sin(t * Pi)); }; // narrow ends, wide middle
+    const Vec3 axis{c.x, c.y + ht * 0.5f, c.z};
+    constexpr int rings = 4;
+    for (int s = 0; s < sides; ++s) {
+        const f32 a0 = ang(s), a1 = ang(s + 1);
+        const Vec3 sc = stave * (0.88f + 0.20f * hashf(static_cast<u32>(s) * 5u + 1u));
+        for (int rr = 0; rr < rings; ++rr) {
+            const f32 t0 = static_cast<f32>(rr) / rings, t1 = static_cast<f32>(rr + 1) / rings;
+            const Vec3 b0 = pt(rad(t0), t0 * ht, a0), b1 = pt(rad(t0), t0 * ht, a1);
+            const Vec3 u0 = pt(rad(t1), t1 * ht, a0), u1 = pt(rad(t1), t1 * ht, a1);
+            emit_tri(m, b0, b1, u1, axis, sc);
+            emit_tri(m, b0, u1, u0, axis, sc);
+        }
+        emit_tri(m, Vec3{c.x, c.y + ht, c.z}, pt(rad(1.0f) * 0.96f, ht, a0),
+                 pt(rad(1.0f) * 0.96f, ht, a1), Vec3{c.x, c.y - 1.0f, c.z}, stave * 0.95f); // lid fan
+    }
+    for (const f32 t : {0.22f, 0.78f}) {
+        const f32 y = t * ht, rr = rad(t) + r * 0.06f;
+        for (int s = 0; s < sides; ++s) {
+            const f32 a0 = ang(s), a1 = ang(s + 1);
+            emit_tri(m, pt(rr, y - ht * 0.06f, a0), pt(rr, y - ht * 0.06f, a1), pt(rr, y + ht * 0.06f, a1),
+                     axis, hoop);
+            emit_tri(m, pt(rr, y - ht * 0.06f, a0), pt(rr, y + ht * 0.06f, a1), pt(rr, y + ht * 0.06f, a0),
+                     axis, hoop);
+        }
+    }
+}
+// A low-poly belled barrel for house/pub/blacksmith yards (sits on the ground at `base`).
 void add_barrel(MeshData& m, const Vec3& base, f32 r, f32 ht) {
-    const Vec3 stave{0.46f, 0.3f, 0.16f}, hoop{0.18f, 0.16f, 0.15f};
-    add_box(m, {base.x - r, base.y, base.z - r}, {base.x + r, base.y + ht, base.z + r}, stave);
-    add_box(m, {base.x - r * 1.12f, base.y + ht * 0.12f, base.z - r * 1.12f},
-            {base.x + r * 1.12f, base.y + ht * 0.9f, base.z + r * 1.12f}, stave * 1.05f);
-    add_box(m, {base.x - r * 1.16f, base.y + ht * 0.2f, base.z - r * 1.16f},
-            {base.x + r * 1.16f, base.y + ht * 0.32f, base.z + r * 1.16f}, hoop);
-    add_box(m, {base.x - r * 1.16f, base.y + ht * 0.66f, base.z - r * 1.16f},
-            {base.x + r * 1.16f, base.y + ht * 0.78f, base.z + r * 1.16f}, hoop);
+    belled_barrel(m, base, r, ht, Vec3{0.46f, 0.30f, 0.16f}, Vec3{0.18f, 0.16f, 0.15f});
 }
 // A stack of cut logs (cut faces lighter, facing +z), in a pyramid - a woodpile against a wall.
 void add_woodpile(MeshData& m, const Vec3& c, f32 len, int rows) {
@@ -2205,40 +2234,11 @@ PropDef PropLibrary::build_decor(int variant) {
         def.colliders.push_back(c);
     };
     switch (variant % static_cast<int>(kDecorVariants)) {
-        case 0: { // a BELLED wooden barrel - round octagonal staves (wide in the middle) + iron hoops
+        case 0: // a belled wooden barrel (shared with the yard helper)
             def.name = "barrel";
-            constexpr int sides = 8;
-            constexpr f32 H = 0.9f;
-            auto ang = [](int s) { return TwoPi * (static_cast<f32>(s) + 0.5f) / static_cast<f32>(sides); };
-            auto pt = [](f32 r, f32 y, f32 a) { return Vec3{std::cos(a) * r, y, std::sin(a) * r}; };
-            auto rad = [](f32 t) { return 0.30f + 0.10f * std::sin(t * Pi); }; // narrow ends, wide middle
-            const Vec3 axis{0.0f, H * 0.5f, 0.0f};
-            constexpr int rings = 5;
-            for (int s = 0; s < sides; ++s) {
-                const f32 a0 = ang(s), a1 = ang(s + 1);
-                const Vec3 sc = wood * (0.86f + 0.22f * hashf(static_cast<u32>(s) * 5u + 1u));
-                for (int r = 0; r < rings; ++r) {
-                    const f32 t0 = static_cast<f32>(r) / rings, t1 = static_cast<f32>(r + 1) / rings;
-                    const Vec3 b0 = pt(rad(t0), t0 * H, a0), b1 = pt(rad(t0), t0 * H, a1);
-                    const Vec3 u0 = pt(rad(t1), t1 * H, a0), u1 = pt(rad(t1), t1 * H, a1);
-                    emit_tri(m, b0, b1, u1, axis, sc);
-                    emit_tri(m, b0, u1, u0, axis, sc);
-                }
-                emit_tri(m, Vec3{0.0f, H, 0.0f}, pt(rad(1.0f) * 0.97f, H, a0),
-                         pt(rad(1.0f) * 0.97f, H, a1), Vec3{0.0f, -1.0f, 0.0f}, wood * 0.95f); // lid fan
-            }
-            // two iron hoops: short proud octagonal bands at the upper + lower thirds
-            for (const f32 t : {0.22f, 0.78f}) {
-                const f32 y = t * H, r = rad(t) + 0.02f;
-                for (int s = 0; s < sides; ++s) {
-                    const f32 a0 = ang(s), a1 = ang(s + 1);
-                    emit_tri(m, pt(r, y - 0.05f, a0), pt(r, y - 0.05f, a1), pt(r, y + 0.05f, a1), axis, dark);
-                    emit_tri(m, pt(r, y - 0.05f, a0), pt(r, y + 0.05f, a1), pt(r, y + 0.05f, a0), axis, dark);
-                }
-            }
+            belled_barrel(m, Vec3{0.0f, 0.0f, 0.0f}, 0.38f, 0.9f, wood, dark);
             collider(0.38f, 0.38f, 0.9f);
             break;
-        }
         case 1: // a stack of crates
             def.name = "crates";
             add_box(m, {-0.42f, 0.0f, -0.42f}, {0.42f, 0.72f, 0.42f}, wood * 1.08f);
