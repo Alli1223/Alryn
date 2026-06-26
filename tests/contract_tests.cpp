@@ -47,6 +47,36 @@ TEST_CASE("Contract: modifiers vary pay + ambush, deterministic and a mix") {
     CHECK(nonstd < 180);
 }
 
+TEST_CASE("Contract: perishable cargo holds value, then spoils if delivered late") {
+    const f32 dist = 300.0f;
+    const f32 deadline = perishable_deadline(dist);
+    REQUIRE(deadline > 0.0f);
+    // Fresh (at or before the deadline) -> full value.
+    CHECK(perishable_value_mult(0.0f, dist, ContractModifier::Perishable) == doctest::Approx(1.0f));
+    CHECK(perishable_value_mult(deadline, dist, ContractModifier::Perishable) == doctest::Approx(1.0f));
+    // Past the deadline the value decays, monotonically, down to (never below) the floor.
+    CHECK(perishable_value_mult(deadline * 1.5f, dist, ContractModifier::Perishable) < 1.0f);
+    const f32 a = perishable_value_mult(deadline * 1.3f, dist, ContractModifier::Perishable);
+    const f32 b = perishable_value_mult(deadline * 1.8f, dist, ContractModifier::Perishable);
+    CHECK(b < a);
+    CHECK(perishable_value_mult(deadline * 100.0f, dist, ContractModifier::Perishable) ==
+          doctest::Approx(kSpoilFloor));
+    // The freshness deadline is tighter than the rush budget - perishable demands real speed.
+    CHECK(perishable_deadline(dist) < rush_expected_time(dist));
+    // Non-perishable cargo never spoils, however slowly it arrives.
+    CHECK(perishable_value_mult(deadline * 100.0f, dist, ContractModifier::Standard) ==
+          doctest::Approx(1.0f));
+    CHECK(perishable_value_mult(deadline * 100.0f, dist, ContractModifier::Bulk) ==
+          doctest::Approx(1.0f));
+    // Perishable pays a premium up front, and appears in the deterministic offer mix.
+    CHECK(modifier_effect(ContractModifier::Perishable).pay_mult > 1.0f);
+    bool seen = false;
+    for (u32 id = 1; id <= 400u && !seen; ++id) {
+        seen = contract_modifier(id) == ContractModifier::Perishable;
+    }
+    CHECK(seen);
+}
+
 TEST_CASE("Contract: intact-delivery bonus rewards a healthy wagon") {
     CHECK(intact_bonus_mult(1.0f) > intact_bonus_mult(0.5f));
     CHECK(intact_bonus_mult(0.5f) > intact_bonus_mult(0.0f));

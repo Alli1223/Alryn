@@ -790,9 +790,12 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
                                 : static_cast<f32>(w.reward);
         // Bonus for delivering the wagon INTACT (scales with remaining health) - defending it pays.
         const f32 intact = intact_bonus_mult(w.health / kWagonHealth);
+        const f32 rdist = roads::route_length(w.route);
         // RUSH bonus: a fast delivery pays extra (decays over the route's time budget).
-        const f32 rush = rush_bonus_mult(contract_elapsed_, rush_expected_time(roads::route_length(w.route)));
-        money_ += static_cast<u32>(std::lround(base * frac * intact * rush));
+        const f32 rush = rush_bonus_mult(contract_elapsed_, rush_expected_time(rdist));
+        // FRESHNESS: perishable cargo loses value if delivered past its (tight) spoil deadline.
+        const f32 fresh = perishable_value_mult(contract_elapsed_, rdist, contract_modifier(w.id));
+        money_ += static_cast<u32>(std::lround(base * frac * intact * rush * fresh));
         contract_outcome_ = 1;
         contract_phase_ = ContractPhase::Settle;
         settle_timer_ = kSettleSeconds;

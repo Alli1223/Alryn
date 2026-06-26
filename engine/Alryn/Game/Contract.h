@@ -204,9 +204,10 @@ inline f32 rig_damage_mult(u8 level) {
 // id, so no extra wire field is needed.
 enum class ContractModifier : u8 {
     Standard = 0,
-    Hazardous = 1, // dangerous + well paid
-    Bulk = 2,      // a big heavy load, extra pay + an extra raider
-    Safe = 3,      // an easy, lightly-paid escort
+    Hazardous = 1,  // dangerous + well paid
+    Bulk = 2,       // a big heavy load, extra pay + an extra raider
+    Safe = 3,       // an easy, lightly-paid escort
+    Perishable = 4, // fresh goods: pays well, but the value SPOILS if you dawdle (a hard rush job)
 };
 struct ModifierEffect {
     f32 pay_mult;
@@ -217,26 +218,50 @@ inline ModifierEffect modifier_effect(ContractModifier m) {
         case ContractModifier::Hazardous: return {1.6f, 2};
         case ContractModifier::Bulk: return {1.35f, 1};
         case ContractModifier::Safe: return {0.75f, -1};
+        case ContractModifier::Perishable: return {1.3f, 0}; // good pay up front; spoilage is the catch
         default: return {1.0f, 0};
     }
 }
-// Deterministic per offer id (so server + client agree). ~55% standard, then hazardous / bulk / safe.
+// Deterministic per offer id (so server + client agree). ~55% standard, then a mix of the flavours.
 inline ContractModifier contract_modifier(u32 id) {
     u32 h = id * 2654435761u;
     h ^= h >> 13;
     const u32 r = h % 100u;
     if (r < 55u) return ContractModifier::Standard;
-    if (r < 73u) return ContractModifier::Hazardous;
-    if (r < 87u) return ContractModifier::Bulk;
-    return ContractModifier::Safe;
+    if (r < 70u) return ContractModifier::Hazardous;
+    if (r < 82u) return ContractModifier::Bulk;
+    if (r < 91u) return ContractModifier::Safe;
+    return ContractModifier::Perishable;
 }
 inline const char* modifier_name(ContractModifier m) {
     switch (m) {
         case ContractModifier::Hazardous: return "HAZARDOUS";
         case ContractModifier::Bulk: return "BULK CARGO";
         case ContractModifier::Safe: return "SAFE ROUTE";
+        case ContractModifier::Perishable: return "PERISHABLE";
         default: return "STANDARD";
     }
+}
+
+// Perishable cargo (the Perishable modifier) holds full value until a TIGHT freshness deadline, then
+// its value spoils toward kSpoilFloor - a real penalty for dawdling, distinct from the rush BONUS
+// (which only ever adds, never subtracts). Non-perishable cargo never spoils (always 1.0).
+inline constexpr f32 kSpoilFloor = 0.5f;  // a fully-spoiled load still sells for half
+inline constexpr f32 kSpoilWindow = 1.0f; // route-time budgets of decay from fresh -> floor
+inline f32 perishable_deadline(f32 route_dist) {
+    return route_dist / kWagonManualSpeed * 1.05f; // tighter than the rush budget (1.6x): a real deadline
+}
+inline f32 perishable_value_mult(f32 elapsed, f32 route_dist, ContractModifier m) {
+    if (m != ContractModifier::Perishable) {
+        return 1.0f;
+    }
+    const f32 deadline = perishable_deadline(route_dist);
+    if (deadline <= 0.0f || elapsed <= deadline) {
+        return 1.0f; // delivered fresh
+    }
+    const f32 over = (elapsed - deadline) / (deadline * kSpoilWindow); // 0 at the deadline, 1 a budget on
+    const f32 t = over > 1.0f ? 1.0f : over;
+    return 1.0f - (1.0f - kSpoilFloor) * t;
 }
 
 // How many ambushers attack a contract of this difficulty over its journey, adjusted by the modifier
