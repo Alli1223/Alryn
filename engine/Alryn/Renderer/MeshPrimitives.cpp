@@ -663,13 +663,17 @@ MeshData bush(int variant, const Vec3& color) {
         const u32 v = (h ^ (static_cast<u32>(salt) * 0x9E3779B9u));
         return static_cast<f32>((v >> 8) & 0xFFFFu) / 65535.0f;
     };
-    const int blobs = 3 + static_cast<int>(rnd(1) * 2.0f);
+    const int blobs = 4 + static_cast<int>(rnd(1) * 3.0f);
     for (int i = 0; i < blobs; ++i) {
         const f32 ang = TwoPi * static_cast<f32>(i) / static_cast<f32>(blobs);
         const f32 r = 0.18f + rnd(i * 3 + 2) * 0.16f;
         const f32 rad = 0.34f + rnd(i * 3 + 3) * 0.18f;
         const f32 cy = 0.28f + rnd(i * 3 + 4) * 0.22f;
-        MeshData b = blob(rad, rad * 0.85f, cy, color * (0.85f + rnd(i * 3 + 5) * 0.3f));
+        // Soft, billowy leafy balls with a baked sun-lit-top gradient (round_blob, as the tree
+        // canopies use) instead of the old hard 6-vertex octahedron - so a bush reads as foliage,
+        // not a faceted green cone.
+        MeshData b = round_blob(rad, rad * 0.88f, Vec3{0.0f, cy, 0.0f},
+                                color * (0.85f + rnd(i * 3 + 5) * 0.3f), 3, 6);
         for (Vertex& v : b.vertices) {
             v.position.x += std::cos(ang) * r;
             v.position.z += std::sin(ang) * r;
