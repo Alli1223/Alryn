@@ -2586,6 +2586,8 @@ PropDef PropLibrary::build_monument(int variant) {
     const Vec3 dark{0.4f, 0.41f, 0.39f};
     const Vec3 moss{0.32f, 0.42f, 0.26f};
     MeshData m;
+    MeshData em;          // emissive glyphs (only the carved obelisk glows)
+    bool glowing = false; // -> push the emissive part + a soft arcane light
     auto rnd = [&](u32 s) {
         u32 v = (static_cast<u32>(variant) * 2654435761u + s * 0x9E3779B9u);
         v ^= v >> 15;
@@ -2594,12 +2596,14 @@ PropDef PropLibrary::build_monument(int variant) {
     };
     f32 cr = 0.7f;
     if (variant % kMonumentVariants == 0) {
-        // carved obelisk on a stepped plinth
+        // a carved obelisk on a stepped plinth - masonry-textured, with a glowing ancient rune
         add_box(m, {-0.85f, 0.0f, -0.85f}, {0.85f, 0.28f, 0.85f}, stone * 0.95f);
         add_box(m, {-0.62f, 0.28f, -0.62f}, {0.62f, 0.52f, 0.62f}, stone);
-        add_box(m, {-0.34f, 0.52f, -0.34f}, {0.34f, 3.6f, 0.34f}, stone * 1.04f); // shaft
-        add_box(m, {-0.36f, 1.3f, -0.36f}, {0.36f, 1.5f, 0.36f}, dark);           // carved band
-        add_box(m, {-0.36f, 2.4f, -0.36f}, {0.36f, 2.6f, 0.36f}, dark);
+        add_box(m, {-0.34f, 0.52f, -0.34f}, {0.34f, 3.6f, 0.34f}, stone * 1.04f); // shaft core
+        stone_face(m, true, 0.34f, 1.0f, -0.34f, 0.34f, 0.52f, 3.5f, stone, 11u);   // +z masonry
+        stone_face(m, true, -0.34f, -1.0f, -0.34f, 0.34f, 0.52f, 3.5f, stone, 23u); // -z
+        stone_face(m, false, 0.34f, 1.0f, -0.34f, 0.34f, 0.52f, 3.5f, stone, 37u);  // +x
+        stone_face(m, false, -0.34f, -1.0f, -0.34f, 0.34f, 0.52f, 3.5f, stone, 51u); // -x
         // a small pyramidal cap
         const Vec3 apex{0.0f, 4.05f, 0.0f};
         add_tri(m, {-0.34f, 3.6f, 0.34f}, {0.34f, 3.6f, 0.34f}, apex, stone * 1.06f);
@@ -2607,6 +2611,16 @@ PropDef PropLibrary::build_monument(int variant) {
         add_tri(m, {0.34f, 3.6f, 0.34f}, {0.34f, 3.6f, -0.34f}, apex, stone);
         add_tri(m, {-0.34f, 3.6f, -0.34f}, {-0.34f, 3.6f, 0.34f}, apex, stone);
         add_box(m, {-0.36f, 0.5f, -0.36f}, {0.0f, 0.9f, -0.32f}, moss); // moss patch
+        // Glowing carved rune: an emissive band ringing the shaft + a vertical glyph, proud of the
+        // masonry (an arcane cyan), so it reads as ancient magic and pools soft light at night.
+        const Vec3 rune{0.34f, 0.82f, 0.95f};
+        add_box(em, {-0.30f, 1.66f, 0.355f}, {0.30f, 1.95f, 0.40f}, rune);   // +z band
+        add_box(em, {-0.30f, 1.66f, -0.40f}, {0.30f, 1.95f, -0.355f}, rune); // -z band
+        add_box(em, {0.355f, 1.66f, -0.30f}, {0.40f, 1.95f, 0.30f}, rune);   // +x band
+        add_box(em, {-0.40f, 1.66f, -0.30f}, {-0.355f, 1.95f, 0.30f}, rune); // -x band
+        add_box(em, {-0.05f, 1.30f, 0.355f}, {0.05f, 2.35f, 0.40f}, rune);   // vertical glyph (front)
+        add_box(em, {-0.05f, 1.30f, -0.40f}, {0.05f, 2.35f, -0.355f}, rune); // vertical glyph (back)
+        glowing = true;
         cr = 0.55f;
     } else if (variant % kMonumentVariants == 1) {
         // a broken, leaning pillar + rubble at the base
@@ -2632,6 +2646,17 @@ PropDef PropLibrary::build_monument(int variant) {
         cr = 0.95f;
     }
     def.parts.push_back({std::move(m), PropLayer::Opaque});
+    if (glowing) {
+        def.parts.push_back({std::move(em), PropLayer::Emissive});
+        PropLight l;
+        l.offset = Vec3{0.0f, 1.85f, 0.0f};
+        l.direction = glm::normalize(Vec3{0.0f, -1.0f, 0.0f});
+        l.color = Vec3{0.30f, 0.66f, 0.82f}; // soft arcane glow
+        l.range = 9.0f;
+        l.intensity = 1.1f;
+        l.cone_deg = 150.0f;
+        def.lights.push_back(l);
+    }
     BoxCollider c;
     c.half_extents = Vec2{cr, cr};
     c.height = 1.6f;
