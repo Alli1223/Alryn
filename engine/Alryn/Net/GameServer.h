@@ -296,6 +296,7 @@ private:
     std::vector<Enemy> ambush_;          // ambushers attacking the active wagon
     std::unordered_map<net::PlayerId, std::pair<u32, u8>> votes_; // player -> (wagon id, mode)
     u32 money_ = 0;                      // shared party wallet
+    u8 rig_level_ = 0;                   // wagon-rig upgrade level the party has bought (money sink)
     u8 contract_outcome_ = 0;            // 0 none, 1 delivered, 2 wrecked (settle banner)
     u32 offer_town_vseed_ = 0;           // which town the current offers are from (0 = none)
     f32 settle_timer_ = 0.0f;            // banner hold before the next offer

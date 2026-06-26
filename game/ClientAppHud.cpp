@@ -1099,6 +1099,24 @@ void ClientApp::draw_wardrobe() {
         y += 44.0f;
     }
 
+    // Wagon-RIG upgrade (a money sink): reinforce the cart for more max health + ambush-damage resist.
+    if (const u8 rl = snapshot_.rig_level; rl < kMaxRigLevel) {
+        const u32 rprice = rig_price(static_cast<u8>(rl + 1));
+        const bool rcan = in_town && snapshot_.money >= rprice;
+        const Vec4 btn{x, y, 380.0f, 40.0f};
+        wardrobe_rig_rect_ = ui::Rect{btn.x, btn.y, btn.z, btn.w};
+        draw.rect(btn, rcan ? Vec4{accent * 0.55f, 0.97f} : Vec4{0.2f, 0.18f, 0.16f, 0.9f},
+                  Vec4{accent, rcan ? 0.95f : 0.3f}, 2.0f, 8.0f);
+        draw.text(Vec2{btn.x + 16.0f, btn.y + 11.0f},
+                  std::format("REINFORCE WAGON  Lv {}   -   $ {}", rl + 1, rprice), 17.0f,
+                  rcan ? th.text : th.text_muted);
+        y += 50.0f;
+    } else {
+        wardrobe_rig_rect_ = ui::Rect{};
+        draw.text(Vec2{x, y}, "WAGON FULLY REINFORCED", 17.0f, th.accent_hover);
+        y += 34.0f;
+    }
+
     // Recolour swatches (the player's chosen primary colour).
     draw.text(Vec2{x, y}, "OUTFIT COLOUR", 15.0f, th.text);
     y += 26.0f;
@@ -1133,6 +1151,12 @@ void ClientApp::wardrobe_click(const Vec2& p) {
         const u8 owned = me != nullptr ? me->owned_tier : 0;
         if (static_cast<u8>(owned + 1) < kTierCount) {
             pending_buy_ = static_cast<u8>(owned + 1); // request the next tier (server gates it)
+        }
+        return;
+    }
+    if (in_rect(p, wardrobe_rig_rect_)) {
+        if (const u8 rl = snapshot_.rig_level; rl < kMaxRigLevel) {
+            pending_buy_rig_ = static_cast<u8>(rl + 1); // request the next rig level (server gates it)
         }
         return;
     }

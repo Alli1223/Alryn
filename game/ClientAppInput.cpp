@@ -391,6 +391,11 @@ void ClientApp::send_input() {
         pending_buy_ = 0;
     }
     packet.buy = pending_buy_;
+    // Wagon-rig purchase: keep requesting until the server's rig_level reaches the target.
+    if (snapshot_.rig_level >= pending_buy_rig_) {
+        pending_buy_rig_ = 0;
+    }
+    packet.buy_rig = pending_buy_rig_;
     client_.send_input(packet);
     pending_ability_ = 0;
     pending_spell_ = 0;

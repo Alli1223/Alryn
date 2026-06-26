@@ -460,7 +460,7 @@ void GameServer::accept_contract(const Wagon& chosen, WagonMode mode) {
     if (active_.route.empty()) {
         active_.route = roads::route_polyline(active_.source, active_.dest, seed);
     }
-    active_.health = kWagonHealth;
+    active_.health = rig_max_health(rig_level_); // a reinforced rig starts (and caps) tougher
     active_.ambush_waves_spawned = 0;
     active_.goods_total = goods_for_capacity(vehicle_type(active_.type).capacity());
     wagon_prev_pos_ = active_.position;
@@ -1308,7 +1308,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                 victim->take_damage(dmg); // role armour / block / Aegis shield soak it
                 e.attack_cd = kEnemyAttackInterval;
             } else if (glm::length(w.position - e.position) < reach + 0.7f) {
-                w.health -= kWagonDamage;
+                w.health -= kWagonDamage * rig_damage_mult(rig_level_); // armored sides shrug off some
                 e.attack_cd = kEnemyAttackInterval;
             }
         }

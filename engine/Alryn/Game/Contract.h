@@ -145,6 +145,26 @@ inline f32 intact_bonus_mult(f32 health_frac) {
     return 1.0f + kIntactBonus * hf;
 }
 
+// --- Wagon RIG upgrades (a money sink) -----------------------------------------
+// The party spends money in town to permanently REINFORCE their rig - a tougher wagon that takes the
+// road's punishment better. The first upgrade axis: more max health + an ambush-damage resist. Each
+// level costs more; effects are pure functions so they're headless-testable + agreed server/client.
+inline constexpr u8 kMaxRigLevel = 3;
+inline u8 clamp_rig(u8 level) { return level > kMaxRigLevel ? kMaxRigLevel : level; }
+// Price of buying the NEXT level (escalating): 220, 880, 1980.
+inline u32 rig_price(u8 next_level) {
+    const u32 n = next_level > kMaxRigLevel ? kMaxRigLevel : next_level;
+    return 220u * n * n;
+}
+// Max wagon health at a rig level: +30% per level over the stock kWagonHealth.
+inline f32 rig_max_health(u8 level) {
+    return kWagonHealth * (1.0f + 0.30f * static_cast<f32>(clamp_rig(level)));
+}
+// Incoming-damage multiplier at a rig level: each level shaves 12% off ambush damage to the wagon.
+inline f32 rig_damage_mult(u8 level) {
+    return 1.0f - 0.12f * static_cast<f32>(clamp_rig(level));
+}
+
 // Per-contract MODIFIER: a deterministic flavour on each offer (derived from its id) that varies the
 // pay + ambush size, so the board mixes safe low-pay escorts with dangerous, well-paid hauls instead
 // of every contract feeling the same. The client derives the SAME modifier from the (networked) wagon

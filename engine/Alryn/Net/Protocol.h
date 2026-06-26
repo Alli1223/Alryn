@@ -49,6 +49,7 @@ struct PlayerInput {
     Equipment equipment;            // the player's worn gear loadout (server clamps earned tiers)
     u8 buy = 0;                     // shop: the gear tier the player is trying to OWN (0 = no request;
                                     // the server buys up to it one tier at a time in a town, if affordable)
+    u8 buy_rig = 0;                 // 1 = buy the next wagon-rig upgrade level (in a town, if affordable)
 };
 
 struct PlayerState {
@@ -182,6 +183,7 @@ struct Snapshot {
     u8 houses_standing = 0;  // un-burnt houses in the defended town
     u8 houses_total = 0;
     u32 money = 0;            // shared party wallet
+    u8 rig_level = 0;        // wagon-rig upgrade level bought by the party (0 = stock)
     u8 contract_phase = 0;   // ContractPhase (Offer / Active / Settle)
     u8 contract_outcome = 0; // 0 none, 1 delivered, 2 wrecked (for the settle banner)
     std::vector<PlayerState> players;

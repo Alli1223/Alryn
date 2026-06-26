@@ -56,6 +56,19 @@ TEST_CASE("Contract: intact-delivery bonus rewards a healthy wagon") {
     CHECK(intact_bonus_mult(-1.0f) == doctest::Approx(1.0f));                    // clamped below 0
 }
 
+TEST_CASE("Contract: wagon rig upgrades cost more + make the cart tougher") {
+    CHECK(rig_price(2) > rig_price(1)); // escalating cost
+    CHECK(rig_price(3) > rig_price(2));
+    CHECK(rig_max_health(1) > rig_max_health(0)); // each level = more max health
+    CHECK(rig_max_health(kMaxRigLevel) > kWagonHealth);
+    CHECK(rig_damage_mult(1) < rig_damage_mult(0)); // each level = less damage taken
+    CHECK(rig_damage_mult(0) == doctest::Approx(1.0f)); // stock cart has no resist
+    CHECK(rig_damage_mult(kMaxRigLevel) > 0.0f);        // resist never fully negates damage
+    // Levels above the cap clamp (a client can't claim a level it didn't buy).
+    CHECK(rig_max_health(static_cast<u8>(kMaxRigLevel + 5)) == doctest::Approx(rig_max_health(kMaxRigLevel)));
+    CHECK(rig_damage_mult(static_cast<u8>(kMaxRigLevel + 5)) == doctest::Approx(rig_damage_mult(kMaxRigLevel)));
+}
+
 TEST_CASE("Contract: bigger vehicles pay more (capacity multiplier)") {
     CHECK(capacity_reward_mult(1) == doctest::Approx(1.0f));     // a cart: baseline pay
     CHECK(capacity_reward_mult(2) > capacity_reward_mult(1));    // a wagon: more

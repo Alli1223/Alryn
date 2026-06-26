@@ -53,6 +53,7 @@ void write(ByteWriter& w, const PlayerInput& in) {
     write_appearance(w, in.appearance);
     write_equipment(w, in.equipment);
     w.write_u8(in.buy);
+    w.write_u8(in.buy_rig);
 }
 
 bool read(ByteReader& r, PlayerInput& in) {
@@ -81,6 +82,7 @@ bool read(ByteReader& r, PlayerInput& in) {
     read_appearance(r, in.appearance);
     read_equipment(r, in.equipment);
     in.buy = r.read_u8();
+    in.buy_rig = r.read_u8();
     return r.ok();
 }
 
@@ -95,6 +97,7 @@ void write(ByteWriter& w, const Snapshot& s) {
     w.write_u8(s.houses_standing);
     w.write_u8(s.houses_total);
     w.write_u32(s.money);
+    w.write_u8(s.rig_level);
     w.write_u8(s.contract_phase);
     w.write_u8(s.contract_outcome);
     w.write_u16(static_cast<u16>(s.players.size()));
@@ -207,6 +210,7 @@ bool read(ByteReader& r, Snapshot& s) {
     s.houses_standing = r.read_u8();
     s.houses_total = r.read_u8();
     s.money = r.read_u32();
+    s.rig_level = r.read_u8();
     s.contract_phase = r.read_u8();
     s.contract_outcome = r.read_u8();
     const u16 count = r.read_u16();

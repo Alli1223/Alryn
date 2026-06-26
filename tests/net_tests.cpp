@@ -39,6 +39,7 @@ TEST_CASE("Net: message serialization round-trips") {
     input.appearance = CharacterAppearance{3, 5, EyeStyle::Sleepy, EarStyle::Pointed,
                                            HairStyle::Ponytail};
     input.equipment = Equipment{2, 1, 4, 1}; // outfit tier 2, weapon tier 1, tint 4, weapon 1
+    input.buy_rig = 2;                       // buying up to wagon-rig level 2
 
     ByteWriter w;
     write(w, input);
@@ -66,6 +67,7 @@ TEST_CASE("Net: message serialization round-trips") {
     CHECK(out.block);
     CHECK(out.appearance == input.appearance); // cosmetics survive the round-trip
     CHECK(out.equipment == input.equipment);   // gear loadout survives the round-trip
+    CHECK(out.buy_rig == 2);                   // wagon-rig purchase request survives
 
     Snapshot snapshot;
     snapshot.tick = 7;
@@ -94,6 +96,7 @@ TEST_CASE("Net: message serialization round-trips") {
     snapshot.fires.push_back({Vec3{10.0f, 1.0f, 12.0f}, 0.7f, 180});
     snapshot.barricades.push_back({Vec3{5.0f, 0.3f, -7.0f}, 1.2f, 240});
     snapshot.money = 1234u;
+    snapshot.rig_level = 3;
     snapshot.contract_phase = static_cast<u8>(ContractPhase::Active);
     snapshot.contract_outcome = 1;
     snapshot.wagons.push_back({55u, Vec3{2.0f, 0.5f, 3.0f}, 0.9f, Vec3{40.0f, 0.0f, 60.0f},
@@ -164,6 +167,7 @@ TEST_CASE("Net: message serialization round-trips") {
     CHECK(decoded.barricades[0].position.x == doctest::Approx(5.0f));
     CHECK(decoded.barricades[0].yaw == doctest::Approx(1.2f));
     CHECK(decoded.money == 1234u);
+    CHECK(decoded.rig_level == 3);
     CHECK(decoded.contract_phase == static_cast<u8>(ContractPhase::Active));
     CHECK(decoded.contract_outcome == 1);
     REQUIRE(decoded.wagons.size() == 1);

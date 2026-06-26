@@ -781,7 +781,9 @@ private:
     bool skills_open_ = false; // full-screen skills tree overlay (K)
     bool wardrobe_open_ = false; // gear / wardrobe overlay (U): buy tiers, recolour, change weapon
     u8 pending_buy_ = 0;       // shop: the gear tier we're trying to buy up to (sent in PlayerInput.buy)
+    u8 pending_buy_rig_ = 0;   // shop: the wagon-rig level we're trying to buy up to (PlayerInput.buy_rig)
     ui::Rect wardrobe_buy_rect_ = {};        // the "buy upgrade" button (from draw_wardrobe)
+    ui::Rect wardrobe_rig_rect_ = {};        // the "reinforce wagon" button
     ui::Rect wardrobe_weapon_rect_ = {};     // the "change weapon" button
     ui::Rect wardrobe_swatch_rects_[8] = {}; // the recolour swatches
 

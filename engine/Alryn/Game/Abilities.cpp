@@ -59,6 +59,17 @@ void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
             money_ -= price;
             pl.owned_tier = static_cast<u8>(pl.owned_tier + 1);
         }
+        // Town shop: buy WAGON-RIG upgrade levels up to the requested target (a money sink), one at a
+        // time, while in a town + the party can afford the next level. buy_rig is the target level.
+        while (pl.input.buy_rig > rig_level_ && rig_level_ < kMaxRigLevel &&
+               worldgen::inside_village(pp.x, pp.z, seed, 6.0f)) {
+            const u32 price = rig_price(static_cast<u8>(rig_level_ + 1));
+            if (money_ < price) {
+                break;
+            }
+            money_ -= price;
+            rig_level_ = static_cast<u8>(rig_level_ + 1);
+        }
         sync_player_role(pl);
         pl.cast_fx = 0; // cleared each tick; set below when an ability actually fires
         for (f32& cd : pl.ability_cd) {
