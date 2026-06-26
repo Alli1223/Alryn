@@ -133,16 +133,23 @@ MeshData build_horse_body() {
     MeshData m;
     const Vec3 hide{0.34f, 0.22f, 0.13f};
     const Vec3 mane{0.16f, 0.11f, 0.07f};
-    add_box(m, {-0.7f, 0.95f, -0.26f}, {0.55f, 1.45f, 0.26f}, hide);        // barrel
-    add_box(m, {-0.85f, 1.0f, -0.2f}, {-0.7f, 1.35f, 0.2f}, hide);         // rump
-    // Neck (angled up-forward) + head.
-    add_box(m, {0.45f, 1.3f, -0.16f}, {0.8f, 1.85f, 0.16f}, hide);         // neck
-    add_box(m, {0.7f, 1.7f, -0.14f}, {1.05f, 2.0f, 0.14f}, hide);          // head
-    add_box(m, {1.0f, 1.78f, -0.12f}, {1.25f, 1.95f, 0.12f}, hide * 0.95f); // muzzle
-    add_box(m, {0.62f, 1.85f, -0.12f}, {0.72f, 2.05f, -0.02f}, mane);      // ears
-    add_box(m, {0.62f, 1.85f, 0.02f}, {0.72f, 2.05f, 0.12f}, mane);
-    add_box(m, {0.45f, 1.45f, -0.05f}, {0.78f, 1.95f, 0.05f}, mane);       // mane
-    add_box(m, {-0.9f, 1.0f, -0.04f}, {-0.78f, 1.4f, 0.04f}, mane);        // tail
+    // Body: a deep chest up front + a rounded haunch behind (two masses, not one flat barrel).
+    add_box(m, {-0.2f, 0.95f, -0.27f}, {0.58f, 1.48f, 0.27f}, hide);   // chest/shoulder (deeper)
+    add_box(m, {-0.86f, 0.95f, -0.24f}, {-0.16f, 1.42f, 0.24f}, hide); // barrel + haunch
+    // Neck: an ARCHED crest stepping up-forward from the shoulder to the head (not a straight box).
+    add_box(m, {0.44f, 1.34f, -0.16f}, {0.74f, 1.74f, 0.16f}, hide);        // lower neck (off the chest)
+    add_box(m, {0.6f, 1.62f, -0.14f}, {0.86f, 1.96f, 0.14f}, hide);         // upper neck (arching up)
+    add_box(m, {0.78f, 1.74f, -0.13f}, {1.08f, 2.02f, 0.13f}, hide);        // head
+    add_box(m, {1.04f, 1.78f, -0.11f}, {1.28f, 1.96f, 0.11f}, hide * 0.95f); // muzzle
+    add_box(m, {0.84f, 2.0f, -0.11f}, {0.94f, 2.18f, -0.02f}, mane);   // ear L
+    add_box(m, {0.84f, 2.0f, 0.02f}, {0.94f, 2.18f, 0.11f}, mane);     // ear R
+    add_box(m, {0.92f, 1.92f, -0.04f}, {1.0f, 2.06f, 0.04f}, mane);    // forelock
+    // Mane: a crest running down the back of the neck (stepped + fuller).
+    add_box(m, {0.58f, 1.66f, -0.05f}, {0.86f, 2.02f, 0.05f}, mane);   // upper mane (along the arch)
+    add_box(m, {0.44f, 1.42f, -0.05f}, {0.68f, 1.8f, 0.05f}, mane);    // lower mane
+    // Tail: a docked top + a long flowing switch hanging down behind the rump.
+    add_box(m, {-0.92f, 1.1f, -0.06f}, {-0.82f, 1.36f, 0.06f}, mane);  // dock (off the rump)
+    add_box(m, {-0.98f, 0.5f, -0.07f}, {-0.86f, 1.14f, 0.07f}, mane);  // long switch hanging down
     return m;
 }
 MeshData build_horse_leg() {
