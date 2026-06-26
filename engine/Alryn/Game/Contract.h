@@ -224,6 +224,21 @@ inline f32 convoy_mult(u32 escorts) {
     return 1.0f + kConvoyBonusPer * static_cast<f32>(capped);
 }
 
+// UNSCATHED bonus: a haul where the party keeps everyone on their feet pays a premium - a reward for
+// protecting each other (and a synergy with second wind, which spares a "down"), pulling against the
+// RUSH bonus (hurrying past raiders risks casualties). Graded: full bonus at zero downs, fading to
+// nothing once the party has been downed kUnscathedDownsFloor times. A "down" is a real respawn (a
+// caught second wind is NOT a down). Applied at delivery only, so it never touches the haul sim.
+inline constexpr f32 kUnscathedBonus = 0.2f;    // +20% pay for a no-casualty haul
+inline constexpr u32 kUnscathedDownsFloor = 3;  // bonus fully gone after this many party downs
+inline f32 unscathed_mult(u32 downs) {
+    if (downs >= kUnscathedDownsFloor) {
+        return 1.0f;
+    }
+    const f32 t = 1.0f - static_cast<f32>(downs) / static_cast<f32>(kUnscathedDownsFloor);
+    return 1.0f + kUnscathedBonus * t;
+}
+
 // FIELD REPAIR: between ambush waves (no raiders alive) a player who stays near the cargo wagon
 // patches it up, mending its health slowly back toward full - so clearing a wave then tending the
 // cart is rewarded, and a battered haul can recover if you make the time. Pure + server-applied.

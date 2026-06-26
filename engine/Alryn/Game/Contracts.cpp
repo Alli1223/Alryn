@@ -557,6 +557,7 @@ void GameServer::accept_contract(const Wagon& chosen, WagonMode mode) {
     contract_phase_ = ContractPhase::Active;
     contract_elapsed_ = 0.0f; // start the rush-bonus clock
     contract_kills_ = 0;      // fresh kill-bounty tally for this haul
+    contract_downs_ = 0;      // fresh no-casualty (unscathed) tally for this haul
     for (auto& [pid, pl] : players_) {
         pl.used_second_wind = false; // each player gets one clutch second wind per haul
         pl.rampage_stacks = 0;       // fresh kill momentum for the new haul
@@ -812,16 +813,18 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
         const f32 streak = streak_mult(delivery_streak_);
         // CONVOY: a bigger escort party earns a better contract (co-op incentive; solo = 1.0).
         const f32 convoy = convoy_mult(static_cast<u32>(players_.size()));
+        // UNSCATHED: a no-casualty haul pays a premium (fades with each party member downed).
+        const f32 unscathed = unscathed_mult(contract_downs_);
         // The reward (scaled by all the multipliers) PLUS a flat kill bounty for the raiders felled.
-        money_ += static_cast<u32>(std::lround(base * frac * intact * rush * fresh * streak * convoy)) +
+        money_ += static_cast<u32>(
+                      std::lround(base * frac * intact * rush * fresh * streak * convoy * unscathed)) +
                   kill_bounty(contract_kills_);
         contract_outcome_ = 1;
         contract_phase_ = ContractPhase::Settle;
         settle_timer_ = kSettleSeconds;
-        ALRYN_INFO("Wagon delivered ({}/{} crates, {:.0f}% intact, x{:.2f} intact, x{:.2f} convoy)! "
+        ALRYN_INFO("Wagon delivered ({}/{} crates, x{:.2f} intact, x{:.2f} convoy, x{:.2f} unscathed)! "
                    "Party money now {}",
-                   cargo_.size(), w.goods_total, 100.0f * w.health / kWagonHealth, intact, convoy,
-                   money_);
+                   cargo_.size(), w.goods_total, intact, convoy, unscathed, money_);
         end_contract_cleanup();
         return;
     }
@@ -1560,6 +1563,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             pl.controller.set_position(spawn_point(id));
             pl.health = pl.max_health;
             pl.since_hit = kPlayerRegenDelay;
+            ++contract_downs_; // a real casualty this haul - costs the UNSCATHED delivery bonus
             ALRYN_INFO("Player {} was slain and respawned", id);
         }
     }

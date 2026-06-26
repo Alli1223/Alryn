@@ -347,6 +347,7 @@ private:
     u8 rig_level_ = 0;                   // wagon-rig upgrade level the party has bought (money sink)
     f32 contract_elapsed_ = 0.0f;        // seconds the active haul has been under way (rush-bonus clock)
     u32 contract_kills_ = 0;             // ambushers the party has felled this haul (-> kill bounty)
+    u32 contract_downs_ = 0;             // times a party member was downed this haul (-> unscathed bonus)
     u8 contract_outcome_ = 0;            // 0 none, 1 delivered, 2 wrecked (settle banner)
     u32 offer_town_vseed_ = 0;           // which town the current offers are from (0 = none)
     f32 settle_timer_ = 0.0f;            // banner hold before the next offer

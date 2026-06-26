@@ -174,6 +174,16 @@ TEST_CASE("Contract: a convoy bonus rewards a bigger escort party, solo unchange
     CHECK(convoy_mult(4) > convoy_mult(1)); // a convoy clearly out-earns a lone hauler
 }
 
+TEST_CASE("Contract: an unscathed (no-casualty) haul pays a premium that fades with each down") {
+    CHECK(unscathed_mult(0) == doctest::Approx(1.0f + kUnscathedBonus)); // nobody downed = full bonus
+    CHECK(unscathed_mult(1) < unscathed_mult(0));                        // each casualty erodes it
+    CHECK(unscathed_mult(2) < unscathed_mult(1));
+    CHECK(unscathed_mult(kUnscathedDownsFloor) == doctest::Approx(1.0f));     // bonus gone at the floor
+    CHECK(unscathed_mult(kUnscathedDownsFloor + 9) == doctest::Approx(1.0f)); // and stays gone
+    CHECK(unscathed_mult(0) > unscathed_mult(kUnscathedDownsFloor)); // a clean haul clearly out-earns a costly one
+    CHECK(kUnscathedBonus > 0.0f);
+}
+
 TEST_CASE("Contract: bigger vehicles pay more (capacity multiplier)") {
     CHECK(capacity_reward_mult(1) == doctest::Approx(1.0f));     // a cart: baseline pay
     CHECK(capacity_reward_mult(2) > capacity_reward_mult(1));    // a wagon: more
