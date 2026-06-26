@@ -165,6 +165,31 @@ TEST_CASE("Combat: a healer ambusher targets the most-wounded ally, not itself o
     CHECK(most_wounded_ally(es[0], span, kHealerRange) == -1);
 }
 
+TEST_CASE("Combat: a heavy blow sunders a shield-bearer's guard, which then recovers") {
+    Enemy e;
+    e.kind = kEnemyShield;
+    e.position = Vec3{0.0f, 0.0f, 0.0f};
+    e.yaw = 0.0f; // faces +x
+    const Vec3 front{3.0f, 0.0f, 0.0f};
+
+    CHECK(enemy_blocks_hit(e, front)); // normally blocks a frontal hit
+    e.sunder_cd = kSunderDuration;     // a heavy blow staggered it
+    CHECK_FALSE(enemy_blocks_hit(e, front)); // guard broken -> the front no longer blocks
+
+    // Stepping the enemy recovers the guard after kSunderDuration.
+    const DensitySampler density = flat_ground();
+    const std::span<const Collider> none{};
+    const Vec3 goal = e.position;
+    for (f32 t = 0.0f; t < kSunderDuration + 0.1f; t += 1.0f / 60.0f) {
+        step_enemy(e, density, none, goal, Timestep{1.0f / 60.0f});
+    }
+    CHECK(e.sunder_cd <= 0.0f);
+    CHECK(enemy_blocks_hit(e, front)); // guard restored -> blocks again
+
+    // The sunder threshold is set above basic attacks (so they don't trivially break the shield).
+    CHECK(kSunderThreshold > kMeleeDamage);
+}
+
 TEST_CASE("Combat: a villager walks toward its goal (e.g. fleeing / heading to bed)") {
     const DensitySampler density = flat_ground();
     const std::span<const Collider> none{};

@@ -51,6 +51,7 @@ struct Enemy {
     u8 kind = 0;
     bool alive = true;
     Vec3 knockback{0.0f}; // a hit shoves it back; this velocity decays each step (server-only)
+    f32 sunder_cd = 0.0f; // shield-bearer: while > 0 its guard is broken (a heavy blow staggered it)
 };
 
 // Knockback on hits: an enemy gets shoved back along the hit direction at a velocity proportional to
@@ -64,11 +65,17 @@ inline constexpr f32 kKnockbackDecay = 7.0f;      // exp decay rate (higher = sn
 inline constexpr u8 kEnemyShield = 4u;
 inline constexpr f32 kShieldBlockCos = 0.32f;  // shield covers the frontal arc (~71 deg half-angle)
 inline constexpr f32 kShieldReduction = 0.80f; // fraction of a frontal hit the shield soaks
+// SUNDER: a single HEAVY blow (a charged ability, an empowered swing - above this threshold) staggers
+// a shield-bearer, dropping its guard for a few seconds so follow-up hits land full. Below the
+// threshold, basic attacks just bounce off the front (the shield stays meaningful - flank or hit hard).
+inline constexpr f32 kSunderThreshold = 55.0f; // raw damage that breaks the guard (basics 14-42 don't)
+inline constexpr f32 kSunderDuration = 2.5f;   // seconds the guard stays down after a sunder
 
 // True if a shield-bearer would block a hit arriving from world position `from` (the attacker's
-// position, or a point back along a projectile's path) - i.e. `from` lies within its frontal arc.
+// position, or a point back along a projectile's path) - i.e. `from` lies within its frontal arc AND
+// its guard isn't currently sundered.
 inline bool enemy_blocks_hit(const Enemy& e, const Vec3& from) {
-    if (e.kind != kEnemyShield) {
+    if (e.kind != kEnemyShield || e.sunder_cd > 0.0f) {
         return false;
     }
     Vec2 to{from.x - e.position.x, from.z - e.position.z};
@@ -183,6 +190,9 @@ inline void step_enemy(Enemy& e, const DensitySampler& density,
     }
     if (e.attack_cd > 0.0f) {
         e.attack_cd -= dts;
+    }
+    if (e.sunder_cd > 0.0f) {
+        e.sunder_cd -= dts; // the shield-bearer's guard recovers after a sunder
     }
 }
 

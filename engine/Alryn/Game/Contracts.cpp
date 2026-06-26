@@ -1384,12 +1384,18 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                 const Vec3 chest = e.position + Vec3{0.0f, 0.9f, 0.0f};
                 if (glm::length(chest - pr.position) < pr.radius + kEnemyRadius + 0.3f) {
                     f32 dmg = (pr.damage > 0.0f ? pr.damage : kThrowDamage) * boost;
+                    const f32 raw = dmg; // pre-block magnitude, for the sunder check
                     // A shield-bearer soaks most of a shot that strikes its front (a point back
                     // along the projectile's path is where it came from).
                     if (enemy_blocks_hit(e, pr.position - pr.velocity * 0.1f)) {
                         dmg *= (1.0f - kShieldReduction);
                     }
                     e.health -= dmg;
+                    // A HEAVY shot (a charged ability) staggers a shield-bearer, dropping its guard for
+                    // follow-ups - even one this hit blocked (the shield took the brunt + cracked).
+                    if (e.kind == kEnemyShield && raw >= kSunderThreshold) {
+                        e.sunder_cd = kSunderDuration;
+                    }
                     Vec3 kdir = pr.velocity; // shove along the shot's flight direction (less if blocked)
                     kdir.y = 0.0f;
                     if (glm::length(kdir) > 1e-3f) {
@@ -1426,11 +1432,16 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
         if (hit != nullptr) {
             // weapon hits as hard as the role, amplified while Empowered (co-op buff)
             f32 dmg = role_stats(pl.role).melee_damage * pl.outgoing_mult();
+            const f32 raw = dmg; // pre-block magnitude, for the sunder check
             // A shield-bearer blocks most of a frontal swing - so flank it (or knock it loose).
             if (enemy_blocks_hit(*hit, pl.controller.position())) {
                 dmg *= (1.0f - kShieldReduction);
             }
             hit->health -= dmg;
+            // A HEAVY swing (e.g. an Empowered Knight blow) staggers it, breaking its guard a while.
+            if (hit->kind == kEnemyShield && raw >= kSunderThreshold) {
+                hit->sunder_cd = kSunderDuration;
+            }
             Vec3 kdir = hit->position - pl.controller.position(); // shove away from the attacker (less if blocked)
             kdir.y = 0.0f;
             if (glm::length(kdir) > 1e-3f) {
