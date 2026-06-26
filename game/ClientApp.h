@@ -773,6 +773,8 @@ private:
     f32 lightning_ = 0.0f;     // current lightning-flash brightness (decays)
     f32 lightning_cd_ = 4.0f;  // seconds until the next storm flash
     f32 cam_distance_ = iso::distance; // scroll-wheel zoom
+    Vec3 cam_target_{0.0f};            // smoothed camera look-at target (glides toward the player)
+    f32 combat_zoom_ = 1.0f;           // distance multiplier eased toward 0.86 while an ambush is on
     Camera camera_;
 
     net::PlayerId my_id_ = 0;

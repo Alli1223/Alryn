@@ -676,8 +676,20 @@ void ClientApp::update_camera() {
     const f32 cam_pitch = radians(iso::pitch_deg);
     const Vec3 dir_to_cam{std::cos(cam_pitch) * std::cos(cam_yaw), std::sin(cam_pitch),
                           std::cos(cam_pitch) * std::sin(cam_yaw)};
-    const Vec3 target = local_feet() + Vec3{0.0f, cam::target_height, 0.0f};
-    Vec3 eye = target + dir_to_cam * cam_distance_;
+    const Vec3 want = local_feet() + Vec3{0.0f, cam::target_height, 0.0f};
+    const f32 dt = glm::clamp(frame_dt_, 0.0001f, 0.1f); // clamp so a frame hitch can't fling the camera
+    // Follow-smoothing: the camera target GLIDES toward the player instead of snapping every frame (a
+    // softer, less rigid feel), but SNAPS on a big jump (first frame / respawn / teleport) so it never
+    // sails across the world.
+    if (glm::length(want - cam_target_) > 8.0f) {
+        cam_target_ = want;
+    } else {
+        cam_target_ += (want - cam_target_) * (1.0f - std::exp(-12.0f * dt));
+    }
+    // Combat zoom: pull in slightly while an ambush is on (enemies present) for intensity, ease back out.
+    const f32 zoom_goal = snapshot_.enemies.empty() ? 1.0f : 0.86f;
+    combat_zoom_ += (zoom_goal - combat_zoom_) * (1.0f - std::exp(-2.5f * dt));
+    Vec3 eye = cam_target_ + dir_to_cam * (cam_distance_ * combat_zoom_);
     // Camera-terrain collision: never let the eye sink into a hillside - going up a hill, the fixed
     // iso offset can bury the camera in the slope, clipping through the ground. Lift the eye to stay a
     // clearance above the terrain at its own position (smooth, since the height field is continuous).
@@ -689,7 +701,7 @@ void ClientApp::update_camera() {
     }
     camera_.set_perspective(radians(iso::fov_deg), renderer_->aspect(), cam::near_plane,
                             cam::far_plane);
-    camera_.look_at(eye, target);
+    camera_.look_at(eye, cam_target_);
 }
 
 void ClientApp::update_visuals(Timestep dt) {
