@@ -616,14 +616,30 @@ PropDef PropLibrary::build_lantern_post() {
     const Vec3 glow{1.0f, 0.78f, 0.4f}; // warm amber flame
     MeshData op;
     MeshData em;
-    add_box(op, {-0.05f, 0.0f, -0.05f}, {0.05f, 1.7f, 0.05f}, wood);          // post
-    add_box(op, {-0.11f, 1.68f, -0.11f}, {0.11f, 1.74f, 0.11f}, frame);        // top cap
-    add_box(op, {-0.11f, 1.42f, -0.11f}, {0.11f, 1.46f, 0.11f}, frame);        // bottom cap
-    add_box(em, {-0.085f, 1.46f, -0.085f}, {0.085f, 1.68f, 0.085f}, glow);     // glass
+    add_box(op, {-0.055f, 0.0f, -0.055f}, {0.055f, 1.42f, 0.055f}, wood);      // post
+    add_box(op, {-0.10f, 0.0f, -0.10f}, {0.10f, 0.12f, 0.10f}, wood * 0.85f);  // base block
+    add_box(op, {-0.13f, 1.40f, -0.13f}, {0.13f, 1.46f, 0.13f}, frame);        // lantern floor plate
+    add_box(em, {-0.085f, 1.47f, -0.085f}, {0.085f, 1.76f, 0.085f}, glow);     // glowing glass panes
+    // Four metal corner posts caging the glass.
+    for (const f32 sx : {-0.10f, 0.10f}) {
+        for (const f32 sz : {-0.10f, 0.10f}) {
+            add_box(op, {sx - 0.018f, 1.44f, sz - 0.018f}, {sx + 0.018f, 1.79f, sz + 0.018f}, frame);
+        }
+    }
+    // Peaked roof cap (four faces to an apex) + a finial spike, instead of a flat lid.
+    const Vec3 apex{0.0f, 1.98f, 0.0f};
+    const Vec3 cap_c{0.0f, 1.82f, 0.0f}; // centre, so emit_tri orients the roof faces outward
+    constexpr f32 cr = 0.155f;
+    const Vec3 r0{-cr, 1.77f, -cr}, r1{cr, 1.77f, -cr}, r2{cr, 1.77f, cr}, r3{-cr, 1.77f, cr};
+    emit_tri(op, r0, r1, apex, cap_c, frame);
+    emit_tri(op, r1, r2, apex, cap_c, frame);
+    emit_tri(op, r2, r3, apex, cap_c, frame);
+    emit_tri(op, r3, r0, apex, cap_c, frame);
+    add_box(op, {-0.025f, 1.96f, -0.025f}, {0.025f, 2.06f, 0.025f}, frame); // finial spike
     def.parts.push_back({std::move(op), PropLayer::Opaque});
     def.parts.push_back({std::move(em), PropLayer::Emissive});
     PropLight l;
-    l.offset = Vec3{0.0f, 1.55f, 0.0f};
+    l.offset = Vec3{0.0f, 1.6f, 0.0f};
     l.direction = glm::normalize(Vec3{0.0f, -1.0f, 0.0f});
     l.color = Vec3{1.0f, 0.74f, 0.42f};
     l.range = 14.0f;
