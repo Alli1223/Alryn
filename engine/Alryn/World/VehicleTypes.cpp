@@ -167,11 +167,19 @@ MeshData build_ox_body() {
     add_box(m, {0.42f, 1.02f, -0.24f}, {0.72f, 1.42f, 0.24f}, hide);   // thick neck
     add_box(m, {0.68f, 0.98f, -0.22f}, {1.02f, 1.4f, 0.22f}, hide);    // head
     add_box(m, {0.98f, 1.0f, -0.17f}, {1.2f, 1.28f, 0.17f}, hide * 0.94f); // muzzle
-    // horns: sweep out + up from the head top
+    add_box(m, {1.18f, 1.02f, -0.1f}, {1.22f, 1.18f, 0.1f}, dark);         // dark nose pad
+    add_box(m, {0.5f, 0.8f, -0.13f}, {0.82f, 1.08f, 0.13f}, hide);         // dewlap (hanging throat fold)
+    // horns: a tapering arc that sweeps OUT to the side, then curves UP and FORWARD to a point
     for (f32 sz : {-1.0f, 1.0f}) {
-        add_box(m, {0.74f, 1.4f, sz * 0.24f - 0.05f}, {0.9f, 1.5f, sz * 0.24f + 0.05f}, horn);
-        add_box(m, {0.76f, 1.46f, sz * 0.36f - 0.05f}, {0.88f, 1.66f, sz * 0.36f + 0.05f}, horn);
-        add_box(m, {0.66f, 1.34f, sz * 0.28f - 0.05f}, {0.76f, 1.44f, sz * 0.28f + 0.05f}, dark); // ear
+        auto seg = [&](f32 cx, f32 cy, f32 cz, f32 h) {
+            add_box(m, {cx - h, cy - h, sz * cz - h}, {cx + h, cy + h, sz * cz + h}, horn);
+        };
+        seg(0.80f, 1.44f, 0.22f, 0.075f); // root on the head crown
+        seg(0.83f, 1.50f, 0.33f, 0.064f); // sweeping outward
+        seg(0.86f, 1.59f, 0.41f, 0.055f); // out + rising
+        seg(0.90f, 1.69f, 0.44f, 0.046f); // curving up
+        seg(0.96f, 1.78f, 0.42f, 0.034f); // forward to the tip
+        add_box(m, {0.64f, 1.30f, sz * 0.27f - 0.05f}, {0.76f, 1.42f, sz * 0.27f + 0.05f}, dark); // ear
     }
     add_box(m, {-0.82f, 0.85f, -0.04f}, {-0.72f, 1.32f, 0.04f}, dark); // tail
     add_box(m, {-0.84f, 0.68f, -0.06f}, {-0.7f, 0.86f, 0.06f}, dark);  // tail tuft
