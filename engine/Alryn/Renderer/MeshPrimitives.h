@@ -86,4 +86,9 @@ MeshData rock(int variant = 0, const Vec3& color = Vec3{0.40f, 0.42f, 0.47f});
 // `color`. Building block for houses, lanterns and other prop geometry.
 MeshData box(const Vec3& min, const Vec3& max, const Vec3& color);
 
+// A wooden CRATE in the box (min..max): a light planked body `color` framed by darker reinforcing
+// corner posts + a base rail and a lid-seam band (standing a hair proud), so it reads as a slatted
+// crate rather than a plain box. Frame thickness scales with the box, so it works at any crate size.
+MeshData crate(const Vec3& min, const Vec3& max, const Vec3& color);
+
 } // namespace alryn::primitives

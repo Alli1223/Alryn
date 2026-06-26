@@ -76,10 +76,11 @@ void ClientApp::on_init() {
     rope_mesh_.create(renderer_->device(),
                       primitives::box(Vec3{-0.5f, 0.0f, -0.5f}, Vec3{0.5f, 1.0f, 0.5f},
                                       Vec3{0.16f, 0.11f, 0.06f}));
-    // A cargo crate (spilled goods on the ground / carried back to the cart).
+    // A cargo crate (rides on the cart bed / spilled on the ground / carried back to the cart) -
+    // a framed slatted crate so the goods you escort read as crates, not plain boxes.
     goods_mesh_.create(renderer_->device(),
-                       primitives::box(Vec3{-0.22f, 0.0f, -0.22f}, Vec3{0.22f, 0.44f, 0.22f},
-                                       Vec3{0.55f, 0.40f, 0.22f}));
+                       primitives::crate(Vec3{-0.22f, 0.0f, -0.22f}, Vec3{0.22f, 0.44f, 0.22f},
+                                         Vec3{0.55f, 0.40f, 0.22f}));
     // A large wave grid that follows the player; the water shader animates it.
     water_mesh_.create(renderer_->device(), primitives::grid(80, 2.0f, Vec3{0.1f, 0.3f, 0.4f}));
     // A unit-length plank bridge, stretched per river crossing where a road bridges a river.

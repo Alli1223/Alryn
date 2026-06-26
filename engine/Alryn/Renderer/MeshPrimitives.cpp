@@ -656,6 +656,25 @@ MeshData box(const Vec3& lo, const Vec3& hi, const Vec3& color) {
     return m;
 }
 
+MeshData crate(const Vec3& lo, const Vec3& hi, const Vec3& color) {
+    MeshData m = box(lo, hi, color);
+    const Vec3 frame = color * 0.45f; // darker reinforcing timber
+    const f32 sx = hi.x - lo.x, sy = hi.y - lo.y, sz = hi.z - lo.z;
+    const f32 s = sx < sz ? sx : sz;
+    const f32 p = 0.10f * s; // corner-post half-thickness (scales with the crate)
+    const f32 e = 0.03f * s; // how far the frame stands proud
+    for (f32 cx : {lo.x, hi.x}) {
+        for (f32 cz : {lo.z, hi.z}) { // four vertical corner posts (edge reinforcement)
+            append(m, box({cx - p, lo.y - e, cz - p}, {cx + p, hi.y + e, cz + p}, frame));
+        }
+    }
+    const f32 band = 0.06f * sy;            // horizontal rail half-thickness
+    const f32 lid = hi.y - 0.18f * sy;      // lid seam near the top
+    append(m, box({lo.x - e, lid - band, lo.z - e}, {hi.x + e, lid + band, hi.z + e}, frame));
+    append(m, box({lo.x - e, lo.y + band, lo.z - e}, {hi.x + e, lo.y + 3.0f * band, hi.z + e}, frame));
+    return m;
+}
+
 MeshData bush(int variant, const Vec3& color) {
     MeshData m;
     const u32 h = static_cast<u32>(variant) * 2654435761u + 1u;

@@ -166,6 +166,10 @@ Asset build_asset(const std::string& cat, int v) {
         add_prop(a, PropLibrary::build_wagon());
     } else if (cat == "wheel") {
         add_prop(a, PropLibrary::build_wagon_wheel());
+    } else if (cat == "cargo") {
+        a.parts.push_back({primitives::crate(Vec3{-0.22f, 0.0f, -0.22f}, Vec3{0.22f, 0.44f, 0.22f},
+                                             Vec3{0.55f, 0.40f, 0.22f}),
+                           Vec4{1.0f}});
     } else if (cat == "ox") {
         a.parts.push_back({build_ox_body(), Vec4{1.0f}});
         for (const Vec3& lo : kOxLegs) {
