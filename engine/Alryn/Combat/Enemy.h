@@ -29,8 +29,19 @@ inline constexpr f32 kSapperDamage = 60.0f;             // heavy hit to the carg
 inline constexpr f32 kSapperBlastRadius = 2.6f;         // players caught this close take the blast
 inline constexpr f32 kSapperBlastDamage = 18.0f;
 
+// WARLORD (kind 7): a tough champion that RALLIES the swarm - allied raiders within kWarlordAuraRadius
+// march faster AND hit harder (x kWarlordBuff). It fights as a sturdy melee unit, so the party should
+// PRIORITISE cutting it down to break the buff on the rest. (Aura check is near_warlord, below - pure.)
+inline constexpr u8 kEnemyWarlord = 7u;
+inline constexpr f32 kWarlordMaxHealth = 140.0f; // a tough priority target
+inline constexpr f32 kWarlordAuraRadius = 8.0f;  // allied raiders within this are rallied
+inline constexpr f32 kWarlordBuff = 1.3f;        // x march speed + x attack damage for rallied allies
+
 inline f32 enemy_max_health(u8 kind) {
-    return kind == 2 ? kBruteMaxHealth : kind == kEnemySapper ? kSapperMaxHealth : kEnemyMaxHealth;
+    return kind == 2              ? kBruteMaxHealth
+           : kind == kEnemySapper ? kSapperMaxHealth
+           : kind == kEnemyWarlord ? kWarlordMaxHealth
+                                   : kEnemyMaxHealth;
 }
 inline constexpr f32 kEnemySpeed = 2.7f;       // march speed (m/s)
 inline constexpr f32 kEnemyRadius = 0.4f;      // collision radius (xz)
@@ -193,6 +204,18 @@ inline int most_wounded_ally(const Enemy& healer, std::span<const Enemy> enemies
         }
     }
     return best;
+}
+
+// True if a living WARLORD (kind 7) other than `e` itself stands within kWarlordAuraRadius of `e` -
+// i.e. `e` is rallied (gets the kWarlordBuff to speed + damage). Pure, so the buff is headless-testable.
+inline bool near_warlord(const Enemy& e, std::span<const Enemy> enemies) {
+    for (const Enemy& w : enemies) {
+        if (w.kind == kEnemyWarlord && w.alive && w.id != e.id &&
+            glm::length(w.position - e.position) <= kWarlordAuraRadius) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // True if `target` lies within `range` and inside the cone of half-angle

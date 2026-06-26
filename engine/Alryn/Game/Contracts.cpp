@@ -1231,12 +1231,13 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             Enemy e;
             e.id = next_ambush_id_++;
             const u32 roll = h % 8u;
-            // ~1/8 each of brute / archer / shield-bearer / healer / sapper, the rest grunts.
+            // ~1/8 each of brute / archer / shield-bearer / healer / sapper / warlord, the rest grunts.
             e.kind = roll == 0u   ? 2u
                      : roll == 1u ? 3u
                      : roll == 2u ? kEnemyShield
                      : roll == 3u ? kEnemyHealer
                      : roll == 4u ? kEnemySapper
+                     : roll == 5u ? kEnemyWarlord
                                   : 0u;
             e.health = enemy_max_health(e.kind);
             const f32 a = detail::hash01(h) * TwoPi;
@@ -1429,10 +1430,12 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
 
         // The lone last raider goes berserk - a faster, harder "finish it" climax (not the brute).
         const f32 enrage = is_enraged(ambush_.size(), e.kind) ? kEnrageMult : 1.0f;
+        // A nearby WARLORD rallies the swarm: allied raiders march faster + hit harder until it falls.
+        const f32 rally = near_warlord(e, std::span<const Enemy>(ambush_)) ? kWarlordBuff : 1.0f;
         const f32 spd = (e.kind == kEnemyShield ? kEnemySpeed * 0.85f // shield-bearer is weighed down
                                                 : kEnemySpeed) *
-                        enrage;
-        const f32 dmg = kEnemyAttackDamage * enrage;
+                        enrage * rally;
+        const f32 dmg = kEnemyAttackDamage * enrage * rally;
         step_enemy(e, density, collider_scratch_, goal, dt, spd, bridge);
         if (e.attack_cd <= 0.0f) {
             const f32 reach = kEnemyAttackRange + kEnemyRadius;

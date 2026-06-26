@@ -66,7 +66,7 @@ void ClientApp::draw_enemies() {
         // 0 = grunt (dark red), 1 = torch-bearer (fiery), 2 = brute (big + dark),
         // 3 = archer (sickly green, carries a bow), 4 = shield-bearer (steel, carries a shield),
         // 5 = healer (pale mystic, floats a glowing green orb).
-        const f32 scale = en.kind == 2 ? 1.5f : 1.0f;
+        const f32 scale = en.kind == 2 ? 1.5f : en.kind == kEnemyWarlord ? 1.28f : 1.0f;
         const Mat4 root = glm::translate(Mat4{1.0f}, en.position) *
                           glm::rotate(Mat4{1.0f}, HalfPi - en.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
                           glm::scale(Mat4{1.0f}, Vec3{scale}) * v.animator.body_offset();
@@ -75,8 +75,9 @@ void ClientApp::draw_enemies() {
                           : en.kind == 3 ? Vec3{0.5f, 0.85f, 0.45f}
                           : en.kind == 4 ? Vec3{0.62f, 0.66f, 0.78f}
                           : en.kind == 5 ? Vec3{0.78f, 0.82f, 0.70f}
-                          : en.kind == kEnemySapper ? Vec3{0.5f, 0.42f, 0.30f} // dark, hunched
-                                                    : Vec3{1.3f, 0.32f, 0.3f};
+                          : en.kind == kEnemySapper ? Vec3{0.5f, 0.42f, 0.30f}  // dark, hunched
+                          : en.kind == kEnemyWarlord ? Vec3{0.85f, 0.14f, 0.26f} // deep crimson champion
+                                                     : Vec3{1.3f, 0.32f, 0.3f};
         const std::vector<Quat> pose = v.animator.pose(v.model);
         if (v.body_skin.vertices.empty()) {
             v.body_skin = build_body_mesh(v.model);
@@ -92,6 +93,27 @@ void ClientApp::draw_enemies() {
                                  glm::translate(Mat4{1.0f}, en.position + Vec3{0.0f, 1.0f, 0.0f}) *
                                      glm::scale(Mat4{1.0f}, Vec3{1.3f}),
                                  Vec4{1.0f, 0.18f, 0.12f, 0.4f * puls});
+        }
+        if (en.kind == kEnemyWarlord) {
+            // A rallying champion: a crimson aura ring on the ground (the rally zone - allies inside
+            // march faster + hit harder until it falls, so cut it down first) + a back-banner.
+            const Vec3 base{en.position.x, en.position.y + 0.04f, en.position.z};
+            const f32 puls = 0.55f + 0.3f * std::sin(elapsed_ * 6.0f);
+            renderer_->draw_transparent(
+                shape_sphere_,
+                glm::translate(Mat4{1.0f}, base) *
+                    glm::scale(Mat4{1.0f}, Vec3{kWarlordAuraRadius, 0.04f, kWarlordAuraRadius}),
+                Vec4{0.85f, 0.12f, 0.2f, 0.1f + 0.06f * puls});
+            const Vec3 fwd{std::cos(en.yaw), 0.0f, std::sin(en.yaw)};
+            const Vec3 polebase = en.position - fwd * 0.25f;
+            renderer_->draw(shape_box_,
+                            glm::translate(Mat4{1.0f}, polebase + Vec3{0.0f, 1.4f, 0.0f}) *
+                                glm::scale(Mat4{1.0f}, Vec3{0.05f, 1.4f, 0.05f}),
+                            Vec4{0.15f, 0.1f, 0.08f, 1.0f}); // banner pole
+            renderer_->draw(shape_box_,
+                            glm::translate(Mat4{1.0f}, polebase + Vec3{0.0f, 2.35f, 0.0f} - fwd * 0.18f) *
+                                glm::scale(Mat4{1.0f}, Vec3{0.04f, 0.5f, 0.36f}),
+                            Vec4{0.82f, 0.12f, 0.2f, 1.0f}); // crimson flag
         }
         if (en.kind == 2 && (en.action == 2 || en.action == 3)) {
             // Brute slam telegraph: a pulsing red danger ring on the ground while it winds up

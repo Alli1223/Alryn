@@ -265,6 +265,27 @@ TEST_CASE("Combat: a sapper is a fragile, fast bomber that hits the cargo hard")
     CHECK(kSapperBlastDamage > 0.0f);
 }
 
+TEST_CASE("Combat: a warlord rallies nearby allies (an aura), excludes itself, and is a tough target") {
+    std::vector<Enemy> es(3);
+    es[0].id = 1;
+    es[0].kind = kEnemyWarlord;
+    es[0].position = Vec3{0.0f};
+    es[1].id = 2; // a grunt just inside the aura
+    es[1].position = Vec3{kWarlordAuraRadius - 1.0f, 0.0f, 0.0f};
+    es[2].id = 3; // a grunt well outside it
+    es[2].position = Vec3{kWarlordAuraRadius + 4.0f, 0.0f, 0.0f};
+    const std::span<const Enemy> all{es};
+    CHECK(near_warlord(es[1], all));       // the nearby ally is rallied
+    CHECK_FALSE(near_warlord(es[2], all)); // the distant ally is not
+    CHECK_FALSE(near_warlord(es[0], all)); // the warlord doesn't rally itself
+
+    es[0].alive = false; // cut the warlord down...
+    CHECK_FALSE(near_warlord(es[1], all)); // ...and the rally breaks
+
+    CHECK(enemy_max_health(kEnemyWarlord) > enemy_max_health(0)); // a tough priority target
+    CHECK(kWarlordBuff > 1.0f);                                   // it really does buff
+}
+
 TEST_CASE("Combat: a villager walks toward its goal (e.g. fleeing / heading to bed)") {
     const DensitySampler density = flat_ground();
     const std::span<const Collider> none{};
