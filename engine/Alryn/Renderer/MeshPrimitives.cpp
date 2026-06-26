@@ -685,18 +685,56 @@ MeshData rock(int variant, const Vec3& color) {
         const u32 v = (h ^ (static_cast<u32>(salt) * 0x85EBCA77u));
         return static_cast<f32>((v >> 9) & 0xFFFFu) / 65535.0f;
     };
-    // Start from a low-poly sphere, then jitter each vertex outward for facets.
-    MeshData m = sphere(8, 5, color);
-    for (Vertex& v : m.vertices) {
+    // Start from a low-poly sphere, jitter each vertex outward for facets, taper the lower
+    // hemisphere inward and clamp it flush to y = 0 so the boulder sits ON the ground with
+    // no floating overhang / dark hollow underneath.
+    MeshData s = sphere(8, 5, color);
+    for (Vertex& v : s.vertices) {
+        const f32 sy = v.position.y; // -1..1 on the unit sphere
         const f32 key = std::floor(v.position.x * 13.0f) + std::floor(v.position.y * 7.0f) +
                         std::floor(v.position.z * 11.0f);
         const u32 hv = h ^ static_cast<u32>(static_cast<i32>(key) * 0x27D4EB2F);
         const f32 j = 0.7f + (static_cast<f32>((hv >> 8) & 0xFFFFu) / 65535.0f) * 0.6f;
-        v.position.x *= j;
-        v.position.z *= j;
-        v.position.y = v.position.y * (0.45f + rnd(2) * 0.2f) + 0.28f; // squashed, sat on ground
+        // Sit the WIDEST ring almost on the ground and dome upward from there, narrowing to
+        // the crown: the whole lower hemisphere clamps flat into y = 0 (hidden under the rock)
+        // so there is no belly that tucks under to cast a dark floating hollow.
+        const f32 up = glm::clamp(sy, 0.0f, 1.0f);
+        const f32 taper = sy < 0.0f ? 1.0f : glm::mix(1.0f, 0.80f, up); // only narrow the crown
+        v.position.x *= j * taper;
+        v.position.z *= j * taper;
+        v.position.y = std::max(sy * (0.48f + rnd(2) * 0.22f), 0.0f); // dome from a flush ground rim
     }
-    m.recompute_flat_normals();
+    // De-index into independent facets so each gets its own crisp flat normal AND its own
+    // stony colour (a shared-vertex sphere averages out to one smooth blob).
+    MeshData m;
+    const Vec3 moss{0.26f, 0.40f, 0.18f};   // damp green on top
+    const Vec3 lichen{0.62f, 0.63f, 0.52f}; // pale crusty fleck
+    for (usize i = 0; i + 2 < s.indices.size(); i += 3) {
+        const Vec3& pa = s.vertices[s.indices[i]].position;
+        const Vec3& pb = s.vertices[s.indices[i + 1]].position;
+        const Vec3& pc = s.vertices[s.indices[i + 2]].position;
+        Vec3 n = glm::cross(pb - pa, pc - pa);
+        const f32 nlen = glm::length(n);
+        if (nlen < 1e-7f) {
+            continue; // skip the flattened-base degenerate faces
+        }
+        n /= nlen;
+        const u32 fh = h ^ (static_cast<u32>(i) * 2654435761u);
+        Vec3 col = color * (0.80f + 0.32f * (static_cast<f32>((fh >> 8) & 0xFFFFu) / 65535.0f));
+        if (n.y > 0.30f) { // dapple moss / lichen onto upward-facing facets
+            const f32 m01 = static_cast<f32>((fh >> 3) & 0xFFu) / 255.0f;
+            if (m01 > 0.60f) {
+                col = glm::mix(col, moss, glm::min((m01 - 0.60f) * 1.8f, 0.85f));
+            } else if (m01 < 0.12f) {
+                col = glm::mix(col, lichen, 0.5f);
+            }
+        }
+        const u32 base = static_cast<u32>(m.vertices.size());
+        m.vertices.push_back({pa, n, col, 0.0f});
+        m.vertices.push_back({pb, n, col, 0.0f});
+        m.vertices.push_back({pc, n, col, 0.0f});
+        m.indices.insert(m.indices.end(), {base, base + 1, base + 2});
+    }
     return m;
 }
 

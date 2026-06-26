@@ -78,8 +78,9 @@ TreeMeshData tree(int variant);
 MeshData bush(int variant = 0, const Vec3& color = Vec3{0.22f, 0.42f, 0.20f});
 
 // A faceted low-poly boulder sitting on y = 0, deterministically deformed by
-// `variant`. Greyish stone by default.
-MeshData rock(int variant = 0, const Vec3& color = Vec3{0.46f, 0.46f, 0.50f});
+// `variant`. Cool stone grey by default (faces vary in shade, upward faces get
+// moss/lichen, and the base tapers flush to the ground).
+MeshData rock(int variant = 0, const Vec3& color = Vec3{0.40f, 0.42f, 0.47f});
 
 // An axis-aligned box from (min) to (max) with one flat normal per face, colour
 // `color`. Building block for houses, lanterns and other prop geometry.
