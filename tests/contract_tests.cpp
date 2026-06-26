@@ -110,6 +110,16 @@ TEST_CASE("Contract: rush bonus rewards a fast delivery + decays to nothing") {
     CHECK(rush_bonus_mult(10.0f, 0.0f) == doctest::Approx(1.0f));            // guard: no budget = no bonus
 }
 
+TEST_CASE("Contract: a clean-delivery streak stacks a capped pay bonus") {
+    CHECK(streak_mult(0) == doctest::Approx(1.0f));                   // no streak = no bonus
+    CHECK(streak_mult(1) == doctest::Approx(1.0f + kStreakBonusPer)); // first perfect run
+    CHECK(streak_mult(2) > streak_mult(1));                           // stacks
+    CHECK(streak_mult(3) > streak_mult(2));
+    CHECK(streak_mult(kStreakMax) == doctest::Approx(1.0f + kStreakBonusPer * kStreakMax));
+    CHECK(streak_mult(kStreakMax + 7) == doctest::Approx(streak_mult(kStreakMax))); // capped
+    CHECK(streak_mult(kStreakMax) > streak_mult(0)); // a full streak clearly pays more than none
+}
+
 TEST_CASE("Contract: bigger vehicles pay more (capacity multiplier)") {
     CHECK(capacity_reward_mult(1) == doctest::Approx(1.0f));     // a cart: baseline pay
     CHECK(capacity_reward_mult(2) > capacity_reward_mult(1));    // a wagon: more

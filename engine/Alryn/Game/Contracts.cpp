@@ -798,7 +798,12 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
         const f32 rush = rush_bonus_mult(contract_elapsed_, rush_expected_time(rdist));
         // FRESHNESS: perishable cargo loses value if delivered past its (tight) spoil deadline.
         const f32 fresh = perishable_value_mult(contract_elapsed_, rdist, contract_modifier(w.id));
-        money_ += static_cast<u32>(std::lround(base * frac * intact * rush * fresh));
+        // STREAK: a PERFECT delivery (the whole load arrived) extends the clean-delivery streak for a
+        // stacking pay bonus; losing any cargo breaks it back to nothing.
+        const bool perfect = w.goods_total == 0 || cargo_.size() >= w.goods_total;
+        delivery_streak_ = perfect ? std::min<u32>(delivery_streak_ + 1u, kStreakMax) : 0u;
+        const f32 streak = streak_mult(delivery_streak_);
+        money_ += static_cast<u32>(std::lround(base * frac * intact * rush * fresh * streak));
         contract_outcome_ = 1;
         contract_phase_ = ContractPhase::Settle;
         settle_timer_ = kSettleSeconds;
@@ -807,11 +812,12 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
         end_contract_cleanup();
         return;
     }
-    // Wrecked: the ambush destroyed it.
+    // Wrecked: the ambush destroyed it. A failed haul breaks the clean-delivery streak.
     if (w.health <= 0.0f) {
         contract_outcome_ = 2;
         contract_phase_ = ContractPhase::Settle;
         settle_timer_ = kSettleSeconds;
+        delivery_streak_ = 0u;
         end_contract_cleanup();
         ALRYN_INFO("Wagon was wrecked - contract failed");
     }

@@ -178,6 +178,16 @@ inline f32 rush_bonus_mult(f32 elapsed, f32 expected) {
     return 1.0f + kRushBonus * t;
 }
 
+// A clean-delivery STREAK bonus: consecutive PERFECT deliveries (the whole load delivered, cart not
+// wrecked) stack a pay multiplier, reset by any spilled-cargo or wrecked run. Rewards consistent,
+// careful hauling across contracts (a meta-progression), on top of the per-delivery bonuses.
+inline constexpr f32 kStreakBonusPer = 0.1f; // +10% pay per delivery in the streak
+inline constexpr u32 kStreakMax = 5;          // capped at +50%
+inline f32 streak_mult(u32 streak) {
+    const u32 s = streak > kStreakMax ? kStreakMax : streak;
+    return 1.0f + kStreakBonusPer * static_cast<f32>(s);
+}
+
 // --- Wagon RIG upgrades (a money sink) -----------------------------------------
 // The party spends money in town to permanently REINFORCE their rig - a tougher wagon that takes the
 // road's punishment better. The first upgrade axis: more max health + an ambush-damage resist. Each

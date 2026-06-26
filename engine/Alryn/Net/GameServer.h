@@ -296,6 +296,7 @@ private:
     std::vector<Enemy> ambush_;          // ambushers attacking the active wagon
     std::unordered_map<net::PlayerId, std::pair<u32, u8>> votes_; // player -> (wagon id, mode)
     u32 money_ = 0;                      // shared party wallet
+    u32 delivery_streak_ = 0;            // consecutive perfect (full-cargo) deliveries -> a pay bonus
     u8 rig_level_ = 0;                   // wagon-rig upgrade level the party has bought (money sink)
     f32 contract_elapsed_ = 0.0f;        // seconds the active haul has been under way (rush-bonus clock)
     u8 contract_outcome_ = 0;            // 0 none, 1 delivered, 2 wrecked (settle banner)

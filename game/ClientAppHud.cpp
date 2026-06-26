@@ -78,6 +78,14 @@ void ClientApp::draw_hud() {
     const std::string money = std::format("$ {}", snapshot_.money);
     draw.text(Vec2{W - draw.text_width(money, ts) - 24.0f, 22.0f}, money, ts,
               Vec4{0.96f, 0.86f, 0.4f, 1.0f});
+    // Clean-delivery streak (perfect full-cargo runs) + its stacking pay bonus, just under the wallet.
+    if (snapshot_.delivery_streak > 0) {
+        const u32 s = snapshot_.delivery_streak;
+        const int pct = static_cast<int>(std::lround((streak_mult(s) - 1.0f) * 100.0f));
+        const std::string str = std::format("STREAK x{}  +{}%", s, pct);
+        draw.text(Vec2{W - draw.text_width(str, ts * 0.7f) - 24.0f, 22.0f + ts * 1.15f}, str, ts * 0.7f,
+                  Vec4{0.55f, 0.95f, 0.7f, 1.0f});
+    }
 
     // Always-on corner minimap (hidden while the full M map is open).
     if (!map_open_) {
