@@ -2028,12 +2028,30 @@ PropDef PropLibrary::build_fountain() {
     PropDef def;
     def.name = "fountain";
     const Vec3 stone{0.55f, 0.54f, 0.50f};
-    const Vec3 water{0.18f, 0.34f, 0.46f};
+    const Vec3 coping{0.65f, 0.64f, 0.59f};
+    const Vec3 water{0.15f, 0.40f, 0.54f};
+    const Vec3 spray{0.55f, 0.80f, 0.92f}; // bright frothy water (emissive, so it glints)
     MeshData op;
     MeshData em;
+    // A round tier (a scaled unit cylinder) - its outward/cap normals stay valid under axis scaling.
+    auto add_cyl = [](MeshData& dst, f32 r, f32 y0, f32 y1, const Vec3& col) {
+        const MeshData c = primitives::cylinder(14, col);
+        const f32 sy = y1 - y0, cy = (y0 + y1) * 0.5f;
+        const u32 base = static_cast<u32>(dst.vertices.size());
+        for (Vertex v : c.vertices) {
+            v.position.x *= r * 2.0f;
+            v.position.z *= r * 2.0f;
+            v.position.y = v.position.y * sy + cy;
+            dst.vertices.push_back(v);
+        }
+        for (u32 idx : c.indices) {
+            dst.indices.push_back(base + idx);
+        }
+    };
     constexpr int n = 12;
     constexpr f32 ro = 1.7f, ri = 1.35f, rim_h = 0.5f;
-    // Octa/dodeca-gonal stone rim + water surface, built as wedges.
+    const f32 wlevel = rim_h * 0.7f;
+    // Dodecagonal stone rim + water surface, built as wedges (per-wedge shade reads as masonry).
     for (int i = 0; i < n; ++i) {
         const f32 a0 = TwoPi * static_cast<f32>(i) / static_cast<f32>(n);
         const f32 a1 = TwoPi * static_cast<f32>(i + 1) / static_cast<f32>(n);
@@ -2042,17 +2060,25 @@ PropDef PropLibrary::build_fountain() {
         const Vec3 i0{std::cos(a0) * ri, 0.0f, std::sin(a0) * ri};
         const Vec3 i1{std::cos(a1) * ri, 0.0f, std::sin(a1) * ri};
         const Vec3 up{0.0f, rim_h, 0.0f};
-        add_quad(op, o0, o1, o1 + up, o0 + up, stone);             // outer rim wall
-        add_quad(op, i0 + up, i1 + up, o1 + up, o0 + up, stone * 1.05f); // rim top
-        add_quad(op, i0, i0 + Vec3{0, rim_h * 0.7f, 0}, i1 + Vec3{0, rim_h * 0.7f, 0}, i1,
-                 stone * 0.9f); // inner wall
-        const Vec3 wc{0.0f, rim_h * 0.7f, 0.0f};
-        add_tri(op, wc, Vec3{i1.x, rim_h * 0.7f, i1.z}, Vec3{i0.x, rim_h * 0.7f, i0.z}, water);
+        const Vec3 lo{0.0f, wlevel, 0.0f};
+        const Vec3 sj = stone * (0.86f + 0.26f * hashf(static_cast<u32>(i) * 7u + 3u));
+        add_quad(op, o0, o0 + up, o1 + up, o1, sj);                 // outer rim wall (outward normal)
+        add_quad(op, i0 + up, i1 + up, o1 + up, o0 + up, coping);   // rim top coping (faces up)
+        add_quad(op, i0, i1, i1 + lo, i0 + lo, stone * 0.88f);      // inner wall (faces the water)
+        add_tri(op, Vec3{0.0f, wlevel, 0.0f}, Vec3{i1.x, wlevel, i1.z}, Vec3{i0.x, wlevel, i0.z},
+                water); // basin water surface
     }
-    // Central tiered spout.
-    add_box(op, {-0.25f, rim_h * 0.7f, -0.25f}, {0.25f, 1.4f, 0.25f}, stone);
-    add_box(op, {-0.5f, 1.0f, -0.5f}, {0.5f, 1.15f, 0.5f}, stone * 1.05f);
-    add_box(em, {-0.18f, 1.4f, -0.18f}, {0.18f, 1.6f, 0.18f}, water * 1.4f); // glinting water top
+    // Round, tiered "wedding-cake" centrepiece: a pedestal -> lower bowl -> stem -> upper bowl,
+    // each bowl catching water, topped by a bubbling-water finial.
+    add_cyl(op, 0.30f, wlevel, 0.74f, stone);  // lower pedestal
+    add_cyl(op, 0.64f, 0.74f, 0.88f, coping);  // lower bowl lip
+    add_cyl(op, 0.56f, 0.84f, 0.90f, water);   // water in the lower bowl
+    add_cyl(op, 0.18f, 0.90f, 1.26f, stone);   // stem
+    add_cyl(op, 0.40f, 1.26f, 1.39f, coping);  // upper bowl lip
+    add_cyl(op, 0.33f, 1.35f, 1.41f, water);   // water in the upper bowl
+    // The finial: a little dome of bright water welling up + spilling, emissive so it glints.
+    add_cyl(em, 0.10f, 1.41f, 1.58f, spray);
+    add_cyl(em, 0.16f, 1.54f, 1.66f, spray);
     def.parts.push_back({std::move(op), PropLayer::Opaque});
     def.parts.push_back({std::move(em), PropLayer::Emissive});
     BoxCollider c;
