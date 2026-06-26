@@ -59,6 +59,27 @@ inline constexpr f32 kKnockbackPerDamage = 0.13f; // m/s of knockback per point 
 inline constexpr f32 kKnockbackMax = 6.5f;        // cap (a huge hit can't fling an enemy across the map)
 inline constexpr f32 kKnockbackDecay = 7.0f;      // exp decay rate (higher = snappier stop)
 
+// Shield-bearer (kind 4): raises a shield that soaks most of a hit landing within its frontal arc,
+// so it shrugs off attacks from the front and must be FLANKED (or shoved around) to be felled fast.
+inline constexpr u8 kEnemyShield = 4u;
+inline constexpr f32 kShieldBlockCos = 0.32f;  // shield covers the frontal arc (~71 deg half-angle)
+inline constexpr f32 kShieldReduction = 0.80f; // fraction of a frontal hit the shield soaks
+
+// True if a shield-bearer would block a hit arriving from world position `from` (the attacker's
+// position, or a point back along a projectile's path) - i.e. `from` lies within its frontal arc.
+inline bool enemy_blocks_hit(const Enemy& e, const Vec3& from) {
+    if (e.kind != kEnemyShield) {
+        return false;
+    }
+    Vec2 to{from.x - e.position.x, from.z - e.position.z};
+    const f32 d = glm::length(to);
+    if (d < 1e-4f) {
+        return false;
+    }
+    const Vec2 facing{std::cos(e.yaw), std::sin(e.yaw)};
+    return glm::dot(to / d, facing) >= kShieldBlockCos;
+}
+
 // True if `target` lies within `range` and inside the cone of half-angle
 // acos(cone_cos) centred on the +xz heading `yaw`. Used for the player's melee
 // swing (and reusable for any directional hit test).

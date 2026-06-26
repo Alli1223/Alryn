@@ -111,6 +111,30 @@ TEST_CASE("Combat: a hit knocks an enemy back, then it settles + presses on") {
     CHECK(glm::length(e.knockback) < 0.1f); // settles to rest
 }
 
+TEST_CASE("Combat: a shield-bearer blocks frontal hits but is open from the flank/rear") {
+    Enemy e;
+    e.kind = kEnemyShield;
+    e.position = Vec3{0.0f, 0.0f, 0.0f};
+    e.yaw = 0.0f; // facing +x, so its shield covers the +x arc
+
+    // A hit coming from the front (in front of its facing) is blocked.
+    CHECK(enemy_blocks_hit(e, Vec3{3.0f, 0.0f, 0.0f}));
+    CHECK(enemy_blocks_hit(e, Vec3{3.0f, 1.0f, 0.8f})); // front, slightly to the side + raised
+    // A hit from the side or behind gets through.
+    CHECK_FALSE(enemy_blocks_hit(e, Vec3{0.0f, 0.0f, 3.0f}));  // flank
+    CHECK_FALSE(enemy_blocks_hit(e, Vec3{-3.0f, 0.0f, 0.0f})); // rear
+
+    // The block applies the configured reduction (so flanking is worth much more damage).
+    const f32 front = kMeleeDamage * (1.0f - kShieldReduction);
+    CHECK(front < kMeleeDamage * 0.3f); // a frontal swing barely chips it
+    CHECK(kMeleeDamage > front * 3.0f); // a flank swing hits far harder
+
+    // Other enemy kinds never block (only the shield-bearer does).
+    Enemy grunt;
+    grunt.kind = 0;
+    CHECK_FALSE(enemy_blocks_hit(grunt, Vec3{3.0f, 0.0f, 0.0f}));
+}
+
 TEST_CASE("Combat: a villager walks toward its goal (e.g. fleeing / heading to bed)") {
     const DensitySampler density = flat_ground();
     const std::span<const Collider> none{};

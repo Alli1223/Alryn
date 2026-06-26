@@ -64,7 +64,7 @@ void ClientApp::draw_enemies() {
         }
         EnemyVisual& v = it->second;
         // 0 = grunt (dark red), 1 = torch-bearer (fiery), 2 = brute (big + dark),
-        // 3 = archer (sickly green, carries a bow).
+        // 3 = archer (sickly green, carries a bow), 4 = shield-bearer (steel, carries a shield).
         const f32 scale = en.kind == 2 ? 1.5f : 1.0f;
         const Mat4 root = glm::translate(Mat4{1.0f}, en.position) *
                           glm::rotate(Mat4{1.0f}, HalfPi - en.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
@@ -72,6 +72,7 @@ void ClientApp::draw_enemies() {
         const Vec3 tint = en.kind == 1   ? Vec3{1.5f, 0.7f, 0.18f}
                           : en.kind == 2 ? Vec3{1.05f, 0.26f, 0.4f}
                           : en.kind == 3 ? Vec3{0.5f, 0.85f, 0.45f}
+                          : en.kind == 4 ? Vec3{0.62f, 0.66f, 0.78f}
                                          : Vec3{1.3f, 0.32f, 0.3f};
         const std::vector<Quat> pose = v.animator.pose(v.model);
         if (v.body_skin.vertices.empty()) {
@@ -90,6 +91,21 @@ void ClientApp::draw_enemies() {
                                 glm::rotate(Mat4{1.0f}, en.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
                                 glm::scale(Mat4{1.0f}, Vec3{0.04f, 0.85f, 0.04f}),
                             Vec4{0.34f, 0.22f, 0.12f, 1.0f});
+        }
+        if (en.kind == 4) {
+            // A large round shield held out front (a wide wooden plate + a steel boss),
+            // facing the way it marches - the side it blocks from.
+            const Vec3 fwd{std::cos(en.yaw), 0.0f, std::sin(en.yaw)};
+            const Vec3 mid = en.position + fwd * 0.5f + Vec3{0.0f, 1.0f, 0.0f};
+            const Mat4 face = glm::translate(Mat4{1.0f}, mid) *
+                              glm::rotate(Mat4{1.0f}, -en.yaw, Vec3{0.0f, 1.0f, 0.0f});
+            renderer_->draw(shape_box_,
+                            face * glm::scale(Mat4{1.0f}, Vec3{0.07f, 0.62f, 0.52f}),
+                            Vec4{0.40f, 0.28f, 0.16f, 1.0f}); // wooden plank face
+            renderer_->draw(shape_sphere_,
+                            glm::translate(Mat4{1.0f}, mid + fwd * 0.06f) *
+                                glm::scale(Mat4{1.0f}, Vec3{0.06f, 0.16f, 0.16f}),
+                            Vec4{0.66f, 0.70f, 0.80f, 1.0f}); // steel boss
         }
         if (en.kind == 1) {
             // The torch: a wooden haft + a flickering emissive flame held aloft, with

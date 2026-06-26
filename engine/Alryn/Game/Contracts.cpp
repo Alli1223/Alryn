@@ -1200,7 +1200,8 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             Enemy e;
             e.id = next_ambush_id_++;
             const u32 roll = h % 6u;
-            e.kind = roll == 0u ? 2u : roll == 1u ? 3u : 0u; // ~1/6 brute, ~1/6 archer, rest grunts
+            // ~1/6 brute, ~1/6 archer, ~1/6 shield-bearer, rest grunts.
+            e.kind = roll == 0u ? 2u : roll == 1u ? 3u : roll == 2u ? kEnemyShield : 0u;
             e.health = enemy_max_health(e.kind);
             const f32 a = detail::hash01(h) * TwoPi;
             const f32 r = kAmbushSpawnRadius + detail::hash01(h ^ 0x55u) * 6.0f;
@@ -1303,7 +1304,9 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             continue;
         }
 
-        const f32 spd = e.kind == 2u ? kEnemySpeed * 0.62f : kEnemySpeed;
+        const f32 spd = e.kind == 2u            ? kEnemySpeed * 0.62f  // brute lumbers
+                        : e.kind == kEnemyShield ? kEnemySpeed * 0.85f  // shield-bearer is weighed down
+                                                 : kEnemySpeed;
         const f32 dmg = e.kind == 2u ? kEnemyAttackDamage * 2.3f : kEnemyAttackDamage;
         step_enemy(e, density, collider_scratch_, goal, dt, spd, bridge);
         if (e.attack_cd <= 0.0f) {
@@ -1339,9 +1342,14 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             for (Enemy& e : ambush_) {
                 const Vec3 chest = e.position + Vec3{0.0f, 0.9f, 0.0f};
                 if (glm::length(chest - pr.position) < pr.radius + kEnemyRadius + 0.3f) {
-                    const f32 dmg = (pr.damage > 0.0f ? pr.damage : kThrowDamage) * boost;
+                    f32 dmg = (pr.damage > 0.0f ? pr.damage : kThrowDamage) * boost;
+                    // A shield-bearer soaks most of a shot that strikes its front (a point back
+                    // along the projectile's path is where it came from).
+                    if (enemy_blocks_hit(e, pr.position - pr.velocity * 0.1f)) {
+                        dmg *= (1.0f - kShieldReduction);
+                    }
                     e.health -= dmg;
-                    Vec3 kdir = pr.velocity; // shove along the shot's flight direction
+                    Vec3 kdir = pr.velocity; // shove along the shot's flight direction (less if blocked)
                     kdir.y = 0.0f;
                     if (glm::length(kdir) > 1e-3f) {
                         e.knockback = glm::normalize(kdir) * std::min(dmg * kKnockbackPerDamage, kKnockbackMax);
@@ -1376,9 +1384,13 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
         }
         if (hit != nullptr) {
             // weapon hits as hard as the role, amplified while Empowered (co-op buff)
-            const f32 dmg = role_stats(pl.role).melee_damage * pl.outgoing_mult();
+            f32 dmg = role_stats(pl.role).melee_damage * pl.outgoing_mult();
+            // A shield-bearer blocks most of a frontal swing - so flank it (or knock it loose).
+            if (enemy_blocks_hit(*hit, pl.controller.position())) {
+                dmg *= (1.0f - kShieldReduction);
+            }
             hit->health -= dmg;
-            Vec3 kdir = hit->position - pl.controller.position(); // shove away from the attacker
+            Vec3 kdir = hit->position - pl.controller.position(); // shove away from the attacker (less if blocked)
             kdir.y = 0.0f;
             if (glm::length(kdir) > 1e-3f) {
                 hit->knockback = glm::normalize(kdir) * std::min(dmg * kKnockbackPerDamage, kKnockbackMax);
