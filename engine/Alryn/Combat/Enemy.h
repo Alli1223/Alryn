@@ -51,7 +51,8 @@ struct Enemy {
     u8 kind = 0;
     bool alive = true;
     Vec3 knockback{0.0f}; // a hit shoves it back; this velocity decays each step (server-only)
-    f32 sunder_cd = 0.0f; // shield-bearer: while > 0 its guard is broken (a heavy blow staggered it)
+    f32 sunder_cd = 0.0f;   // shield-bearer: while > 0 its guard is broken (a heavy blow staggered it)
+    f32 slam_windup = 0.0f; // brute: while > 0 it is winding up a telegraphed radial slam (server-only)
 };
 
 // Knockback on hits: an enemy gets shoved back along the hit direction at a velocity proportional to
@@ -70,6 +71,21 @@ inline constexpr f32 kShieldReduction = 0.80f; // fraction of a frontal hit the 
 // threshold, basic attacks just bounce off the front (the shield stays meaningful - flank or hit hard).
 inline constexpr f32 kSunderThreshold = 55.0f; // raw damage that breaks the guard (basics 14-42 don't)
 inline constexpr f32 kSunderDuration = 2.5f;   // seconds the guard stays down after a sunder
+
+// Brute (kind 2) SLAM: instead of a single-target swing the brute winds up (a telegraph the players
+// can read + dodge), then smashes the ground for a RADIAL AoE that hits everyone within kSlamRadius -
+// so a brute in a crowd is dangerous, but a brute you sidestep wastes its big blow.
+inline constexpr f32 kSlamWindup = 0.9f;       // telegraph time before the slam lands (react/dodge)
+inline constexpr f32 kSlamRadius = 3.4f;       // radial reach of the slam (wider than a melee swing)
+inline constexpr f32 kSlamDamage = 32.0f;      // hit to every player caught in the ring (mitigated)
+inline constexpr f32 kSlamWagonDamage = 16.0f; // and a wallop to a wagon caught in it
+inline constexpr f32 kSlamCooldown = 2.6f;     // recovery before the brute can slam again
+
+// True if a target at `target` is caught in a brute's slam centred at `brute` (xz distance only).
+inline bool brute_slam_hits(const Vec3& brute, const Vec3& target) {
+    const Vec2 d{target.x - brute.x, target.z - brute.z};
+    return glm::length(d) <= kSlamRadius;
+}
 
 // True if a shield-bearer would block a hit arriving from world position `from` (the attacker's
 // position, or a point back along a projectile's path) - i.e. `from` lies within its frontal arc AND

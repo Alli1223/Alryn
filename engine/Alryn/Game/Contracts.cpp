@@ -1345,10 +1345,40 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             continue;
         }
 
-        const f32 spd = e.kind == 2u            ? kEnemySpeed * 0.62f  // brute lumbers
-                        : e.kind == kEnemyShield ? kEnemySpeed * 0.85f  // shield-bearer is weighed down
-                                                 : kEnemySpeed;
-        const f32 dmg = e.kind == 2u ? kEnemyAttackDamage * 2.3f : kEnemyAttackDamage;
+        if (e.kind == 2u) {
+            // Brute: lumbers in, then a telegraphed radial SLAM the party can read + dodge out of.
+            if (e.slam_windup > 0.0f) {
+                e.slam_windup -= dt.seconds;
+                step_enemy(e, density, collider_scratch_, e.position, dt, 0.0f, bridge); // plant + wind up
+                if (e.slam_windup <= 0.0f) {
+                    e.slam_windup = 0.0f;
+                    for (auto& [pid, pl] : players_) {
+                        if (brute_slam_hits(e.position, pl.controller.position())) {
+                            pl.take_damage(kSlamDamage); // role armour / block / shield soak it
+                        }
+                    }
+                    if (brute_slam_hits(e.position, w.position)) {
+                        w.health -= kSlamWagonDamage * rig_damage_mult(rig_level_);
+                    }
+                    e.attack_cd = kSlamCooldown;
+                }
+            } else {
+                step_enemy(e, density, collider_scratch_, goal, dt, kEnemySpeed * 0.62f, bridge);
+                if (e.attack_cd <= 0.0f) {
+                    const f32 trig = kSlamRadius * 0.8f; // commit once a target is well inside the ring
+                    const bool nearV = victim != nullptr && best < trig;
+                    const bool nearW = glm::length(w.position - e.position) < trig;
+                    if (nearV || nearW) {
+                        e.slam_windup = kSlamWindup;
+                    }
+                }
+            }
+            continue;
+        }
+
+        const f32 spd = e.kind == kEnemyShield ? kEnemySpeed * 0.85f // shield-bearer is weighed down
+                                               : kEnemySpeed;
+        const f32 dmg = kEnemyAttackDamage;
         step_enemy(e, density, collider_scratch_, goal, dt, spd, bridge);
         if (e.attack_cd <= 0.0f) {
             const f32 reach = kEnemyAttackRange + kEnemyRadius;

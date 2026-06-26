@@ -190,6 +190,19 @@ TEST_CASE("Combat: a heavy blow sunders a shield-bearer's guard, which then reco
     CHECK(kSunderThreshold > kMeleeDamage);
 }
 
+TEST_CASE("Combat: a brute's slam is a radial AoE you can dodge out of") {
+    const Vec3 brute{0.0f, 0.0f, 0.0f};
+    CHECK(brute_slam_hits(brute, Vec3{2.0f, 0.0f, 0.0f}));                      // inside the ring
+    CHECK(brute_slam_hits(brute, Vec3{0.0f, 5.0f, 3.0f}));                      // inside (y ignored)
+    CHECK_FALSE(brute_slam_hits(brute, Vec3{kSlamRadius + 1.0f, 0.0f, 0.0f})); // dodged clear
+    CHECK_FALSE(brute_slam_hits(brute, Vec3{0.0f, 0.0f, kSlamRadius + 0.5f})); // dodged clear
+    // The slam reaches wider than a single melee swing (so it threatens a clustered party)...
+    CHECK(kSlamRadius > kEnemyAttackRange);
+    // ...but it telegraphs first (time to react) and hits harder than a normal swing.
+    CHECK(kSlamWindup > 0.3f);
+    CHECK(kSlamDamage > kEnemyAttackDamage);
+}
+
 TEST_CASE("Combat: a villager walks toward its goal (e.g. fleeing / heading to bed)") {
     const DensitySampler density = flat_ground();
     const std::span<const Collider> none{};

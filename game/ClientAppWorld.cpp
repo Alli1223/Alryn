@@ -83,6 +83,30 @@ void ClientApp::draw_enemies() {
         skin_and_draw(v.model, v.body_skin, v.body_mesh, root, pose, tint); // continuous skinned body
         const std::vector<Mat4> emats = v.model.bone_matrices(root, pose);
         draw_rig(v.model, emats, tint, /*attachments_only=*/true); // face/hair on top
+        if (en.kind == 2 && (en.action == 2 || en.action == 3)) {
+            // Brute slam telegraph: a pulsing red danger ring on the ground while it winds up
+            // (action 2 - dodge out of it!), then a bright shockwave burst on the strike (action 3).
+            const Vec3 c{en.position.x, en.position.y + 0.06f, en.position.z};
+            if (en.action == 2) {
+                const f32 puls = 0.5f + 0.35f * std::sin(elapsed_ * 12.0f);
+                renderer_->draw_transparent(
+                    shape_sphere_,
+                    glm::translate(Mat4{1.0f}, c) *
+                        glm::scale(Mat4{1.0f}, Vec3{kSlamRadius, 0.05f, kSlamRadius}),
+                    Vec4{0.95f, 0.2f, 0.15f, 0.28f + 0.18f * puls});
+                renderer_->draw_glow(shape_sphere_,
+                                     glm::translate(Mat4{1.0f}, c) *
+                                         glm::scale(Mat4{1.0f}, Vec3{kSlamRadius * 1.03f, 0.04f,
+                                                                     kSlamRadius * 1.03f}),
+                                     Vec4{1.0f, 0.3f, 0.2f, 0.32f * puls});
+            } else { // action 3: the slam landed
+                renderer_->draw_glow(shape_sphere_,
+                                     glm::translate(Mat4{1.0f}, c + Vec3{0.0f, 0.2f, 0.0f}) *
+                                         glm::scale(Mat4{1.0f}, Vec3{kSlamRadius * 1.2f, 0.5f,
+                                                                     kSlamRadius * 1.2f}),
+                                     Vec4{1.0f, 0.55f, 0.25f, 0.6f});
+            }
+        }
         if (en.kind == 3) {
             // A bow held out front (a curved stave + string).
             const Vec3 hand = en.position +

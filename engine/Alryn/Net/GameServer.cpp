@@ -271,10 +271,18 @@ void GameServer::tick(Timestep dt) {
     for (const Enemy& en : ambush_) {
         const u8 hp = static_cast<u8>(
             glm::clamp(en.health / enemy_max_health(en.kind), 0.0f, 1.0f) * 255.0f);
-        // Flag a swing for the brief window just after the enemy struck (attack_cd was reset),
-        // so the client plays the attack animation in sync with the hit.
-        const u8 action =
-            (en.kind != 3 && en.attack_cd > kEnemyAttackInterval - 0.18f) ? 1u : 0u; // melee only
+        // Networked action cue for the client (no new wire field - EnemyState.action is reused):
+        // brute slam telegraph (2 = winding up) / strike (3 = just slammed), else a melee swing (1).
+        u8 action = 0u;
+        if (en.kind == 2u) {
+            if (en.slam_windup > 0.0f) {
+                action = 2u; // winding up -> client draws the danger ring
+            } else if (en.attack_cd > kSlamCooldown - 0.18f) {
+                action = 3u; // just slammed -> client draws the shockwave
+            }
+        } else if (en.kind != 3 && en.attack_cd > kEnemyAttackInterval - 0.18f) {
+            action = 1u; // melee swing in sync with the hit
+        }
         snapshot.enemies.push_back({en.id, en.position, en.yaw, en.kind, hp, action});
     }
     // Wagons: the parked offers while choosing, or the single active cargo en route.
