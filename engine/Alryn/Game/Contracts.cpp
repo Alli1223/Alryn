@@ -576,10 +576,13 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
     }
     const VehicleType& vt = vehicle_type(w.type);
     const f32 hitch = vt.horse_drawn() ? vt.reach() + 1.8f : kHitchDist;
-    // A battered cart moves slower, and a fully-laden one is heavy (lightens as cargo spills). For a
-    // player hauling by hand this is applied to their walk speed instead (GameServer step loop).
-    const f32 dmg = damage_speed_factor(w.health / kWagonHealth) *
-                    load_speed_factor(static_cast<u32>(cargo_.size()), w.goods_total);
+    // A battered cart moves slower. The laden-weight penalty (load_speed_factor) is applied ONLY to
+    // a PLAYER hauling by hand - their walk speed, in the GameServer step loop - where the heaviness
+    // is felt as gameplay. The hired driver/horse keeps a steady professional pace: its deterministic
+    // route is what the wheel-breakdown physics (a shed wheel rolling + settling) depend on, so
+    // perturbing it by the live cargo count would land the wheel in a different, sometimes unreachable
+    // spot.
+    const f32 dmg = damage_speed_factor(w.health / kWagonHealth);
 
     // Walks a puller (horse or teamster) toward the next route waypoint, A*-routing around
     // obstacles so it never snags. It targets sparse, string-pulled nodes using the LIVE
