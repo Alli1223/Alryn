@@ -244,6 +244,19 @@ TEST_CASE("GameServer: a dodge roll grants i-frames + a perfect-dodge damage boo
     CHECK(p.damage_boost_timer == doctest::Approx(0.0f));
 }
 
+TEST_CASE("GameServer: heal mends health, capped at the role max (melee-kill lifesteal)") {
+    GameServer::ServerPlayer p;
+    p.role = PlayerRole::Knight;
+    p.max_health = 170.0f;
+    p.health = 100.0f;
+    p.heal(kMeleeKillHeal);
+    CHECK(p.health == doctest::Approx(100.0f + kMeleeKillHeal)); // mends by the lifesteal amount
+    p.health = p.max_health - 2.0f;
+    p.heal(50.0f);
+    CHECK(p.health == doctest::Approx(p.max_health)); // caps at max (no overheal)
+    CHECK(kMeleeKillHeal > 0.0f);
+}
+
 // Drives a real ENet client + server over localhost through the whole pipeline:
 // connect -> welcome -> input -> snapshot. Skips if the socket can't bind.
 //

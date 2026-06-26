@@ -47,6 +47,7 @@ inline constexpr f32 kMeleeRange = 2.7f;        // player melee reach
 inline constexpr f32 kMeleeDamage = 34.0f;      // per swing
 inline constexpr f32 kMeleeConeCos = 0.35f;     // ~69° half-cone in front
 inline constexpr f32 kThrowDamage = 28.0f;      // a thrown rock hitting an enemy
+inline constexpr f32 kMeleeKillHeal = 7.0f;     // lifesteal: felling a raider in melee mends you a little
 
 // Dodge roll: a quick burst in the move/facing direction with brief invulnerability (i-frames), so a
 // player can roll out of a telegraphed hit (e.g. the brute slam). Server-authoritative.

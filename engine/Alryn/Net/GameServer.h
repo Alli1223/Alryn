@@ -92,6 +92,9 @@ public:
             health -= d;
             since_hit = 0.0f;
         }
+
+        // Mend `amount` health, capped at the role's max (e.g. a melee-kill lifesteal).
+        void heal(f32 amount) { health = std::min(max_health, health + amount); }
     };
 
     // A cargo crate that bounced out of the bed and is lying on the ground (world position)

@@ -1508,6 +1508,10 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                 dmg *= (1.0f - kShieldReduction);
             }
             hit->health -= dmg;
+            // LIFESTEAL: felling a raider in melee mends the attacker a little (sustain by fighting).
+            if (hit->health <= 0.0f) {
+                pl.heal(kMeleeKillHeal);
+            }
             // A HEAVY swing (e.g. an Empowered Knight blow) staggers it, breaking its guard a while.
             if (hit->kind == kEnemyShield && raw >= kSunderThreshold) {
                 hit->sunder_cd = kSunderDuration;
