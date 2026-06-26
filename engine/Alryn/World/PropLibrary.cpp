@@ -1920,6 +1920,20 @@ PropDef PropLibrary::build_wagon() {
     add_box(m, {-1.0f, 0.72f, -0.58f}, {1.0f, 1.05f, -0.50f}, wood);        // left rail
     add_box(m, {0.92f, 0.72f, -0.58f}, {1.0f, 1.05f, 0.58f}, wood);         // front board
     add_box(m, {-1.0f, 0.72f, -0.58f}, {-0.92f, 1.15f, 0.58f}, wood);       // back board (taller)
+    // Vertical plank staves on the long side rails (per-plank shade), so the bed reads as planked
+    // boards, not a smooth box.
+    for (int i = 0; i < 8; ++i) {
+        const f32 x = -0.95f + 1.9f * (static_cast<f32>(i) + 0.5f) / 8.0f;
+        const Vec3 pc = wood * (0.84f + 0.26f * hashf(static_cast<u32>(i) * 7u + 3u));
+        add_box(m, {x - 0.07f, 0.72f, 0.575f}, {x + 0.07f, 1.05f, 0.605f}, pc);   // +z face plank
+        add_box(m, {x - 0.07f, 0.72f, -0.605f}, {x + 0.07f, 1.05f, -0.575f}, pc); // -z face plank
+    }
+    // Iron corner brackets binding the rails.
+    for (const f32 cx : {-0.95f, 0.95f}) {
+        for (const f32 cz : {-0.54f, 0.54f}) {
+            add_box(m, {cx - 0.05f, 0.96f, cz - 0.06f}, {cx + 0.05f, 1.08f, cz + 0.06f}, metal);
+        }
+    }
 
     // Cargo: a varied, stacked, lashed load so the haul reads as properly loaded (not a couple of bare
     // crates) - crates + burlap sacks tied down under rope straps.
