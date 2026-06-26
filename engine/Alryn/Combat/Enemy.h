@@ -69,6 +69,12 @@ inline constexpr u8 kRampageMaxStacks = 4;      // stacks cap
 inline constexpr f32 kRampagePerStack = 0.10f;  // +10% outgoing damage per stack (max +40%)
 inline constexpr f32 kRampageDuration = 4.0f;   // seconds the momentum lasts (refreshed on each kill)
 
+// MORALE FLINCH: when a raider is felled, its living allies nearby briefly RECOIL (a short stagger) -
+// so cutting one down rattles the pack and opens follow-up windows, a chain reaction that pairs with
+// RAMPAGE. A flinch is much shorter than a heavy-hit stagger (no stun-lock; only KILLS trigger it).
+inline constexpr f32 kFlinchRadius = 4.0f;   // allies within this of a death flinch
+inline constexpr f32 kFlinchDuration = 0.3f; // brief recoil (half a stagger)
+
 // Dodge roll: a quick burst in the move/facing direction with brief invulnerability (i-frames), so a
 // player can roll out of a telegraphed hit (e.g. the brute slam). Server-authoritative.
 inline constexpr f32 kRollDuration = 0.4f; // roll + i-frame window (seconds)
@@ -216,6 +222,20 @@ inline bool near_warlord(const Enemy& e, std::span<const Enemy> enemies) {
         }
     }
     return false;
+}
+
+// A raider was felled at `dead_pos`: rattle the pack - each LIVING ally within kFlinchRadius recoils
+// briefly (a flinch = max of its current stagger and kFlinchDuration). Returns how many flinched.
+// Pure (mutates the span), so the morale chain reaction is headless-testable.
+inline int flinch_allies(const Vec3& dead_pos, std::span<Enemy> allies) {
+    int n = 0;
+    for (Enemy& e : allies) {
+        if (e.alive && e.health > 0.0f && glm::length(e.position - dead_pos) <= kFlinchRadius) {
+            e.stagger = e.stagger > kFlinchDuration ? e.stagger : kFlinchDuration;
+            ++n;
+        }
+    }
+    return n;
 }
 
 // True if `target` lies within `range` and inside the cone of half-angle

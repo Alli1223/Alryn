@@ -1508,8 +1508,11 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                         e.knockback = glm::normalize(kdir) * std::min(dmg * kKnockbackPerDamage, kKnockbackMax);
                     }
                     // RAMPAGE: the felling shot stokes the shooter's kill momentum (crossing zero this hit).
-                    if (e.health <= 0.0f && e_before > 0.0f && ownit != players_.end()) {
-                        ownit->second.on_kill();
+                    if (e.health <= 0.0f && e_before > 0.0f) {
+                        if (ownit != players_.end()) {
+                            ownit->second.on_kill();
+                        }
+                        flinch_allies(e.position, std::span<Enemy>(ambush_)); // MORALE: rattle the pack
                     }
                     pr.alive = false;
                 }
@@ -1554,6 +1557,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                 pl.heal(kMeleeKillHeal);
                 if (hit_before > 0.0f) {
                     pl.on_kill(); // RAMPAGE: the felling blow stokes kill momentum
+                    flinch_allies(hit->position, std::span<Enemy>(ambush_)); // MORALE: rattle the pack
                 }
             }
             // A HEAVY swing (e.g. an Empowered Knight blow) staggers it, breaking its guard a while.

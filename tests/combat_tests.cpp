@@ -286,6 +286,26 @@ TEST_CASE("Combat: a warlord rallies nearby allies (an aura), excludes itself, a
     CHECK(kWarlordBuff > 1.0f);                                   // it really does buff
 }
 
+TEST_CASE("Combat: felling a raider rattles its nearby living allies (a morale flinch)") {
+    std::vector<Enemy> es(3);
+    es[0].id = 1;
+    es[0].position = Vec3{0.0f};
+    es[0].health = 0.0f; // it was just felled (we flinch the pack around its position)
+    es[1].id = 2;        // a living ally just inside the flinch radius
+    es[1].position = Vec3{kFlinchRadius - 1.0f, 0.0f, 0.0f};
+    es[2].id = 3; // a living ally well outside it
+    es[2].position = Vec3{kFlinchRadius + 4.0f, 0.0f, 0.0f};
+
+    const int n = flinch_allies(es[0].position, std::span<Enemy>(es));
+    CHECK(n == 1);                              // only the one nearby LIVING ally flinches...
+    CHECK(es[1].stagger >= kFlinchDuration);    // ...and it recoils
+    CHECK(es[2].stagger == doctest::Approx(0.0f)); // the distant ally is unshaken
+    CHECK(es[0].stagger == doctest::Approx(0.0f)); // the felled one isn't "flinched" (it's down)
+
+    CHECK(kFlinchDuration > 0.0f);
+    CHECK(kFlinchDuration < kStaggerDuration); // a flinch is briefer than a heavy-hit stagger (no lock)
+}
+
 TEST_CASE("Combat: a villager walks toward its goal (e.g. fleeing / heading to bed)") {
     const DensitySampler density = flat_ground();
     const std::span<const Collider> none{};
