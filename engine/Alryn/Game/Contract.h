@@ -161,6 +161,21 @@ inline f32 intact_bonus_mult(f32 health_frac) {
     return 1.0f + kIntactBonus * hf;
 }
 
+// LAST STAND: when the cargo wagon is badly battered (health below kLastStandThreshold) the defenders
+// fight with desperate fury - their OUTGOING damage ramps up the closer the cart is to wrecking, a
+// comeback chance to save a failing haul. (Pulls against the INTACT pay bonus, which rewards keeping
+// it pristine - so it's drama, not a thing you farm.) Returns 1.0 until the wagon is hurt enough.
+inline constexpr f32 kLastStandThreshold = 0.30f; // wagon health fraction below which it kicks in
+inline constexpr f32 kLastStandMaxBonus = 0.6f;   // up to +60% damage as the wagon nears 0
+inline f32 last_stand_mult(f32 wagon_health_frac) {
+    const f32 hf = wagon_health_frac < 0.0f ? 0.0f : (wagon_health_frac > 1.0f ? 1.0f : wagon_health_frac);
+    if (hf >= kLastStandThreshold) {
+        return 1.0f;
+    }
+    const f32 t = (kLastStandThreshold - hf) / kLastStandThreshold; // 0 at the threshold -> 1 at zero
+    return 1.0f + kLastStandMaxBonus * t;
+}
+
 // A RUSH bonus for a fast delivery: the payout gets a bonus that DECAYS from +kRushBonus when the haul
 // starts down to 0 by the time a steady run would take (rush_expected_time). Hurrying - and risking the
 // ambushers rather than stopping to fight them off (which the INTACT bonus rewards) - pays off too, so

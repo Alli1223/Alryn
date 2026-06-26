@@ -136,6 +136,14 @@ void ClientApp::draw_hud() {
                   3.0f);
         draw.rect(Vec4{24.0f, 22.0f + ts * 2.6f, 220.0f * std::max(wf, 0.0f), 12.0f},
                   Vec4{glm::mix(Vec3{0.8f, 0.3f, 0.2f}, Vec3{0.5f, 0.7f, 0.4f}, wf), 0.95f}, 3.0f);
+        // LAST STAND: a near-wrecked wagon rallies the defenders (ramping their damage) - flag it.
+        if (wf > 0.0f && wf < kLastStandThreshold) {
+            const int lsb = static_cast<int>(std::lround((last_stand_mult(wf) - 1.0f) * 100.0f));
+            const f32 pulse = 0.55f + 0.45f * std::sin(elapsed_ * 9.0f);
+            draw.text(Vec2{24.0f, 22.0f + ts * 2.6f + 16.0f},
+                      std::format("LAST STAND  +{}% DMG", lsb), ts * 0.82f,
+                      Vec4{1.0f, 0.3f + 0.25f * pulse, 0.2f, 1.0f});
+        }
         // Intact-delivery bonus: keeping the wagon's health up earns up to +bonus pay on arrival, so
         // it's worth fighting the ambushers off rather than just outrunning them.
         const int ibonus = static_cast<int>(std::lround((intact_bonus_mult(wf) - 1.0f) * 100.0f));

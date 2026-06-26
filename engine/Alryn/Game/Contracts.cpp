@@ -1392,6 +1392,10 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
         }
     }
 
+    // A near-wrecked wagon rallies its defenders: LAST STAND ramps their outgoing damage as the cart
+    // nears destruction (a comeback chance). Same for everyone - keyed on the shared cargo's health.
+    const f32 last_stand = last_stand_mult(w.health / rig_max_health(rig_level_));
+
     // Thrown rocks hurt ambushers; hostile arrows hurt players. A spent projectile that has
     // landed (resting) no longer deals damage - it's just stuck in the ground.
     for (Projectile& pr : projectiles_) {
@@ -1413,7 +1417,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             for (Enemy& e : ambush_) {
                 const Vec3 chest = e.position + Vec3{0.0f, 0.9f, 0.0f};
                 if (glm::length(chest - pr.position) < pr.radius + kEnemyRadius + 0.3f) {
-                    f32 dmg = (pr.damage > 0.0f ? pr.damage : kThrowDamage) * boost;
+                    f32 dmg = (pr.damage > 0.0f ? pr.damage : kThrowDamage) * boost * last_stand;
                     const f32 raw = dmg; // pre-block magnitude, for the sunder check
                     // A shield-bearer soaks most of a shot that strikes its front (a point back
                     // along the projectile's path is where it came from).
@@ -1461,7 +1465,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
         }
         if (hit != nullptr) {
             // weapon hits as hard as the role, amplified while Empowered (co-op buff)
-            f32 dmg = role_stats(pl.role).melee_damage * pl.outgoing_mult();
+            f32 dmg = role_stats(pl.role).melee_damage * pl.outgoing_mult() * last_stand;
             const f32 raw = dmg; // pre-block magnitude, for the sunder check
             // A shield-bearer blocks most of a frontal swing - so flank it (or knock it loose).
             if (enemy_blocks_hit(*hit, pl.controller.position())) {

@@ -86,6 +86,21 @@ TEST_CASE("Contract: intact-delivery bonus rewards a healthy wagon") {
     CHECK(intact_bonus_mult(-1.0f) == doctest::Approx(1.0f));                    // clamped below 0
 }
 
+TEST_CASE("Contract: last stand ramps the defenders' damage as the wagon nears wrecking") {
+    CHECK(last_stand_mult(1.0f) == doctest::Approx(1.0f));                // full health -> no bonus
+    CHECK(last_stand_mult(kLastStandThreshold) == doctest::Approx(1.0f)); // at the threshold -> none yet
+    CHECK(last_stand_mult(kLastStandThreshold * 0.5f) > 1.0f);            // below it -> a damage bonus
+    CHECK(last_stand_mult(0.0f) == doctest::Approx(1.0f + kLastStandMaxBonus)); // near-wrecked -> max
+    // It ramps up monotonically as the wagon takes more damage.
+    CHECK(last_stand_mult(0.10f) > last_stand_mult(0.20f));
+    CHECK(last_stand_mult(0.20f) > last_stand_mult(0.25f));
+    CHECK(last_stand_mult(-0.5f) == doctest::Approx(1.0f + kLastStandMaxBonus)); // clamps below 0
+    CHECK(last_stand_mult(2.0f) == doctest::Approx(1.0f));                       // clamps above 1
+    // It pulls against the INTACT pay bonus: a pristine cart pays more but never triggers last stand.
+    CHECK(last_stand_mult(1.0f) == doctest::Approx(1.0f));
+    CHECK(intact_bonus_mult(0.1f) < intact_bonus_mult(1.0f));
+}
+
 TEST_CASE("Contract: wagon rig upgrades cost more + make the cart tougher") {
     CHECK(rig_price(2) > rig_price(1)); // escalating cost
     CHECK(rig_price(3) > rig_price(2));
