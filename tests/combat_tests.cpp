@@ -135,6 +135,36 @@ TEST_CASE("Combat: a shield-bearer blocks frontal hits but is open from the flan
     CHECK_FALSE(enemy_blocks_hit(grunt, Vec3{3.0f, 0.0f, 0.0f}));
 }
 
+TEST_CASE("Combat: a healer ambusher targets the most-wounded ally, not itself or full ones") {
+    std::vector<Enemy> es(4);
+    for (usize i = 0; i < es.size(); ++i) {
+        es[i].id = static_cast<u32>(i + 1);
+        es[i].kind = 0;
+    }
+    es[0].kind = kEnemyHealer;
+    es[0].position = Vec3{0.0f, 0.0f, 0.0f};
+    es[0].health = 20.0f; // the healer itself is hurt (should still be ignored)
+    es[1].position = Vec3{2.0f, 0.0f, 0.0f};
+    es[1].health = 50.0f; // lightly wounded, in range
+    es[2].position = Vec3{3.0f, 0.0f, 0.0f};
+    es[2].health = 12.0f; // badly wounded, in range
+    es[3].position = Vec3{50.0f, 0.0f, 0.0f};
+    es[3].health = 5.0f; // worst, but well out of range
+
+    const std::span<const Enemy> span{es};
+    CHECK(most_wounded_ally(es[0], span, kHealerRange) == 2); // the badly-wounded in-range ally
+    // Mend that one to full -> it now picks the lightly-wounded one instead.
+    es[2].health = enemy_max_health(es[2].kind);
+    CHECK(most_wounded_ally(es[0], span, kHealerRange) == 1);
+    // Everyone in range at full health -> nothing to mend.
+    es[1].health = enemy_max_health(es[1].kind);
+    CHECK(most_wounded_ally(es[0], span, kHealerRange) == -1);
+    // It never targets itself, even when it's the only wounded thing nearby.
+    es[1].position = Vec3{100.0f, 0.0f, 0.0f}; // push the only other wounded out of range
+    es[1].health = 1.0f;
+    CHECK(most_wounded_ally(es[0], span, kHealerRange) == -1);
+}
+
 TEST_CASE("Combat: a villager walks toward its goal (e.g. fleeing / heading to bed)") {
     const DensitySampler density = flat_ground();
     const std::span<const Collider> none{};

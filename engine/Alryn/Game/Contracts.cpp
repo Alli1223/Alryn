@@ -1202,9 +1202,13 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                                             7000u);
             Enemy e;
             e.id = next_ambush_id_++;
-            const u32 roll = h % 6u;
-            // ~1/6 brute, ~1/6 archer, ~1/6 shield-bearer, rest grunts.
-            e.kind = roll == 0u ? 2u : roll == 1u ? 3u : roll == 2u ? kEnemyShield : 0u;
+            const u32 roll = h % 7u;
+            // ~1/7 each of brute / archer / shield-bearer / healer, the rest grunts.
+            e.kind = roll == 0u   ? 2u
+                     : roll == 1u ? 3u
+                     : roll == 2u ? kEnemyShield
+                     : roll == 3u ? kEnemyHealer
+                                  : 0u;
             e.health = enemy_max_health(e.kind);
             const f32 a = detail::hash01(h) * TwoPi;
             const f32 r = kAmbushSpawnRadius + detail::hash01(h ^ 0x55u) * 6.0f;
@@ -1272,6 +1276,28 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                 victim = &pl;
                 goal = pl.controller.position();
             }
+        }
+
+        if (e.kind == kEnemyHealer) {
+            // Hang back out of reach (kite from the nearest player) and mend the most-wounded raider.
+            const Vec3 target = victim != nullptr ? victim->controller.position() : w.position;
+            const f32 td = glm::length(target - e.position);
+            Vec3 g = goal;
+            if (td < kHealerKeepDist) {
+                Vec3 away = e.position - target;
+                away.y = 0.0f;
+                if (glm::length(away) > 1e-3f) {
+                    g = e.position + glm::normalize(away) * 5.0f;
+                }
+            }
+            step_enemy(e, density, collider_scratch_, g, dt, kEnemySpeed, bridge);
+            const int widx = most_wounded_ally(e, std::span<const Enemy>(ambush_), kHealerRange);
+            if (widx >= 0) {
+                Enemy& ally = ambush_[static_cast<usize>(widx)];
+                ally.health = std::min(enemy_max_health(ally.kind),
+                                       ally.health + kHealerHealRate * dt.seconds);
+            }
+            continue;
         }
 
         if (e.kind == 3u) { // archer: kite to range and loose hostile arrows

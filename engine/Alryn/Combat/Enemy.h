@@ -80,6 +80,39 @@ inline bool enemy_blocks_hit(const Enemy& e, const Vec3& from) {
     return glm::dot(to / d, facing) >= kShieldBlockCos;
 }
 
+// Healer (kind 5): a fragile support raider that hangs back out of reach and mends the most-wounded
+// nearby ally - so a wave can sustain itself unless the players FOCUS the healer down first.
+inline constexpr u8 kEnemyHealer = 5u;
+inline constexpr f32 kHealerRange = 7.0f;     // mends allies within this radius
+inline constexpr f32 kHealerHealRate = 14.0f; // hp/sec funnelled to the most-wounded ally
+inline constexpr f32 kHealerKeepDist = 9.0f;  // hangs this far back from its target (kites to stay safe)
+
+// Index into `enemies` of the most-wounded living ally (below max health) within `range` of `healer`,
+// excluding the healer itself; -1 if none needs mending. Pure, so the healer AI is headless-testable.
+inline int most_wounded_ally(const Enemy& healer, std::span<const Enemy> enemies, f32 range) {
+    int best = -1;
+    f32 worst = 1.0f; // lowest health fraction wins (most wounded)
+    for (usize i = 0; i < enemies.size(); ++i) {
+        const Enemy& e = enemies[i];
+        if (e.id == healer.id || !e.alive) {
+            continue;
+        }
+        const f32 maxh = enemy_max_health(e.kind);
+        if (e.health >= maxh - 0.01f) {
+            continue; // already at full health
+        }
+        if (glm::length(e.position - healer.position) > range) {
+            continue;
+        }
+        const f32 frac = e.health / maxh;
+        if (frac < worst) {
+            worst = frac;
+            best = static_cast<int>(i);
+        }
+    }
+    return best;
+}
+
 // True if `target` lies within `range` and inside the cone of half-angle
 // acos(cone_cos) centred on the +xz heading `yaw`. Used for the player's melee
 // swing (and reusable for any directional hit test).

@@ -64,7 +64,8 @@ void ClientApp::draw_enemies() {
         }
         EnemyVisual& v = it->second;
         // 0 = grunt (dark red), 1 = torch-bearer (fiery), 2 = brute (big + dark),
-        // 3 = archer (sickly green, carries a bow), 4 = shield-bearer (steel, carries a shield).
+        // 3 = archer (sickly green, carries a bow), 4 = shield-bearer (steel, carries a shield),
+        // 5 = healer (pale mystic, floats a glowing green orb).
         const f32 scale = en.kind == 2 ? 1.5f : 1.0f;
         const Mat4 root = glm::translate(Mat4{1.0f}, en.position) *
                           glm::rotate(Mat4{1.0f}, HalfPi - en.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
@@ -73,6 +74,7 @@ void ClientApp::draw_enemies() {
                           : en.kind == 2 ? Vec3{1.05f, 0.26f, 0.4f}
                           : en.kind == 3 ? Vec3{0.5f, 0.85f, 0.45f}
                           : en.kind == 4 ? Vec3{0.62f, 0.66f, 0.78f}
+                          : en.kind == 5 ? Vec3{0.78f, 0.82f, 0.70f}
                                          : Vec3{1.3f, 0.32f, 0.3f};
         const std::vector<Quat> pose = v.animator.pose(v.model);
         if (v.body_skin.vertices.empty()) {
@@ -91,6 +93,20 @@ void ClientApp::draw_enemies() {
                                 glm::rotate(Mat4{1.0f}, en.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
                                 glm::scale(Mat4{1.0f}, Vec3{0.04f, 0.85f, 0.04f}),
                             Vec4{0.34f, 0.22f, 0.12f, 1.0f});
+        }
+        if (en.kind == 5) {
+            // A healer floats a pulsing green orb of mending magic above its hand + a soft glow.
+            const f32 puls = 0.85f + 0.15f * std::sin(elapsed_ * 6.0f + en.position.x);
+            const Vec3 orb = en.position + Vec3{std::cos(en.yaw), 0.0f, std::sin(en.yaw)} * 0.42f +
+                             Vec3{0.0f, 1.35f, 0.0f};
+            renderer_->draw_emissive(shape_sphere_,
+                                     glm::translate(Mat4{1.0f}, orb) *
+                                         glm::scale(Mat4{1.0f}, Vec3{0.16f * puls}),
+                                     Vec4{0.4f, 1.0f, 0.5f, 1.0f});
+            renderer_->draw_glow(shape_sphere_,
+                                 glm::translate(Mat4{1.0f}, orb) *
+                                     glm::scale(Mat4{1.0f}, Vec3{0.5f}),
+                                 Vec4{0.4f, 1.0f, 0.5f, 0.35f * puls});
         }
         if (en.kind == 4) {
             // A large round shield held out front (a wide wooden plate + a steel boss),
