@@ -203,6 +203,12 @@ TEST_CASE("Combat: a brute's slam is a radial AoE you can dodge out of") {
     CHECK(kSlamDamage > kEnemyAttackDamage);
 }
 
+TEST_CASE("Combat: the archer's aimed shot is heavy, telegraphed (dodgeable), and fast") {
+    CHECK(kAimWindup > 0.3f);                     // telegraphs first -> time to read + dodge / break line
+    CHECK(kAimedShotDamage > kEnemyAttackDamage);  // a heavy sniper hit (vs a basic melee swing)
+    CHECK(kAimedArrowSpeed > 0.0f);                // and fast once it's loosed
+}
+
 TEST_CASE("Combat: a villager walks toward its goal (e.g. fleeing / heading to bed)") {
     const DensitySampler density = flat_ground();
     const std::span<const Collider> none{};

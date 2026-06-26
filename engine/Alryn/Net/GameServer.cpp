@@ -304,7 +304,11 @@ void GameServer::tick(Timestep dt) {
             } else if (en.attack_cd > kSlamCooldown - 0.18f) {
                 action = 3u; // just slammed -> client draws the shockwave
             }
-        } else if (en.kind != 3 && en.attack_cd > kEnemyAttackInterval - 0.18f) {
+        } else if (en.kind == 3u) {
+            if (en.slam_windup > 0.0f) {
+                action = 2u; // archer aiming -> client draws a charging glow on the bow
+            }
+        } else if (en.attack_cd > kEnemyAttackInterval - 0.18f) {
             action = 1u; // melee swing in sync with the hit
         }
         snapshot.enemies.push_back({en.id, en.position, en.yaw, en.kind, hp, action});

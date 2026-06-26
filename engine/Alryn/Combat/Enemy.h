@@ -58,8 +58,15 @@ struct Enemy {
     bool alive = true;
     Vec3 knockback{0.0f}; // a hit shoves it back; this velocity decays each step (server-only)
     f32 sunder_cd = 0.0f;   // shield-bearer: while > 0 its guard is broken (a heavy blow staggered it)
-    f32 slam_windup = 0.0f; // brute: while > 0 it is winding up a telegraphed radial slam (server-only)
+    f32 slam_windup = 0.0f; // brute slam / archer aim: while > 0 it is winding up a telegraphed attack
 };
+
+// Archer (kind 3) AIMED SHOT: instead of weak snap-arrows the archer now winds up (a telegraph the
+// party can read) and looses a HEAVY, fast arrow - so an archer is a sniper you watch + dodge (or
+// break line on) rather than chip damage. Reuses the slam_windup timer (an archer is never a brute).
+inline constexpr f32 kAimWindup = 0.7f;       // telegraph time before the arrow looses (react/dodge)
+inline constexpr f32 kAimedShotDamage = 20.0f; // a heavy aimed hit (vs the old ~8 snap arrow)
+inline constexpr f32 kAimedArrowSpeed = 26.0f; // faster than a snap shot once it's loosed
 
 // Knockback on hits: an enemy gets shoved back along the hit direction at a velocity proportional to
 // the damage (capped), decaying over ~half a second - so a solid hit reads with impact + opens space.

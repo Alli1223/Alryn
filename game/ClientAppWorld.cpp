@@ -117,6 +117,18 @@ void ClientApp::draw_enemies() {
                                 glm::rotate(Mat4{1.0f}, en.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
                                 glm::scale(Mat4{1.0f}, Vec3{0.04f, 0.85f, 0.04f}),
                             Vec4{0.34f, 0.22f, 0.12f, 1.0f});
+            if (en.action == 2) {
+                // Aiming a heavy shot: a charging glow swells at the bow (telegraph - dodge it!).
+                const f32 chg = 0.5f + 0.5f * std::sin(elapsed_ * 16.0f);
+                renderer_->draw_glow(shape_sphere_,
+                                     glm::translate(Mat4{1.0f}, hand) *
+                                         glm::scale(Mat4{1.0f}, Vec3{0.28f + 0.1f * chg}),
+                                     Vec4{1.0f, 0.4f, 0.18f, 0.55f});
+                renderer_->draw_emissive(shape_sphere_,
+                                         glm::translate(Mat4{1.0f}, hand) *
+                                             glm::scale(Mat4{1.0f}, Vec3{0.10f}),
+                                         Vec4{1.0f, 0.7f, 0.3f, 1.0f});
+            }
         }
         if (en.kind == 5) {
             // A healer floats a pulsing green orb of mending magic above its hand + a soft glow.

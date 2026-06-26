@@ -29,8 +29,7 @@ constexpr f32 kAggroRadius = 16.0f;       // an ambusher chases a player within 
 constexpr f32 kArcherShootRange = 16.0f;
 constexpr f32 kArcherKeepDist = 9.0f;
 constexpr f32 kArcherInterval = 2.4f;
-constexpr f32 kArrowSpeed = 20.0f;
-constexpr f32 kArrowDamage = 8.0f;
+constexpr f32 kArrowDamage = 8.0f; // fallback for any hostile arrow without an explicit damage
 constexpr f32 kDriverStuckSeconds = 2.0f; // no waypoint progress for this long => skip it
 constexpr f32 kUnstickSeconds = 2.0f; // cart snagged (tow-gate pinned) this long => pull it free
 
@@ -1312,34 +1311,46 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             continue;
         }
 
-        if (e.kind == 3u) { // archer: kite to range and loose hostile arrows
+        if (e.kind == 3u) { // archer: kite to range, AIM (telegraph), then loose a heavy arrow
             const Vec3 target = victim != nullptr ? victim->controller.position() : w.position;
             const f32 td = glm::length(target - e.position);
-            Vec3 g = goal;
-            if (td < kArcherShootRange) {
-                g = e.position;
-                if (td < kArcherKeepDist) {
-                    Vec3 away = e.position - target;
-                    away.y = 0.0f;
-                    if (glm::length(away) > 1e-3f) {
-                        g = e.position + glm::normalize(away) * 5.0f;
+            if (e.slam_windup > 0.0f) {
+                // Aiming: plant + wind up; loose a heavy, fast arrow when the telegraph elapses.
+                e.slam_windup -= dt.seconds;
+                step_enemy(e, density, collider_scratch_, e.position, dt, 0.0f, bridge);
+                if (e.slam_windup <= 0.0f) {
+                    e.slam_windup = 0.0f;
+                    const Vec3 from = e.position + Vec3{0.0f, 1.3f, 0.0f};
+                    Vec3 dir = (target + Vec3{0.0f, 0.6f, 0.0f}) - from;
+                    if (glm::length(dir) > 0.3f) {
+                        Projectile arrow;
+                        arrow.position = from + glm::normalize(dir) * 0.5f;
+                        arrow.velocity = glm::normalize(dir) * kAimedArrowSpeed;
+                        arrow.kind = 1;
+                        arrow.hostile = true;
+                        arrow.radius = 0.15f;
+                        arrow.damage = kAimedShotDamage; // heavy (the hostile-hit site reads pr.damage)
+                        arrow.life = 3.0f;
+                        projectiles_.push_back(arrow);
+                    }
+                    e.attack_cd = kArcherInterval;
+                }
+            } else {
+                // Kite to/around range; begin aiming once in range + off cooldown.
+                Vec3 g = goal;
+                if (td < kArcherShootRange) {
+                    g = e.position;
+                    if (td < kArcherKeepDist) {
+                        Vec3 away = e.position - target;
+                        away.y = 0.0f;
+                        if (glm::length(away) > 1e-3f) {
+                            g = e.position + glm::normalize(away) * 5.0f;
+                        }
                     }
                 }
-            }
-            step_enemy(e, density, collider_scratch_, g, dt, kEnemySpeed, bridge);
-            if (e.attack_cd <= 0.0f && td < kArcherShootRange) {
-                const Vec3 from = e.position + Vec3{0.0f, 1.3f, 0.0f};
-                Vec3 dir = (target + Vec3{0.0f, 0.6f, 0.0f}) - from;
-                if (glm::length(dir) > 0.3f) {
-                    Projectile arrow;
-                    arrow.position = from + glm::normalize(dir) * 0.5f;
-                    arrow.velocity = glm::normalize(dir) * kArrowSpeed;
-                    arrow.kind = 1;
-                    arrow.hostile = true;
-                    arrow.radius = 0.15f;
-                    arrow.life = 3.0f;
-                    projectiles_.push_back(arrow);
-                    e.attack_cd = kArcherInterval;
+                step_enemy(e, density, collider_scratch_, g, dt, kEnemySpeed, bridge);
+                if (e.attack_cd <= 0.0f && td < kArcherShootRange) {
+                    e.slam_windup = kAimWindup; // start the aim telegraph
                 }
             }
             continue;
@@ -1406,7 +1417,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             for (auto& [id, pl] : players_) {
                 const Vec3 chest = pl.controller.position() + Vec3{0.0f, 0.9f, 0.0f};
                 if (glm::length(chest - pr.position) < pr.radius + 0.55f) {
-                    pl.take_damage(kArrowDamage);
+                    pl.take_damage(pr.damage > 0.0f ? pr.damage : kArrowDamage); // aimed shots hit heavy
                     pr.alive = false;
                 }
             }
