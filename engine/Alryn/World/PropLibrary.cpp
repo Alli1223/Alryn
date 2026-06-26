@@ -575,8 +575,16 @@ PropDef PropLibrary::build_fence(int variant) {
     def.name = "fence_post";
     const Vec3 wood = variant % 2 == 0 ? Vec3{0.42f, 0.30f, 0.18f} : Vec3{0.36f, 0.26f, 0.16f};
     MeshData m;
-    add_box(m, {-0.075f, 0.0f, -0.075f}, {0.075f, 1.0f, 0.075f}, wood);        // post
-    add_box(m, {-0.095f, 0.9f, -0.095f}, {0.095f, 1.04f, 0.095f}, wood * 0.85f); // cap
+    add_box(m, {-0.075f, 0.0f, -0.075f}, {0.075f, 0.92f, 0.075f}, wood);            // post
+    add_box(m, {-0.095f, 0.88f, -0.095f}, {0.095f, 0.95f, 0.095f}, wood * 0.86f);   // chamfer collar
+    // a pointed pyramidal cap (a weather-shedding fence-post top, not a flat block)
+    const Vec3 apex{0.0f, 1.13f, 0.0f}, ctr{0.0f, 0.95f, 0.0f};
+    constexpr f32 cr = 0.095f;
+    const Vec3 q0{-cr, 0.95f, -cr}, q1{cr, 0.95f, -cr}, q2{cr, 0.95f, cr}, q3{-cr, 0.95f, cr};
+    emit_tri(m, q0, q1, apex, ctr, wood);
+    emit_tri(m, q1, q2, apex, ctr, wood);
+    emit_tri(m, q2, q3, apex, ctr, wood);
+    emit_tri(m, q3, q0, apex, ctr, wood);
     def.parts.push_back({std::move(m), PropLayer::Opaque});
     BoxCollider c;
     c.half_extents = Vec2{0.1f, 0.1f};
