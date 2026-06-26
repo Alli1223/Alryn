@@ -808,14 +808,18 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
         const bool perfect = w.goods_total == 0 || cargo_.size() >= w.goods_total;
         delivery_streak_ = perfect ? std::min<u32>(delivery_streak_ + 1u, kStreakMax) : 0u;
         const f32 streak = streak_mult(delivery_streak_);
+        // CONVOY: a bigger escort party earns a better contract (co-op incentive; solo = 1.0).
+        const f32 convoy = convoy_mult(static_cast<u32>(players_.size()));
         // The reward (scaled by all the multipliers) PLUS a flat kill bounty for the raiders felled.
-        money_ += static_cast<u32>(std::lround(base * frac * intact * rush * fresh * streak)) +
+        money_ += static_cast<u32>(std::lround(base * frac * intact * rush * fresh * streak * convoy)) +
                   kill_bounty(contract_kills_);
         contract_outcome_ = 1;
         contract_phase_ = ContractPhase::Settle;
         settle_timer_ = kSettleSeconds;
-        ALRYN_INFO("Wagon delivered ({}/{} crates, {:.0f}% intact, x{:.2f} bonus)! Party money now {}",
-                   cargo_.size(), w.goods_total, 100.0f * w.health / kWagonHealth, intact, money_);
+        ALRYN_INFO("Wagon delivered ({}/{} crates, {:.0f}% intact, x{:.2f} intact, x{:.2f} convoy)! "
+                   "Party money now {}",
+                   cargo_.size(), w.goods_total, 100.0f * w.health / kWagonHealth, intact, convoy,
+                   money_);
         end_contract_cleanup();
         return;
     }

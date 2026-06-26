@@ -210,6 +210,20 @@ inline f32 streak_mult(u32 streak) {
 inline constexpr u32 kBountyPerKill = 12; // money per raider felled
 inline u32 kill_bounty(u32 kills) { return kBountyPerKill * kills; }
 
+// CONVOY bonus: the more players escorting a haul, the better the contract pays - a co-op incentive
+// (the whole game is a multiplayer escort), and it offsets a bigger party clearing the ambush more
+// easily. Modest + capped so solo play isn't taxed: +kConvoyBonusPer per escort beyond the first,
+// capped at kConvoyMaxEscorts. Crucially solo (1 player, or 0 in an edge call) = 1.0, so the
+// deterministic single-player haul tests (seed 4242) are unchanged. Multiplicative, so it scales
+// with the contract's size - a reason to bring the party on the big, lucrative hauls.
+inline constexpr f32 kConvoyBonusPer = 0.1f; // +10% pay per escort beyond the first
+inline constexpr u32 kConvoyMaxEscorts = 3;  // capped at +30% (a 4-strong convoy)
+inline f32 convoy_mult(u32 escorts) {
+    const u32 extra = escorts > 1u ? escorts - 1u : 0u;
+    const u32 capped = extra > kConvoyMaxEscorts ? kConvoyMaxEscorts : extra;
+    return 1.0f + kConvoyBonusPer * static_cast<f32>(capped);
+}
+
 // FIELD REPAIR: between ambush waves (no raiders alive) a player who stays near the cargo wagon
 // patches it up, mending its health slowly back toward full - so clearing a wave then tending the
 // cart is rewarded, and a battered haul can recover if you make the time. Pure + server-applied.

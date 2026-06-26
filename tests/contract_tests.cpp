@@ -163,6 +163,17 @@ TEST_CASE("Contract: a kill bounty pays per raider felled, rewarding fighting th
     CHECK(kBountyPerKill > 0u);
 }
 
+TEST_CASE("Contract: a convoy bonus rewards a bigger escort party, solo unchanged") {
+    CHECK(convoy_mult(0) == doctest::Approx(1.0f)); // edge (no players) = baseline
+    CHECK(convoy_mult(1) == doctest::Approx(1.0f)); // solo = no bonus (deterministic haul tests safe)
+    CHECK(convoy_mult(2) == doctest::Approx(1.0f + kConvoyBonusPer)); // one extra escort
+    CHECK(convoy_mult(3) > convoy_mult(2));                            // stacks
+    CHECK(convoy_mult(1 + kConvoyMaxEscorts) ==
+          doctest::Approx(1.0f + kConvoyBonusPer * kConvoyMaxEscorts));  // capped at a full convoy
+    CHECK(convoy_mult(20) == doctest::Approx(convoy_mult(1 + kConvoyMaxEscorts))); // stays capped
+    CHECK(convoy_mult(4) > convoy_mult(1)); // a convoy clearly out-earns a lone hauler
+}
+
 TEST_CASE("Contract: bigger vehicles pay more (capacity multiplier)") {
     CHECK(capacity_reward_mult(1) == doctest::Approx(1.0f));     // a cart: baseline pay
     CHECK(capacity_reward_mult(2) > capacity_reward_mult(1));    // a wagon: more
