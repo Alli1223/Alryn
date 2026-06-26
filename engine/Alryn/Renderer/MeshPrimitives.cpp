@@ -108,18 +108,25 @@ MeshData blob(f32 rxz, f32 ry, f32 cy, const Vec3& color) {
 MeshData round_blob(f32 rxz, f32 ry, const Vec3& c, const Vec3& color, int stacks = 4,
                     int slices = 7) {
     MeshData m;
+    constexpr f32 top_light = 0.32f; // sun-lit top + shaded underside, baked per-face, so the canopy
+                                     // reads with depth/dimension instead of a flat clump of one green
     auto vert = [&](int st, int sl) {
         const f32 phi = Pi * static_cast<f32>(st) / static_cast<f32>(stacks);   // 0 (top) .. Pi
         const f32 theta = TwoPi * static_cast<f32>(sl) / static_cast<f32>(slices);
         const f32 sr = std::sin(phi);
         return c + Vec3{std::cos(theta) * sr * rxz, std::cos(phi) * ry, std::sin(theta) * sr * rxz};
     };
+    auto shade = [&](const Vec3& a, const Vec3& b, const Vec3& d) {
+        const f32 fy = (a.y + b.y + d.y) / 3.0f;
+        const f32 yf = glm::clamp((fy - c.y) / (ry > 1e-3f ? ry : 1.0f), -1.0f, 1.0f); // -1 base .. +1 top
+        return color * (1.0f + top_light * yf);
+    };
     for (int st = 0; st < stacks; ++st) {
         for (int sl = 0; sl < slices; ++sl) {
             const Vec3 a = vert(st, sl), b = vert(st, sl + 1);
             const Vec3 d0 = vert(st + 1, sl), d1 = vert(st + 1, sl + 1);
-            emit_tri(m, a, d0, d1, c, color); // degenerate pole tris are auto-dropped by emit_tri
-            emit_tri(m, a, d1, b, c, color);
+            emit_tri(m, a, d0, d1, c, shade(a, d0, d1)); // degenerate pole tris auto-dropped by emit_tri
+            emit_tri(m, a, d1, b, c, shade(a, d1, b));
         }
     }
     return m;
