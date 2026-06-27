@@ -304,6 +304,7 @@ void ClientApp::on_update(Timestep dt) {
         update_gates(dt);
         update_feedback(dt);
         update_debug(dt);
+        update_wagon_smooth(dt); // ease wagon render positions toward the snapshot (kills jitter)
         update_ropes(dt);
         update_deer(dt);
 

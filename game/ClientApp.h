@@ -457,13 +457,23 @@ private:
         return nullptr;
     }
 
-    // This frame's cart displacement (for the bob), from the position cached in draw_wagons.
+    // Eases each wagon's render position toward its authoritative snapshot position (called once
+    // per frame in on_update, before any wagon drawing). Removes the inter-snapshot jitter.
+    void update_wagon_smooth(Timestep dt);
+
+    // The smoothed render position for a wagon (falls back to the raw position before it's seeded).
+    Vec3 wagon_render_pos(const net::WagonState& wg) const {
+        const auto it = wagon_smooth_.find(wg.id);
+        return it != wagon_smooth_.end() && it->second.init ? it->second.pos : wg.position;
+    }
+    // This frame's smoothed cart displacement (for the bob + wheel spin).
     f32 wagon_frame_move(const net::WagonState& wg) const {
-        const auto it = wagon_prev_.find(wg.id);
-        if (it == wagon_prev_.end()) {
-            return 0.0f;
-        }
-        return glm::length(Vec2{wg.position.x - it->second.x, wg.position.z - it->second.z});
+        const auto it = wagon_smooth_.find(wg.id);
+        return it != wagon_smooth_.end() ? glm::length(it->second.step) : 0.0f;
+    }
+    Vec2 wagon_frame_step(const net::WagonState& wg) const {
+        const auto it = wagon_smooth_.find(wg.id);
+        return it != wagon_smooth_.end() ? it->second.step : Vec2{0.0f};
     }
 
     // Draws the networked wagons (the parked offers, then the active cargo): the body
@@ -853,7 +863,16 @@ private:
     Mesh rope_mesh_;            // a unit harness-trace link, drawn per rope segment
     Mesh goods_mesh_;           // a cargo crate (spilled on the ground / carried by a player)
     std::unordered_map<u32, f32> wagon_roll_;  // accumulated wheel spin per wagon id
-    std::unordered_map<u32, Vec3> wagon_prev_; // last wagon position (to derive roll)
+    // Smoothed render state per wagon: the raw authoritative position arrives in lumpy snapshot
+    // steps, so we ease a render position toward it each frame. Everything visual (the cart mesh,
+    // its bob/tilt, the wheels, and ANY rider/driver attached to it) is driven off this smoothed
+    // state, so they all move together and the cart doesn't jitter between snapshots.
+    struct WagonSmooth {
+        Vec3 pos{0.0f};  // smoothed render position
+        Vec2 step{0.0f}; // this frame's smoothed xz displacement (drives the bob + wheel roll)
+        bool init = false;
+    };
+    std::unordered_map<u32, WagonSmooth> wagon_smooth_;
     // A shed wheel rolling on the ground: derive its heading + rolling spin from its networked
     // position so the client can render it upright, rolling the way it travels.
     struct FallenWheel {
