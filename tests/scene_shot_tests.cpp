@@ -193,6 +193,13 @@ TEST_CASE("Scene shot: forest sampler (trees, logs, ferns, mushrooms) renders") 
     // Long meadow grass: a fresh-green clump and a dried straw-yellow one.
     add(primitives::meadow_grass(11, Vec3{0.30f, 0.55f, 0.24f}), Vec3{-3.6f, 0.0f, 2.4f}, 1.6f);
     add(primitives::meadow_grass(11, Vec3{0.76f, 0.67f, 0.31f}), Vec3{4.3f, 0.0f, 2.4f}, 1.6f, 1.0f);
+    // A dense THICKET: a tight cluster of overlapping clumps that reads as thick grass.
+    const Vec3 thicket_off[] = {{0, 0, 0}, {0.3f, 0, 0.2f}, {-0.3f, 0, 0.15f}, {0.1f, 0, -0.25f},
+                                {-0.18f, 0, -0.18f}, {0.28f, 0, -0.05f}};
+    for (int k = 0; k < 6; ++k) {
+        add(primitives::meadow_grass(11, Vec3{0.31f, 0.54f, 0.23f}),
+            Vec3{0.2f, 0.0f, 2.7f} + thicket_off[k], 1.5f, static_cast<f32>(k) * 1.05f);
+    }
     REQUIRE_FALSE(draws.empty());
 
     const Vec3 target{0.0f, 1.5f, -1.0f};
