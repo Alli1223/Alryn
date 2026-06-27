@@ -302,6 +302,30 @@ void ClientApp::draw_hud() {
     }
 
     draw_ability_bar(draw, W, H, ts);
+
+    // Damage flash: a red wash over the screen when WE take a hit (revived feedback - it pairs
+    // with the hit marker below so both giving and taking damage read instantly).
+    if (hit_flash_ > 0.001f) {
+        draw.rect(Vec4{0.0f, 0.0f, W, H}, Vec4{0.85f, 0.12f, 0.12f, hit_flash_ * 0.32f});
+    }
+    // Hit marker: a crisp screen-centre X that pops + fades whenever one of OUR attacks lands a
+    // confirmed hit (any role / any attack). Punchy white, briefly punching outward as it fades.
+    if (hit_marker_ > 0.001f) {
+        const f32 m = hit_marker_;
+        const Vec2 c{W * 0.5f, H * 0.5f};
+        const f32 r0 = 7.0f + (1.0f - m) * 6.0f; // punches outward as it fades
+        const f32 r1 = r0 + 10.0f;
+        const f32 thick = 3.5f;
+        const Vec4 mark_col{1.0f, 0.97f, 0.9f, glm::clamp(m * 1.1f, 0.0f, 1.0f)};
+        const Vec4 mark_shadow{0.0f, 0.0f, 0.0f, glm::clamp(m * 0.6f, 0.0f, 1.0f)};
+        const Vec2 diag[4] = {{0.707f, 0.707f}, {-0.707f, 0.707f}, {0.707f, -0.707f}, {-0.707f, -0.707f}};
+        for (const Vec2& d : diag) {
+            const Vec2 pa = c + d * r0;
+            const Vec2 pb = c + d * r1;
+            draw.line(pa + Vec2{1.5f, 1.5f}, pb + Vec2{1.5f, 1.5f}, thick + 1.5f, mark_shadow); // shadow
+            draw.line(pa, pb, thick, mark_col);
+        }
+    }
 }
 
 void ClientApp::draw_contract_panel(ui::DrawList& draw, const net::WagonState& wg, bool accepted, f32 W, f32 H, f32 ts, const Vec3& feet) {

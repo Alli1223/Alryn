@@ -82,11 +82,11 @@ TEST_CASE("Net: message serialization round-trips") {
     snapshot.houses_standing = 9;
     snapshot.houses_total = 12;
     snapshot.players.push_back(
-        {1, Vec3{1.0f, 2.0f, 3.0f}, 0.5f, 100, 8, 0, 0, 0, 0, 2, 0, 0,
+        {1, Vec3{1.0f, 2.0f, 3.0f}, 0.5f, 100, 8, 0, 0, 0, 0, 2, 0, 0, 0,
          CharacterAppearance{}}); // Knight blocking
     snapshot.players.push_back(
         {2, Vec3{4.0f, 5.0f, 6.0f}, 1.5f, 73, 3, 1, 1, 2, 3, 0, 128,
-         3, // seated+carrying, Cleric, slot3, shielded, empowered+hasted
+         3, 17, // seated+carrying, Cleric, slot3, shielded, empowered+hasted, hit_fx=17
          CharacterAppearance{2, 0, EyeStyle::Sharp, EarStyle::Small, HairStyle::Spiky}});
     snapshot.enemies.push_back({40u, Vec3{7.0f, 1.0f, -2.0f}, 0.8f, 1, 200, 1}); // swinging
     snapshot.enemies.push_back({41u, Vec3{9.0f, 1.5f, -4.0f}, 2.0f, 0, 60, 0});
@@ -138,6 +138,8 @@ TEST_CASE("Net: message serialization round-trips") {
     CHECK(decoded.players[1].shield == 128); // Aegis shielded
     CHECK(decoded.players[0].buffs == 0);
     CHECK(decoded.players[1].buffs == 3); // empowered + hasted (co-op buffs)
+    CHECK(decoded.players[0].hit_fx == 0);
+    CHECK(decoded.players[1].hit_fx == 17); // hit-marker counter round-trips
     CHECK(decoded.enemies[0].action == 1); // swinging
     CHECK(decoded.enemies[1].action == 0);
     CHECK(decoded.time_of_day == doctest::Approx(0.625f));

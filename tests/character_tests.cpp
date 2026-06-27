@@ -161,6 +161,31 @@ TEST_CASE("BodyMesh: the action overlay deforms the skinned upper body (legs kee
     CHECK(leg_shift < 0.02f); // the legs are untouched by the upper-body action (same walk phase)
 }
 
+TEST_CASE("CharacterAnimator: the attack swing is a horizontal right-to-left slash") {
+    CharacterModel model = CharacterModel::create(11u, CharacterAppearance{});
+    const int hand = model.bone_index(BonePart::LowerArmL); // sword hand (rig labels mirrored: L = player's right)
+    REQUIRE(hand >= 0);
+
+    // The sword-hand joint position at `t` seconds into a fresh swing (idle underneath, so only the
+    // swing moves the arm). The rig faces +Z, so the player's right is +X.
+    auto hand_x_y = [&](f32 t) {
+        CharacterAnimator anim;
+        anim.play_swing();
+        const Timestep dt{1.0f / 240.0f};
+        for (f32 e = 0.0f; e < t; e += dt.seconds) {
+            anim.update(0.0f, dt);
+        }
+        const Vec3 p{model.joint_matrices(Mat4{1.0f}, anim.pose(model))[hand][3]};
+        return Vec2{p.x, p.y};
+    };
+
+    const Vec2 windup = hand_x_y(0.10f); // cocked to the player's right
+    const Vec2 follow = hand_x_y(0.24f); // followed through to the left
+
+    CHECK(windup.x > follow.x);                              // sweeps right -> left
+    CHECK(std::abs(follow.x - windup.x) > std::abs(follow.y - windup.y)); // horizontal, not a chop
+}
+
 TEST_CASE("ClothChain: hangs under gravity, blows in wind, and falls when detached") {
     const f32 dt = 1.0f / 60.0f;
     const Vec3 anchor{0.0f, 1.5f, 0.0f};

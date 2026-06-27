@@ -1534,6 +1534,9 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                     }
                     const f32 e_before = e.health;
                     e.health -= dmg;
+                    if (ownit != players_.end()) {
+                        ++ownit->second.hit_fx; // confirmed hit -> the shooter's client pops a hit marker
+                    }
                     // A HEAVY shot (a charged ability) staggers a shield-bearer, dropping its guard for
                     // follow-ups - even one this hit blocked (the shield took the brunt + cracked).
                     if (e.kind == kEnemyShield && raw >= kSunderThreshold) {
@@ -1592,6 +1595,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             }
             const f32 hit_before = hit->health;
             hit->health -= dmg;
+            ++pl.hit_fx; // confirmed melee hit -> the attacker's client pops a hit marker
             // LIFESTEAL: felling a raider in melee mends the attacker a little (sustain by fighting).
             if (hit->health <= 0.0f) {
                 pl.heal(kMeleeKillHeal);

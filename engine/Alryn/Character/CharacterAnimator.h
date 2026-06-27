@@ -25,8 +25,8 @@ public:
     // character can e.g. swing or block while their legs keep walking. Triggered by the
     // game (left-click -> swing, hold shield -> block); the legs/locomotion are untouched.
 
-    // Trigger a one-shot attack swing (overhead diagonal slash of the right arm). Restarts
-    // the swing if one is already mid-play.
+    // Trigger a one-shot attack swing (a horizontal slash of the right arm, swept right->left).
+    // Restarts the swing if one is already mid-play.
     void play_swing();
     // Trigger a one-shot spell cast (the weapon arm thrusts the staff/hand forward + up). For the
     // Mage/Cleric; blends over locomotion like the swing.

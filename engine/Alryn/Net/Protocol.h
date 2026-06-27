@@ -66,6 +66,7 @@ struct PlayerState {
     u8 action = 0;                  // body action: 0 none, 1 swinging, 2 blocking (-> animation)
     u8 shield = 0;                  // Aegis shield strength 0..255 (0 = none) -> shield sphere
     u8 buffs = 0;                   // co-op buff bitflags: bit0 = empowered, bit1 = hasted
+    u8 hit_fx = 0;                  // monotonic counter: bumps when THIS player's attack lands a hit (-> hit marker)
     CharacterAppearance appearance; // so every client renders the right avatar
     Equipment equipment;            // the authoritative worn gear (drives the outfit + weapon + stats)
     u8 owned_tier = 0;              // highest gear tier this player has bought (for their wardrobe)

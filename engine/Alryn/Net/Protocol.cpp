@@ -118,6 +118,7 @@ void write(ByteWriter& w, const Snapshot& s) {
         w.write_u8(p.action);
         w.write_u8(p.shield);
         w.write_u8(p.buffs);
+        w.write_u8(p.hit_fx);
         write_appearance(w, p.appearance);
         write_equipment(w, p.equipment);
         w.write_u8(p.owned_tier);
@@ -236,6 +237,7 @@ bool read(ByteReader& r, Snapshot& s) {
         p.action = r.read_u8();
         p.shield = r.read_u8();
         p.buffs = r.read_u8();
+        p.hit_fx = r.read_u8();
         read_appearance(r, p.appearance);
         read_equipment(r, p.equipment);
         p.owned_tier = r.read_u8();

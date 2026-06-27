@@ -764,6 +764,26 @@ void ClientApp::update_feedback(Timestep dt) {
     }
     last_health_ = hp;
     hit_flash_ = std::max(0.0f, hit_flash_ - dt.seconds * 1.8f);
+
+    // Hit marker: the server bumps the local player's hit_fx counter whenever one of our
+    // attacks lands a confirmed hit (melee swing, arrow, bolt, thrown rock - all of them).
+    // When it ticks up we pop a crisp screen-centre marker + a little impact spark, so every
+    // attack that connects feels like it did something.
+    if (const net::PlayerState* lp = local_player()) {
+        if (!hit_fx_init_) {
+            last_hit_fx_ = lp->hit_fx; // adopt the first value so joining mid-fight doesn't false-pop
+            hit_fx_init_ = true;
+        } else if (lp->hit_fx != last_hit_fx_) {
+            hit_marker_ = 1.0f;
+            // A burst of sparks at the point we're aiming at (the enemy we struck is right there).
+            if (aim_valid_) {
+                emit_burst(aim_ + Vec3{0.0f, 0.9f, 0.0f}, Vec4{1.0f, 0.92f, 0.6f, 1.0f}, 14, 4.5f, 0.35f,
+                           0.12f, /*style=*/1, /*up=*/1.5f);
+            }
+            last_hit_fx_ = lp->hit_fx;
+        }
+    }
+    hit_marker_ = std::max(0.0f, hit_marker_ - dt.seconds * 3.2f);
 }
 
 ApplicationConfig ClientApp::make_config(u64 max_frames) {

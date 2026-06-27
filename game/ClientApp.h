@@ -870,6 +870,9 @@ private:
     std::unordered_map<u32, std::array<RopeTrace, 2>> wagon_ropes_;
     f32 hit_flash_ = 0.0f;   // red damage-flash intensity (decays)
     f32 last_health_ = 1.0f; // last seen local health fraction (to detect hits)
+    f32 hit_marker_ = 0.0f;  // hit-marker pop intensity when OUR attack lands (decays); drawn at screen centre
+    u8 last_hit_fx_ = 0;     // last seen local hit_fx counter (server bumps it on a confirmed hit)
+    bool hit_fx_init_ = false; // seen the first snapshot value yet (so a fresh join doesn't pop a marker)
     Vec3 aim_{0.0f};
     bool aim_valid_ = false;
 };

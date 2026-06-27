@@ -280,7 +280,7 @@ void GameServer::tick(Timestep dt) {
                                     static_cast<u8>(seated ? 1 : 0),
                                     static_cast<u8>(player.carrying ? 1 : 0),
                                     static_cast<u8>(player.role), player.cast_fx, action, shield,
-                                    buffs, player.input.appearance, player.equipment,
+                                    buffs, player.hit_fx, player.input.appearance, player.equipment,
                                     player.owned_tier});
     }
     snapshot.projectiles.reserve(projectiles_.size());

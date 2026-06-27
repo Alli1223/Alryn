@@ -136,33 +136,35 @@ void blend_overlay(const CharacterModel& model, std::vector<Quat>& pose, f32 wei
 }
 } // namespace
 
-// An overhead sword chop. The SWORD arm is on the player's right side, which (the rig's L/R
-// labels are mirrored) is the *L*-suffixed arm; the SHIELD arm is the *R*-suffixed one. The
-// shoulder swings about the body's left-right axis (the bone's local X) on a single smooth,
-// monotonic angle: wind up overhead-and-back (+), sweep down to the FRONT (-), settle to rest.
-// Only the upper body is masked, so the legs keep their walk/idle cycle underneath.
+// A HORIZONTAL sword slash, swung from the player's RIGHT across to their LEFT (not the old
+// top-to-bottom chop). The SWORD arm is on the player's right side, which (the rig's L/R labels
+// are mirrored) is the *L*-suffixed arm; the SHIELD arm is the *R*-suffixed one. The arm is
+// raised to ~chest height (a forward pitch about local X) and then swept side-to-side by a yaw
+// about the vertical axis (local Y): wind up cocked to the right (+), slash across to the left
+// (-), settle to rest. Only the upper body is masked, so the legs keep their walk/idle cycle.
 void CharacterAnimator::overlay_swing(const CharacterModel& model, std::vector<Quat>& pose) const {
     const f32 t = glm::clamp(swing_t_ / kSwingDur, 0.0f, 1.0f);
     const f32 env = glm::smoothstep(0.0f, 0.10f, t) * (1.0f - glm::smoothstep(0.86f, 1.0f, t));
 
-    f32 a; // shoulder pitch (about local X: +raises the arm overhead-and-back, - drops it to the front)
+    f32 sweep; // shoulder YAW about local Y: + = cocked to the player's right, - = followed through left
     if (t < 0.26f) {
-        a = glm::mix(0.0f, 2.55f, glm::smoothstep(0.0f, 0.26f, t)); // quick raise overhead (windup)
-    } else if (t < 0.55f) {
-        a = glm::mix(2.55f, -1.6f, glm::smoothstep(0.26f, 0.55f, t)); // CHOP down hard to the front
+        sweep = glm::mix(0.0f, 1.25f, glm::smoothstep(0.0f, 0.26f, t)); // wind up across to the right
+    } else if (t < 0.52f) {
+        sweep = glm::mix(1.25f, -1.6f, glm::smoothstep(0.26f, 0.52f, t)); // SLASH across hard to the left
     } else {
-        a = glm::mix(-1.6f, 0.0f, glm::smoothstep(0.55f, 1.0f, t)); // recover to rest
+        sweep = glm::mix(-1.6f, 0.0f, glm::smoothstep(0.52f, 1.0f, t)); // recover to rest
     }
+    const f32 raise = -1.42f; // hold the arm forward to ~chest height for the whole swing (eased by env)
     const f32 cock = glm::smoothstep(0.0f, 0.24f, t) * (1.0f - glm::smoothstep(0.26f, 0.5f, t));
-    const f32 lean = glm::smoothstep(0.32f, 0.58f, t) * (1.0f - glm::smoothstep(0.60f, 0.95f, t));
 
     const Vec3 ax{1.0f, 0.0f, 0.0f};
     const Vec3 ay{0.0f, 1.0f, 0.0f};
-    const Quat sword_upper = glm::angleAxis(a, ax);
-    const Quat sword_lower = glm::angleAxis(0.8f * cock, ax); // cock the elbow, extend on impact
-    const Quat torso = glm::angleAxis(0.22f * lean, ax) * glm::angleAxis(-0.25f * lean, ay);
-    const Quat head = glm::angleAxis(0.1f * lean, ax);
-    const Quat off_upper = glm::angleAxis(-0.25f * lean, ax); // shield arm counter-swings
+    // Raise the arm forward (about X) FIRST, then yaw it horizontally (about Y) to sweep the blade.
+    const Quat sword_upper = glm::angleAxis(sweep, ay) * glm::angleAxis(raise, ax);
+    const Quat sword_lower = glm::angleAxis(0.55f + 0.4f * cock, ax); // cock the elbow, extend on impact
+    const Quat torso = glm::angleAxis(0.34f * sweep, ay) * glm::angleAxis(0.08f * cock, ax); // twist into the slash
+    const Quat head = glm::angleAxis(0.2f * sweep, ay);
+    const Quat off_upper = glm::angleAxis(-0.22f * sweep, ay); // shield arm counter-rotates
 
     blend_overlay(
         model, pose, env,
