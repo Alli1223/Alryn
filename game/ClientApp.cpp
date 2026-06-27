@@ -303,6 +303,7 @@ void ClientApp::on_update(Timestep dt) {
         tick_mesh_graveyard(); // free retired NPC body meshes once their frames-in-flight have passed
         update_gates(dt);
         update_feedback(dt);
+        update_debug(dt);
         update_ropes(dt);
         update_deer(dt);
 
@@ -784,6 +785,32 @@ void ClientApp::update_feedback(Timestep dt) {
         }
     }
     hit_marker_ = std::max(0.0f, hit_marker_ - dt.seconds * 3.2f);
+}
+
+void ClientApp::update_debug(Timestep dt) {
+    // Client frame rate, sampled over a ~0.4 s window so the number is readable, not jittery.
+    fps_accum_ += dt.seconds;
+    ++fps_frames_;
+    if (fps_accum_ >= 0.4f) {
+        fps_ = static_cast<f32>(fps_frames_) / fps_accum_;
+        frame_ms_ = 1000.0f * fps_accum_ / static_cast<f32>(fps_frames_);
+        fps_accum_ = 0.0f;
+        fps_frames_ = 0;
+    }
+    // Server tick rate, measured from how fast the authoritative snapshot tick advances (works for a
+    // listen server AND a remote one, since it just reads the networked tick counter).
+    if (have_snapshot_) {
+        if (snapshot_.tick > tps_last_tick_) {
+            tps_ticks_ += snapshot_.tick - tps_last_tick_;
+        }
+        tps_last_tick_ = snapshot_.tick;
+    }
+    tps_accum_ += dt.seconds;
+    if (tps_accum_ >= 0.4f) {
+        server_tps_ = static_cast<f32>(tps_ticks_) / tps_accum_;
+        tps_accum_ = 0.0f;
+        tps_ticks_ = 0;
+    }
 }
 
 ApplicationConfig ClientApp::make_config(u64 max_frames) {

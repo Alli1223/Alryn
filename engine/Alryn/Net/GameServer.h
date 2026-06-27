@@ -103,9 +103,14 @@ public:
             return raw * (1.0f - glm::clamp(r, 0.0f, 0.9f));
         }
 
+        bool invincible = false; // debug godmode: ignore all incoming damage (set per tick from the server flag)
+
         // Apply `raw` incoming damage: mitigate it, then soak it into the Aegis shield first and
         // spill the rest onto health. Resets the regen gate.
         void take_damage(f32 raw) {
+            if (invincible) {
+                return; // debug godmode
+            }
             if (roll_timer > 0.0f) {
                 // i-frames: a dodge roll evades the hit entirely - and a PERFECT DODGE (rolling through
                 // a hit) rewards a brief outgoing-damage boost (reuses the empower buff): dodge into
@@ -164,6 +169,14 @@ public:
     bool running() const { return server_.running(); }
 
     void tick(Timestep dt);
+
+    // --- Debug / testing hooks (driven by the client's debug overlay on a listen server) ---
+    // Godmode: all players + the active cargo wagon ignore incoming damage.
+    void set_debug_god(bool on) { debug_god_ = on; }
+    bool debug_god() const { return debug_god_; }
+    // Stop the wagon ambushes: no raiders spawn during a haul, and any in progress are cleared.
+    void set_debug_no_ambush(bool on) { debug_no_ambush_ = on; }
+    bool debug_no_ambush() const { return debug_no_ambush_; }
 
     // A town building that enemies can set alight (Phase 4). Static position; only
     // the fire amount changes. Tracked for towns near players, like villagers.
@@ -314,6 +327,8 @@ private:
     f32 time_of_day_ = 0.30f; // day/night clock (0..1), advanced each tick
     f32 day_seconds_ = 120.0f;
     net::MatchOutcome outcome_ = net::MatchOutcome::Ongoing;
+    bool debug_god_ = false;       // debug: players + active wagon ignore damage
+    bool debug_no_ambush_ = false; // debug: no wagon ambushes spawn
     u8 houses_standing_ = 0;
     u8 houses_total_ = 0;
 

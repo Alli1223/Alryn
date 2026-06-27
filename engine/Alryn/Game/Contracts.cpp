@@ -1259,6 +1259,11 @@ void GameServer::carry_top_riders(const Vec2& delta, const VehicleType& vt) {
 
 void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
     Wagon& w = active_;
+    // Debug: stop the wagon ambushes entirely - clear any raiders in progress and never spawn more.
+    if (debug_no_ambush_) {
+        ambush_.clear();
+        return;
+    }
     // So ambushers chasing the cart cross bridges with it instead of dropping into the river.
     const u32 wseed = sampler_.seed();
     const auto bridge = [wseed](f32 x, f32 z) { return roads::bridge_height(x, z, wseed); };
@@ -1426,7 +1431,9 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             // hit to the cargo + a small blast on nearby players. Intercept it before it arrives!
             step_enemy(e, density, collider_scratch_, w.position, dt, kSapperSpeed, bridge);
             if (glm::length(w.position - e.position) < kSapperRange) {
-                w.health -= kSapperDamage * rig_damage_mult(rig_level_);
+                if (!debug_god_) {
+                    w.health -= kSapperDamage * rig_damage_mult(rig_level_);
+                }
                 for (auto& [pid, pl] : players_) {
                     if (glm::length(pl.controller.position() - e.position) < kSapperBlastRadius) {
                         pl.take_damage(kSapperBlastDamage); // i-frames (a dodge roll) evade the blast
@@ -1449,7 +1456,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                             pl.take_damage(kSlamDamage); // role armour / block / shield soak it
                         }
                     }
-                    if (brute_slam_hits(e.position, w.position)) {
+                    if (brute_slam_hits(e.position, w.position) && !debug_god_) {
                         w.health -= kSlamWagonDamage * rig_damage_mult(rig_level_);
                     }
                     e.attack_cd = kSlamCooldown;
@@ -1494,7 +1501,9 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                 }
                 e.attack_cd = kEnemyAttackInterval;
             } else if (glm::length(w.position - e.position) < reach + 0.7f) {
-                w.health -= kWagonDamage * rig_damage_mult(rig_level_); // armored sides shrug off some
+                if (!debug_god_) {
+                    w.health -= kWagonDamage * rig_damage_mult(rig_level_); // armored sides shrug off some
+                }
                 e.attack_cd = kEnemyAttackInterval;
             }
         }

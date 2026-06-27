@@ -111,6 +111,11 @@ void GameServer::tick(Timestep dt) {
     const DensitySampler density = sampler_.as_sampler();
     manager_.update(dt); // advances the day/night clock + (later) the transport objective
 
+    // Debug godmode: make every player invincible this tick (their damage routes through take_damage).
+    for (auto& [id, player] : players_) {
+        player.invincible = debug_god_;
+    }
+
     for (const net::ServerEvent& e : server_.poll()) {
         switch (e.type) {
             case net::ServerEventType::ClientConnected: {

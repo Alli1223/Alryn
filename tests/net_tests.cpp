@@ -259,6 +259,21 @@ TEST_CASE("GameServer: heal mends health, capped at the role max (melee-kill lif
     CHECK(kMeleeKillHeal > 0.0f);
 }
 
+TEST_CASE("GameServer: debug godmode makes a player ignore all incoming damage") {
+    GameServer::ServerPlayer p;
+    p.role = PlayerRole::Hunter;
+    p.max_health = 95.0f;
+    p.health = 95.0f;
+    p.take_damage(40.0f);
+    CHECK(p.health == doctest::Approx(55.0f)); // normal: takes the hit
+    p.invincible = true;                       // debug godmode (the server sets this each tick)
+    p.take_damage(1000.0f);
+    CHECK(p.health == doctest::Approx(55.0f)); // godmode: no damage at all, even a huge hit
+    p.invincible = false;
+    p.take_damage(5.0f);
+    CHECK(p.health == doctest::Approx(50.0f)); // toggled off: takes damage again
+}
+
 TEST_CASE("GameServer: second wind catches the first lethal blow of a haul, once") {
     GameServer::ServerPlayer p;
     p.role = PlayerRole::Hunter;

@@ -98,6 +98,28 @@ void ClientApp::skills_click(const Vec2& p) {
     }
 }
 
+void ClientApp::apply_debug_flags() {
+    // The debug gameplay toggles only have teeth on a listen server we host (we own the sim).
+    if (host_local_ && local_server_.running()) {
+        local_server_.set_debug_god(debug_god_);
+        local_server_.set_debug_no_ambush(debug_no_ambush_);
+    }
+}
+
+bool ClientApp::debug_click(const Vec2& p) {
+    if (in_rect(p, god_btn_)) {
+        debug_god_ = !debug_god_;
+        apply_debug_flags();
+        return true;
+    }
+    if (in_rect(p, noatk_btn_)) {
+        debug_no_ambush_ = !debug_no_ambush_;
+        apply_debug_flags();
+        return true;
+    }
+    return false;
+}
+
 bool ClientApp::abilitybar_press(const Vec2& p) {
     for (u8 i = 0; i < kAbilitySlots; ++i) {
         if (bar_[i] >= 0 && in_rect(p, ability_slot_rects_[i])) {
@@ -234,6 +256,10 @@ void ClientApp::on_event(Event& event) {
                 selected_wagon_ = 0; // withdraw the offer
                 return true;
             }
+            // A click on the debug overlay's toggles takes priority over melee.
+            if (debug_open_ && debug_click(p)) {
+                return true;
+            }
             // Primary attack is role-specific: the Knight swings the held sword, the Hunter
             // looses an arrow, the Cleric casts a damage spell (both fire a role projectile
             // the server picks). Only the Knight melees + plays the sword swing.
@@ -268,6 +294,22 @@ void ClientApp::on_event(Event& event) {
         return false;
     });
     dispatcher.dispatch<KeyPressedEvent>([&](KeyPressedEvent& e) {
+        // Debug overlay (F1) + its toggles (F2 godmode, F3 stop wagon ambushes). Also clickable in
+        // the panel; the keys are the quick path and work whatever the role.
+        if (e.key() == key::F1) {
+            debug_open_ = !debug_open_;
+            return true;
+        }
+        if (e.key() == key::F2) {
+            debug_god_ = !debug_god_;
+            apply_debug_flags();
+            return true;
+        }
+        if (e.key() == key::F3) {
+            debug_no_ambush_ = !debug_no_ambush_;
+            apply_debug_flags();
+            return true;
+        }
         // Mage casting: tap a number key (1-4) to instantly cast that element's spell; or hold
         // Ctrl to weave a COMBO (queue several elements, release to cast the advanced spell).
         if (role_ == PlayerRole::Mage) {

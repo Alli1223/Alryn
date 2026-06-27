@@ -326,6 +326,66 @@ void ClientApp::draw_hud() {
             draw.line(pa, pb, thick, mark_col);
         }
     }
+
+    // Debug / testing overlay on top of everything (F1).
+    if (debug_open_) {
+        draw_debug(draw, H);
+    }
+}
+
+void ClientApp::draw_debug(ui::DrawList& draw, f32 H) {
+    const f32 ds = glm::clamp(H * 0.02f, 13.0f, 22.0f); // debug text size
+    const f32 pad = 12.0f;
+    const f32 pw = std::max(290.0f, draw.text_width("NO WAGON ATTACKS:  OFF", ds) + pad * 2.0f);
+    const f32 x = 16.0f;
+    const f32 y = H * 0.26f;
+    const f32 line = ds * 1.32f;
+    const bool host = host_local_ && local_server_.running();
+    const int rows = 9; // title + 6 metrics + 2 toggles
+    const f32 ph = pad * 2.0f + line * static_cast<f32>(rows) + line * 1.4f; // + hint
+    // Panel.
+    draw.rect(Vec4{x, y, pw, ph}, Vec4{0.04f, 0.05f, 0.07f, 0.82f},
+              Vec4{0.5f, 0.62f, 0.78f, 0.9f}, 1.5f, 7.0f);
+    f32 ty = y + pad;
+    draw.text(Vec2{x + pad, ty}, "DEBUG  [F1]", ds * 1.05f, Vec4{0.7f, 0.85f, 1.0f, 1.0f});
+    ty += line * 1.2f;
+    auto metric = [&](const std::string& s, const Vec4& c) {
+        draw.text(Vec2{x + pad, ty}, s, ds, c);
+        ty += line;
+    };
+    const Vec4 mc{0.82f, 0.88f, 0.95f, 1.0f};
+    const f32 fps = fps_;
+    const Vec4 fps_c = fps >= 55.0f ? Vec4{0.6f, 0.95f, 0.65f, 1.0f}
+                       : fps >= 30.0f ? Vec4{0.95f, 0.85f, 0.45f, 1.0f}
+                                      : Vec4{0.95f, 0.45f, 0.4f, 1.0f};
+    metric(std::format("FPS         {:.0f}  ({:.1f} ms)", fps, frame_ms_), fps_c);
+    metric(std::format("SERVER TPS  {:.0f}", server_tps_), mc);
+    metric(std::format("PLAYERS     {}", snapshot_.players.size()), mc);
+    metric(std::format("ENEMIES     {}", snapshot_.enemies.size()), mc);
+    metric(std::format("PROJECTILES {}", snapshot_.projectiles.size()), mc);
+    metric(std::format("PARTICLES   {}", particles_.size()), mc);
+
+    // Two clickable toggles.
+    auto toggle = [&](const char* label, bool on, ui::Rect& rect) {
+        const f32 bx = x + pad;
+        const f32 bw = pw - pad * 2.0f;
+        const f32 bh = line * 1.05f;
+        rect = ui::Rect{bx, ty, bw, bh};
+        const Vec4 fill = on ? Vec4{0.18f, 0.42f, 0.22f, 0.95f} : Vec4{0.16f, 0.16f, 0.2f, 0.9f};
+        const Vec4 border = on ? Vec4{0.5f, 0.95f, 0.55f, 1.0f} : Vec4{0.45f, 0.48f, 0.55f, 0.9f};
+        draw.rect(Vec4{bx, ty, bw, bh}, fill, border, 1.5f, 5.0f);
+        draw.text(Vec2{bx + 8.0f, ty + bh * 0.5f - ds * 0.5f}, label, ds, Vec4{0.85f, 0.9f, 0.95f, 1.0f});
+        const std::string st = on ? "ON" : "OFF";
+        draw.text(Vec2{bx + bw - draw.text_width(st, ds) - 10.0f, ty + bh * 0.5f - ds * 0.5f}, st, ds,
+                  on ? Vec4{0.6f, 1.0f, 0.65f, 1.0f} : Vec4{0.7f, 0.72f, 0.78f, 1.0f});
+        ty += bh + 4.0f;
+    };
+    toggle("GODMODE  [F2]", debug_god_, god_btn_);
+    toggle("NO WAGON ATTACKS  [F3]", debug_no_ambush_, noatk_btn_);
+    if (!host) {
+        draw.text(Vec2{x + pad, ty}, "(toggles need a hosted game)", ds * 0.82f,
+                  Vec4{0.85f, 0.6f, 0.45f, 0.95f});
+    }
 }
 
 void ClientApp::draw_contract_panel(ui::DrawList& draw, const net::WagonState& wg, bool accepted, f32 W, f32 H, f32 ts, const Vec3& feet) {
