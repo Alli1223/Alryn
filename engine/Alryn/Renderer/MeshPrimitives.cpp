@@ -470,6 +470,30 @@ MeshData tall_grass(int blades, const Vec3& color) {
     return m;
 }
 
+MeshData meadow_grass(int blades, const Vec3& color) {
+    MeshData m;
+    const Vec3 dark = color * 0.5f;                                              // dark at the roots
+    const Vec3 tip = glm::clamp(color * 1.28f + Vec3{0.07f, 0.08f, 0.0f},        // bright bowing tips
+                                Vec3{0.0f}, Vec3{1.0f});
+    for (int i = 0; i < blades; ++i) {
+        const u32 h = static_cast<u32>(i) * 0x9E3779B9u + 3u;
+        const f32 ang = TwoPi * static_cast<f32>(i) / static_cast<f32>(blades) + vrnd(h, 1) * 0.9f;
+        const f32 ca = std::cos(ang);
+        const f32 sa = std::sin(ang);
+        const Vec3 dir{ca, 0.0f, sa};
+        const Vec3 perp{-sa, 0.0f, ca};
+        const Vec3 root = dir * (0.03f + vrnd(h, 5) * 0.06f); // fan the bases into a clump
+        const f32 height = 0.85f + vrnd(h, 2) * 0.5f;         // long blades
+        const f32 lean = 0.20f + vrnd(h, 3) * 0.30f;          // arch over near the tip
+        // Tall, mostly-upright blade that bows over at the top.
+        std::vector<Vec3> rib = {root, root + dir * (lean * 0.22f) + Vec3{0.0f, height * 0.40f, 0.0f},
+                                 root + dir * (lean * 0.6f) + Vec3{0.0f, height * 0.76f, 0.0f},
+                                 root + dir * lean + Vec3{0.0f, height, 0.0f}};
+        ribbon(m, rib, 0.05f, 0.006f, perp, dark, tip);
+    }
+    return m;
+}
+
 MeshData reed(int blades, const Vec3& color) {
     MeshData m;
     const Vec3 dark = color * 0.5f;

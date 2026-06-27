@@ -46,6 +46,12 @@ MeshData fern(int variant = 0, const Vec3& color = Vec3{0.20f, 0.42f, 0.22f});
 // meadow / forest-clearing variety.
 MeshData tall_grass(int blades = 6, const Vec3& color = Vec3{0.34f, 0.52f, 0.26f});
 
+// A full clump of LONG meadow grass: many tall, mostly-upright blades fanned from a
+// small clumped base, arching over at the tips, with a dark-root to bright-tip
+// gradient. Taller and fuller than tall_grass - scale it in Y for the really-long
+// stalks you wade through. Sways strongly in the wind (tall = big sway weight).
+MeshData meadow_grass(int blades = 9, const Vec3& color = Vec3{0.32f, 0.54f, 0.25f});
+
 // A low-poly mushroom: pale stem + a coloured cap, sitting on y = 0. `spots` adds
 // white flecks (the classic toadstool). Scale for tiny sprouts to fat boletes.
 MeshData mushroom(const Vec3& cap = Vec3{0.74f, 0.18f, 0.15f}, f32 scale = 1.0f, bool spots = true);

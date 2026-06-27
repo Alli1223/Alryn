@@ -190,6 +190,9 @@ TEST_CASE("Scene shot: forest sampler (trees, logs, ferns, mushrooms) renders") 
     add(primitives::mushroom(Vec3{0.74f, 0.16f, 0.13f}, 1.6f, true), Vec3{1.8f, 0.0f, 1.6f});
     add(primitives::tall_grass(7, Vec3{0.32f, 0.52f, 0.26f}), Vec3{2.8f, 0.0f, 1.5f}, 1.4f);
     add(primitives::ground_leaf(0), Vec3{3.8f, 0.0f, 1.4f}, 1.6f);
+    // Long meadow grass: a fresh-green clump and a dried straw-yellow one.
+    add(primitives::meadow_grass(11, Vec3{0.30f, 0.55f, 0.24f}), Vec3{-3.6f, 0.0f, 2.4f}, 1.6f);
+    add(primitives::meadow_grass(11, Vec3{0.76f, 0.67f, 0.31f}), Vec3{4.3f, 0.0f, 2.4f}, 1.6f, 1.0f);
     REQUIRE_FALSE(draws.empty());
 
     const Vec3 target{0.0f, 1.5f, -1.0f};

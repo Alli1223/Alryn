@@ -167,6 +167,31 @@ inline MeshData build_vegetation(int cx, int cz, f32 chunk_world, u32 seed) {
                  detail::hash01(detail::tree_hash(gx, gz, seed + 5207u)) * TwoPi, sc, 1.0f, Vec3{1.0f});
     });
 
+    // ---- Long meadow grass: dense, tall clumps that wave in the wind, with the odd
+    // REALLY long stalk you wade through. A low-frequency "dryness" field (separate
+    // from soil moisture) paints whole swathes either fresh green or sun-bleached
+    // straw yellow, so a field reads as drifting bands of green + dried grass. Grows
+    // in the town's green areas too.
+    for_cells(1.15f, seed + 5900u, [&](int gx, int gz, f32 wx, f32 wz) {
+        f32 moist;
+        const f32 gh = worldgen::height(wx, wz, seed);
+        if (!detail::veg_ground(wx, wz, seed, gh, 2.0f, -0.04f, moist, true)) return; // grows in town too
+        if (detail::hash01(detail::tree_hash(gx, gz, seed + 5903u)) > 0.4f) return;
+        const f32 dryness = glm::smoothstep(-0.22f, 0.42f,
+            noise::fbm2d(wx * 0.025f, wz * 0.025f, 2, 2.0f, 0.5f, seed + 5999u));
+        const Vec3 green{0.30f, 0.55f, 0.24f};
+        const Vec3 straw{0.76f, 0.67f, 0.31f}; // dried-up yellow
+        const Vec3 g = glm::mix(green, straw, dryness);
+        const int blades = 8 + static_cast<int>(detail::hash01(detail::tree_hash(gx, gz, seed + 5904u)) * 4.0f);
+        const f32 sc = 0.8f + detail::hash01(detail::tree_hash(gx, gz, seed + 5905u)) * 0.35f;
+        // ~1 in 6 clumps shoots up really long; the rest are ordinary tall grass.
+        const bool very_long = detail::hash01(detail::tree_hash(gx, gz, seed + 5906u)) < 0.16f;
+        const f32 sy = very_long ? (1.5f + detail::hash01(detail::tree_hash(gx, gz, seed + 5907u)) * 0.45f)
+                                 : (0.95f + detail::hash01(detail::tree_hash(gx, gz, seed + 5908u)) * 0.35f);
+        place_at(primitives::meadow_grass(blades, g), wx, wz, gh,
+                 detail::hash01(detail::tree_hash(gx, gz, seed + 5909u)) * TwoPi, sc, sy, Vec3{1.0f});
+    });
+
     // ---- Mushrooms: damp forest floor, various caps; the odd cluster.
     static const Vec3 caps[] = {{0.74f, 0.16f, 0.13f}, {0.55f, 0.34f, 0.20f}, {0.80f, 0.66f, 0.40f},
                                 {0.86f, 0.74f, 0.30f}, {0.55f, 0.40f, 0.55f}};
