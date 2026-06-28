@@ -541,13 +541,13 @@ void ClientApp::draw_surf() {
         v ^= v >> 16;
         return static_cast<f32>((v >> 8) & 0xFFFFu) / 65535.0f;
     };
-    // Surf foam lapping the shore. Scan WORLD cells around the player; for cells right on the
-    // waterline (water on one side, land on the other) lay down flat, bright froth that WASHES up
-    // the beach and recedes with a wave that rolls ALONG the shore. The foam is alpha-gated to the
-    // wave crest (no persistent circles), washes along the shore-normal (so it surges in + out like
-    // real surf), and is a couple of jittered overlapping flat discs per cell so it reads as froth
-    // rather than a ring. World-anchored, so it stays put on the beach as the camera moves.
-    constexpr f32 cell = 2.6f, radius = 26.0f;
+    // Surf foam hugging the shore. Scan WORLD cells around the player; for cells right on the
+    // waterline (water on one side, land on the other) lay a thin, soft foam STREAK oriented ALONG
+    // the shore (parallel to the waterline, perpendicular to the slope), so adjacent cells line up
+    // into a broken foam line that follows the coast - not big discs/blobs. The streak's brightness
+    // rides a wave that rolls along the shore and it laps in/out a touch along the slope, so the
+    // surf shimmers and washes. World-anchored, so it stays put on the beach as the camera moves.
+    constexpr f32 cell = 1.5f, radius = 24.0f;
     const int bcx = static_cast<int>(std::floor(feet.x / cell));
     const int bcz = static_cast<int>(std::floor(feet.z / cell));
     const int cr = static_cast<int>(radius / cell) + 1;
@@ -557,46 +557,43 @@ void ClientApp::draw_surf() {
             const f32 wx = static_cast<f32>(cx) * cell + cell * 0.5f;
             const f32 wz = static_cast<f32>(cz) * cell + cell * 0.5f;
             const f32 gh = ground(wx, wz);
-            if (gh < worldgen::water_level - 0.3f || gh > worldgen::water_level + 0.28f) {
-                continue; // tight band right at the waterline
+            if (gh < worldgen::water_level - 0.22f || gh > worldgen::water_level + 0.2f) {
+                continue; // a tight band right at the waterline
             }
             const f32 hl = ground(wx - cell, wz), hr = ground(wx + cell, wz);
             const f32 hu = ground(wx, wz - cell), hd = ground(wx, wz + cell);
             const f32 lo = std::min(std::min(hl, hr), std::min(hu, hd));
             const f32 hi = std::max(std::max(hl, hr), std::max(hu, hd));
-            if (lo > worldgen::water_level - 0.2f || hi < worldgen::water_level + 0.05f) {
+            if (lo > worldgen::water_level - 0.18f || hi < worldgen::water_level + 0.04f) {
                 continue; // needs both water + land around it to be a real shore
             }
+            const Vec2 grad{hr - hl, hd - hu};
+            if (glm::length(grad) < 1e-3f) {
+                continue; // need a real slope to know which way the shore runs
+            }
+            const Vec2 up_slope = glm::normalize(grad);          // uphill = toward land
+            const Vec2 tangent{up_slope.y, -up_slope.x};         // along the shore (the foam line)
             const f32 dist = glm::length(Vec2{wx - feet.x, wz - feet.z});
             if (dist > radius) {
                 continue;
             }
             const f32 fade = glm::smoothstep(radius, radius * 0.5f, dist);
-            // Shore-normal (uphill = toward land); the foam washes IN along it. Phase travels along
-            // the shore tangent so neighbouring crests are offset => the surf rolls down the beach.
-            const Vec2 grad{hr - hl, hd - hu};
-            const Vec2 up_slope = glm::length(grad) > 1e-4f ? glm::normalize(grad) : Vec2{1.0f, 0.0f};
-            const f32 along = glm::dot(Vec2{wx, wz}, Vec2{up_slope.y, -up_slope.x});
-            const f32 wave = 0.5f + 0.5f * std::sin(t * 1.4f + along * 0.45f);
-            // Foam only shows near the crest as the wave passes (gated => no permanent rings), and
-            // surges up the beach at the crest, receding to the waterline in the trough.
-            const f32 crest = glm::smoothstep(0.25f, 1.0f, wave);
-            if (crest < 0.02f) {
+            // Wave rolls along the shore; foam brightens near the crest and laps in/out a touch.
+            const f32 along = glm::dot(Vec2{wx, wz}, tangent);
+            const f32 wave = 0.5f + 0.5f * std::sin(t * 1.4f + along * 0.5f);
+            const f32 crest = glm::smoothstep(0.2f, 1.0f, wave);
+            const f32 a = fade * (0.16f + 0.34f * crest); // soft, always a hint, brighter at the crest
+            if (a < 0.02f) {
                 continue;
             }
-            const Vec2 wash = up_slope * (crest * 1.0f); // advance up the sand at the crest
-            for (int k = 0; k < 2; ++k) { // a couple of overlapping flecks => frothy, not a ring
-                const f32 jx = (hcell(cx, cz, 11 + k) - 0.5f) * 1.6f;
-                const f32 jz = (hcell(cx, cz, 23 + k) - 0.5f) * 1.6f;
-                const f32 px = wx + wash.x + jx;
-                const f32 pz = wz + wash.y + jz;
-                const f32 sc = 1.7f + hcell(cx, cz, 31 + k) * 0.9f;
-                const f32 a = fade * crest * (0.55f + 0.3f * hcell(cx, cz, 41 + k));
-                const Mat4 m =
-                    glm::translate(Mat4{1.0f}, Vec3{px, worldgen::water_level + 0.05f, pz}) *
-                    glm::scale(Mat4{1.0f}, Vec3{sc, 0.04f, sc});
-                renderer_->draw_transparent(shape_cylinder_, m, Vec4{0.96f, 0.99f, 1.0f, a});
-            }
+            const Vec2 p = Vec2{wx, wz} + up_slope * (crest * 0.4f - 0.1f); // laps at the waterline
+            const f32 ang = std::atan2(-tangent.y, tangent.x);   // local +X -> shore tangent
+            const f32 len = 1.5f + hcell(cx, cz, 7) * 0.7f;      // a streak spanning ~the cell
+            const f32 wid = 0.26f + crest * 0.18f;               // thin across, swells a touch
+            const Mat4 m = glm::translate(Mat4{1.0f}, Vec3{p.x, worldgen::water_level + 0.05f, p.y}) *
+                           glm::rotate(Mat4{1.0f}, ang, Vec3{0.0f, 1.0f, 0.0f}) *
+                           glm::scale(Mat4{1.0f}, Vec3{len, 0.05f, wid});
+            renderer_->draw_transparent(shape_box_, m, Vec4{0.95f, 0.98f, 1.0f, a});
         }
     }
 }

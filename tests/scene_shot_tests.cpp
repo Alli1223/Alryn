@@ -45,7 +45,7 @@ Vec3 pixel(const std::vector<u8>& px, u32 w, u32 x, u32 y) {
 void render_world(test::OffscreenRenderer& r, u32 seed, const Vec2& focus, f32 radius,
                   const std::string& out, f32 cam_height_mul = 1.95f, f32 cam_back_mul = 0.85f,
                   const Vec3* eye_rel = nullptr, const Vec3* target_rel = nullptr,
-                  bool with_wagon = false, f32 wagon_yaw = 0.0f) {
+                  bool with_wagon = false, f32 wagon_yaw = 0.0f, bool with_surf = false) {
     constexpr f32 voxel = 1.0f;
     constexpr int cv = 16;                 // voxels per chunk
     constexpr f32 cw = static_cast<f32>(cv) * voxel; // chunk world size (16 m)
@@ -137,6 +137,51 @@ void render_world(test::OffscreenRenderer& r, u32 seed, const Vec2& focus, f32 r
                     glm::rotate(Mat4{1.0f}, -b.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
                     glm::rotate(Mat4{1.0f}, pitch, Vec3{0.0f, 0.0f, 1.0f}) *
                     glm::scale(Mat4{1.0f}, Vec3{b.length, 1.0f, 1.0f}));
+        }
+    }
+    // Shore surf preview: mirror the client's draw_surf (thin foam streaks ALONG the waterline)
+    // as opaque white boxes, so the scene shot shows whether the foam forms a coherent shore line.
+    // (The live game draws these soft + alpha-blended over the water; here they're solid so the
+    // arrangement reads clearly without a water plane.)
+    if (with_surf) {
+        Mesh* foam = r.upload(primitives::cube(1.0f, Vec3{0.96f, 0.99f, 1.0f}));
+        const f32 t = 2.0f; // a fixed wave phase
+        constexpr f32 scell = 1.5f;
+        const int sx0 = static_cast<int>(std::floor((focus.x - radius) / scell));
+        const int sx1 = static_cast<int>(std::floor((focus.x + radius) / scell));
+        const int sz0 = static_cast<int>(std::floor((focus.y - radius) / scell));
+        const int sz1 = static_cast<int>(std::floor((focus.y + radius) / scell));
+        for (int gz = sz0; gz <= sz1; ++gz) {
+            for (int gx = sx0; gx <= sx1; ++gx) {
+                const f32 wx = static_cast<f32>(gx) * scell + scell * 0.5f;
+                const f32 wz = static_cast<f32>(gz) * scell + scell * 0.5f;
+                const f32 gh = worldgen::height(wx, wz, seed);
+                if (gh < worldgen::water_level - 0.22f || gh > worldgen::water_level + 0.2f) continue;
+                const f32 hl = worldgen::height(wx - scell, wz, seed);
+                const f32 hr = worldgen::height(wx + scell, wz, seed);
+                const f32 hu = worldgen::height(wx, wz - scell, seed);
+                const f32 hd = worldgen::height(wx, wz + scell, seed);
+                const f32 lo = std::min(std::min(hl, hr), std::min(hu, hd));
+                const f32 hi = std::max(std::max(hl, hr), std::max(hu, hd));
+                if (lo > worldgen::water_level - 0.18f || hi < worldgen::water_level + 0.04f) continue;
+                const Vec2 grad{hr - hl, hd - hu};
+                if (glm::length(grad) < 1e-3f) continue;
+                const Vec2 up_slope = glm::normalize(grad);
+                const Vec2 tangent{up_slope.y, -up_slope.x};
+                const f32 along = glm::dot(Vec2{wx, wz}, tangent);
+                const f32 wave = 0.5f + 0.5f * std::sin(t * 1.4f + along * 0.5f);
+                const f32 crest = glm::smoothstep(0.2f, 1.0f, wave);
+                const Vec2 p = Vec2{wx, wz} + up_slope * (crest * 0.4f - 0.1f);
+                const f32 ang = std::atan2(-tangent.y, tangent.x);
+                const f32 len = 1.5f, wid = 0.26f + crest * 0.18f;
+                if (foam != nullptr) {
+                    draws.push_back({foam,
+                                     at(Vec3{p.x, worldgen::water_level + 0.05f, p.y}) *
+                                         glm::rotate(Mat4{1.0f}, ang, Vec3{0.0f, 1.0f, 0.0f}) *
+                                         glm::scale(Mat4{1.0f}, Vec3{len, 0.05f, wid}),
+                                     Vec4{1.0f}});
+                }
+            }
         }
     }
     REQUIRE_FALSE(draws.empty());
@@ -539,7 +584,7 @@ TEST_CASE("Scene shot: a shoreline (stones, reeds, lily pads, coral) renders") {
     const Vec3 eye = -d * (span * 0.5f) + Vec3{span * 0.22f, gy + span * 0.5f, span * 0.16f};
     const Vec3 tgt = d * (span * 0.45f) + Vec3{0.0f, worldgen::water_level - 0.6f, 0.0f};
     render_world(renderer, best_seed, best, span, (executable_dir() / "shore.ppm").string(), 1.0f,
-                 1.0f, &eye, &tgt);
+                 1.0f, &eye, &tgt, /*with_wagon=*/false, /*wagon_yaw=*/0.0f, /*with_surf=*/true);
 }
 
 // A wagon crossing a plank bridge where a road spans a river - the new river + bridge feature.
