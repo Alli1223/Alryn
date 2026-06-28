@@ -533,45 +533,70 @@ void ClientApp::draw_surf() {
     const Vec3 feet = local_feet();
     const f32 t = elapsed_;
     auto ground = [&](f32 x, f32 z) { return worldgen::height(x, z, world_seed_); };
-    // Foam waves lapping the shore: scan a grid of WORLD cells around the player and, for cells that
-    // sit right on the waterline with both deeper water and dry land around them (a real shoreline,
-    // not open sea or inland), draw a foam patch whose size + opacity wash in and out on a sine wave.
-    // The wave's phase travels along the shore so the surf rolls rather than pulsing in place. Cells
-    // are world-anchored so the foam stays put on the beach as the camera moves.
-    constexpr f32 cell = 3.0f, radius = 27.0f;
+    auto hcell = [](int x, int z, int s) {
+        u32 v = static_cast<u32>(x * 73856093) ^ static_cast<u32>(z * 19349663) ^
+                static_cast<u32>(s * 83492791);
+        v ^= v >> 13;
+        v *= 0x2545F491u;
+        v ^= v >> 16;
+        return static_cast<f32>((v >> 8) & 0xFFFFu) / 65535.0f;
+    };
+    // Surf foam lapping the shore. Scan WORLD cells around the player; for cells right on the
+    // waterline (water on one side, land on the other) lay down flat, bright froth that WASHES up
+    // the beach and recedes with a wave that rolls ALONG the shore. The foam is alpha-gated to the
+    // wave crest (no persistent circles), washes along the shore-normal (so it surges in + out like
+    // real surf), and is a couple of jittered overlapping flat discs per cell so it reads as froth
+    // rather than a ring. World-anchored, so it stays put on the beach as the camera moves.
+    constexpr f32 cell = 2.6f, radius = 26.0f;
     const int bcx = static_cast<int>(std::floor(feet.x / cell));
     const int bcz = static_cast<int>(std::floor(feet.z / cell));
     const int cr = static_cast<int>(radius / cell) + 1;
     for (int dz = -cr; dz <= cr; ++dz) {
         for (int dx = -cr; dx <= cr; ++dx) {
-            const f32 wx = static_cast<f32>(bcx + dx) * cell + cell * 0.5f;
-            const f32 wz = static_cast<f32>(bcz + dz) * cell + cell * 0.5f;
+            const int cx = bcx + dx, cz = bcz + dz;
+            const f32 wx = static_cast<f32>(cx) * cell + cell * 0.5f;
+            const f32 wz = static_cast<f32>(cz) * cell + cell * 0.5f;
             const f32 gh = ground(wx, wz);
-            if (gh < worldgen::water_level - 0.4f || gh > worldgen::water_level + 0.45f) {
-                continue; // not in the surf band
+            if (gh < worldgen::water_level - 0.3f || gh > worldgen::water_level + 0.28f) {
+                continue; // tight band right at the waterline
             }
             const f32 hl = ground(wx - cell, wz), hr = ground(wx + cell, wz);
             const f32 hu = ground(wx, wz - cell), hd = ground(wx, wz + cell);
             const f32 lo = std::min(std::min(hl, hr), std::min(hu, hd));
             const f32 hi = std::max(std::max(hl, hr), std::max(hu, hd));
             if (lo > worldgen::water_level - 0.2f || hi < worldgen::water_level + 0.05f) {
-                continue; // needs water on one side + land on the other to be a real shore
+                continue; // needs both water + land around it to be a real shore
             }
             const f32 dist = glm::length(Vec2{wx - feet.x, wz - feet.z});
             if (dist > radius) {
                 continue;
             }
-            const f32 fade = glm::smoothstep(radius, radius * 0.55f, dist);
-            // Wave phase travels along the shore (downhill gradient ~ shore-normal; project the cell
-            // along it so neighbouring foam crests are slightly out of phase => a rolling wave).
-            const Vec2 nrm{hr - hl, hd - hu};
-            const f32 along = glm::length(nrm) > 1e-4f ? glm::dot(Vec2{wx, wz}, Vec2{nrm.y, -nrm.x}) : (wx + wz);
-            const f32 wave = 0.5f + 0.5f * std::sin(t * 1.5f + along * 0.5f);
-            const f32 a = fade * (0.18f + 0.55f * wave);
-            const f32 sc = 1.1f + wave * 1.0f; // foam swells as the wave breaks
-            const Mat4 m = glm::translate(Mat4{1.0f}, Vec3{wx, worldgen::water_level + 0.04f, wz}) *
-                           glm::scale(Mat4{1.0f}, Vec3{sc, 0.06f, sc});
-            renderer_->draw_transparent(shape_sphere_, m, Vec4{0.92f, 0.97f, 1.0f, a});
+            const f32 fade = glm::smoothstep(radius, radius * 0.5f, dist);
+            // Shore-normal (uphill = toward land); the foam washes IN along it. Phase travels along
+            // the shore tangent so neighbouring crests are offset => the surf rolls down the beach.
+            const Vec2 grad{hr - hl, hd - hu};
+            const Vec2 up_slope = glm::length(grad) > 1e-4f ? glm::normalize(grad) : Vec2{1.0f, 0.0f};
+            const f32 along = glm::dot(Vec2{wx, wz}, Vec2{up_slope.y, -up_slope.x});
+            const f32 wave = 0.5f + 0.5f * std::sin(t * 1.4f + along * 0.45f);
+            // Foam only shows near the crest as the wave passes (gated => no permanent rings), and
+            // surges up the beach at the crest, receding to the waterline in the trough.
+            const f32 crest = glm::smoothstep(0.25f, 1.0f, wave);
+            if (crest < 0.02f) {
+                continue;
+            }
+            const Vec2 wash = up_slope * (crest * 1.0f); // advance up the sand at the crest
+            for (int k = 0; k < 2; ++k) { // a couple of overlapping flecks => frothy, not a ring
+                const f32 jx = (hcell(cx, cz, 11 + k) - 0.5f) * 1.6f;
+                const f32 jz = (hcell(cx, cz, 23 + k) - 0.5f) * 1.6f;
+                const f32 px = wx + wash.x + jx;
+                const f32 pz = wz + wash.y + jz;
+                const f32 sc = 1.7f + hcell(cx, cz, 31 + k) * 0.9f;
+                const f32 a = fade * crest * (0.55f + 0.3f * hcell(cx, cz, 41 + k));
+                const Mat4 m =
+                    glm::translate(Mat4{1.0f}, Vec3{px, worldgen::water_level + 0.05f, pz}) *
+                    glm::scale(Mat4{1.0f}, Vec3{sc, 0.04f, sc});
+                renderer_->draw_transparent(shape_cylinder_, m, Vec4{0.96f, 0.99f, 1.0f, a});
+            }
         }
     }
 }

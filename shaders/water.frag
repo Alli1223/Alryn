@@ -41,10 +41,8 @@ void main() {
     float intensity = pc.sun.w;
     float t = pc.params.x;
 
-    // Schlick Fresnel: water is barely reflective looking straight down (you see into it) and
-    // becomes a near-mirror at grazing angles - the key to "real" looking reflective water.
     float ndv = max(dot(N, V), 0.0);
-    float fresnel = 0.02 + 0.98 * pow(1.0 - ndv, 5.0);
+    float fresnel = pow(1.0 - ndv, 5.0); // true Schlick term, used for the alpha (transmission)
 
     // --- Water body: rich blue depths fading to a vibrant shallow tint on the wave faces. ---
     vec3 deep = vec3(0.02, 0.13, 0.32);
@@ -53,21 +51,24 @@ void main() {
     body *= mix(0.18, 1.06, intensity);                          // dark + steely at night
     body *= mix(vec3(0.50, 0.58, 0.80), pc.sunColor.rgb, intensity);
 
-    // --- Planar reflection: mirror the view across the wave normal and look up the sky + sun
-    // along the reflected ray. This is a genuine reflection (moves with the camera + waves), it
-    // just reads a procedural sky (matching the land's atmosphere haze) instead of a render
-    // target - so it costs nothing yet gives the surface a real reflective, mirror-like quality.
+    // --- Planar reflection: mirror the view across the wave normal and look up the sky + sun along
+    // the reflected ray. A genuine reflection (it moves with the camera + ripples) that reads a
+    // procedural sky matching the land's atmosphere - so it costs nothing yet gives a real
+    // reflective, mirror-like surface. Stylised reflectivity (`refl`) keeps a good chunk of sky
+    // visible even from the top-down iso camera, where physical fresnel would be ~2% (= flat,
+    // dead water), ramping to a full mirror at grazing.
+    float refl = mix(0.36, 1.0, pow(1.0 - ndv, 3.0));
     vec3 R = reflect(-V, N);
     float up = clamp(R.y, 0.0, 1.0);
-    vec3 horizonCol = lights.fogColor.rgb;                       // far atmosphere band
-    vec3 zenithCol = mix(horizonCol, vec3(0.16, 0.34, 0.64), 0.8) * mix(0.22, 1.15, intensity);
-    vec3 sky = mix(horizonCol, zenithCol, pow(up, 0.55));
+    vec3 horizonCol = mix(lights.fogColor.rgb, pc.sunColor.rgb, 0.18) * mix(0.5, 1.12, intensity);
+    vec3 zenithCol = mix(horizonCol, vec3(0.20, 0.42, 0.74), 0.85) * mix(0.25, 1.2, intensity);
+    vec3 sky = mix(horizonCol, zenithCol, pow(up, 0.5));
     // The reflected sun: a tight disc plus a broad warm glow, smeared into a glittering streak by
     // the rippling normals.
     float rl = max(dot(R, L), 0.0);
-    sky += pc.sunColor.rgb * (pow(rl, 420.0) * 5.0 + pow(rl, 26.0) * 0.7) * intensity;
+    sky += pc.sunColor.rgb * (pow(rl, 300.0) * 7.0 + pow(rl, 22.0) * 1.0) * intensity;
 
-    vec3 color = mix(body, sky, fresnel);
+    vec3 color = mix(body, sky, refl);
 
     // --- Specular sun glints off the wave facets. ---
     vec3 H = normalize(L + V);
@@ -106,7 +107,8 @@ void main() {
         color *= mix(1.0, smoothstep(0.86, 0.32, vigR), 0.34 + 0.18 * lights.screen.z);
     }
 
-    // More transparent looking down (reflection weak), near-opaque mirror at grazing.
-    float alpha = mix(0.60, 0.96, fresnel);
+    // The more it reflects, the less it transmits: fairly transparent looking down (so the lily
+    // pads / fish / coral read through it), near-opaque mirror at grazing.
+    float alpha = mix(0.62, 0.96, refl);
     outColor = vec4(color, alpha);
 }
