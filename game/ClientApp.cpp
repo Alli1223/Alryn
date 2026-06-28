@@ -72,6 +72,7 @@ void ClientApp::on_init() {
     ox_leg_mesh_.create(renderer_->device(), build_ox_leg());
     deer_body_mesh_.create(renderer_->device(), build_deer_body());
     deer_leg_mesh_.create(renderer_->device(), build_deer_leg());
+    fish_body_mesh_.create(renderer_->device(), build_fish_body());
     // A unit rope segment (along +Y, 0..1) for the verlet harness traces; scaled per link.
     rope_mesh_.create(renderer_->device(),
                       primitives::box(Vec3{-0.5f, 0.0f, -0.5f}, Vec3{0.5f, 1.0f, 0.5f},
@@ -307,6 +308,7 @@ void ClientApp::on_update(Timestep dt) {
         update_wagon_smooth(dt); // ease wagon render positions toward the snapshot (kills jitter)
         update_ropes(dt);
         update_deer(dt);
+        update_fish(dt);
 
         if (terrain_ != nullptr && renderer_ != nullptr) {
             terrain_->update(local_feet(), renderer_->device());
@@ -378,6 +380,8 @@ void ClientApp::on_render() {
     draw_buffs();
     draw_particles();
     draw_deer();         // ambient wildlife grazing in the meadows
+    draw_fish();         // ambient fish swimming in nearby water (opaque - the water tints them)
+    draw_surf();         // foam waves lapping along the nearby shoreline
     draw_ambient_life(); // flock of birds by day, fireflies + an owl by night
 
     // Tree trunks (opaque, but they obey the peek-through dissolve so a trunk between
@@ -553,6 +557,7 @@ void ClientApp::on_shutdown() {
     ox_leg_mesh_.destroy();
     deer_body_mesh_.destroy();
     deer_leg_mesh_.destroy();
+    fish_body_mesh_.destroy();
     rope_mesh_.destroy();
     goods_mesh_.destroy();
     water_mesh_.destroy();

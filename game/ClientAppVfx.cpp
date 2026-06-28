@@ -423,6 +423,159 @@ void ClientApp::draw_deer() {
     }
 }
 
+void ClientApp::update_fish(Timestep dt) {
+    if (renderer_ == nullptr || world_seed_ == 0) {
+        return;
+    }
+    const Vec3 feet = local_feet();
+    auto ground = [&](f32 x, f32 z) { return worldgen::height(x, z, world_seed_); };
+    // The biome around the player decides the fish look: warm seas get bright tropical fish, cold /
+    // freshwater gets silvery / dark ones.
+    const auto biome = worldgen::biome_at(feet.x, feet.z, world_seed_);
+    const bool warm = worldgen::temperature(feet.x, feet.z, world_seed_) > 0.46f &&
+                      (biome == worldgen::Biome::Ocean || biome == worldgen::Biome::Beach);
+    static const Vec3 tropical[] = {{1.0f, 0.55f, 0.18f}, {1.0f, 0.82f, 0.25f}, {0.30f, 0.62f, 1.0f},
+                                    {0.95f, 0.42f, 0.55f}, {0.45f, 0.85f, 0.78f}};
+    static const Vec3 temperate[] = {{0.78f, 0.80f, 0.86f}, {0.55f, 0.62f, 0.60f}, {0.62f, 0.56f, 0.42f},
+                                     {0.70f, 0.74f, 0.82f}};
+
+    // Spawn a shoal in the water near the player. Each fish wants a wet spot (real water, a little
+    // below the waterline) within view; if none is found in a few tries we just hold the count.
+    auto wet_spot = [&](Vec3& out) {
+        for (int tries = 0; tries < 6; ++tries) {
+            const f32 a = frand(0.0f, TwoPi), r = frand(8.0f, 26.0f);
+            const Vec3 p{feet.x + std::cos(a) * r, 0.0f, feet.z + std::sin(a) * r};
+            const f32 g = ground(p.x, p.z);
+            if (g < worldgen::water_level - 0.5f) { // genuinely under water (not just a damp shore)
+                out = Vec3{p.x, glm::max(g + 0.25f, worldgen::water_level - frand(0.25f, 0.9f)), p.z};
+                return true;
+            }
+        }
+        return false;
+    };
+    int guard = 0;
+    while (fish_.size() < 7 && guard++ < 4) {
+        Fish f;
+        if (!wet_spot(f.pos)) {
+            break; // no water nearby - no fish this frame
+        }
+        f.yaw = frand(0.0f, TwoPi);
+        f.target = f.pos;
+        f.scale = frand(0.6f, 1.3f);
+        f.tint = warm ? tropical[static_cast<int>(frand(0.0f, 5.0f)) % 5]
+                      : temperate[static_cast<int>(frand(0.0f, 4.0f)) % 4];
+        fish_.push_back(f);
+    }
+
+    for (Fish& f : fish_) {
+        const f32 dist = glm::length(Vec2{f.pos.x - feet.x, f.pos.z - feet.z});
+        const f32 g = ground(f.pos.x, f.pos.z);
+        if (dist > 34.0f || g > worldgen::water_level - 0.3f) {
+            // wandered out of range or beached - respawn at a fresh wet spot (or cull if no water).
+            if (!wet_spot(f.pos)) {
+                f.pos.y = -1e6f; // mark for removal
+            }
+            f.retarget = 0.0f;
+            f.darting = false;
+            continue;
+        }
+        f.darting = dist < 6.0f; // dart away if the player wades close
+        f.retarget -= dt.seconds;
+        if (f.darting) {
+            const Vec2 away = glm::normalize(Vec2{f.pos.x - feet.x, f.pos.z - feet.z} + Vec2{1e-3f});
+            f.target = f.pos + Vec3{away.x, 0.0f, away.y} * 8.0f;
+        } else if (f.retarget <= 0.0f) {
+            const f32 a = frand(0.0f, TwoPi), r = frand(2.0f, 7.0f);
+            f.target = f.pos + Vec3{std::cos(a) * r, 0.0f, std::sin(a) * r};
+            f.retarget = frand(1.5f, 4.0f);
+        }
+        const Vec2 to{f.target.x - f.pos.x, f.target.z - f.pos.z};
+        const f32 td = glm::length(to);
+        const f32 spd = (f.darting ? 7.0f : 1.8f) * dt.seconds;
+        if (td > 0.1f) {
+            const Vec2 step = to / td * std::min(spd, td);
+            const f32 ng = ground(f.pos.x + step.x, f.pos.z + step.y);
+            if (ng < worldgen::water_level - 0.2f) { // only swim where it stays wet
+                f.pos.x += step.x;
+                f.pos.z += step.y;
+                f.yaw = std::atan2(step.y, step.x);
+            } else {
+                f.retarget = 0.0f; // hit the bank - pick a new heading
+            }
+            // hold just under the surface, above the bed
+            f.pos.y = glm::clamp(f.pos.y, ground(f.pos.x, f.pos.z) + 0.2f, worldgen::water_level - 0.12f);
+            f.wiggle += glm::length(step) * 6.0f + dt.seconds * (f.darting ? 18.0f : 7.0f);
+        } else {
+            f.wiggle += dt.seconds * 6.0f;
+        }
+    }
+    std::erase_if(fish_, [](const Fish& f) { return f.pos.y < -1e5f; });
+}
+
+void ClientApp::draw_fish() {
+    if (renderer_ == nullptr) {
+        return;
+    }
+    for (const Fish& f : fish_) {
+        // A swimming wiggle: oscillate the heading a touch so the body + tail sashay side to side.
+        const f32 wob = std::sin(f.wiggle) * (f.darting ? 0.45f : 0.28f);
+        const Mat4 m = glm::translate(Mat4{1.0f}, f.pos) *
+                       glm::rotate(Mat4{1.0f}, -(f.yaw + wob), Vec3{0.0f, 1.0f, 0.0f}) *
+                       glm::scale(Mat4{1.0f}, Vec3{f.scale});
+        renderer_->draw(fish_body_mesh_, m, Vec4{f.tint, 1.0f});
+    }
+}
+
+void ClientApp::draw_surf() {
+    if (renderer_ == nullptr || world_seed_ == 0) {
+        return;
+    }
+    const Vec3 feet = local_feet();
+    const f32 t = elapsed_;
+    auto ground = [&](f32 x, f32 z) { return worldgen::height(x, z, world_seed_); };
+    // Foam waves lapping the shore: scan a grid of WORLD cells around the player and, for cells that
+    // sit right on the waterline with both deeper water and dry land around them (a real shoreline,
+    // not open sea or inland), draw a foam patch whose size + opacity wash in and out on a sine wave.
+    // The wave's phase travels along the shore so the surf rolls rather than pulsing in place. Cells
+    // are world-anchored so the foam stays put on the beach as the camera moves.
+    constexpr f32 cell = 3.0f, radius = 27.0f;
+    const int bcx = static_cast<int>(std::floor(feet.x / cell));
+    const int bcz = static_cast<int>(std::floor(feet.z / cell));
+    const int cr = static_cast<int>(radius / cell) + 1;
+    for (int dz = -cr; dz <= cr; ++dz) {
+        for (int dx = -cr; dx <= cr; ++dx) {
+            const f32 wx = static_cast<f32>(bcx + dx) * cell + cell * 0.5f;
+            const f32 wz = static_cast<f32>(bcz + dz) * cell + cell * 0.5f;
+            const f32 gh = ground(wx, wz);
+            if (gh < worldgen::water_level - 0.4f || gh > worldgen::water_level + 0.45f) {
+                continue; // not in the surf band
+            }
+            const f32 hl = ground(wx - cell, wz), hr = ground(wx + cell, wz);
+            const f32 hu = ground(wx, wz - cell), hd = ground(wx, wz + cell);
+            const f32 lo = std::min(std::min(hl, hr), std::min(hu, hd));
+            const f32 hi = std::max(std::max(hl, hr), std::max(hu, hd));
+            if (lo > worldgen::water_level - 0.2f || hi < worldgen::water_level + 0.05f) {
+                continue; // needs water on one side + land on the other to be a real shore
+            }
+            const f32 dist = glm::length(Vec2{wx - feet.x, wz - feet.z});
+            if (dist > radius) {
+                continue;
+            }
+            const f32 fade = glm::smoothstep(radius, radius * 0.55f, dist);
+            // Wave phase travels along the shore (downhill gradient ~ shore-normal; project the cell
+            // along it so neighbouring foam crests are slightly out of phase => a rolling wave).
+            const Vec2 nrm{hr - hl, hd - hu};
+            const f32 along = glm::length(nrm) > 1e-4f ? glm::dot(Vec2{wx, wz}, Vec2{nrm.y, -nrm.x}) : (wx + wz);
+            const f32 wave = 0.5f + 0.5f * std::sin(t * 1.5f + along * 0.5f);
+            const f32 a = fade * (0.18f + 0.55f * wave);
+            const f32 sc = 1.1f + wave * 1.0f; // foam swells as the wave breaks
+            const Mat4 m = glm::translate(Mat4{1.0f}, Vec3{wx, worldgen::water_level + 0.04f, wz}) *
+                           glm::scale(Mat4{1.0f}, Vec3{sc, 0.06f, sc});
+            renderer_->draw_transparent(shape_sphere_, m, Vec4{0.92f, 0.97f, 1.0f, a});
+        }
+    }
+}
+
 void ClientApp::spawn_ability_vfx(PlayerRole role, u8 slot, const Vec3& feet, f32 yaw, const Vec3& aim) {
     const Vec3 chest = feet + Vec3{0.0f, 1.0f, 0.0f};
     const Vec3 facing{std::cos(yaw), 0.0f, std::sin(yaw)};

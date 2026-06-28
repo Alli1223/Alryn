@@ -230,6 +230,26 @@ MeshData build_deer_body() {
             Vec3{0.93f, 0.9f, 0.85f}); // white scut at the rump (hangs at the rear, not on the spine)
     return m;
 }
+MeshData build_fish_body() {
+    MeshData m;
+    const Vec3 body{0.86f, 0.87f, 0.92f}; // light base; tinted per-fish at draw time
+    const Vec3 fin{0.74f, 0.76f, 0.84f};
+    const Vec3 dark{0.22f, 0.24f, 0.30f};
+    // Faces local +X. A flattened spindle (thin in Z) tapering to nose + tail, with fins.
+    add_box(m, {-0.16f, -0.10f, -0.035f}, {0.26f, 0.12f, 0.035f}, body); // main body
+    add_box(m, {0.22f, -0.05f, -0.024f}, {0.40f, 0.07f, 0.024f}, body);  // head / snout taper
+    add_box(m, {-0.28f, -0.07f, -0.020f}, {-0.14f, 0.08f, 0.020f}, body); // caudal peduncle
+    add_box(m, {-0.46f, -0.14f, -0.012f}, {-0.26f, 0.16f, 0.012f}, fin);  // forked tail fin (tall, thin)
+    add_box(m, {-0.04f, 0.10f, -0.010f}, {0.12f, 0.24f, 0.010f}, fin);    // dorsal fin
+    for (const f32 sz : {-1.0f, 1.0f}) {                                  // pectoral fins
+        const f32 z0 = sz > 0.0f ? 0.035f : -0.10f;
+        const f32 z1 = sz > 0.0f ? 0.10f : -0.035f;
+        add_box(m, {0.02f, -0.06f, z0}, {0.16f, 0.02f, z1}, fin);
+    }
+    add_box(m, {0.30f, 0.0f, -0.045f}, {0.36f, 0.06f, 0.045f}, dark);     // eye band
+    return m;
+}
+
 MeshData build_deer_leg() {
     MeshData m;
     const Vec3 hide{0.5f, 0.35f, 0.21f};

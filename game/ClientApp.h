@@ -384,6 +384,9 @@ private:
     void draw_oxen(const Vec3& pos, f32 yaw); // a yoked pair of draft oxen pulling the wagon
     void update_deer(Timestep dt);            // wander/graze/flee the ambient deer (client-side)
     void draw_deer();
+    void update_fish(Timestep dt);            // swim/dart the ambient fish in nearby water (client-side)
+    void draw_fish();
+    void draw_surf();                         // foam waves washing along the nearby shoreline
     void draw_particles();
     // Ambient wildlife VFX (no networking): a flock of birds drifting across the sky by day, and
     // at night a slow gliding owl plus fireflies. The fireflies are anchored to fixed WORLD cells
@@ -866,6 +869,19 @@ private:
         bool fleeing = false;
     };
     std::vector<Deer> deer_;
+    Mesh fish_body_mesh_;       // ambient wildlife: small fish that swim in the water near the player
+    // A client-side ambient fish (not networked): swims just under the surface, darts from the player.
+    struct Fish {
+        Vec3 pos{0.0f};
+        f32 yaw = 0.0f;
+        f32 wiggle = 0.0f; // swim-tail phase
+        Vec3 target{0.0f};
+        f32 retarget = 0.0f;
+        f32 scale = 1.0f;
+        Vec3 tint{1.0f}; // biome colour (tropical bright vs silver/dark)
+        bool darting = false;
+    };
+    std::vector<Fish> fish_;
     Mesh rope_mesh_;            // a unit harness-trace link, drawn per rope segment
     Mesh goods_mesh_;           // a cargo crate (spilled on the ground / carried by a player)
     std::unordered_map<u32, f32> wagon_roll_;  // accumulated wheel spin per wagon id

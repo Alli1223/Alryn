@@ -140,4 +140,9 @@ inline const Vec3 kDeerLegs[4] = {
     {-0.4f, kDeerLegHipY, -0.13f},
 };
 
+// A small low-poly fish (ambient wildlife in the water): a laterally-flattened spindle body with
+// a forked tail + dorsal/pectoral fins, facing local +X. Built in a light base colour so the
+// client can tint it per-fish by biome (bright tropical vs silver/dark freshwater).
+MeshData build_fish_body();
+
 } // namespace alryn

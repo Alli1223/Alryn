@@ -179,6 +179,8 @@ Asset build_asset(const std::string& cat, int v) {
             for (Vertex& v : leg.vertices) v.position += lo;
             a.parts.push_back({std::move(leg), Vec4{1.0f}});
         }
+    } else if (cat == "fish") {
+        a.parts.push_back({build_fish_body(), Vec4{1.0f}});
     } else if (cat == "deer") {
         a.parts.push_back({build_deer_body(), Vec4{1.0f}});
         for (const Vec3& lo : kDeerLegs) {
