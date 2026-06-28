@@ -481,6 +481,67 @@ TEST_CASE("Scene shot: the wagon on roads across biomes") {
     CHECK(shot > 0);
 }
 
+// The water's edge: a warm shoreline where the new shore stones, fringing reeds, floating lily
+// pads and submerged coral cluster around the waterline. (The OffscreenRenderer draws no water
+// plane, so the lily pads + reef sit "in the open" - which makes them easy to eyeball.)
+TEST_CASE("Scene shot: a shoreline (stones, reeds, lily pads, coral) renders") {
+    test::OffscreenRenderer renderer;
+    if (!renderer.init(960, 600)) {
+        MESSAGE("No Vulkan device/shaders - skipping shoreline shot");
+        return;
+    }
+    // Hunt a warm coastal spot: a waterline foot with both shallow water and dry land nearby (so a
+    // mix of stones/reeds on the bank and lily pads/coral out in the shallows can scatter), warmest
+    // first so the tropical coral shows. Scan a few seeds.
+    auto score_at = [](u32 seed, const Vec2& p) -> f32 {
+        const f32 h = worldgen::height(p.x, p.y, seed);
+        if (h < worldgen::water_level - 0.3f || h > worldgen::water_level + 1.0f) return -1.0f;
+        int water = 0, land = 0;
+        for (int a = 0; a < 8; ++a) {
+            const f32 ang = TwoPi * static_cast<f32>(a) / 8.0f;
+            const Vec2 q = p + Vec2{std::cos(ang), std::sin(ang)} * 9.0f;
+            const f32 hh = worldgen::height(q.x, q.y, seed);
+            if (hh < worldgen::water_level - 1.0f) ++water;
+            if (hh > worldgen::water_level + 0.5f) ++land;
+        }
+        if (water == 0 || land == 0) return -1.0f; // want a real shoreline, not open sea or dry
+        return worldgen::temperature(p.x, p.y, seed) * 3.0f +
+               static_cast<f32>(std::min(water, 3) + std::min(land, 3));
+    };
+    u32 best_seed = 1337u;
+    Vec2 best{0.0f};
+    f32 best_score = -1.0f;
+    for (const u32 seed : {1337u, 4242u, 99u, 777u, 51u}) {
+        for (int j = -70; j <= 70; ++j) {
+            for (int i = -70; i <= 70; ++i) {
+                const Vec2 p{static_cast<f32>(i) * 8.0f, static_cast<f32>(j) * 8.0f};
+                const f32 s = score_at(seed, p);
+                if (s > best_score) {
+                    best_score = s;
+                    best = p;
+                    best_seed = seed;
+                }
+            }
+        }
+        if (best_score > 6.0f) break; // good enough - a warm, well-mixed shore
+    }
+    REQUIRE(best_score > 0.0f);
+
+    // Look from the land down across the waterline (downhill = toward the water).
+    const f32 gy = worldgen::height(best.x, best.y, best_seed);
+    const Vec2 grad{worldgen::height(best.x + 2.0f, best.y, best_seed) -
+                        worldgen::height(best.x - 2.0f, best.y, best_seed),
+                    worldgen::height(best.x, best.y + 2.0f, best_seed) -
+                        worldgen::height(best.x, best.y - 2.0f, best_seed)};
+    const Vec2 down = glm::length(grad) > 1e-4f ? -glm::normalize(grad) : Vec2{1.0f, 0.0f};
+    const Vec3 d{down.x, 0.0f, down.y};
+    constexpr f32 span = 22.0f;
+    const Vec3 eye = -d * (span * 0.5f) + Vec3{span * 0.22f, gy + span * 0.5f, span * 0.16f};
+    const Vec3 tgt = d * (span * 0.45f) + Vec3{0.0f, worldgen::water_level - 0.6f, 0.0f};
+    render_world(renderer, best_seed, best, span, (executable_dir() / "shore.ppm").string(), 1.0f,
+                 1.0f, &eye, &tgt);
+}
+
 // A wagon crossing a plank bridge where a road spans a river - the new river + bridge feature.
 TEST_CASE("Scene shot: a wagon crossing a river bridge") {
     test::OffscreenRenderer renderer;

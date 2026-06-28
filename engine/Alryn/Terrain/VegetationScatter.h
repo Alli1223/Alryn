@@ -298,6 +298,118 @@ inline MeshData build_vegetation(int cx, int cz, f32 chunk_world, u32 seed) {
                  /*rigid=*/true);
     });
 
+    // ===== Water's edge & underwater life ==================================================
+    // The shoreline + shallows get their own life, gated by biome so each body of water reads
+    // right: pebbly/sandy stones along every shore, cattail reeds fringing temperate freshwater,
+    // floating lily pads on calm ponds & slow rivers, and colourful coral on warm shallow seabeds.
+    //
+    // These passes are confined to chunks that actually touch the waterline. The vast majority of
+    // chunks are dry inland ground, so a cheap 3x3 height probe lets the worker skip the lot for
+    // them (keeping the streaming meshing path fast) - only coastal / lakeside / river chunks pay
+    // for the per-cell scatter below.
+    bool near_water = false;
+    for (int sj = 0; sj <= 2 && !near_water; ++sj) {
+        for (int si = 0; si <= 2 && !near_water; ++si) {
+            const f32 hh = worldgen::height(x0 + chunk_world * 0.5f * static_cast<f32>(si),
+                                            z0 + chunk_world * 0.5f * static_cast<f32>(sj), seed);
+            // A water-touching chunk dips toward the waterline yet isn't below the reef seabed.
+            if (hh < worldgen::water_level + 1.6f && hh > worldgen::water_level - 5.0f) {
+                near_water = true;
+            }
+        }
+    }
+    if (near_water) {
+    // ---- Shore stones: pebbles + small boulders strewn along the waterline of every shore.
+    for_cells(2.0f, seed + 6100u, [&](int gx, int gz, f32 wx, f32 wz) {
+        const f32 gh = worldgen::height(wx, wz, seed);
+        if (gh < worldgen::water_level - 0.5f || gh > worldgen::water_level + 1.4f) return; // wet band
+        if (detail::hash01(detail::tree_hash(gx, gz, seed + 6103u)) > 0.5f) return;
+        const auto biome = worldgen::biome_at(wx, wz, seed);
+        Vec3 stone{0.46f, 0.47f, 0.50f}; // cool grey by default
+        if (biome == worldgen::Biome::Desert || biome == worldgen::Biome::Beach) {
+            stone = Vec3{0.72f, 0.64f, 0.48f}; // warm sandstone on sandy coasts
+        } else if (biome == worldgen::Biome::Bog) {
+            stone = Vec3{0.34f, 0.36f, 0.33f}; // dark wet stone in the swamp
+        }
+        const int var = static_cast<int>(detail::tree_hash(gx, gz, seed + 6104u) % 3u);
+        const int count = 1 + static_cast<int>(detail::hash01(detail::tree_hash(gx, gz, seed + 6106u)) * 2.0f);
+        for (int k = 0; k < count; ++k) {
+            const f32 ox = (detail::hash01(detail::tree_hash(gx * 5 + k, gz, seed + 6107u)) - 0.5f) * 1.4f;
+            const f32 oz = (detail::hash01(detail::tree_hash(gx, gz * 5 + k, seed + 6108u)) - 0.5f) * 1.4f;
+            const f32 gh2 = worldgen::height(wx + ox, wz + oz, seed);
+            if (gh2 < worldgen::water_level - 0.8f) continue; // not out in deep water
+            const f32 shade = 0.85f + detail::hash01(detail::tree_hash(gx + k, gz, seed + 6105u)) * 0.3f;
+            const f32 sc = 0.16f + detail::hash01(detail::tree_hash(gx + k, gz, seed + 6109u)) * 0.5f;
+            place_at(primitives::rock(var, stone), wx + ox, wz + oz, gh2,
+                     detail::hash01(detail::tree_hash(gx + k, gz, seed + 6110u)) * TwoPi, sc, 0.7f,
+                     Vec3{shade}, /*rigid=*/true);
+        }
+    });
+
+    // ---- Shoreline reeds: cattails fringing temperate freshwater edges (ponds / rivers / lake
+    // shores), beyond the bog where the lush forest-floor reeds already grow.
+    for_cells(1.3f, seed + 6400u, [&](int gx, int gz, f32 wx, f32 wz) {
+        const f32 gh = worldgen::height(wx, wz, seed);
+        if (gh < worldgen::water_level - 0.3f || gh > worldgen::water_level + 0.55f) return; // at the edge
+        if (worldgen::temperature(wx, wz, seed) > 0.62f) return; // not the hot desert shore
+        if (worldgen::slope(wx, wz, seed) > 1.0f) return;         // not on a steep bank
+        if (detail::hash01(detail::tree_hash(gx, gz, seed + 6403u)) > 0.55f) return;
+        const Vec3 reedc = glm::mix(Vec3{0.32f, 0.42f, 0.24f}, Vec3{0.46f, 0.52f, 0.30f},
+                                    detail::hash01(detail::tree_hash(gx, gz, seed + 6404u)));
+        const int n = 3 + static_cast<int>(detail::hash01(detail::tree_hash(gx, gz, seed + 6405u)) * 3.0f);
+        const f32 sc = 0.8f + detail::hash01(detail::tree_hash(gx, gz, seed + 6406u)) * 0.6f;
+        place_at(primitives::reed(n, reedc), wx, wz, gh,
+                 detail::hash01(detail::tree_hash(gx, gz, seed + 6407u)) * TwoPi, sc, 1.0f, Vec3{1.0f});
+    });
+
+    // ---- Lily pads: floating leaves + blooms on calm, shallow FRESH water. A nearby-land check
+    // keeps them on enclosed ponds / slow rivers / bog pools, off the open (salt) sea.
+    auto near_land = [&](f32 x, f32 z) {
+        for (const Vec2& d : {Vec2{5.0f, 0.0f}, Vec2{-5.0f, 0.0f}, Vec2{0.0f, 5.0f}, Vec2{0.0f, -5.0f}}) {
+            if (worldgen::height(x + d.x, z + d.y, seed) > worldgen::water_level + 0.2f) return true;
+        }
+        return false;
+    };
+    for_cells(1.5f, seed + 6300u, [&](int gx, int gz, f32 wx, f32 wz) {
+        const f32 gh = worldgen::height(wx, wz, seed);
+        if (gh > worldgen::water_level - 0.04f || gh < worldgen::water_level - 1.8f) return; // shallow water
+        const f32 temp = worldgen::temperature(wx, wz, seed);
+        if (temp < 0.18f || temp > 0.62f) return;        // not frozen, not desert
+        if (worldgen::slope(wx, wz, seed) > 0.7f) return; // calm water only
+        if (!near_land(wx, wz)) return;                   // a pond / river, not the open sea
+        if (detail::hash01(detail::tree_hash(gx, gz, seed + 6303u)) > 0.5f) return;
+        const Vec3 pad = glm::mix(Vec3{0.18f, 0.44f, 0.22f}, Vec3{0.24f, 0.50f, 0.26f},
+                                  detail::hash01(detail::tree_hash(gx, gz, seed + 6304u)));
+        const int count = 1 + static_cast<int>(detail::hash01(detail::tree_hash(gx, gz, seed + 6305u)) * 3.0f);
+        for (int k = 0; k < count; ++k) {
+            const f32 ox = (detail::hash01(detail::tree_hash(gx * 7 + k, gz, seed + 6306u)) - 0.5f) * 1.1f;
+            const f32 oz = (detail::hash01(detail::tree_hash(gx, gz * 7 + k, seed + 6307u)) - 0.5f) * 1.1f;
+            if (worldgen::height(wx + ox, wz + oz, seed) > worldgen::water_level - 0.04f) continue; // stay wet
+            const int var = static_cast<int>(detail::tree_hash(gx + k, gz, seed + 6308u) % 3u);
+            const f32 sc = 0.8f + detail::hash01(detail::tree_hash(gx + k, gz, seed + 6309u)) * 0.7f;
+            place_at(primitives::lily_pad(var, pad), wx + ox, wz + oz, worldgen::water_level + 0.04f,
+                     detail::hash01(detail::tree_hash(gx + k, gz, seed + 6310u)) * TwoPi, sc, 1.0f,
+                     Vec3{1.0f}, /*rigid=*/true);
+        }
+    });
+
+    // ---- Coral: colourful reefs on warm, shallow seabeds (underwater, tropical only).
+    static const Vec3 reefcol[] = {{0.94f, 0.40f, 0.45f}, {0.96f, 0.62f, 0.28f}, {0.62f, 0.42f, 0.86f},
+                                   {0.95f, 0.45f, 0.70f}, {0.38f, 0.74f, 0.66f}};
+    for_cells(2.4f, seed + 6200u, [&](int gx, int gz, f32 wx, f32 wz) {
+        const f32 gh = worldgen::height(wx, wz, seed);
+        if (gh > worldgen::water_level - 0.6f || gh < worldgen::water_level - 4.5f) return; // submerged shallows
+        if (worldgen::temperature(wx, wz, seed) < 0.46f) return; // cold seas grow no coral
+        if (detail::hash01(detail::tree_hash(gx, gz, seed + 6203u)) > 0.45f) return;
+        const u32 ci = detail::tree_hash(gx, gz, seed + 6204u) % 5u;
+        const int var = static_cast<int>(detail::tree_hash(gx, gz, seed + 6205u) % 3u);
+        const f32 sc = 0.7f + detail::hash01(detail::tree_hash(gx, gz, seed + 6206u)) * 0.9f;
+        place_at(primitives::coral(var, reefcol[ci]), wx, wz, gh,
+                 detail::hash01(detail::tree_hash(gx, gz, seed + 6207u)) * TwoPi, sc, 1.0f,
+                 Vec3{1.0f}, /*rigid=*/true);
+    });
+    } // near_water
+
     // ---- Desert dry tufts: sparse bleached grass clumps scattered between the dunes.
     for_cells(1.2f, seed + 5800u, [&](int gx, int gz, f32 wx, f32 wz) {
         f32 moist;

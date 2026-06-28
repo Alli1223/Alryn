@@ -88,6 +88,8 @@ int variant_count(const std::string& cat) {
     if (cat == "crystal") return 4;
     if (cat == "monument") return 3;
     if (cat == "cactus") return 2;
+    if (cat == "lily") return 3;
+    if (cat == "coral") return 3;
     if (cat == "bush" || cat == "rock" || cat == "log") return 3;
     if (cat == "fence" || cat == "rail" || cat == "wall" || cat == "fern") return 2;
     return 1;
@@ -199,6 +201,11 @@ Asset build_asset(const std::string& cat, int v) {
         a.parts.push_back({primitives::reed(5), Vec4{1.0f}});
     } else if (cat == "cactus") {
         a.parts.push_back({primitives::cactus(v), Vec4{1.0f}});
+    } else if (cat == "lily") {
+        a.parts.push_back({primitives::lily_pad(v), Vec4{1.0f}});
+    } else if (cat == "coral") {
+        static const Vec3 reef[] = {{0.94f, 0.40f, 0.45f}, {0.96f, 0.62f, 0.28f}, {0.62f, 0.42f, 0.86f}};
+        a.parts.push_back({primitives::coral(v, reef[v % 3]), Vec4{1.0f}});
     }
     return a;
 }

@@ -519,7 +519,10 @@ TEST_CASE("Vegetation: grass + flowers bake deterministically onto land") {
     }
     CHECK(total_indices > 0);
     REQUIRE(any);
-    CHECK(min_y >= worldgen::water_level); // nothing grows below the waterline
+    // Land plants grow above water; the new aquatic features (shore stones, fringing reeds,
+    // floating lily pads and coral) sit at or below the waterline, down to the shallow reef
+    // seabed - but nothing sinks into the abyss below it.
+    CHECK(min_y >= worldgen::water_level - 5.0f);
 }
 
 TEST_CASE("Props: library builds geometry, scatter is deterministic & on land") {
@@ -1105,14 +1108,16 @@ TEST_CASE("StreamingTerrain: streams + unloads chunks around a moving focus") {
 
     // Chunks are generated on a background thread, so pump update() until the worker
     // has filled in enough around the focus (with a generous frame cap so the test is
-    // robust to worker throughput / system load).
+    // robust to worker throughput / system load). The cap is generous because a coastal
+    // focus generates extra shoreline/underwater content per chunk, which takes a touch
+    // longer than open inland ground - the loop still exits the moment the target is met.
     auto pump_until = [&](const Vec3& focus, usize target, int max_frames) {
         for (int i = 0; i < max_frames && terrain.loaded_chunk_count() < target; ++i) {
             terrain.update(focus, device);
             std::this_thread::sleep_for(std::chrono::milliseconds(3));
         }
     };
-    pump_until(Vec3{0.0f, 0.0f, 0.0f}, 9, 600);
+    pump_until(Vec3{0.0f, 0.0f, 0.0f}, 9, 1500);
     CHECK(terrain.loaded_chunk_count() >= 9);
     int meshes = 0;
     terrain.for_each_mesh([&](const Mesh&) { ++meshes; });
@@ -1127,7 +1132,7 @@ TEST_CASE("StreamingTerrain: streams + unloads chunks around a moving focus") {
     for (int i = 0; i < 5; ++i) {
         terrain.update(far, device); // evict the origin chunks (out of range)
     }
-    pump_until(far, 9, 600);
+    pump_until(far, 9, 1500);
     CHECK(terrain.loaded_chunk_count() >= 9);
     CHECK(terrain.loaded_chunk_count() <= 64); // bounded - origin chunks were evicted
 

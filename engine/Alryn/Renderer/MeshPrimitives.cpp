@@ -524,6 +524,102 @@ MeshData reed(int blades, const Vec3& color) {
     return m;
 }
 
+MeshData lily_pad(int variant, const Vec3& color) {
+    MeshData m;
+    const u32 h = static_cast<u32>(variant) * 2654435761u + 11u;
+    const f32 r = 0.30f + vrnd(h, 1) * 0.20f;
+    const f32 dome = 0.03f;
+    const Vec3 ctr{0.0f, dome, 0.0f};
+    const Vec3 below{0.0f, -1.0f, 0.0f}; // orient the fan's normal upward
+    // Pads darken + redden toward the wavy rim (the reference's water-lily leaves).
+    const Vec3 rim = glm::clamp(color * 0.7f + Vec3{0.14f, -0.02f, -0.04f}, Vec3{0.0f}, Vec3{1.0f});
+    constexpr f32 notch = 0.5f; // angular half-width of the wedge cut (the lily-pad slit)
+    constexpr int seg = 18;
+    Vec3 prev{};
+    for (int i = 0; i <= seg; ++i) {
+        const f32 a = notch + (TwoPi - 2.0f * notch) * static_cast<f32>(i) / static_cast<f32>(seg);
+        const f32 wob = 0.86f + 0.16f * std::sin(a * 5.0f + vrnd(h, 3) * 6.2f); // scalloped edge
+        const Vec3 p{std::cos(a) * r * wob, 0.0f, std::sin(a) * r * wob};
+        if (i > 0) {
+            emit_tri(m, ctr, prev, p, below, glm::mix(color, rim, 0.55f));
+        }
+        prev = p;
+    }
+    // A water-lily bloom rises off some pads: a gold heart ringed by two tiers of petals.
+    if (vrnd(h, 7) < 0.34f) {
+        const Vec3 petal = vrnd(h, 8) < 0.5f ? Vec3{0.97f, 0.96f, 0.99f} : Vec3{0.97f, 0.64f, 0.82f};
+        append(m, blob(0.05f, 0.05f, dome + 0.05f, Vec3{0.95f, 0.82f, 0.28f})); // gold centre
+        for (int tier = 0; tier < 2; ++tier) {
+            const int petals = 6 + tier * 2;
+            const f32 lift = 0.40f - tier * 0.18f; // outer petals lie flatter
+            const f32 reach = 0.10f + tier * 0.05f;
+            for (int p = 0; p < petals; ++p) {
+                const f32 a = TwoPi * static_cast<f32>(p) / static_cast<f32>(petals) + tier * 0.4f;
+                const Vec3 d{std::cos(a), 0.0f, std::sin(a)};
+                const Vec3 root = ctr + Vec3{0.0f, 0.04f, 0.0f} + d * 0.03f;
+                const Vec3 tip = root + d * reach + Vec3{0.0f, lift * reach, 0.0f};
+                ribbon(m, {root, glm::mix(root, tip, 0.5f), tip}, 0.022f, 0.004f,
+                       glm::normalize(Vec3{-d.z, 0.0f, d.x}), petal * 0.9f, petal);
+            }
+        }
+    }
+    return m;
+}
+
+MeshData coral(int variant, const Vec3& color) {
+    MeshData m;
+    const u32 h = static_cast<u32>(variant) * 2246822519u + 13u;
+    const Vec3 tipc = glm::clamp(color * 1.18f + Vec3{0.05f}, Vec3{0.0f}, Vec3{1.0f});
+    const int form = variant % 3;
+    if (form == 0) {
+        // Staghorn: a stubby base sprouting a few upward-forking branches.
+        append(m, round_column(0.09f, 0.16f, color * 0.82f, 6));
+        const int arms = 3 + static_cast<int>(vrnd(h, 1) * 3.0f);
+        for (int a = 0; a < arms; ++a) {
+            const f32 ang = TwoPi * static_cast<f32>(a) / static_cast<f32>(arms) + vrnd(h, a * 3) * 0.7f;
+            const Vec3 base{std::cos(ang) * 0.06f, 0.13f, std::sin(ang) * 0.06f};
+            const Vec3 dir = glm::normalize(Vec3{std::cos(ang) * 0.55f, 1.0f, std::sin(ang) * 0.55f});
+            const f32 len = 0.28f + vrnd(h, a * 3 + 1) * 0.22f;
+            limb(m, base, dir, len, 0.05f, 0.03f, color, 5);
+            const Vec3 elbow = base + dir * len;
+            const Vec3 d2 = glm::normalize(dir + Vec3{(vrnd(h, a * 3 + 2) - 0.5f) * 0.9f, 0.5f,
+                                                      (vrnd(h, a * 3 + 5) - 0.5f) * 0.9f});
+            limb(m, elbow, d2, len * 0.62f, 0.03f, 0.018f, tipc, 5);
+        }
+    } else if (form == 1) {
+        // Brain coral: a lumpy rounded dome with a few extra knobs.
+        append(m, round_blob(0.25f, 0.17f, Vec3{0.0f, 0.10f, 0.0f}, color, 4, 8));
+        for (int b = 0; b < 4; ++b) {
+            const f32 ang = TwoPi * static_cast<f32>(b) / 4.0f + vrnd(h, b) * 0.8f;
+            const f32 rr = 0.13f + vrnd(h, b + 4) * 0.07f;
+            MeshData knob = round_blob(0.08f, 0.07f, Vec3{0.0f}, tipc, 3, 6);
+            for (Vertex& v : knob.vertices) {
+                v.position += Vec3{std::cos(ang) * rr, 0.13f, std::sin(ang) * rr};
+            }
+            append(m, knob);
+        }
+    } else {
+        // Sea fan: a standing, fluted vertical plate that fans out from a short stalk.
+        append(m, round_column(0.05f, 0.10f, color * 0.8f, 5));
+        const Vec3 below{0.0f, 0.0f, -1.0f};
+        constexpr int ribs = 9;
+        const f32 span = 0.34f, top = 0.46f;
+        for (int i = 0; i < ribs; ++i) {
+            const f32 u0 = static_cast<f32>(i) / ribs - 0.5f;
+            const f32 u1 = static_cast<f32>(i + 1) / ribs - 0.5f;
+            const f32 base = 0.1f;
+            const f32 wob0 = 0.78f + 0.22f * std::sin(u0 * 9.0f + vrnd(h, 2) * 6.0f);
+            const f32 wob1 = 0.78f + 0.22f * std::sin(u1 * 9.0f + vrnd(h, 2) * 6.0f);
+            const Vec3 a0{u0 * span, base, 0.0f}, a1{u1 * span, base, 0.0f};
+            const Vec3 b0{u0 * span * 1.7f, base + top * wob0, 0.0f};
+            const Vec3 b1{u1 * span * 1.7f, base + top * wob1, 0.0f};
+            emit_tri(m, a0, b0, b1, below, color);
+            emit_tri(m, a0, b1, a1, below, glm::mix(color, tipc, 0.6f));
+        }
+    }
+    return m;
+}
+
 MeshData cactus(int variant, const Vec3& color) {
     MeshData m;
     const f32 th = 1.35f + 0.55f * static_cast<f32>(variant & 1); // trunk height
