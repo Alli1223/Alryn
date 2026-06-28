@@ -27,52 +27,74 @@ layout(set = 0, binding = 2) uniform Lights {
     vec4 screen;   // xy = resolution, z = gloom
 } lights;
 
+float hash21(vec2 p) {
+    p = fract(p * vec2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+}
+
 void main() {
     vec3 N = normalize(vNormal);
     vec3 camPos = pc.params.yzw;
     vec3 V = normalize(camPos - vWorldPos);
     vec3 L = normalize(pc.sun.xyz);
     float intensity = pc.sun.w;
-
-    // Fresnel: more opaque/reflective at grazing angles.
-    float fresnel = pow(1.0 - max(dot(N, V), 0.0), 3.0);
-
-    vec3 deep = vec3(0.05, 0.26, 0.55);    // rich blue depths
-    vec3 shallow = vec3(0.18, 0.52, 0.74); // vibrant shallow blue
-    vec3 color = mix(deep, shallow, clamp(N.y, 0.0, 1.0));
-
-    // Daylight tints the water and lifts it; at night it goes dark and steely.
-    color *= mix(0.22, 1.08, intensity);
-    color *= mix(vec3(0.55, 0.6, 0.8), pc.sunColor.rgb, intensity);
-
-    // Specular sun glints off the wave facets + a sky-reflection lift at grazing.
-    vec3 H = normalize(L + V);
-    float ndh = max(dot(N, H), 0.0);
-    float spec = pow(ndh, 64.0) * intensity;
-    color += pc.sunColor.rgb * spec * 0.8;
-    color += fresnel * 0.25 * mix(0.2, 1.0, intensity);
-
-    // Glistening sparkle: animated high-frequency highlights, densest along the
-    // sun's reflection, so the water twinkles with moving bright spots.
     float t = pc.params.x;
+
+    // Schlick Fresnel: water is barely reflective looking straight down (you see into it) and
+    // becomes a near-mirror at grazing angles - the key to "real" looking reflective water.
+    float ndv = max(dot(N, V), 0.0);
+    float fresnel = 0.02 + 0.98 * pow(1.0 - ndv, 5.0);
+
+    // --- Water body: rich blue depths fading to a vibrant shallow tint on the wave faces. ---
+    vec3 deep = vec3(0.02, 0.13, 0.32);
+    vec3 shallow = vec3(0.10, 0.42, 0.62);
+    vec3 body = mix(deep, shallow, clamp(N.y, 0.0, 1.0));
+    body *= mix(0.18, 1.06, intensity);                          // dark + steely at night
+    body *= mix(vec3(0.50, 0.58, 0.80), pc.sunColor.rgb, intensity);
+
+    // --- Planar reflection: mirror the view across the wave normal and look up the sky + sun
+    // along the reflected ray. This is a genuine reflection (moves with the camera + waves), it
+    // just reads a procedural sky (matching the land's atmosphere haze) instead of a render
+    // target - so it costs nothing yet gives the surface a real reflective, mirror-like quality.
+    vec3 R = reflect(-V, N);
+    float up = clamp(R.y, 0.0, 1.0);
+    vec3 horizonCol = lights.fogColor.rgb;                       // far atmosphere band
+    vec3 zenithCol = mix(horizonCol, vec3(0.16, 0.34, 0.64), 0.8) * mix(0.22, 1.15, intensity);
+    vec3 sky = mix(horizonCol, zenithCol, pow(up, 0.55));
+    // The reflected sun: a tight disc plus a broad warm glow, smeared into a glittering streak by
+    // the rippling normals.
+    float rl = max(dot(R, L), 0.0);
+    sky += pc.sunColor.rgb * (pow(rl, 420.0) * 5.0 + pow(rl, 26.0) * 0.7) * intensity;
+
+    vec3 color = mix(body, sky, fresnel);
+
+    // --- Specular sun glints off the wave facets. ---
+    vec3 H = normalize(L + V);
+    float spec = pow(max(dot(N, H), 0.0), 130.0) * intensity;
+    color += pc.sunColor.rgb * spec * 1.2;
+
+    // --- Glistening sparkle: animated high-frequency highlights, densest along the sun's
+    // reflection, so the water twinkles with moving bright spots. ---
     vec2 sp = vWorldPos.xz;
     float tw = sin(dot(sp, vec2(12.9, 7.3)) + t * 3.1) *
                sin(dot(sp, vec2(-5.7, 9.1)) - t * 2.3) *
                sin(dot(sp, vec2(3.1, -4.4)) + t * 1.7);
-    float glint = smoothstep(0.72, 1.0, tw) * pow(ndh, 20.0) * intensity;
-    color += pc.sunColor.rgb * glint * 2.2;
+    float glint = smoothstep(0.7, 1.0, tw) * pow(rl, 16.0) * intensity;
+    color += pc.sunColor.rgb * glint * 2.0;
 
-    // Foam: scrolling sine bands crest into white foam, concentrated on the steeper wave faces, so
-    // the surface reads alive + frothy rather than a flat sheet (the reference's foamy water).
-    vec2 fp = vWorldPos.xz * 0.55;
+    // --- Foam: scrolling sine bands crest into froth on the steep wave faces, broken up by noise
+    // so it reads as churning foam rather than painted stripes. ---
+    vec2 fp = vWorldPos.xz * 0.5;
     float fb = sin(fp.x * 1.3 + t * 0.8) * sin(fp.y * 1.1 - t * 0.6) + 0.55 * sin((fp.x + fp.y) * 0.9 + t * 1.1);
-    float crest = smoothstep(0.45, 1.0, 1.0 - N.y); // foam rides the tilted wave faces
-    float foam = smoothstep(0.72, 1.0, fb) * (0.35 + 0.65 * crest);
-    color = mix(color, vec3(0.9, 0.95, 1.0), foam * mix(0.3, 0.85, intensity));
+    float crest = smoothstep(0.5, 1.0, 1.0 - N.y);              // foam rides the tilted wave faces
+    float foam = smoothstep(0.7, 1.0, fb) * (0.3 + 0.7 * crest);
+    foam *= 0.45 + 0.55 * hash21(floor(vWorldPos.xz * 3.0) + floor(t * 2.0));
+    color = mix(color, vec3(0.92, 0.96, 1.0), foam * mix(0.25, 0.82, intensity));
 
     // Saturation lift so the pool reads vibrant blue (matching the world re-grade), not muddy teal.
     float wlum = dot(color, vec3(0.2126, 0.7152, 0.0722));
-    color = mix(vec3(wlum), color, 1.28);
+    color = mix(vec3(wlum), color, 1.22);
 
     // Fold the water into the atmosphere: haze with distance and darken toward the frame edge,
     // so it sits in the same gloom as the land instead of reading as a bright cut-out.
@@ -84,6 +106,7 @@ void main() {
         color *= mix(1.0, smoothstep(0.86, 0.32, vigR), 0.34 + 0.18 * lights.screen.z);
     }
 
-    float alpha = mix(0.5, 0.92, fresnel);
+    // More transparent looking down (reflection weak), near-opaque mirror at grazing.
+    float alpha = mix(0.60, 0.96, fresnel);
     outColor = vec4(color, alpha);
 }
