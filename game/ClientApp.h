@@ -255,6 +255,7 @@ private:
         u8 role = 255;  // PlayerRole the model is built for (255 = none yet -> force a build)
         Vec3 last_pos{0.0f};
         f32 speed = 0.0f;
+        f32 splash_acc = 0.0f;  // distance-through-water accumulator, paces the wading splash VFX
         bool has_last = false;
         u8 last_action = 0;     // to fire a swing once on the rising edge of a networked action
         u8 last_health = 255;   // previous snapshot health % (255 = unseen) - a drop can cut cloth
@@ -357,6 +358,11 @@ private:
     // A flat expanding ring of motes on the ground (radius grows via outward velocity).
     void emit_ring(const Vec3& center, const Vec4& color, int n, f32 speed, f32 life, f32 size,
                    u8 style = 1);
+
+    // A splash where something wades through water at `at` (sit `at.y` at the water surface):
+    // a spray of droplets that arc up and fall, plus an outward ripple ring. `intensity` (the
+    // mover's speed) scales the count + height.
+    void emit_splash(const Vec3& at, f32 intensity);
 
     void update_particles(Timestep dt);
 
@@ -870,6 +876,7 @@ private:
     struct WagonSmooth {
         Vec3 pos{0.0f};  // smoothed render position
         Vec2 step{0.0f}; // this frame's smoothed xz displacement (drives the bob + wheel roll)
+        f32 splash_acc = 0.0f; // distance-through-water accumulator, paces the wading splash VFX
         bool init = false;
     };
     std::unordered_map<u32, WagonSmooth> wagon_smooth_;

@@ -70,6 +70,16 @@ void ClientApp::emit_ring(const Vec3& center, const Vec4& color, int n, f32 spee
     }
 }
 
+void ClientApp::emit_splash(const Vec3& at, f32 intensity) {
+    const int n = 4 + static_cast<int>(glm::clamp(intensity, 0.0f, 7.0f));
+    // Droplets spray up + out and arc back down under gravity (white-blue, lightly transparent).
+    emit_burst(at + Vec3{0.0f, 0.05f, 0.0f}, Vec4{0.86f, 0.94f, 1.0f, 0.9f}, n,
+               1.6f + intensity * 0.25f, 0.45f, 0.06f, /*style=*/1, /*up=*/2.0f + intensity * 0.2f,
+               /*gravity=*/7.5f);
+    // A low ripple ring skating outward across the surface.
+    emit_ring(at, Vec4{0.92f, 0.97f, 1.0f, 0.5f}, 7, 1.2f, 0.5f, 0.05f);
+}
+
 void ClientApp::update_particles(Timestep dt) {
     const f32 s = dt.seconds;
     for (Particle& p : particles_) {

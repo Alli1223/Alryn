@@ -727,6 +727,20 @@ void ClientApp::update_visuals(Timestep dt) {
         v.last_pos = p.position;
         v.has_last = true;
 
+        // Wading splash: moving through water kicks up droplets + a ripple at the waterline. Paced
+        // by distance travelled while submerged, and only for players near enough to see.
+        const f32 wsub = worldgen::water_level - p.position.y;
+        if (wsub > 0.06f && v.speed > 0.8f &&
+            glm::length(p.position - local_feet()) < 55.0f) {
+            v.splash_acc += v.speed * dt.seconds;
+            if (v.splash_acc > 0.55f) {
+                v.splash_acc = 0.0f;
+                emit_splash(Vec3{p.position.x, worldgen::water_level, p.position.z}, v.speed);
+            }
+        } else {
+            v.splash_acc = 0.0f;
+        }
+
         // Drive the action layer. The local player uses its own input for zero-latency
         // feedback; remote players follow the networked `action` field.
         const bool is_local = p.id == my_id_;

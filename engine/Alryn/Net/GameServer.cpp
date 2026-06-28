@@ -222,6 +222,15 @@ void GameServer::tick(Timestep dt) {
                 move = move / l * f; // exact fraction of walk speed, any direction
             }
         }
+        // Wading through water is slow going: scale movement down by how submerged the feet are
+        // (ankle-deep barely slows; waist-deep wading is a hard slog). Server-authoritative, so the
+        // slowdown shows up in everyone's snapshot.
+        const f32 submersion = worldgen::water_level - player.controller.position().y;
+        if (submersion > 0.02f) {
+            const f32 wf = glm::mix(1.0f, 0.4f, glm::smoothstep(0.0f, 1.1f, submersion));
+            move.x *= wf;
+            move.z *= wf;
+        }
         if (collision_) {
             collision_->gather(player.controller.position(), collider_scratch_);
         } else {

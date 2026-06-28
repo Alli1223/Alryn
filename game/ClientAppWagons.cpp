@@ -24,6 +24,25 @@ void ClientApp::update_wagon_smooth(Timestep dt) {
         const Vec3 prev = s.pos;
         s.pos += (wg.position - s.pos) * a;
         s.step = Vec2{s.pos.x - prev.x, s.pos.z - prev.z};
+
+        // Wading splash: a cart rolling through water throws spray off its wheels. Paced by the
+        // distance it rolls while submerged; near enough to see only.
+        const f32 sub = worldgen::water_level - s.pos.y;
+        const f32 dist = glm::length(s.step);
+        if (sub > 0.06f && dist > 1e-3f && glm::length(s.pos - local_feet()) < 70.0f) {
+            s.splash_acc += dist;
+            if (s.splash_acc > 0.6f) {
+                s.splash_acc = 0.0f;
+                const f32 spd = dist / std::max(dt.seconds, 1e-3f);
+                const Vec2 lat{-std::sin(wg.yaw), std::cos(wg.yaw)}; // across the cart (wheel line)
+                for (const f32 side : {-1.0f, 1.0f}) {
+                    emit_splash(Vec3{s.pos.x + lat.x * side, worldgen::water_level, s.pos.z + lat.y * side},
+                                spd);
+                }
+            }
+        } else {
+            s.splash_acc = 0.0f;
+        }
     }
     // Forget wagons that are no longer in the snapshot.
     for (auto it = wagon_smooth_.begin(); it != wagon_smooth_.end();) {

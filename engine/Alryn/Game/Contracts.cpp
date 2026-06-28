@@ -790,6 +790,14 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
     }
 
     if (towed) {
+        // A cart bogs down in water: scale the tow pace by how deep the cart sits below the
+        // waterline. (A player-hauled cart is also slowed via the puller, who wades slowly too;
+        // this slows the hired teamster's cart and keeps the trailer from out-running a wading
+        // puller.) The lag this opens up makes the tow_gate ease the driver to match.
+        const f32 cart_sub = worldgen::water_level - w.position.y;
+        if (cart_sub > 0.02f) {
+            speed *= glm::mix(1.0f, 0.42f, glm::smoothstep(0.0f, 1.2f, cart_sub));
+        }
         // Trailer kinematics: the puller holds the drawbar at the cart's front, so the cart
         // body trails `hitch` behind and its heading SWINGS to follow the pull (capped turn
         // rate - a cart can't pivot in place or flip instantly). It eases toward its ideal
