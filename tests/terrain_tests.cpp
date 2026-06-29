@@ -258,6 +258,34 @@ TEST_CASE("Worldgen: biome classifier is deterministic, varied, and consistent")
     CHECK(seen.count(Biome::Forest) > 0); // forest still dominates the land
 }
 
+TEST_CASE("Villages: no town is placed straddling a river") {
+    // A town sited on a carved river channel floats its market stalls + drops its wagons in the
+    // water. village_at must reject such sites, so every accepted town's core (market + wagon depot
+    // + inner houses) is dry. Scan several seeds + a wide grid, and require we actually found towns.
+    int total = 0;
+    for (const u32 seed : {1337u, 4242u, 99u, 777u, 51u}) {
+        for (int cz = -12; cz <= 12; ++cz) {
+            for (int cx = -12; cx <= 12; ++cx) {
+                const auto v = worldgen::village_at(cx, cz, seed);
+                if (!v) {
+                    continue;
+                }
+                ++total;
+                CHECK(worldgen::river_amount(v->center.x, v->center.y, seed) < 0.5f);
+                const f32 rr = v->half * 0.55f;
+                for (int i = 0; i < 16; ++i) {
+                    const f32 a = TwoPi * static_cast<f32>(i) / 16.0f;
+                    for (const f32 r : {rr * 0.5f, rr}) {
+                        const Vec2 p = v->center + Vec2{std::cos(a), std::sin(a)} * r;
+                        CHECK(worldgen::river_amount(p.x, p.y, seed) < 0.5f); // dry core, no channel
+                    }
+                }
+            }
+        }
+    }
+    CHECK(total > 0); // we actually validated some towns
+}
+
 TEST_CASE("Roads: town graph routes multi-hop through intermediate towns") {
     const u32 seed = 1337u;
 
