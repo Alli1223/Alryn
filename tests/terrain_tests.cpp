@@ -341,6 +341,57 @@ TEST_CASE("Roads: town graph routes multi-hop through intermediate towns") {
     CHECK(found_multihop); // the road graph produces real multi-hop hauls through other towns
 }
 
+TEST_CASE("Roads: the multi-hop route skirts intermediate town market plazas") {
+    // A multi-hop route passes through intermediate towns, whose centres are market squares ringed
+    // by stall colliders. The route must DETOUR around each plaza (so the hired cart doesn't dive
+    // into the stalls and snag), while still entering the town. Find such a pass-through and check
+    // the route enters the town but stays clear of its plaza centre.
+    const u32 seed = 1337u;
+    auto cell_of = [&](const Vec2& c) {
+        return std::pair<int, int>{static_cast<int>(std::floor(c.x / worldgen::village_cell)),
+                                   static_cast<int>(std::floor(c.y / worldgen::village_cell))};
+    };
+    bool checked = false;
+    for (int cz = -16; cz <= 16 && !checked; ++cz) {
+        for (int cx = -16; cx <= 16 && !checked; ++cx) {
+            const auto v = worldgen::village_at(cx, cz, seed);
+            if (!v) {
+                continue;
+            }
+            const auto rr = roads::reachable_towns(v->center, seed, 40);
+            for (const auto& d : rr) {
+                const auto [dcx, dcz] = cell_of(d.center);
+                if (std::max(std::abs(dcx - cx), std::abs(dcz - cz)) <= roads::road_max_cells) {
+                    continue; // want a guaranteed multi-hop destination
+                }
+                const std::vector<Vec2> r = roads::route_through_towns(v->center, d.center, seed);
+                if (r.empty()) {
+                    continue;
+                }
+                for (const auto& mid : rr) {
+                    if (mid.vseed == d.vseed || glm::length(mid.center - v->center) < 1.0f ||
+                        glm::length(mid.center - d.center) < 1.0f) {
+                        continue;
+                    }
+                    f32 best = 1e30f;
+                    for (const Vec2& p : r) {
+                        best = std::min(best, glm::length(p - mid.center));
+                    }
+                    if (best < mid.half - 4.0f) { // the route genuinely passes THROUGH this town
+                        CHECK(best > 9.0f);       // ...but skirts its market plaza (stalls ~6.2, market 9)
+                        checked = true;
+                        break;
+                    }
+                }
+                if (checked) {
+                    break;
+                }
+            }
+        }
+    }
+    CHECK(checked); // we actually exercised an intermediate-town pass-through
+}
+
 TEST_CASE("Roads: a bridge deck is walkable ground over the river") {
     // Find a bridge across a few seeds.
     for (const u32 seed : {1337u, 4242u, 99u, 777u}) {

@@ -646,7 +646,18 @@ f32 amount(const Vec3& p, f32 up, u32 seed) {
 }
 
 Vec3 tint_surface(Vec3 color, const Vec3& p, f32 up, u32 seed) {
-    const f32 on = amount(p, up, seed);
+    f32 on = amount(p, up, seed);
+    if (on > 0.0f) {
+        // Don't paint the inter-town road through a town's central market plaza - it would run the
+        // dirt road right under the market stalls (the "objects on the road" look). The plaza stays a
+        // clear square; the town's own ring road (tinted separately by town_path_*) carries traffic
+        // around the market, and the hired cart detours along it.
+        if (const auto v = worldgen::village_containing(p.x, p.z, seed)) {
+            constexpr f32 plaza = 10.0f; // ~ the market footprint (kMarketHalf) + a touch
+            const f32 d = glm::length(v->center - Vec2{p.x, p.z});
+            on *= glm::smoothstep(plaza - 3.5f, plaza, d); // fade the road out toward the plaza centre
+        }
+    }
     if (on > 0.0f) {
         const f32 speckle = noise::fbm2d(p.x * 0.9f, p.z * 0.9f, 1, 2.0f, 0.5f, seed + 717u);
         const Vec3 road_col = glm::mix(Vec3{0.40f, 0.32f, 0.23f}, Vec3{0.52f, 0.46f, 0.38f},
@@ -704,6 +715,42 @@ f32 bridge_height(f32 x, f32 z, u32 seed) {
     return best;
 }
 
+// Replace the run of polyline points falling inside a town's market plaza (within R of centre C)
+// with a short arc around it at the ring-road radius, so a cart following the route skirts the
+// stall-ringed centre rather than diving into it (and getting stuck).
+std::vector<Vec2> detour_around_plaza(const std::vector<Vec2>& in, const Vec2& C) {
+    constexpr f32 R = 11.5f; // ~ market footprint (kMarketHalf 9) + the town ring-road offset (2.5)
+    if (in.size() < 2) {
+        return in;
+    }
+    std::vector<Vec2> out;
+    out.reserve(in.size() + 16);
+    for (usize i = 0; i < in.size();) {
+        if (glm::length(in[i] - C) >= R) {
+            out.push_back(in[i]);
+            ++i;
+            continue;
+        }
+        usize j = i;
+        while (j < in.size() && glm::length(in[j] - C) < R) {
+            ++j;
+        }
+        const Vec2 entry = out.empty() ? in[i] : out.back();
+        const Vec2 exit = (j < in.size()) ? in[j] : in.back();
+        const f32 a0 = std::atan2(entry.y - C.y, entry.x - C.x);
+        f32 da = std::atan2(exit.y - C.y, exit.x - C.x) - a0;
+        while (da > Pi) da -= TwoPi;
+        while (da < -Pi) da += TwoPi; // arc the short way around the plaza
+        const int steps = std::max(2, static_cast<int>(std::abs(da) / 0.5f));
+        for (int k = 0; k <= steps; ++k) {
+            const f32 a = a0 + da * static_cast<f32>(k) / static_cast<f32>(steps);
+            out.push_back(C + Vec2{std::cos(a), std::sin(a)} * R);
+        }
+        i = j;
+    }
+    return out;
+}
+
 std::vector<Vec2> route_through_towns(const Vec2& a, const Vec2& b, u32 seed) {
     const auto sa = owning_cell(seed, a);
     const auto sb = owning_cell(seed, b);
@@ -728,6 +775,14 @@ std::vector<Vec2> route_through_towns(const Vec2& a, const Vec2& b, u32 seed) {
         for (usize k = (out.empty() ? 0 : 1); k < seg.size(); ++k) {
             out.push_back(seg[k]);
         }
+    }
+    // Detour AROUND each INTERMEDIATE town's market plaza. The chained legs meet at the town
+    // centres, but a centre is a market square ringed by stall colliders, so a cart driven straight
+    // through it snags. Arc the path around the plaza on the ring-road radius instead. The two end
+    // towns are left alone: the cart starts beyond the source market and delivers at the dest plaza
+    // edge (kDeliverRadius), and the road should still visibly reach both towns.
+    for (usize i = 1; i + 1 < cells.size(); ++i) {
+        out = detour_around_plaza(out, cell_center(seed, cells[i]));
     }
     return out;
 }
