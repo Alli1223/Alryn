@@ -226,6 +226,15 @@ public:
     WagonMode active_mode() const { return active_mode_; }
     bool wheel_off() const { return wheel_off_; }   // a wheel has come off the active cart
     Vec3 wheel_pos() const { return wheel_pos_; }    // the fallen/carried wheel's world position
+    // A single NPC navigation polyline, for the client's pathfinding debug overlay. `points` is a
+    // world-space line (>=2 pts) the client draws on screen; `kind` chooses the colour/meaning.
+    struct DebugNavPath {
+        std::vector<Vec3> points;
+        u8 kind = 0; // 0 teamster A* path, 1 wagon road route, 2 villager goal, 3 ambusher goal
+    };
+    // The current NPC navigation routes (teamster A* path + wagon route + each NPC's goal line). Only
+    // meaningful on a listen server (the client owns the sim); a remote client has no path data.
+    std::vector<DebugNavPath> debug_nav_paths() const;
     f32 wheel_repair() const { return wheel_repair_; } // 0..1 re-attach progress
     void force_wheel_break();                        // trigger a break now (test / debug hook)
     void debug_place_player(net::PlayerId id, const Vec3& pos); // move a player (test / debug hook)

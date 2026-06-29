@@ -336,9 +336,57 @@ void ClientApp::draw_hud() {
         }
     }
 
+    // NPC pathfinding routes (toggled via the F1 overlay's NPC PATHS button / F4). Drawn whether or
+    // not the panel is open, so you can switch it on and watch the routes while playing.
+    draw_nav_paths(draw, W, H);
+
     // Debug / testing overlay on top of everything (F1).
     if (debug_open_) {
         draw_debug(draw, H);
+    }
+}
+
+void ClientApp::draw_nav_paths(ui::DrawList& draw, f32 W, f32 H) {
+    // Only meaningful on a listen server we host: we own the sim, so we have the live path data; a
+    // remote client has none (the routes aren't networked).
+    if (!debug_paths_ || !host_local_ || !local_server_.running()) {
+        return;
+    }
+    // Project a world point through the iso camera. Returns false when the point is behind the camera
+    // (so a segment with an endpoint behind us is skipped); off-screen-but-in-front points still
+    // project, so a line just runs off the screen edge.
+    const Mat4 vp = camera_.view_projection();
+    auto project = [&](const Vec3& wp, Vec2& sp) -> bool {
+        const Vec4 clip = vp * Vec4{wp, 1.0f};
+        if (clip.w <= 0.05f) {
+            return false;
+        }
+        sp = Vec2{(clip.x / clip.w * 0.5f + 0.5f) * W, (clip.y / clip.w * 0.5f + 0.5f) * H};
+        return true;
+    };
+    const Vec4 kind_col[4] = {
+        {0.25f, 0.95f, 1.0f, 0.95f}, // 0 teamster A* path  - cyan (the real around-obstacles route)
+        {1.0f, 0.82f, 0.2f, 0.9f},   // 1 wagon road route  - gold
+        {0.45f, 0.9f, 0.5f, 0.7f},   // 2 villager/guard goal - green
+        {1.0f, 0.4f, 0.32f, 0.8f},   // 3 ambusher goal     - red
+    };
+    for (const GameServer::DebugNavPath& path : local_server_.debug_nav_paths()) {
+        const Vec4 col = kind_col[path.kind % 4];
+        const f32 thick = path.kind <= 1 ? 2.6f : 1.6f; // emphasise the A* path + the wagon route
+        Vec2 prev{};
+        bool have_prev = false;
+        for (const Vec3& wp : path.points) {
+            Vec2 sp{};
+            const bool on = project(wp, sp);
+            if (on && have_prev) {
+                draw.line(prev, sp, thick, col);
+            }
+            if (on && path.kind <= 1) {
+                draw.rect(Vec4{sp.x - 2.5f, sp.y - 2.5f, 5.0f, 5.0f}, col, 1.5f); // waypoint node
+            }
+            prev = sp;
+            have_prev = on;
+        }
     }
 }
 
@@ -350,7 +398,7 @@ void ClientApp::draw_debug(ui::DrawList& draw, f32 H) {
     const f32 y = H * 0.26f;
     const f32 line = ds * 1.32f;
     const bool host = host_local_ && local_server_.running();
-    const int rows = 9; // title + 6 metrics + 2 toggles
+    const int rows = 10; // title + 6 metrics + 3 toggles
     const f32 ph = pad * 2.0f + line * static_cast<f32>(rows) + line * 1.4f; // + hint
     // Panel.
     draw.rect(Vec4{x, y, pw, ph}, Vec4{0.04f, 0.05f, 0.07f, 0.82f},
@@ -391,6 +439,7 @@ void ClientApp::draw_debug(ui::DrawList& draw, f32 H) {
     };
     toggle("GODMODE  [F2]", debug_god_, god_btn_);
     toggle("NO WAGON ATTACKS  [F3]", debug_no_ambush_, noatk_btn_);
+    toggle("NPC PATHS  [F4]", debug_paths_, npc_paths_btn_);
     if (!host) {
         draw.text(Vec2{x + pad, ty}, "(toggles need a hosted game)", ds * 0.82f,
                   Vec4{0.85f, 0.6f, 0.45f, 0.95f});

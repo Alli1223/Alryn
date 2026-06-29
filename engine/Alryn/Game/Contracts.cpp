@@ -1814,4 +1814,44 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
     }
 }
 
+// Gather the live NPC navigation routes for the client's pathfinding debug overlay: the hired
+// teamster's A* path (around obstacles), the active wagon's high-level road route, and a goal line
+// for every townsfolk/guard + ambusher. World-space polylines lifted just above the ground.
+std::vector<GameServer::DebugNavPath> GameServer::debug_nav_paths() const {
+    std::vector<DebugNavPath> out;
+    const u32 seed = sampler_.seed();
+    auto lift = [&](f32 x, f32 z) { return Vec3{x, worldgen::height(x, z, seed) + 0.3f, z}; };
+
+    // The teamster's A* path (the around-buildings route it's following), from the driver onward.
+    if (driver_ && driver_path_.size() > driver_path_i_) {
+        DebugNavPath p;
+        p.kind = 0;
+        p.points.push_back(lift(driver_->position.x, driver_->position.z));
+        for (usize i = driver_path_i_; i < driver_path_.size(); ++i) {
+            p.points.push_back(lift(driver_path_[i].x, driver_path_[i].y));
+        }
+        if (p.points.size() >= 2) {
+            out.push_back(std::move(p));
+        }
+    }
+    // The active wagon's high-level road route (the waypoints the haul aims through).
+    if (contract_phase_ == ContractPhase::Active && active_.route.size() >= 2) {
+        DebugNavPath p;
+        p.kind = 1;
+        for (const Vec2& w : active_.route) {
+            p.points.push_back(lift(w.x, w.y));
+        }
+        out.push_back(std::move(p));
+    }
+    // Each townsfolk / guard: a line to its current wander/charge goal.
+    for (const auto& [id, vg] : villagers_) {
+        out.push_back({{lift(vg.position.x, vg.position.z), lift(vg.target.x, vg.target.z)}, 2});
+    }
+    // Each ambusher: a line to its objective (the wagon / town it marches on).
+    for (const Enemy& e : ambush_) {
+        out.push_back({{lift(e.position.x, e.position.z), lift(e.home.x, e.home.z)}, 3});
+    }
+    return out;
+}
+
 } // namespace alryn

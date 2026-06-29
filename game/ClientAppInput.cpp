@@ -117,6 +117,10 @@ bool ClientApp::debug_click(const Vec2& p) {
         apply_debug_flags();
         return true;
     }
+    if (in_rect(p, npc_paths_btn_)) {
+        debug_paths_ = !debug_paths_; // client-only visual toggle (no server state to push)
+        return true;
+    }
     return false;
 }
 
@@ -297,6 +301,10 @@ void ClientApp::on_event(Event& event) {
         if (e.key() == key::F3) {
             debug_no_ambush_ = !debug_no_ambush_;
             apply_debug_flags();
+            return true;
+        }
+        if (e.key() == key::F4) {
+            debug_paths_ = !debug_paths_; // draw NPC pathfinding routes as lines (listen server only)
             return true;
         }
         // Mage casting: tap a number key (1-4) to instantly cast that element's spell; or hold

@@ -345,6 +345,7 @@ private:
     // ---- Debug / testing overlay (F1; F2 godmode, F3 stop wagon ambushes) ----------
     void update_debug(Timestep dt);                                 // samples FPS + server tick rate
     void draw_debug(ui::DrawList& draw, f32 H);                     // the overlay panel + toggles
+    void draw_nav_paths(ui::DrawList& draw, f32 W, f32 H);          // NPC pathfinding routes as lines
     void apply_debug_flags();                                       // push god/no-ambush to the listen server
     bool debug_click(const Vec2& p);                                // hit-test the overlay's toggles
 
@@ -956,6 +957,7 @@ private:
     bool debug_open_ = false;       // the overlay is showing
     bool debug_god_ = false;        // godmode: players + active wagon invincible
     bool debug_no_ambush_ = false;  // no wagon ambushes spawn
+    bool debug_paths_ = false;      // draw NPC pathfinding routes as world-space lines (listen server only)
     f32 fps_ = 0.0f;                // sampled client frames/sec
     f32 frame_ms_ = 0.0f;           // sampled client frame time (ms)
     f32 fps_accum_ = 0.0f;          // wall time accumulated in the current FPS sample window
@@ -966,6 +968,7 @@ private:
     u32 tps_ticks_ = 0;             // server ticks counted in the current window
     ui::Rect god_btn_{};            // clickable toggle rects in the overlay
     ui::Rect noatk_btn_{};
+    ui::Rect npc_paths_btn_{};
     Vec3 aim_{0.0f};
     bool aim_valid_ = false;
 };

@@ -1427,6 +1427,48 @@ TEST_CASE("GameServer: a covered wagon carries a noble passenger who rides along
     }
 }
 
+// The NPC pathfinding debug accessor (drives the client's F4 route overlay): in a town it returns a
+// goal line per townsfolk - a >=2-point world polyline tagged kind 2 - so the client can draw it.
+TEST_CASE("GameServer: debug_nav_paths returns NPC goal routes in a town") {
+    bool tested = false;
+    for (u32 attempt = 0; attempt < 8 && !tested; ++attempt) {
+        GameServer server;
+        const u16 port = static_cast<u16>(24700 + attempt);
+        if (!server.start(port, 9100u + attempt * 53u)) {
+            continue;
+        }
+        NetClient c;
+        if (!c.connect("127.0.0.1", port)) {
+            continue;
+        }
+        PlayerInput intent{};
+        for (int i = 0; i < 200; ++i) {
+            c.send_input(intent);
+            server.tick(Timestep{1.0f / 60.0f});
+            c.poll(1);
+        }
+        if (server.villager_count() == 0) {
+            continue; // spawned away from a populated town this seed - try another
+        }
+        const auto paths = server.debug_nav_paths();
+        int villager_lines = 0;
+        for (const auto& p : paths) {
+            CHECK(p.points.size() >= 2);          // every nav line is a real polyline
+            for (const Vec3& pt : p.points) {
+                CHECK(std::isfinite(pt.x));
+                CHECK(std::isfinite(pt.y));
+                CHECK(std::isfinite(pt.z));
+            }
+            if (p.kind == 2) {
+                ++villager_lines;
+            }
+        }
+        CHECK(villager_lines > 0); // a goal line per townsfolk
+        tested = true;
+    }
+    REQUIRE(tested);
+}
+
 // A player who walks straight at a parked wagon is blocked by it - they can't pass through to
 // its centre.
 TEST_CASE("GameServer: players are blocked from walking through a wagon") {
