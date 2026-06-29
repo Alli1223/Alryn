@@ -1366,8 +1366,9 @@ TEST_CASE("GameServer: a covered wagon carries a noble passenger who rides along
             continue; // couldn't reach the carriage this seed - try another
         }
         // The covered wagon carries a NOBLE passenger (CargoKind::Passengers), not crates: a kind-4
-        // villager is networked, and rides ON the carriage as we drive a hard circle (stays seated
-        // rather than being left at the depot).
+        // villager is networked. Per #50b the noble BOARDS ON FOOT - it spawns at a source-town house
+        // and walks to the parked wagon, climbing aboard before the haul rolls; then it rides ON the
+        // carriage as we drive a hard circle (stays seated rather than being left at the depot).
         auto noble_pos = [&]() -> std::optional<Vec3> {
             for (const VillagerState& vl : snap.villagers) {
                 if (vl.kind == 4) {
@@ -1376,9 +1377,26 @@ TEST_CASE("GameServer: a covered wagon carries a noble passenger who rides along
             }
             return std::nullopt;
         };
-        REQUIRE(noble_pos().has_value());        // a noble boarded the covered wagon
+        REQUIRE(noble_pos().has_value());        // a noble is assigned to the covered wagon
         CHECK(snap.wagons[0].goods_aboard == 0); // people, not crates
         CHECK(server.wagon_goods_aboard() == 0);
+        // Wait for the noble to walk over and climb aboard (the cart waits at the depot meanwhile);
+        // a safety timeout in the server guarantees boarding completes, so this can't hang.
+        f32 board_gap = 1e9f;
+        intent.move = Vec3{0.0f};
+        intent.throttle = 0.0f;
+        intent.steer = 0.0f;
+        for (int t = 0; t < 400 && board_gap > 2.0f; ++t) {
+            pump(1);
+            if (snap.wagons.empty()) {
+                continue;
+            }
+            if (const auto np = noble_pos()) {
+                board_gap = glm::length(Vec2{np->x - snap.wagons[0].position.x,
+                                             np->z - snap.wagons[0].position.z});
+            }
+        }
+        CHECK(board_gap < 2.5f); // the noble walked over from town and boarded the parked wagon
         const Vec3 cart_start = snap.wagons[0].position;
         f32 max_cart_move = 0.0f;
         f32 max_ride_gap = 0.0f;

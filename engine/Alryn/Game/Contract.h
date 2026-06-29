@@ -46,6 +46,16 @@ inline constexpr f32 kMarketKeepout = 7.0f;    // the hired driver routes AROUND
 inline constexpr f32 kCarriageSpeed = 5.0f;    // player-driven carriage top speed (m/s)
 inline constexpr f32 kCarriageTurnRate = 1.6f; // rein steering rate (rad/s)
 
+// A covered-wagon noble (Passengers cargo) walks on/off the cart at the towns. Boarding: the noble
+// walks from a source-town house to the parked wagon and the cart waits until aboard. Disembark: on
+// delivery the noble hops off and walks to a destination-town house, then vanishes. The timeouts
+// force-advance each walk so a snagged noble can never stall the haul (or the post-delivery settle).
+inline constexpr f32 kNobleWalkSpeed = 1.9f;     // the noble's on-foot pace (m/s)
+inline constexpr f32 kBoardRange = 2.4f;         // within this of the wagon = climb aboard
+inline constexpr f32 kBoardTimeout = 4.0f;       // force-board after this long (anti-stall)
+inline constexpr f32 kDisembarkArrive = 1.6f;    // within this of the house door = arrived (vanish)
+inline constexpr f32 kDisembarkTimeout = 6.0f;   // force-vanish after this long (anti-stall)
+
 // Bigger vehicles carry more cargo, so they pay more: +30% per capacity unit over 1.
 inline f32 capacity_reward_mult(u32 capacity) {
     return 1.0f + 0.3f * static_cast<f32>(capacity > 0 ? capacity - 1 : 0);

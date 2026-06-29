@@ -266,6 +266,9 @@ private:
     void end_contract_cleanup();                // clear haul state on delivery / wreck
     void append_wagon_colliders(std::vector<Collider>& out) const; // block players from carts
     void seat_occupants(const VehicleType& vt); // place pilot/riders/seated-driver on the vehicle
+    void update_passenger(Timestep dt, const DensitySampler& density); // noble board/ride/disembark walk
+    void start_passenger_disembark();                  // on delivery: send the noble off to a house
+    std::optional<Vec3> town_house_door(Vec2 town_center, u32 pick); // a house's door in the named town
     // The active cart's bed is a moving platform: its top-surface height where (x,z) is over the
     // footprint (else a large-negative sentinel), so the controller can stand a player on top.
     f32 wagon_top_at(f32 x, f32 z) const;
@@ -342,6 +345,13 @@ private:
     std::unordered_set<net::PlayerId> riders_; // players sitting on the wagon (passengers)
     std::optional<Villager> driver_;     // hired NPC: teamster pulling, or seated carriage driver
     std::optional<Villager> passenger_;  // a noble riding a Passengers-kind covered wagon (kind 4)
+    // The noble's lifecycle: walk from a source-town house TO the parked wagon (Boarding - the cart
+    // waits), ride it (Aboard), then on delivery hop off and walk to a destination-town house before
+    // vanishing (Leaving). A timer force-advances each walk so a snagged noble never stalls the haul.
+    enum class PassengerPhase : u8 { None, Boarding, Aboard, Leaving };
+    PassengerPhase passenger_phase_ = PassengerPhase::None;
+    Vec3 passenger_target_{0.0f}; // where the noble is walking to (the wagon, or a house door)
+    f32 passenger_timer_ = 0.0f;  // seconds spent in the current walk (board / disembark timeout)
     bool has_horse_ = false;             // carriage: a horse is the puller
     Vec3 horse_pos_{0.0f};
     f32 horse_yaw_ = 0.0f;

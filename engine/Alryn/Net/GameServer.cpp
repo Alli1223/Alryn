@@ -311,8 +311,10 @@ void GameServer::tick(Timestep dt) {
         snapshot.villagers.push_back({driver_->id, driver_->position, driver_->yaw, 255, driver_->kind,
                                       0, driver_->appearance});
     }
-    // The noble riding a covered-wagon (Passengers) haul - a kind-4 villager (rendered fancy).
-    if (contract_phase_ == ContractPhase::Active && passenger_) {
+    // The covered-wagon (Passengers) noble - a kind-4 villager (rendered fancy). Networked whenever
+    // present, not just while Active, so the client also shows them walking to board the parked wagon
+    // and walking off to a house after delivery (during the Settle phase).
+    if (passenger_) {
         snapshot.villagers.push_back({passenger_->id, passenger_->position, passenger_->yaw, 255,
                                       passenger_->kind, 0, passenger_->appearance});
     }

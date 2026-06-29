@@ -328,6 +328,7 @@ void GameServer::update_contracts(Timestep dt, const DensitySampler& density) {
             if (pilot_ != 0 && players_.count(pilot_) == 0u) {
                 pilot_ = 0;
             }
+            update_passenger(dt, density); // walk the noble to the wagon to board (cart waits)
             update_wheel(dt, density);
             const Vec3 cart_before = active_.position;
             update_wagon(dt, density);
@@ -341,6 +342,7 @@ void GameServer::update_contracts(Timestep dt, const DensitySampler& density) {
             break;
         }
         case ContractPhase::Settle: {
+            update_passenger(dt, density); // the delivered noble keeps walking off to a house
             settle_timer_ -= dt.seconds;
             if (settle_timer_ <= 0.0f) {
                 contract_outcome_ = 0;
@@ -561,16 +563,27 @@ void GameServer::accept_contract(const Wagon& chosen, WagonMode mode) {
     // A noble rides the covered wagon (Passengers): spawn a fancy NPC (kind 4) seated inside. The
     // seat is placed each tick by seat_occupants; networked as a villager so every client renders it.
     passenger_.reset();
+    passenger_phase_ = PassengerPhase::None;
     if (passengers) {
         Villager p;
         p.id = active_.id ^ 0x70B1Eu; // distinct from the teamster's id (active_.id ^ 0xD1234u)
         p.kind = 4; // noble passenger
         p.appearance = villager_look(p.id);
-        p.position = active_.position;
+        // Board on foot: the noble starts at a house door in the source town (fallback: a few metres
+        // behind the wagon, toward town) and walks to the parked wagon - the cart waits until aboard.
+        Vec3 board_start = active_.position - Vec3{fdir.x, 0.0f, fdir.y} * 6.0f;
+        if (const auto door = town_house_door(active_.source, p.id)) {
+            board_start = *door;
+        }
+        board_start.y = worldgen::height(board_start.x, board_start.z, seed);
+        p.position = board_start;
         p.yaw = active_.yaw;
         p.home_center = active_.source;
         p.rng = p.id | 1u;
         passenger_ = p;
+        passenger_phase_ = PassengerPhase::Boarding;
+        passenger_target_ = active_.position;
+        passenger_timer_ = 0.0f;
     }
     if (has_horse_) {
         // Carriages are horse-drawn: a horse pulls in front (in either mode).
@@ -624,6 +637,16 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
     Wagon& w = active_;
     contract_elapsed_ += dt.seconds; // the rush-bonus clock runs the whole haul (even while stranded)
     const u32 wseed = sampler_.seed(); // so the cart + its puller ride bridges over rivers
+    // Boarding: the covered wagon waits at the depot until the noble has walked over from a town
+    // house and climbed aboard (update_passenger advances that walk). Keep it grounded; don't tow or
+    // advance the driver yet. seat_occupants still seats any players, but skips the not-yet-aboard noble.
+    if (passenger_phase_ == PassengerPhase::Boarding) {
+        w.position.y = ground_at(density, w.position.x, w.position.z, wseed);
+        wagon_vel_ = Vec2{0.0f};
+        wagon_prev_pos_ = w.position;
+        seat_occupants(vehicle_type(w.type));
+        return;
+    }
     // A wheel is off: the cart is stranded - it can't roll until a player refits the wheel. Keep it
     // grounded + zero its velocity (so cargo settles), but don't tow or advance it.
     if (wheel_off_) {
@@ -899,6 +922,7 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
         ALRYN_INFO("Wagon delivered ({}/{} crates, x{:.2f} intact, x{:.2f} convoy, x{:.2f} unscathed)! "
                    "Party money now {}",
                    cargo_.size(), w.goods_total, intact, convoy, unscathed, money_);
+        start_passenger_disembark(); // the noble hops off and walks to a destination-town house
         end_contract_cleanup();
         return;
     }
@@ -1075,7 +1099,12 @@ void GameServer::end_contract_cleanup() {
     tower_ = 0;
     pilot_ = 0;
     driver_.reset();
-    passenger_.reset();
+    // A noble who's disembarking keeps walking to a house through the post-delivery Settle phase
+    // (update_passenger clears them on arrival); otherwise (wreck / new contract) drop them now.
+    if (passenger_phase_ != PassengerPhase::Leaving) {
+        passenger_.reset();
+        passenger_phase_ = PassengerPhase::None;
+    }
     driver_path_.clear();
     riders_.clear();
     has_horse_ = false;
@@ -1231,7 +1260,7 @@ void GameServer::seat_occupants(const VehicleType& vt) {
         driver_->position = seat_world(vt.driver_seat());
         driver_->yaw = active_.yaw;
     }
-    if (passenger_) { // the noble rides inside the covered wagon
+    if (passenger_ && passenger_phase_ == PassengerPhase::Aboard) { // the noble rides once aboard
         passenger_->position = seat_world(Vec3{-0.25f, 0.95f, 0.0f});
         passenger_->yaw = active_.yaw;
     }
@@ -1246,6 +1275,87 @@ void GameServer::seat_occupants(const VehicleType& vt) {
         const Vec3 local = seats.empty() ? Vec3{-0.6f, 0.85f, 0.0f} : seats[i % seats.size()].pos;
         it->second.controller.set_position(seat_world(local));
     }
+}
+
+// A house's door position in the town centred at `town_center`, chosen deterministically by `pick`.
+// Mirrors the siege villager spawn: each House prop's local door_spot transformed into the world.
+// Returns nothing if the point isn't in a town or the town has no houses (caller falls back).
+std::optional<Vec3> GameServer::town_house_door(Vec2 town_center, u32 pick) {
+    const u32 seed = sampler_.seed();
+    const auto v = worldgen::village_containing(town_center.x, town_center.y, seed);
+    if (!v) {
+        return std::nullopt;
+    }
+    std::vector<Vec3> doors;
+    for (const PropInstance& pr : village_props(*v, seed)) {
+        if (pr.category != PropCategory::House) {
+            continue;
+        }
+        const f32 cs = std::cos(pr.yaw);
+        const f32 sn = std::sin(pr.yaw);
+        const PropDef& hd = prop_lib_.resolve(pr); // this house variant's layout (door_spot)
+        const Vec3 l = hd.door_spot;
+        Vec3 d = pr.position + Vec3{l.x * cs + l.z * sn, l.y, -l.x * sn + l.z * cs};
+        d.y = worldgen::height(d.x, d.z, seed);
+        doors.push_back(d);
+    }
+    if (doors.empty()) {
+        return std::nullopt;
+    }
+    return doors[pick % static_cast<u32>(doors.size())];
+}
+
+// Drive the covered-wagon noble's on-foot walk. Boarding: walk from the source house to the parked
+// wagon, then climb aboard (the cart waits via update_wagon's gate). Leaving (post-delivery): walk to
+// a destination-town house and vanish on arrival. A timeout force-advances each phase so a snagged
+// noble can never stall the haul or the settle.
+void GameServer::update_passenger(Timestep dt, const DensitySampler& density) {
+    if (!passenger_ || passenger_phase_ == PassengerPhase::None ||
+        passenger_phase_ == PassengerPhase::Aboard) {
+        return; // None: nobody walking; Aboard: seat_occupants rides them on the moving cart
+    }
+    passenger_timer_ += dt.seconds;
+    if (collision_) {
+        collision_->gather(passenger_->position, collider_scratch_);
+    } else {
+        collider_scratch_.clear();
+    }
+    if (passenger_phase_ == PassengerPhase::Boarding) {
+        passenger_target_ = active_.position; // the parked wagon (the cart waits while we approach)
+        step_villager(*passenger_, density, collider_scratch_, passenger_target_, dt, kNobleWalkSpeed);
+        const f32 d = glm::length(Vec2{passenger_->position.x - active_.position.x,
+                                       passenger_->position.z - active_.position.z});
+        if (d < kBoardRange || passenger_timer_ > kBoardTimeout) {
+            passenger_phase_ = PassengerPhase::Aboard; // climbed aboard - the haul can roll
+        }
+    } else { // Leaving
+        step_villager(*passenger_, density, collider_scratch_, passenger_target_, dt, kNobleWalkSpeed);
+        const f32 d = glm::length(Vec2{passenger_->position.x - passenger_target_.x,
+                                       passenger_->position.z - passenger_target_.z});
+        if (d < kDisembarkArrive || passenger_timer_ > kDisembarkTimeout) {
+            passenger_.reset(); // reached a house (or gave up) - the noble has gone home
+            passenger_phase_ = PassengerPhase::None;
+        }
+    }
+}
+
+// On delivery: the noble hops off and heads for a house in the destination town, vanishing on arrival
+// (update_passenger walks them there through the Settle phase; end_contract_cleanup keeps them alive
+// while Leaving). Falls back to the town centre if no house door is found.
+void GameServer::start_passenger_disembark() {
+    if (!passenger_ || passenger_phase_ == PassengerPhase::None) {
+        return;
+    }
+    const u32 seed = sampler_.seed();
+    Vec3 target{active_.dest.x, 0.0f, active_.dest.y};
+    if (const auto door = town_house_door(active_.dest, passenger_->id)) {
+        target = *door;
+    }
+    target.y = worldgen::height(target.x, target.z, seed);
+    passenger_target_ = target;
+    passenger_phase_ = PassengerPhase::Leaving;
+    passenger_timer_ = 0.0f;
+    passenger_->position.y = worldgen::height(passenger_->position.x, passenger_->position.z, seed);
 }
 
 // The active cart's bed is a moving platform: the deck-top height where (x,z) sits over the cart
