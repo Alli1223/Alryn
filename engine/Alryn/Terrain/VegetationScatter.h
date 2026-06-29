@@ -346,17 +346,36 @@ inline MeshData build_vegetation(int cx, int cz, f32 chunk_world, u32 seed) {
         }
     });
 
-    // ---- Shoreline reeds: cattails fringing temperate freshwater edges (ponds / rivers / lake
-    // shores), beyond the bog where the lush forest-floor reeds already grow.
-    for_cells(1.3f, seed + 6400u, [&](int gx, int gz, f32 wx, f32 wz) {
+    // ---- Shoreline reeds: cattails fringing FRESHWATER edges (ponds / rivers / lake shores),
+    // beyond the bog where the lush forest-floor reeds already grow. Sparse, kept right at the
+    // wet edge (not standing out in deep water), and only where the land just inland reads as
+    // forest/plains/bog - so they don't carpet salty sand beaches.
+    auto inland_biome = [&](f32 x, f32 z) {
+        f32 bh = -1e9f;
+        Vec2 best{x, z};
+        for (const Vec2& d : {Vec2{8.0f, 0.0f}, Vec2{-8.0f, 0.0f}, Vec2{0.0f, 8.0f}, Vec2{0.0f, -8.0f}}) {
+            const f32 h = worldgen::height(x + d.x, z + d.y, seed);
+            if (h > bh) {
+                bh = h;
+                best = Vec2{x + d.x, z + d.y};
+            }
+        }
+        return worldgen::biome_at(best.x, best.y, seed);
+    };
+    for_cells(1.6f, seed + 6400u, [&](int gx, int gz, f32 wx, f32 wz) {
         const f32 gh = worldgen::height(wx, wz, seed);
-        if (gh < worldgen::water_level - 0.3f || gh > worldgen::water_level + 0.55f) return; // at the edge
+        if (gh < worldgen::water_level - 0.12f || gh > worldgen::water_level + 0.5f) return; // wet edge only
         if (worldgen::temperature(wx, wz, seed) > 0.62f) return; // not the hot desert shore
         if (worldgen::slope(wx, wz, seed) > 1.0f) return;         // not on a steep bank
-        if (detail::hash01(detail::tree_hash(gx, gz, seed + 6403u)) > 0.55f) return;
+        const auto ib = inland_biome(wx, wz);
+        if (ib != worldgen::Biome::Forest && ib != worldgen::Biome::Plains &&
+            ib != worldgen::Biome::Bog) {
+            return; // freshwater only - skip sandy salt coasts / rock / snow
+        }
+        if (detail::hash01(detail::tree_hash(gx, gz, seed + 6403u)) > 0.3f) return; // sparse fringe
         const Vec3 reedc = glm::mix(Vec3{0.32f, 0.42f, 0.24f}, Vec3{0.46f, 0.52f, 0.30f},
                                     detail::hash01(detail::tree_hash(gx, gz, seed + 6404u)));
-        const int n = 3 + static_cast<int>(detail::hash01(detail::tree_hash(gx, gz, seed + 6405u)) * 3.0f);
+        const int n = 2 + static_cast<int>(detail::hash01(detail::tree_hash(gx, gz, seed + 6405u)) * 2.0f);
         const f32 sc = 0.8f + detail::hash01(detail::tree_hash(gx, gz, seed + 6406u)) * 0.6f;
         place_at(primitives::reed(n, reedc), wx, wz, gh,
                  detail::hash01(detail::tree_hash(gx, gz, seed + 6407u)) * TwoPi, sc, 1.0f, Vec3{1.0f});
