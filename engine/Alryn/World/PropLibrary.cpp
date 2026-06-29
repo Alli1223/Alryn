@@ -2535,7 +2535,9 @@ PropDef PropLibrary::build_plank_bridge() {
 PropDef PropLibrary::build_river() {
     PropDef def;
     def.name = "river";
-    const Vec3 water{0.16f, 0.33f, 0.44f};
+    // Match the reflective open-water palette (a clean medium blue), not the old muddy teal, so the
+    // town canal reads as the same water as the lakes/sea rather than a saturated strip.
+    const Vec3 water{0.12f, 0.40f, 0.58f};
     const Vec3 stone{0.48f, 0.47f, 0.45f};
     const Vec3 earth{0.30f, 0.23f, 0.15f};
     MeshData op;
@@ -2546,8 +2548,9 @@ PropDef PropLibrary::build_river() {
 
     // Water surface, just above the ground plane (hides the flat terrain beneath it).
     add_box(op, {-hl, 0.0f, -wb}, {hl, 0.1f, wb}, water);
-    // A brighter shimmer strip down the middle (emissive, so it glints like moving water).
-    add_box(em, {-hl, 0.11f, -0.7f}, {hl, 0.13f, 0.7f}, Vec3{0.32f, 0.55f, 0.62f});
+    // A soft brighter sheen down the middle - kept gentle + close to the water colour so the
+    // repeated per-tile strip doesn't read as a hard segmented bar down the canal.
+    add_box(em, {-hl, 0.11f, -1.0f}, {hl, 0.12f, 1.0f}, Vec3{0.20f, 0.46f, 0.60f});
 
     // Raised stone embankments either side, with an earthy outer slope down to the ground.
     for (f32 s : {-1.0f, 1.0f}) {
