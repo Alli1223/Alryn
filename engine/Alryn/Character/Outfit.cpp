@@ -179,19 +179,19 @@ void build_robe(CharacterModel& m, const Equipment& eq) {
     };
 
     if (vt == 0) {
-        // APPRENTICE - an angular drawn-up hood with a drooping point, a shadowed face, a rope belt + pouch.
-        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.08f, -hs.z * 0.04f},
-              hs * Vec3{1.26f, 1.26f, 1.34f}, BoneColor::Primary, BoneShape::Box); // hood shell
-        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.5f, -hs.z * 0.3f},
-              Vec3{hs.x * 0.5f, hs.y * 0.7f, hs.z * 0.6f}, BoneColor::Primary, BoneShape::Box,
-              pitch(-0.42f)); // drooping peak
-        piece(m, BonePart::Head, Vec3{0.0f, hc.y - hs.y * 0.04f, hs.z * 0.5f},
-              Vec3{hs.x * 0.72f, hs.y * 0.52f, 0.16f}, BoneColor::Dark, BoneShape::Box); // face shadow
+        // APPRENTICE - a soft drawn-up hood with a drooping point (the face shows), a cowl drape, a
+        // rope belt + pouch. Rounded, not a box head.
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.12f, -hs.z * 0.24f},
+              hs * Vec3{1.22f, 1.3f, 1.16f}, BoneColor::Primary); // hood shell, pushed back so the face shows
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.52f, -hs.z * 0.34f},
+              Vec3{hs.x * 0.46f, hs.y * 0.66f, hs.z * 0.5f}, BoneColor::Primary, BoneShape::RoundedBox,
+              pitch(-0.42f)); // soft drooping peak
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y - hs.y * 0.5f, -hs.z * 0.06f},
+              hs * Vec3{1.2f, 0.56f, 1.22f}, BoneColor::Primary); // cowl drape around the neck
         piece(m, BonePart::Pelvis, Vec3{0.0f, 0.04f, 0.0f},
-              part_size(m, BonePart::Pelvis) * Vec3{1.16f, 0.3f, 1.18f}, BoneColor::Dark,
-              BoneShape::Box); // rope belt
+              part_size(m, BonePart::Pelvis) * Vec3{1.16f, 0.3f, 1.18f}, BoneColor::Dark); // rope belt
         piece(m, BonePart::Pelvis, Vec3{0.15f, -0.02f, ts.z * 0.4f}, Vec3{0.09f, 0.11f, 0.06f},
-              BoneColor::Dark, BoneShape::Box); // pouch
+              BoneColor::Dark); // pouch
     } else if (vt == 1) {
         // ELEMENTALIST - a circlet + gem, an angular shoulder cowl, a runed orphrey, a belt + spellbook.
         piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.42f, 0.0f}, hs * Vec3{1.18f, 0.18f, 1.18f},
@@ -295,14 +295,16 @@ void build_leather(CharacterModel& m, const Equipment& eq) {
     }
 
     if (vt == 0 || vt == 1) {
-        // A pulled-up RANGER HOOD framing the face (angular shell + a peak swept back) + a face mask.
-        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.1f, -hs.z * 0.06f},
-              hs * Vec3{1.26f, 1.3f, 1.34f}, BoneColor::Dark, BoneShape::Box); // hood shell
-        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.42f, -hs.z * 0.5f},
-              Vec3{hs.x * 0.5f, hs.y * 0.66f, hs.z * 0.66f}, BoneColor::Dark, BoneShape::Box,
+        // A pulled-up RANGER HOOD framing the face (soft shell + a peak swept back) + a face mask over
+        // the lower face. Rounded + pushed back so the face shows, not a box head.
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.12f, -hs.z * 0.22f},
+              hs * Vec3{1.24f, 1.3f, 1.18f}, BoneColor::Dark); // hood shell, pushed back so the face shows
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.46f, -hs.z * 0.5f},
+              Vec3{hs.x * 0.5f, hs.y * 0.66f, hs.z * 0.62f}, BoneColor::Dark, BoneShape::RoundedBox,
               pitch(-0.5f)); // peak swept back
-        piece(m, BonePart::Head, Vec3{0.0f, hc.y - hs.y * 0.2f, hs.z * 0.44f},
-              Vec3{hs.x * 0.86f, hs.y * 0.46f, hs.z * 0.6f}, BoneColor::Primary, BoneShape::Box); // mask
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y - hs.y * 0.18f, hs.z * 0.5f},
+              Vec3{hs.x * 0.78f, hs.y * 0.42f, hs.z * 0.5f}, BoneColor::Primary,
+              BoneShape::RoundedBox); // soft face mask over the lower face
     }
     if (vt == 1) {
         // WARDEN - a steel pauldron on the off shoulder + steel knee cops.
@@ -366,14 +368,14 @@ void build_holy(CharacterModel& m, const Equipment& eq) {
     };
 
     if (vt == 0) {
-        // ACOLYTE - an angular monk hood over a shadowed face, a corded belt, a hung cross. Drab.
-        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.08f, -hs.z * 0.06f},
-              hs * Vec3{1.26f, 1.28f, 1.34f}, BoneColor::Primary, BoneShape::Box); // hood (angular)
-        piece(m, BonePart::Head, Vec3{0.0f, hc.y - hs.y * 0.04f, hs.z * 0.5f},
-              Vec3{hs.x * 0.72f, hs.y * 0.52f, 0.16f}, BoneColor::Dark, BoneShape::Box); // face shadow
+        // ACOLYTE - a soft cowl hood framing the face (the face shows, like the squire coif), a cowl
+        // drape over the neck/shoulders, a corded belt, a hung cross. Drab. Rounded, not a box head.
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.12f, -hs.z * 0.24f},
+              hs * Vec3{1.22f, 1.32f, 1.16f}, BoneColor::Primary); // hood shell, pushed back so the face shows
+        piece(m, BonePart::Head, Vec3{0.0f, hc.y - hs.y * 0.5f, -hs.z * 0.06f},
+              hs * Vec3{1.2f, 0.56f, 1.22f}, BoneColor::Primary); // cowl drape around the neck
         piece(m, BonePart::Pelvis, Vec3{0.0f, 0.04f, 0.0f},
-              part_size(m, BonePart::Pelvis) * Vec3{1.16f, 0.32f, 1.18f}, BoneColor::Dark,
-              BoneShape::Box); // cord belt
+              part_size(m, BonePart::Pelvis) * Vec3{1.16f, 0.32f, 1.18f}, BoneColor::Dark); // cord belt
         cross(tc.y * 0.4f, ts.y * 0.42f);
     } else if (vt == 1) {
         // PRIEST - a circlet, an angular amice collar, a gold orphrey + cross, a belt + book.
