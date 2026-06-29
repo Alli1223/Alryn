@@ -184,7 +184,9 @@ float fbm(vec2 p) {
     return v;
 }
 float fogFactor(vec3 wpos) {
-    float dist = length(wpos - lights.camPos.xyz);
+    // Player-relative (not camera-relative), so zooming the iso camera out doesn't haze the whole
+    // near scene + wash out the lights - matches mesh.frag.
+    float dist = length(wpos - lights.playerPeek.xyz);
     float dn = dist * lights.fogColor.w;
     float f = 1.0 - exp(-dn * dn);
     float bank = lights.fogVolume.x;

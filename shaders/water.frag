@@ -100,7 +100,7 @@ void main() {
 
     // Fold the water into the atmosphere: haze with distance and darken toward the frame edge,
     // so it sits in the same gloom as the land instead of reading as a bright cut-out.
-    float dn = length(vWorldPos - lights.camPos.xyz) * lights.fogColor.w;
+    float dn = length(vWorldPos - lights.playerPeek.xyz) * lights.fogColor.w; // player-relative (zoom-independent)
     float fog = clamp(1.0 - exp(-dn * dn), 0.0, 1.0);
     color = mix(color, lights.fogColor.rgb, fog);
     if (lights.screen.x >= 1.0) { // skip when the screen size is unset (headless smoke tests)
