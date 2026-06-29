@@ -581,6 +581,15 @@ private:
 
     void send_input();
 
+    // Controller support: sample the gamepad each frame and fold it into the same input path as
+    // mouse/keyboard (the left stick is added in send_input; this handles buttons, triggers, zoom
+    // and menu toggles). Sets `using_gamepad_` - the active input device, auto-switched by activity
+    // - so the aim follows the right stick instead of the cursor while the pad is in use.
+    void apply_gamepad(Timestep dt);
+
+    // The left-click primary attack, role-specific - shared by the mouse button and the pad trigger.
+    void primary_action();
+
     Vec3 local_feet() const {
         if (have_snapshot_) {
             for (const net::PlayerState& p : snapshot_.players) {
@@ -847,6 +856,12 @@ private:
     bool blocking_ = false;            // Knight holding the shield up (right mouse held)
     bool pending_rally_ = false;
     bool pending_grab_ = false; // one-shot hitch/unhitch the nearest wagon
+    // Controller state. `using_gamepad_` is the active input device (auto-switched: any pad activity
+    // selects it, any mouse motion selects KBM) and decides whether the aim follows the right stick
+    // or the cursor. The trigger edges are tracked here because triggers are analog axes, not buttons.
+    bool using_gamepad_ = false;
+    bool pad_lt_prev_ = false; // left-trigger held last frame (secondary-action edge)
+    bool pad_rt_prev_ = false; // right-trigger held last frame (primary-action edge)
     u32 selected_wagon_ = 0;    // wagon id this client has ACCEPTED (its vote; 0 = none)
     u32 near_wagon_ = 0;        // offered wagon currently in range (shows its info panel)
     u32 panel_wagon_ = 0;       // wagon the on-screen Accept/Cancel buttons act on

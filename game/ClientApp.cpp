@@ -262,6 +262,7 @@ void ClientApp::on_update(Timestep dt) {
             }
         }
 
+        apply_gamepad(dt); // fold a connected controller into the input path (before aim + camera)
         update_camera();
         if (renderer_ != nullptr) {
             renderer_->set_player_position(local_feet()); // bends nearby vegetation
