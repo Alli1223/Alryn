@@ -45,6 +45,16 @@ inline constexpr KeyCode LeftShift = 340, RightShift = 344; // GLFW shift - dodg
 inline constexpr bool is_shift(KeyCode k) { return k == LeftShift || k == RightShift; }
 } // namespace key
 
+// Gamepad button indices (match GLFW_GAMEPAD_BUTTON_*), used with Input::pad_down / pad_pressed.
+namespace pad {
+inline constexpr int A = 0, B = 1, X = 2, Y = 3;          // south / east / west / north face buttons
+inline constexpr int LB = 4, RB = 5;                       // shoulder bumpers
+inline constexpr int Back = 6, Start = 7, Guide = 8;       // view / menu / home
+inline constexpr int L3 = 9, R3 = 10;                      // stick clicks
+inline constexpr int DUp = 11, DRight = 12, DDown = 13, DLeft = 14; // d-pad
+inline constexpr f32 trigger_threshold = 0.5f;             // a trigger past this counts as "pressed"
+} // namespace pad
+
 // Fixed isometric-style third-person camera angle (the world rotates under it).
 namespace iso {
 inline constexpr f32 yaw_deg = 45.0f;   // compass direction we look from
