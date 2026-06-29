@@ -237,11 +237,29 @@ void ClientApp::draw_goods() {
         return;
     }
     const net::WagonState* aw = active_wagon();
+    const bool casks = aw != nullptr && static_cast<CargoKind>(aw->cargo_kind) == CargoKind::Casks;
     const Mesh& cargo = cargo_mesh();
     const Mat4 cart = aw != nullptr ? wagon_model(*aw, wagon_frame_move(*aw)) : Mat4{1.0f};
+    constexpr f32 cask_r = 0.16f; // ale-cask radius (matches build_cargo_casks)
+    if (!casks) {
+        cask_roll_.clear(); // not carrying casks -> drop the per-cask roll state
+    }
     for (const net::GoodState& g : snapshot_.goods) {
         Mat4 m;
-        if (g.loose == 0 && aw != nullptr) {
+        if (g.loose == 0 && aw != nullptr && casks) {
+            // An ale cask rolls about its long axis as it slides fore/aft (cart-local X) in the bed:
+            // accumulate the roll from the change in its bed-local position, then lay the barrel
+            // ACROSS the bed (its built +X axis -> Z) and spin it about that long axis.
+            CaskRoll& cr = cask_roll_[g.id];
+            if (cr.seen) {
+                cr.roll = std::fmod(cr.roll + (g.position.x - cr.prev.x) / cask_r, TwoPi);
+            }
+            cr.prev = g.position;
+            cr.seen = true;
+            m = cart * glm::translate(Mat4{1.0f}, g.position + Vec3{0.0f, cask_r, 0.0f}) *
+                glm::rotate(Mat4{1.0f}, cr.roll, Vec3{0.0f, 0.0f, 1.0f}) *
+                glm::rotate(Mat4{1.0f}, glm::half_pi<f32>(), Vec3{0.0f, 1.0f, 0.0f});
+        } else if (g.loose == 0 && aw != nullptr) {
             // Bed-local position -> world via the cart transform (centred crate on the floor).
             m = cart * glm::translate(Mat4{1.0f}, g.position + Vec3{0.0f, kCargoHalf, 0.0f});
         } else {
@@ -251,6 +269,14 @@ void ClientApp::draw_goods() {
                 glm::rotate(Mat4{1.0f}, 0.18f, Vec3{1.0f, 0.0f, 0.0f});
         }
         renderer_->draw(cargo, m);
+    }
+    // Forget casks no longer in the bed (delivered / spilled out).
+    for (auto it = cask_roll_.begin(); it != cask_roll_.end();) {
+        const bool live = std::any_of(snapshot_.goods.begin(), snapshot_.goods.end(),
+                                      [&](const net::GoodState& g) {
+                                          return g.id == it->first && g.loose == 0;
+                                      });
+        it = live ? std::next(it) : cask_roll_.erase(it);
     }
 }
 

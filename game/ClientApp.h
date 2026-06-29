@@ -889,6 +889,15 @@ private:
     Mesh cargo_casks_mesh_;     // cask of ale (CargoKind::Casks)
     // The cargo mesh for the active wagon's CargoKind (weapons crate / ale cask / default crate).
     const Mesh& cargo_mesh() const;
+    // Per-cask roll: an ale cask rolls about its long axis as it slides fore/aft in the bed. The
+    // roll angle is accumulated client-side from the change in the cask's cart-local position
+    // (keyed by good id), so casks visibly trundle around the back of the wagon.
+    struct CaskRoll {
+        Vec3 prev{0.0f};
+        f32 roll = 0.0f;
+        bool seen = false;
+    };
+    std::unordered_map<u32, CaskRoll> cask_roll_;
     std::unordered_map<u32, f32> wagon_roll_;  // accumulated wheel spin per wagon id
     // Smoothed render state per wagon: the raw authoritative position arrives in lumpy snapshot
     // steps, so we ease a render position toward it each frame. Everything visual (the cart mesh,
