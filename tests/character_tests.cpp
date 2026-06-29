@@ -125,6 +125,29 @@ TEST_CASE("BodyMesh/OutfitMesh: skinned body + outfit are valid and deform with 
     }
 }
 
+TEST_CASE("Character: the cape collar anchors at the shoulders, not the waist") {
+    // Cloaks (ClientAppCloth add_cape / setup_noble_cape) anchor to the HEAD joint + a small offset,
+    // so the collar must sit high on the body and hang from the shoulders. The Torso joint sits at
+    // mid-body (~the waist), so a cape must NOT be anchored there. Guards against the cape regressing
+    // to a waist anchor. Checked in a walk pose (the in-game case), not just bind.
+    CharacterModel model = CharacterModel::create(7u, CharacterAppearance{});
+    CharacterAnimator anim;
+    for (int i = 0; i < 20; ++i) {
+        anim.update(2.5f, Timestep{1.0f / 60.0f});
+    }
+    const std::vector<Mat4> jm = model.joint_matrices(Mat4{1.0f}, anim.pose(model));
+    const int head = model.bone_index(BonePart::Head);
+    const int torso = model.bone_index(BonePart::Torso);
+    REQUIRE(head >= 0);
+    REQUIRE(torso >= 0);
+    // The exact cape-collar anchor the cloth uses: Head joint * the add_cape centre-panel offset.
+    const Vec3 collar =
+        Vec3{(jm[static_cast<usize>(head)] * glm::translate(Mat4{1.0f}, Vec3{0.0f, 0.05f, -0.30f}))[3]};
+    const f32 torso_y = jm[static_cast<usize>(torso)][3].y;
+    CHECK(collar.y > model.height() * 0.72f); // the collar is up at the shoulders / neck
+    CHECK(collar.y > torso_y + 0.4f);          // and well above the mid-body (waist) joint
+}
+
 TEST_CASE("BodyMesh: the action overlay deforms the skinned upper body (legs keep the walk)") {
     CharacterModel model = CharacterModel::create(11u, CharacterAppearance{});
     const SkinnedMesh body = build_body_mesh(model);
