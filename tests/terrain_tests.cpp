@@ -724,11 +724,16 @@ TEST_CASE("Village: decorative props don't spawn on the roads") {
                 const bool decorative =
                     p.category == PropCategory::Lantern || p.category == PropCategory::Planter ||
                     p.category == PropCategory::Bush || p.category == PropCategory::Decor;
-                if (!decorative) {
+                // The fountain is a big basin (~2.6 m radius), so its CENTRE must clear the road by
+                // that footprint, not merely sit off the lane - otherwise the basin overhangs the road.
+                const bool fountain = p.category == PropCategory::Fountain;
+                if (!decorative && !fountain) {
                     continue;
                 }
                 ++decor_seen;
-                if (roads::distance(p.position.x, p.position.z, seed) < roads::road_half_width) {
+                const f32 d = roads::distance(p.position.x, p.position.z, seed);
+                const f32 need = fountain ? roads::road_half_width + 2.0f : roads::road_half_width;
+                if (d < need) {
                     ++on_road;
                 }
             }
@@ -736,7 +741,7 @@ TEST_CASE("Village: decorative props don't spawn on the roads") {
     }
     REQUIRE(towns_checked > 0);
     REQUIRE(decor_seen > 0);
-    CHECK(on_road == 0); // nothing decorative sits in the road
+    CHECK(on_road == 0); // nothing decorative (and no fountain basin) sits in the road
 }
 
 // The streaming terrain meshes a fixed vertical band per column; the surface must never rise above
