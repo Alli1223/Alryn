@@ -268,6 +268,7 @@ private:
 
     // Set up a character's flowing cloth pieces for its role + gear (called when the visual is built).
     void setup_cloth(PlayerVisual& v, PlayerRole role, const Equipment& eq);
+    void setup_noble_cape(PlayerVisual& v); // a large flowing red cape for the carriage noble
     // Step + rebuild + draw a character's cloth pieces. World-space sim (anchor from the posed joints,
     // renderer wind), mesh localised to `root` so culling stays correct.
     void draw_cloth(PlayerVisual& v, const Mat4& root, const std::vector<Mat4>& jmats, const Vec3& tint);
@@ -574,7 +575,7 @@ private:
     // left the snapshot.
     void update_villager_visuals(Timestep dt);
 
-    PlayerVisual& ensure_villager_visual(u32 id, const CharacterAppearance& appearance);
+    PlayerVisual& ensure_villager_visual(u32 id, const CharacterAppearance& appearance, u8 kind = 0);
 
     void draw_villagers();
 

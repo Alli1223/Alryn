@@ -475,7 +475,11 @@ void GameServer::accept_contract(const Wagon& chosen, WagonMode mode) {
     }
     active_.health = rig_max_health(rig_level_); // a reinforced rig starts (and caps) tougher
     active_.ambush_waves_spawned = 0;
-    active_.goods_total = goods_for_capacity(vehicle_type(active_.type).capacity());
+    // A Passengers-kind covered wagon carries PEOPLE, not crates - so it loads no cargo boxes (the
+    // delivered "load" is the noble who rides it).
+    const bool passengers = static_cast<CargoKind>(active_.cargo_kind) == CargoKind::Passengers;
+    active_.goods_total =
+        passengers ? 0 : goods_for_capacity(vehicle_type(active_.type).capacity());
     wagon_prev_pos_ = active_.position;
     wagon_vel_ = Vec2{0.0f};
     wagon_vy_ = 0.0f;
@@ -554,6 +558,20 @@ void GameServer::accept_contract(const Wagon& chosen, WagonMode mode) {
         d.rng = d.id | 1u;
         driver_ = d;
     };
+    // A noble rides the covered wagon (Passengers): spawn a fancy NPC (kind 4) seated inside. The
+    // seat is placed each tick by seat_occupants; networked as a villager so every client renders it.
+    passenger_.reset();
+    if (passengers) {
+        Villager p;
+        p.id = active_.id ^ 0x70B1Eu; // distinct from the teamster's id (active_.id ^ 0xD1234u)
+        p.kind = 4; // noble passenger
+        p.appearance = villager_look(p.id);
+        p.position = active_.position;
+        p.yaw = active_.yaw;
+        p.home_center = active_.source;
+        p.rng = p.id | 1u;
+        passenger_ = p;
+    }
     if (has_horse_) {
         // Carriages are horse-drawn: a horse pulls in front (in either mode).
         const Vec2 hp = Vec2{active_.position.x, active_.position.z} + fdir * (vt.reach() + 1.8f);
@@ -1057,6 +1075,7 @@ void GameServer::end_contract_cleanup() {
     tower_ = 0;
     pilot_ = 0;
     driver_.reset();
+    passenger_.reset();
     driver_path_.clear();
     riders_.clear();
     has_horse_ = false;
@@ -1211,6 +1230,10 @@ void GameServer::seat_occupants(const VehicleType& vt) {
     if (driver_ && driver_->kind == 3) { // hired driver seated up top
         driver_->position = seat_world(vt.driver_seat());
         driver_->yaw = active_.yaw;
+    }
+    if (passenger_) { // the noble rides inside the covered wagon
+        passenger_->position = seat_world(Vec3{-0.25f, 0.95f, 0.0f});
+        passenger_->yaw = active_.yaw;
     }
     const std::vector<Seat> seats = vt.seats();
     std::vector<net::PlayerId> rs(riders_.begin(), riders_.end());

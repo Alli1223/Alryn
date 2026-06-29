@@ -311,6 +311,11 @@ void GameServer::tick(Timestep dt) {
         snapshot.villagers.push_back({driver_->id, driver_->position, driver_->yaw, 255, driver_->kind,
                                       0, driver_->appearance});
     }
+    // The noble riding a covered-wagon (Passengers) haul - a kind-4 villager (rendered fancy).
+    if (contract_phase_ == ContractPhase::Active && passenger_) {
+        snapshot.villagers.push_back({passenger_->id, passenger_->position, passenger_->yaw, 255,
+                                      passenger_->kind, 0, passenger_->appearance});
+    }
     // Ambushers ride in the existing enemy list (rendered red by the client).
     snapshot.enemies.reserve(ambush_.size());
     for (const Enemy& en : ambush_) {

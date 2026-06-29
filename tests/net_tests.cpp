@@ -1283,7 +1283,7 @@ TEST_CASE("GameServer: an accepted contract starts fully loaded with goods") {
 // walls keep it aboard on flat ground - it doesn't spill just from acceleration / hard turns.
 // Scans seeds for a carriage, walks the player to it, takes the reins, then circles. Skips if
 // no carriage can be reached (degrades gracefully, never flakes).
-TEST_CASE("GameServer: a carriage's walls keep the cargo in under hard driving") {
+TEST_CASE("GameServer: a covered wagon carries a noble passenger who rides along") {
     bool tested = false;
     for (u32 attempt = 0; attempt < 12 && !tested; ++attempt) {
         GameServer server;
@@ -1365,42 +1365,47 @@ TEST_CASE("GameServer: a carriage's walls keep the cargo in under hard driving")
         if (!piloting) {
             continue; // couldn't reach the carriage this seed - try another
         }
-        // Record the crates' starting bed-local positions, then drive a hard circle.
-        const u8 loaded = snap.wagons.empty() ? 0 : snap.wagons[0].goods_aboard;
-        std::vector<u32> ids;
-        std::vector<Vec2> start;
-        for (const GoodState& g : snap.goods) {
-            if (g.loose == 0) {
-                ids.push_back(g.id);
-                start.push_back(Vec2{g.position.x, g.position.z});
+        // The covered wagon carries a NOBLE passenger (CargoKind::Passengers), not crates: a kind-4
+        // villager is networked, and rides ON the carriage as we drive a hard circle (stays seated
+        // rather than being left at the depot).
+        auto noble_pos = [&]() -> std::optional<Vec3> {
+            for (const VillagerState& vl : snap.villagers) {
+                if (vl.kind == 4) {
+                    return vl.position;
+                }
             }
-        }
+            return std::nullopt;
+        };
+        REQUIRE(noble_pos().has_value());        // a noble boarded the covered wagon
+        CHECK(snap.wagons[0].goods_aboard == 0); // people, not crates
+        CHECK(server.wagon_goods_aboard() == 0);
+        const Vec3 cart_start = snap.wagons[0].position;
+        f32 max_cart_move = 0.0f;
+        f32 max_ride_gap = 0.0f;
         intent.move = Vec3{0.0f};
         intent.throttle = 1.0f;
         intent.steer = 1.0f;
         for (int t = 0; t < 300; ++t) {
             pump(1);
-        }
-        // The crates slid around the bed...
-        f32 max_move = 0.0f;
-        for (const GoodState& g : snap.goods) {
-            if (g.loose != 0) {
+            if (snap.wagons.empty()) {
                 continue;
             }
-            for (usize k = 0; k < ids.size(); ++k) {
-                if (ids[k] == g.id) {
-                    max_move = std::max(max_move, glm::length(Vec2{g.position.x, g.position.z} - start[k]));
-                }
+            const Vec3 cart = snap.wagons[0].position;
+            max_cart_move = std::max(
+                max_cart_move,
+                glm::length(Vec2{cart.x - cart_start.x, cart.z - cart_start.z}));
+            if (const auto np = noble_pos()) {
+                max_ride_gap = std::max(
+                    max_ride_gap, glm::length(Vec2{np->x - cart.x, np->z - cart.z}));
             }
         }
-        CHECK(max_move > 0.1f); // they really did slide (physics is live)
-        // ...but the solid walls kept the whole load aboard (nothing spilled on flat ground).
-        CHECK(server.good_count() == 0);
-        CHECK(server.wagon_goods_aboard() == loaded);
+        REQUIRE(noble_pos().has_value()); // still aboard after the hard drive
+        CHECK(max_cart_move > 1.0f);      // the carriage really drove
+        CHECK(max_ride_gap < 3.0f);       // the noble stayed seated ON it throughout (rode along)
         tested = true;
     }
     if (!tested) {
-        MESSAGE("No carriage could be reached to drive - skipping cargo-containment check");
+        MESSAGE("No carriage could be reached to drive - skipping noble-passenger check");
     }
 }
 

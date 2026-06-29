@@ -122,6 +122,39 @@ void ClientApp::setup_cloth(PlayerVisual& v, PlayerRole role, const Equipment& e
     }
 }
 
+void ClientApp::setup_noble_cape(PlayerVisual& v) {
+    for (ClothInstance& c : v.cloth) {
+        retire_mesh(std::move(c.mesh)); // defer the GPU free past the frames in flight
+    }
+    v.cloth.clear();
+    // A grand, oversized crimson cloak: a wide arc of LONG panels off the shoulder line, fuller +
+    // longer than a player cape (8 segments / 7 panels / a wider collar wrap), so it sweeps behind
+    // the noble as the covered wagon rolls.
+    ClothInstance c;
+    c.anchor = BonePart::Head; // rides the neck / shoulder line
+    c.ring = true;
+    c.closed = false; // an open sheet across the back
+    c.segments = 8;   // floor-length (the player cape is 6)
+    c.seg = 0.16f;
+    c.collide_r = 0.4f; // stand clear of the gilded plate
+    c.color = Vec3{0.66f, 0.10f, 0.12f}; // deep noble crimson
+    constexpr int kN = 7;     // a wider, fuller cape than the player's 6 panels
+    constexpr f32 arc = 1.0f; // wraps further around the shoulders (~57 deg each side)
+    for (int i = 0; i < kN; ++i) {
+        const f32 t = static_cast<f32>(i) / static_cast<f32>(kN - 1);
+        const f32 ang = glm::mix(-arc, arc, t);
+        const Vec3 dir{std::sin(ang), 0.0f, -std::cos(ang)};
+        c.anchor_locals.push_back(dir * 0.32f + Vec3{0.0f, 0.08f, 0.0f});
+        c.hang_locals.push_back(glm::normalize(dir * 0.45f + Vec3{0.0f, -1.0f, 0.0f}));
+        ClothChain ch;
+        ch.stiffness = 0.66f;
+        ch.damping = 0.06f;
+        ch.wind_gain = 1.3f;
+        c.chains.push_back(ch);
+    }
+    v.cloth.push_back(std::move(c));
+}
+
 void ClientApp::detach_cloth(ClothInstance& c, const Vec3& impulse) {
     if (c.detached || !c.inited) {
         return; // not seated yet, or already gone

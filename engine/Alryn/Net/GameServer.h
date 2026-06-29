@@ -341,6 +341,7 @@ private:
     net::PlayerId pilot_ = 0;            // player driving a carriage from the top seat (manual)
     std::unordered_set<net::PlayerId> riders_; // players sitting on the wagon (passengers)
     std::optional<Villager> driver_;     // hired NPC: teamster pulling, or seated carriage driver
+    std::optional<Villager> passenger_;  // a noble riding a Passengers-kind covered wagon (kind 4)
     bool has_horse_ = false;             // carriage: a horse is the puller
     Vec3 horse_pos_{0.0f};
     f32 horse_yaw_ = 0.0f;

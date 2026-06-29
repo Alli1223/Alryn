@@ -549,7 +549,7 @@ void ClientApp::update_villager_visuals(Timestep dt) {
         return;
     }
     for (const net::VillagerState& vl : snapshot_.villagers) {
-        PlayerVisual& v = ensure_villager_visual(vl.id, vl.appearance);
+        PlayerVisual& v = ensure_villager_visual(vl.id, vl.appearance, vl.kind);
         f32 measured = 0.0f;
         if (v.has_last && dt.seconds > 0.0001f) {
             Vec3 d = vl.position - v.last_pos;
@@ -575,7 +575,8 @@ void ClientApp::update_villager_visuals(Timestep dt) {
 }
 
 ClientApp::PlayerVisual& ClientApp::ensure_villager_visual(u32 id,
-                                                           const CharacterAppearance& appearance) {
+                                                           const CharacterAppearance& appearance,
+                                                           u8 kind) {
     const auto it = villager_visuals_.find(id);
     if (it != villager_visuals_.end()) {
         return it->second;
@@ -583,12 +584,22 @@ ClientApp::PlayerVisual& ClientApp::ensure_villager_visual(u32 id,
     PlayerVisual v;
     v.appearance = appearance;
     v.model = CharacterModel::create(id ^ 0x55u, appearance);
-    // Generic peasant garb (a belted tunic + trousers + cap), with a little per-NPC colour variety.
     Equipment eq;
-    eq.outfit_tint = static_cast<u8>(id % 4u);
-    apply_outfit(v.model, OutfitKind::Peasant, eq);
-    v.body_skin = build_body_mesh(v.model);
-    v.outfit_skin = build_outfit_mesh(v.model, OutfitKind::Peasant, eq);
+    if (kind == 4) {
+        // A NOBLE passenger: the reference-grade (Master) plate - gilded armour with a plume - which
+        // the client gold-tints in draw_villagers, plus a large flowing red cape (setup_noble_cape).
+        eq.outfit_tier = static_cast<u8>(EquipmentTier::Master);
+        apply_outfit(v.model, OutfitKind::Plate, eq);
+        v.body_skin = build_body_mesh(v.model);
+        v.outfit_skin = build_outfit_mesh(v.model, OutfitKind::Plate, eq);
+        setup_noble_cape(v);
+    } else {
+        // Generic peasant garb (a belted tunic + trousers + cap), with a little per-NPC variety.
+        eq.outfit_tint = static_cast<u8>(id % 4u);
+        apply_outfit(v.model, OutfitKind::Peasant, eq);
+        v.body_skin = build_body_mesh(v.model);
+        v.outfit_skin = build_outfit_mesh(v.model, OutfitKind::Peasant, eq);
+    }
     return villager_visuals_.emplace(id, std::move(v)).first->second;
 }
 
@@ -602,9 +613,9 @@ void ClientApp::draw_villagers() {
             continue;
         }
         PlayerVisual& v = it->second;
-        // Kind 3 is a hired carriage driver sitting on the top seat (sit pose), attached to
-        // the cart's tilt + bob so they ride with it.
-        const bool seated = vl.kind == 3;
+        // Kind 3 is a hired carriage driver (top seat) and kind 4 a noble passenger riding inside -
+        // both sit (sit pose) attached to the cart's tilt + bob so they ride with it.
+        const bool seated = vl.kind == 3 || vl.kind == 4;
         const net::WagonState* aw = seated ? active_wagon() : nullptr;
         const Vec3 seat = (aw != nullptr) ? attach_to_wagon(*aw, vl.position) : vl.position;
         const Vec3 base = seated ? seat - Vec3{0.0f, 0.42f, 0.0f} : vl.position;
@@ -619,6 +630,7 @@ void ClientApp::draw_villagers() {
         // leather/steel tint + hold a bow; the rest are plain townsfolk.
         const Vec3 tint = vl.kind == 1   ? Vec3{0.72f, 0.76f, 0.86f}
                           : vl.kind == 2 ? Vec3{0.66f, 0.70f, 0.80f}
+                          : vl.kind == 4 ? Vec3{1.0f, 0.84f, 0.42f} // noble: gilded armour
                                          : Vec3{1.0f};
         if (v.body_skin.vertices.empty()) {
             v.body_skin = build_body_mesh(v.model);
@@ -627,6 +639,11 @@ void ClientApp::draw_villagers() {
         skin_and_draw(v.model, v.outfit_skin, v.outfit_mesh, root, pose, tint); // peasant tunic + trousers
         const std::vector<Mat4> mats = v.model.bone_matrices(root, pose);
         draw_rig(v.model, mats, tint, /*attachments_only=*/true); // face/hair/cap/apron on top
+        if (vl.kind == 4) {
+            // The noble's grand crimson cape (simulated cloth) at the joint frames; tint {1} keeps
+            // it red rather than gilding it like the plate.
+            draw_cloth(v, root, v.model.joint_matrices(root, pose), Vec3{1.0f});
+        }
         if (vl.kind == 1) {
             draw_held_spear(v.model, mats);
         } else if (vl.kind == 2) {
