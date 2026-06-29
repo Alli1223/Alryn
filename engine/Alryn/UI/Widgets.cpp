@@ -24,9 +24,34 @@ Vec4 with_alpha(const Vec4& c, f32 a) { return Vec4{c.r, c.g, c.b, c.a * a}; }
 
 // ---- Panel ---------------------------------------------------------------
 void Panel::on_draw(DrawList& dl) {
-    if (fill) {
-        dl.rect(bounds.xywh(), color, border, 1.5f, radius);
+    if (!fill) {
+        return;
     }
+    dl.rect(bounds.xywh(), color, border, 1.5f, radius);
+    // Medieval framing (procedural, no art assets): an inset hairline + gilded corner brackets in
+    // the theme's accent, so a card reads as a carved, gold-edged board rather than a flat panel.
+    // Driven by the theme accent, so it adapts if a game restyles; skipped on tiny panels.
+    constexpr f32 inset = 4.0f;
+    const f32 ix = bounds.x + inset, iy = bounds.y + inset;
+    const f32 iw = bounds.w - 2.0f * inset, ih = bounds.h - 2.0f * inset;
+    if (iw < 28.0f || ih < 28.0f) {
+        return;
+    }
+    const Theme& th = theme();
+    const Vec4 hair{th.accent.r, th.accent.g, th.accent.b, 0.30f};
+    dl.outline(Vec4{ix, iy, iw, ih}, hair, 1.0f, std::max(radius - inset, 0.0f));
+    const Vec4 gold = th.accent_hover;
+    const f32 L = std::min(20.0f, std::min(iw, ih) * 0.26f);
+    constexpr f32 t = 2.0f;
+    const Vec2 tl{ix, iy}, tr{ix + iw, iy}, br{ix + iw, iy + ih}, bl{ix, iy + ih};
+    dl.line(tl, tl + Vec2{L, 0.0f}, t, gold);
+    dl.line(tl, tl + Vec2{0.0f, L}, t, gold);
+    dl.line(tr, tr - Vec2{L, 0.0f}, t, gold);
+    dl.line(tr, tr + Vec2{0.0f, L}, t, gold);
+    dl.line(br, br - Vec2{L, 0.0f}, t, gold);
+    dl.line(br, br - Vec2{0.0f, L}, t, gold);
+    dl.line(bl, bl + Vec2{L, 0.0f}, t, gold);
+    dl.line(bl, bl - Vec2{0.0f, L}, t, gold);
 }
 
 // ---- Label ---------------------------------------------------------------
