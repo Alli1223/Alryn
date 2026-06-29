@@ -136,23 +136,29 @@ void ClientApp::draw_hud() {
                   3.0f);
         draw.rect(Vec4{24.0f, 22.0f + ts * 2.6f, 220.0f * std::max(wf, 0.0f), 12.0f},
                   Vec4{glm::mix(Vec3{0.8f, 0.3f, 0.2f}, Vec3{0.5f, 0.7f, 0.4f}, wf), 0.95f}, 3.0f);
+        // Status + bonus lines, stacked in ONE left column below the health bar with a running y
+        // cursor. (The bonuses used to sit in a fixed right-hand column at x=252, which the wide
+        // status line - "TEND THE CART TO REPAIR IT" - ran straight into, overlapping the text.)
+        f32 oy = 22.0f + ts * 2.6f + 18.0f; // just below the wagon health bar
         // LAST STAND: a near-wrecked wagon rallies the defenders (ramping their damage) - flag it.
         if (wf > 0.0f && wf < kLastStandThreshold) {
             const int lsb = static_cast<int>(std::lround((last_stand_mult(wf) - 1.0f) * 100.0f));
             const f32 pulse = 0.55f + 0.45f * std::sin(elapsed_ * 9.0f);
-            draw.text(Vec2{24.0f, 22.0f + ts * 2.6f + 16.0f},
-                      std::format("LAST STAND  +{}% DMG", lsb), ts * 0.82f,
+            draw.text(Vec2{24.0f, oy}, std::format("LAST STAND  +{}% DMG", lsb), ts * 0.82f,
                       Vec4{1.0f, 0.3f + 0.25f * pulse, 0.2f, 1.0f});
+            oy += ts * 1.05f;
         } else if (wf > 0.0f && wf < 0.999f && snapshot_.enemies.empty()) {
             // Damaged + no raiders left: prompt the field-repair (stay near the cart to mend it).
-            draw.text(Vec2{24.0f, 22.0f + ts * 2.6f + 16.0f}, "TEND THE CART TO REPAIR IT",
-                      ts * 0.78f, Vec4{0.55f, 0.9f, 0.65f, 1.0f});
+            draw.text(Vec2{24.0f, oy}, "TEND THE CART TO REPAIR IT", ts * 0.78f,
+                      Vec4{0.55f, 0.9f, 0.65f, 1.0f});
+            oy += ts * 1.05f;
         }
         // Intact-delivery bonus: keeping the wagon's health up earns up to +bonus pay on arrival, so
         // it's worth fighting the ambushers off rather than just outrunning them.
         const int ibonus = static_cast<int>(std::lround((intact_bonus_mult(wf) - 1.0f) * 100.0f));
-        draw.text(Vec2{252.0f, 22.0f + ts * 2.6f - 1.0f}, std::format("INTACT +{}% PAY", ibonus),
-                  ts * 0.62f, Vec4{glm::mix(Vec3{0.85f, 0.5f, 0.3f}, Vec3{0.6f, 0.86f, 0.5f}, wf), 1.0f});
+        draw.text(Vec2{24.0f, oy}, std::format("INTACT +{}% PAY", ibonus), ts * 0.62f,
+                  Vec4{glm::mix(Vec3{0.85f, 0.5f, 0.3f}, Vec3{0.6f, 0.86f, 0.5f}, wf), 1.0f});
+        oy += ts * 0.85f;
         // Rush bonus: delivering fast pays extra (it decays over the route), so there's a real choice -
         // hurry past the ambushers, or stop and fight for the intact bonus. Approximate client estimate
         // (route ~ 1.3x the straight line); the server's payout is authoritative.
@@ -160,16 +166,18 @@ void ClientApp::draw_hud() {
         const int rbonus =
             static_cast<int>(std::lround((rush_bonus_mult(haul_elapsed_, rush_expected_time(sld)) - 1.0f) * 100.0f));
         if (rbonus > 0) {
-            draw.text(Vec2{252.0f, 22.0f + ts * 2.6f + 13.0f}, std::format("RUSH +{}% PAY", rbonus),
-                      ts * 0.62f, Vec4{0.95f, 0.78f, 0.42f, 1.0f});
+            draw.text(Vec2{24.0f, oy}, std::format("RUSH +{}% PAY", rbonus), ts * 0.62f,
+                      Vec4{0.95f, 0.78f, 0.42f, 1.0f});
+            oy += ts * 0.85f;
         }
         // Kill bounty: a running tally of raiders felled this haul + the bonus it pays on delivery
         // (so fighting the ambush is rewarded, not just outrunning it).
         if (snapshot_.contract_kills > 0) {
-            draw.text(Vec2{252.0f, 22.0f + ts * 2.6f + 26.0f},
+            draw.text(Vec2{24.0f, oy},
                       std::format("BOUNTY $ {}  ({} DOWN)", kill_bounty(snapshot_.contract_kills),
                                   snapshot_.contract_kills),
                       ts * 0.62f, Vec4{1.0f, 0.55f, 0.5f, 1.0f});
+            oy += ts * 0.85f;
         }
         // Contextual E hint: righting a flipped cart / handling goods take priority.
         bool carrying = false;
@@ -202,7 +210,8 @@ void ClientApp::draw_hud() {
         } else {
             hint = "[E] haul / ride the wagon";
         }
-        draw.text(Vec2{24.0f, 22.0f + ts * 4.0f}, hint, ts * 0.72f, Vec4{0.66f, 0.78f, 0.7f, 1.0f});
+        oy += ts * 0.4f; // a small gap before the contextual hint
+        draw.text(Vec2{24.0f, oy}, hint, ts * 0.72f, Vec4{0.66f, 0.78f, 0.7f, 1.0f});
         // Wheel-off: a prominent centred alert + the re-attach progress bar while someone refits.
         if (wheel_off) {
             const char* warn = "WHEEL OFF! THE WAGON IS STRANDED";
@@ -236,21 +245,21 @@ void ClientApp::draw_hud() {
         draw.text(Vec2{(W - draw.text_width(msg, bs)) * 0.5f, H * 0.34f}, msg, bs, c);
     }
 
-    draw.text(Vec2{24.0f, H - 52.0f}, "[M] MAP    [K] SKILLS    [U] GEAR", ts * 0.72f,
-              Vec4{0.72f, 0.80f, 0.88f, 1.0f});
-
-    // Health bar.
+    // Bottom-left: the health bar, with the role label and the control hints STACKED above it (they
+    // used to be pinned to overlapping y positions, so "KNIGHT" sat on top of "[M] MAP ...").
     const f32 bw = std::min(320.0f, W * 0.28f);
     const f32 bh = 18.0f;
     const f32 x = 24.0f;
-    const f32 y = H - 24.0f - bh;
+    const f32 y = H - 24.0f - bh;        // health bar
+    const f32 role_y = y - ts * 1.1f;    // role label, a clear line above the bar
+    const f32 controls_y = role_y - ts * 1.1f; // controls hint, above the role label
+    draw.text(Vec2{x, controls_y}, "[M] MAP    [K] SKILLS    [U] GEAR", ts * 0.72f,
+              Vec4{0.72f, 0.80f, 0.88f, 1.0f});
     draw.rect(Vec4{x - 3.0f, y - 3.0f, bw + 6.0f, bh + 6.0f}, Vec4{0.05f, 0.05f, 0.07f, 0.7f},
               5.0f);
     const Vec3 col = glm::mix(Vec3{0.85f, 0.2f, 0.18f}, Vec3{0.35f, 0.8f, 0.35f}, hp);
     draw.rect(Vec4{x, y, bw * std::max(hp, 0.0f), bh}, Vec4{col, 0.95f}, 4.0f);
-    // Role label above the health bar.
-    draw.text(Vec2{x, y - ts * 0.95f}, role_name(role_), ts * 0.72f,
-              Vec4{0.74f, 0.82f, 0.92f, 1.0f});
+    draw.text(Vec2{x, role_y}, role_name(role_), ts * 0.72f, Vec4{0.74f, 0.82f, 0.92f, 1.0f});
 
     // Cleric heal-channel charge bar (centre screen while charging the AOE heal).
     if (role_ == PlayerRole::Cleric && heal_charge_fx_ > 0.001f) {
