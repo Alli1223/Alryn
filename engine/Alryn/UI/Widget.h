@@ -70,6 +70,16 @@ public:
     bool dispatch_text(char c);
     bool dispatch_key(KeyCode key);
 
+    // ---- Focus navigation (keyboard / controller) ---------------------------
+    // UIContext drives these so a menu can be operated without a pointer: it tracks a focused
+    // widget, moves focus between the focusable ones in screen order, and activates / adjusts the
+    // focused one. Defaults make a widget non-focusable + inert, so containers (Panel/Label) are
+    // skipped; the interactive widgets override them. `on_activate` is a "click", `on_nav` nudges a
+    // value left/right (slider/stepper/swatches).
+    virtual bool can_focus() const { return false; }
+    virtual void on_activate() {}
+    virtual void on_nav(int dir) { (void)dir; }
+
 protected:
     // Override these in subclasses. Pointer hooks return true to consume the event.
     virtual void on_update(f32 dt) { (void)dt; }

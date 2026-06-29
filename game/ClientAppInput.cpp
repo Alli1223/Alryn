@@ -409,27 +409,54 @@ void ClientApp::apply_gamepad(Timestep dt) {
     pad_lt_prev_ = lt;
     auto pressed = [&](int b) { return in->pad_pressed(b); };
 
-    // The main menu still uses the mouse (controller menu navigation is a separate task).
-    if (state_ != AppState::Playing) {
-        return;
-    }
-    // While a menu / overlay is up, the pad only closes it (Start = pause, Back/B = back, B closes
-    // an overlay). Full focus navigation is a separate task.
-    if (paused_) {
-        if (pressed(pad::Start) || pressed(pad::B)) {
-            escape_pressed();
-        }
-        return;
-    }
-    if (map_open_ || skills_open_ || wardrobe_open_) {
+    // The full-screen overlays (map / skills / wardrobe) aren't focus-navigable lists - the pad just
+    // closes them (the same B/Back that opened them).
+    if (state_ == AppState::Playing && (map_open_ || skills_open_ || wardrobe_open_)) {
         if (pressed(pad::B) || pressed(pad::Back)) {
             map_open_ = skills_open_ = wardrobe_open_ = false;
-        } else if (pressed(pad::Start)) {
-            escape_pressed();
         }
         return;
     }
-    // Back opens the map; Start opens the pause menu.
+    // The main menu (Menu state) and the in-game pause menu (paused_) are widget trees we navigate by
+    // focus: D-pad up/down moves between controls, left/right adjusts a slider/stepper/swatch, A
+    // activates, B goes back. The mouse and pad share the menu - mouse motion hides the focus ring.
+    if (state_ != AppState::Playing || paused_) {
+        if (!using_gamepad_) {
+            ui_.clear_focus();
+            return;
+        }
+        bool navigated = false;
+        if (pressed(pad::DDown)) {
+            ui_.focus_move(+1);
+            navigated = true;
+        } else if (pressed(pad::DUp)) {
+            ui_.focus_move(-1);
+            navigated = true;
+        }
+        if (pressed(pad::DRight)) {
+            ui_.focus_nav(+1);
+            navigated = true;
+        } else if (pressed(pad::DLeft)) {
+            ui_.focus_nav(-1);
+            navigated = true;
+        }
+        if (pressed(pad::A)) {
+            ui_.focus_activate();
+            navigated = true;
+        }
+        // B = back (resume when paused), but never on the root menu screen (escape_pressed -> close()
+        // there would quit the game out from under the player); Start resumes from the pause menu.
+        const bool on_root_menu = state_ == AppState::Menu && current_screen_ == Screen::Main;
+        if ((pressed(pad::B) && !on_root_menu) || (paused_ && pressed(pad::Start))) {
+            escape_pressed();
+            navigated = true;
+        }
+        if (!navigated && !ui_.has_focus()) {
+            ui_.focus_move(+1); // entering a menu with the pad: show the ring on the first control
+        }
+        return;
+    }
+    // In-game: Back opens the map; Start opens the pause menu.
     if (pressed(pad::Back)) {
         map_open_ = true;
         skills_open_ = wardrobe_open_ = false;

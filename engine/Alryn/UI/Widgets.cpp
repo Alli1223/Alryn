@@ -115,6 +115,12 @@ bool Button::on_pointer_up(const Vec2& p, int button) {
     return true;
 }
 
+void Button::on_activate() {
+    if (enabled && on_click) {
+        on_click();
+    }
+}
+
 // ---- Toggle --------------------------------------------------------------
 Rect Toggle::switch_rect() const {
     constexpr f32 w = 48.0f;
@@ -154,6 +160,14 @@ bool Toggle::on_pointer_down(const Vec2& p, int button) {
     }
     return false;
 }
+
+void Toggle::on_activate() {
+    value = !value;
+    if (on_change) {
+        on_change(value);
+    }
+}
+void Toggle::on_nav(int /*dir*/) { on_activate(); } // left or right just flips it
 
 // ---- Slider --------------------------------------------------------------
 Rect Slider::track_rect() const {
@@ -229,6 +243,21 @@ bool Slider::on_pointer_up(const Vec2& /*p*/, int button) {
     return false;
 }
 
+void Slider::on_nav(int dir) {
+    const f32 span = max_value - min_value;
+    const f32 stepv = integer ? 1.0f : span * 0.05f; // 5% of the range per press
+    f32 v = glm::clamp(value + static_cast<f32>(dir) * stepv, min_value, max_value);
+    if (integer) {
+        v = std::round(v);
+    }
+    if (v != value) {
+        value = v;
+        if (on_change) {
+            on_change(value);
+        }
+    }
+}
+
 // ---- Stepper -------------------------------------------------------------
 Rect Stepper::left_arrow() const {
     return Rect{bounds.x + bounds.w - 180.0f, bounds.y + (bounds.h - 30.0f) * 0.5f, 30.0f, 30.0f};
@@ -289,6 +318,9 @@ bool Stepper::on_pointer_down(const Vec2& p, int button) {
     return false;
 }
 
+void Stepper::on_activate() { step(1); }   // advance one option
+void Stepper::on_nav(int dir) { step(dir); }
+
 // ---- SwatchRow -----------------------------------------------------------
 Rect SwatchRow::swatch_rect(usize i) const {
     const usize n = colors.empty() ? 1 : colors.size();
@@ -339,6 +371,18 @@ bool SwatchRow::on_pointer_down(const Vec2& p, int button) {
     }
     return false;
 }
+
+void SwatchRow::on_nav(int dir) {
+    if (colors.empty()) {
+        return;
+    }
+    const int n = static_cast<int>(colors.size());
+    index = static_cast<usize>(((static_cast<int>(index) + dir) % n + n) % n);
+    if (on_change) {
+        on_change(index);
+    }
+}
+void SwatchRow::on_activate() { on_nav(1); } // advance one swatch
 
 // ---- TextField -----------------------------------------------------------
 void TextField::on_update(f32 dt) { caret_blink_ = std::fmod(caret_blink_ + dt, 1.0f); }
@@ -393,5 +437,9 @@ bool TextField::on_key(KeyCode key) {
     }
     return false;
 }
+
+// A / Enter toggles keyboard focus; the value itself is still typed on the keyboard (no on-screen
+// keyboard), so this just lets a pad user arm the field before typing the host IP.
+void TextField::on_activate() { focused = !focused; }
 
 } // namespace alryn::ui

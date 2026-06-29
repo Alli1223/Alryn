@@ -319,6 +319,7 @@ void ClientApp::on_update(Timestep dt) {
             terrain_->update(local_feet(), renderer_->device());
         }
     } else if (renderer_ != nullptr) {
+        apply_gamepad(dt); // controller drives the main-menu focus navigation (in-game path is above)
         renderer_->set_sky_color(menu_sky_); // calm backdrop behind the menu
         if (current_screen_ == Screen::Customise) {
             preview_turn_ += dt.seconds * 0.6f; // slow turntable

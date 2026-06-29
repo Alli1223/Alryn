@@ -199,3 +199,58 @@ TEST_CASE("UIContext routes events to its root tree") {
     // A click in empty space is not consumed.
     CHECK_FALSE(ui.pointer_down(Vec2{10.0f, 10.0f}, 0));
 }
+
+TEST_CASE("UIContext focus navigation (controller/keyboard): order, skip, activate, adjust, wrap") {
+    UIContext ui;
+    ui.set_screen(800.0f, 600.0f);
+
+    int a_clicks = 0;
+    int b_clicks = 0;
+    auto& title = ui.root().add<Label>("TITLE", 30.0f); // a Label is not focusable - it's skipped
+    title.bounds = Rect{100.0f, 40.0f, 200.0f, 40.0f};
+    auto& a = ui.root().add<Button>("A", [&] { ++a_clicks; });
+    a.bounds = Rect{100.0f, 100.0f, 200.0f, 50.0f};
+    auto& step = ui.root().add<Stepper>("OPT", std::vector<std::string>{"X", "Y", "Z"}, 0);
+    step.bounds = Rect{100.0f, 200.0f, 300.0f, 50.0f};
+    auto& b = ui.root().add<Button>("B", [&] { ++b_clicks; });
+    b.bounds = Rect{100.0f, 300.0f, 200.0f, 50.0f};
+
+    // A frame's update() establishes the focusable count and starts with nothing focused (no ring).
+    ui.update(0.016f, Vec2{-1.0f, -1.0f});
+    CHECK_FALSE(ui.has_focus());
+
+    // First "down" lands on the top-most focusable control (Button A) - the Label is skipped.
+    ui.focus_move(+1);
+    CHECK(ui.has_focus());
+    ui.focus_activate();
+    CHECK(a_clicks == 1);
+
+    // Down moves to the Stepper; left/right adjust it in place without firing a button.
+    ui.focus_move(+1);
+    CHECK(step.index == 0);
+    ui.focus_nav(+1);
+    CHECK(step.index == 1);
+    ui.focus_nav(-1);
+    CHECK(step.index == 0);
+    CHECK(a_clicks == 1);
+
+    // Down to Button B and activate it.
+    ui.focus_move(+1);
+    ui.focus_activate();
+    CHECK(b_clicks == 1);
+
+    // Wrap-around: from the last control, "down" returns to the first.
+    ui.focus_move(+1);
+    ui.focus_activate();
+    CHECK(a_clicks == 2);
+
+    // "Up" from the first wraps to the last.
+    ui.focus_move(-1);
+    ui.focus_activate();
+    CHECK(b_clicks == 2);
+
+    // A menu rebuild (the focusable set changes) drops the now-stale focus on the next frame.
+    ui.root().clear_children();
+    ui.update(0.016f, Vec2{-1.0f, -1.0f});
+    CHECK_FALSE(ui.has_focus());
+}
