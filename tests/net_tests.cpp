@@ -109,6 +109,7 @@ TEST_CASE("Net: message serialization round-trips") {
                                1 /*has_horse*/, 4 /*aboard*/, 6 /*total*/});
     snapshot.wagons[0].wheel_off = 1;
     snapshot.wagons[0].wheel_index = 2; // a shed wheel on axle 2
+    snapshot.wagons[0].cargo_kind = static_cast<u8>(CargoKind::Casks); // hauling ale
     snapshot.goods.push_back({77u, Vec3{12.0f, 1.0f, 13.0f}, 1});  // a fallen crate (loose)
     snapshot.goods.push_back({78u, Vec3{0.2f, 0.55f, -0.1f}, 0}); // a crate in the bed (local pos)
     snapshot.auras.push_back({Vec3{3.0f, 1.0f, -5.0f}, 5.0f, 0}); // a Cleric heal aura
@@ -194,6 +195,7 @@ TEST_CASE("Net: message serialization round-trips") {
     CHECK(decoded.wagons[0].goods_total == 6);
     CHECK(decoded.wagons[0].wheel_off == 1);
     CHECK(decoded.wagons[0].wheel_index == 2); // which axle shed survives the wire
+    CHECK(decoded.wagons[0].cargo_kind == static_cast<u8>(CargoKind::Casks)); // cargo kind round-trips
     CHECK(decoded.players[0].seated == 0);
     CHECK(decoded.players[1].seated == 1);
     CHECK(decoded.players[0].carrying == 0);

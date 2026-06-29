@@ -418,6 +418,14 @@ void GameServer::generate_offers() {
         }
         type = static_cast<u8>(std::min<u32>(type, vehicle_type_count() - 1u));
         wg.type = type;
+        // Cargo kind: the enclosed covered wagon (tall-walled bed) carries PASSENGERS; open
+        // carts/wagons carry WEAPONS or CASKS of ale, alternating deterministically by offer id so
+        // the board mixes the two and the client agrees without an extra wire negotiation.
+        if (vehicle_type(type).bed().wall > 2.0f) {
+            wg.cargo_kind = static_cast<u8>(CargoKind::Passengers);
+        } else {
+            wg.cargo_kind = static_cast<u8>((wg.id % 2u == 0u) ? CargoKind::Weapons : CargoKind::Casks);
+        }
         // A per-offer modifier (hazardous / bulk / safe, deterministic from the id) varies the pay.
         wg.reward = static_cast<u32>(
             std::lround(contract_reward(dist, difficulty, false) *

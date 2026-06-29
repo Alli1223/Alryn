@@ -145,4 +145,10 @@ inline const Vec3 kDeerLegs[4] = {
 // client can tint it per-fish by biome (bright tropical vs silver/dark freshwater).
 MeshData build_fish_body();
 
+// Cargo meshes for the wagon-contract loads (CargoKind), sized to the cargo-crate footprint with
+// the base at y = 0: a crate of ARMS (spears + a sword poking out) and a CASK of ale (a hooped
+// barrel on its side, along local +X so it reads as one that rolls).
+MeshData build_cargo_weapons();
+MeshData build_cargo_casks();
+
 } // namespace alryn

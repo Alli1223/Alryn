@@ -221,11 +221,23 @@ void ClientApp::draw_wagons() {
     }
 }
 
+const Mesh& ClientApp::cargo_mesh() const {
+    if (const net::WagonState* aw = active_wagon()) {
+        switch (static_cast<CargoKind>(aw->cargo_kind)) {
+            case CargoKind::Weapons: return cargo_weapons_mesh_;
+            case CargoKind::Casks: return cargo_casks_mesh_;
+            default: break; // Passengers (covered wagon) carry no loose crates; fall back to the crate
+        }
+    }
+    return goods_mesh_;
+}
+
 void ClientApp::draw_goods() {
     if (renderer_ == nullptr || !have_snapshot_) {
         return;
     }
     const net::WagonState* aw = active_wagon();
+    const Mesh& cargo = cargo_mesh();
     const Mat4 cart = aw != nullptr ? wagon_model(*aw, wagon_frame_move(*aw)) : Mat4{1.0f};
     for (const net::GoodState& g : snapshot_.goods) {
         Mat4 m;
@@ -238,7 +250,7 @@ void ClientApp::draw_goods() {
                 glm::rotate(Mat4{1.0f}, static_cast<f32>(g.id) * 1.3f, Vec3{0.0f, 1.0f, 0.0f}) *
                 glm::rotate(Mat4{1.0f}, 0.18f, Vec3{1.0f, 0.0f, 0.0f});
         }
-        renderer_->draw(goods_mesh_, m);
+        renderer_->draw(cargo, m);
     }
 }
 
@@ -247,7 +259,7 @@ void ClientApp::draw_carried_good(const Vec3& feet, f32 yaw) {
     const Vec3 pos = feet + Vec3{0.0f, 0.85f, 0.0f} + fwd * 0.35f;
     const Mat4 m = glm::translate(Mat4{1.0f}, pos) *
                    glm::rotate(Mat4{1.0f}, -yaw, Vec3{0.0f, 1.0f, 0.0f});
-    renderer_->draw(goods_mesh_, m);
+    renderer_->draw(cargo_mesh(), m);
 }
 
 void ClientApp::draw_ropes(u32 id) {

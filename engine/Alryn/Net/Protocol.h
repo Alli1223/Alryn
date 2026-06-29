@@ -124,6 +124,7 @@ struct WagonState {
     u8 wheel_index = 0;   // which axle shed its wheel (0..3) - the cart lists onto that corner
     Vec3 wheel_pos{0.0f}; // the fallen/carried wheel's world position (when wheel_off)
     u8 repair = 0;        // 0..255 wheel re-attach progress
+    u8 cargo_kind = 0;    // CargoKind: weapons / casks / passengers (drives the cargo look)
 };
 
 // A burning building, broadcast so clients render flames at its position. A low

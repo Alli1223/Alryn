@@ -182,6 +182,7 @@ void write(ByteWriter& w, const Snapshot& s) {
         w.write_u8(wg.wheel_index);
         w.write_vec3(wg.wheel_pos);
         w.write_u8(wg.repair);
+        w.write_u8(wg.cargo_kind);
     }
     w.write_u16(static_cast<u16>(s.goods.size()));
     for (const GoodState& g : s.goods) {
@@ -325,6 +326,7 @@ bool read(ByteReader& r, Snapshot& s) {
         wg.wheel_index = r.read_u8();
         wg.wheel_pos = r.read_vec3();
         wg.repair = r.read_u8();
+        wg.cargo_kind = r.read_u8();
         s.wagons.push_back(wg);
     }
     const u16 good_count = r.read_u16();

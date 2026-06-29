@@ -885,6 +885,10 @@ private:
     std::vector<Fish> fish_;
     Mesh rope_mesh_;            // a unit harness-trace link, drawn per rope segment
     Mesh goods_mesh_;           // a cargo crate (spilled on the ground / carried by a player)
+    Mesh cargo_weapons_mesh_;   // crate of arms (CargoKind::Weapons)
+    Mesh cargo_casks_mesh_;     // cask of ale (CargoKind::Casks)
+    // The cargo mesh for the active wagon's CargoKind (weapons crate / ale cask / default crate).
+    const Mesh& cargo_mesh() const;
     std::unordered_map<u32, f32> wagon_roll_;  // accumulated wheel spin per wagon id
     // Smoothed render state per wagon: the raw authoritative position arrives in lumpy snapshot
     // steps, so we ease a render position toward it each frame. Everything visual (the cart mesh,

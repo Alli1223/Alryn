@@ -359,6 +359,7 @@ void GameServer::tick(Timestep dt) {
         s.votes = votes;
         s.goods_aboard = static_cast<u8>(cargo_.size()); // crates still in the bed
         s.goods_total = w.goods_total;
+        s.cargo_kind = w.cargo_kind;
         if (with_horse) {
             s.has_horse = 1;
             s.horse_pos = horse_pos_;

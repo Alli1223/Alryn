@@ -14,6 +14,21 @@ void add_box(MeshData& m, const Vec3& lo, const Vec3& hi, const Vec3& color) {
     }
 }
 
+// Append `src` transformed by `xf` (positions + normals), tinted by `tint`.
+void append_xf(MeshData& m, const MeshData& src, const Mat4& xf, const Vec3& tint) {
+    const Mat3 nm{xf};
+    const u32 base = static_cast<u32>(m.vertices.size());
+    for (Vertex v : src.vertices) {
+        v.position = Vec3{xf * Vec4{v.position, 1.0f}};
+        v.normal = glm::normalize(nm * v.normal);
+        v.color *= tint;
+        m.vertices.push_back(v);
+    }
+    for (u32 i : src.indices) {
+        m.indices.push_back(base + i);
+    }
+}
+
 const Vec3 kWood{0.45f, 0.32f, 0.18f};
 const Vec3 kDark{0.27f, 0.19f, 0.11f};
 const Vec3 kMetal{0.30f, 0.30f, 0.33f};
@@ -256,6 +271,55 @@ MeshData build_deer_leg() {
     const Vec3 hoof{0.12f, 0.1f, 0.09f};
     add_box(m, {-0.05f, -0.92f, -0.05f}, {0.05f, 0.0f, 0.05f}, hide); // slim leg
     add_box(m, {-0.06f, -0.98f, -0.06f}, {0.06f, -0.92f, 0.06f}, hoof);
+    return m;
+}
+
+// A crate of ARMS: a stout crate with spears + a sword standing in it, blades poking out the top.
+// Sized to the cargo crate footprint (kCargoHalf ~ 0.2), base sits at y = 0.
+MeshData build_cargo_weapons() {
+    MeshData m;
+    const Vec3 crate_c{0.40f, 0.29f, 0.17f};
+    const Vec3 shaft{0.34f, 0.24f, 0.13f};
+    const Vec3 steel{0.62f, 0.64f, 0.70f};
+    const Vec3 hilt{0.55f, 0.42f, 0.20f};
+    append_xf(m, primitives::crate({-0.21f, 0.0f, -0.21f}, {0.21f, 0.28f, 0.21f}, crate_c), Mat4{1.0f},
+              Vec3{1.0f});
+    // Spears stood up in the crate: a thin shaft + a steel blade tip.
+    const Vec3 spears[] = {{-0.10f, 0.0f, -0.06f}, {0.07f, 0.0f, 0.09f}, {0.11f, 0.0f, -0.10f}};
+    const f32 lens[] = {0.30f, 0.24f, 0.36f};
+    for (int i = 0; i < 3; ++i) {
+        const f32 x = spears[i].x, z = spears[i].z, h = lens[i];
+        add_box(m, {x - 0.016f, 0.16f, z - 0.016f}, {x + 0.016f, 0.16f + h, z + 0.016f}, shaft);
+        add_box(m, {x - 0.028f, 0.16f + h, z - 0.01f}, {x + 0.028f, 0.16f + h + 0.11f, z + 0.01f}, steel);
+    }
+    // A sword stood against the back: flat blade + crossguard + grip.
+    add_box(m, {-0.16f, 0.20f, 0.05f}, {-0.10f, 0.62f, 0.07f}, steel);     // blade
+    add_box(m, {-0.18f, 0.18f, 0.03f}, {-0.08f, 0.21f, 0.09f}, hilt);      // crossguard
+    add_box(m, {-0.145f, 0.10f, 0.045f}, {-0.115f, 0.18f, 0.075f}, hilt);  // grip
+    return m;
+}
+
+// A CASK of ale: a hooped barrel lying on its side (along local +X, so it reads as one that rolls).
+// Centred on the cargo-crate footprint, resting at bed height.
+MeshData build_cargo_casks() {
+    MeshData m;
+    const Vec3 wood{0.47f, 0.31f, 0.16f};
+    const Vec3 hoop{0.22f, 0.20f, 0.20f};
+    const Vec3 endc{0.40f, 0.26f, 0.13f};
+    // A horizontal cylinder ring along +X: rotate the (Y-axis) cylinder 90deg about Z, scale to
+    // (length along X, diameter), translate to (x, y=cask-radius, 0).
+    const f32 cy = 0.18f; // barrel radius -> rests with its axis at this height
+    auto ring = [&](f32 x0, f32 x1, f32 r, const Vec3& c) {
+        const Mat4 xf = glm::translate(Mat4{1.0f}, Vec3{(x0 + x1) * 0.5f, cy, 0.0f}) *
+                        glm::rotate(Mat4{1.0f}, glm::half_pi<f32>(), Vec3{0.0f, 0.0f, 1.0f}) *
+                        glm::scale(Mat4{1.0f}, Vec3{r * 2.0f, (x1 - x0), r * 2.0f});
+        append_xf(m, primitives::cylinder(12, c), xf, Vec3{1.0f});
+    };
+    ring(-0.22f, 0.22f, 0.16f, wood);  // staves (body), slightly inset ends
+    ring(-0.235f, -0.18f, 0.135f, endc); // end cap (smaller radius -> the barrel bulges in the middle)
+    ring(0.18f, 0.235f, 0.135f, endc);
+    ring(-0.10f, -0.05f, 0.172f, hoop); // hoops
+    ring(0.05f, 0.10f, 0.172f, hoop);
     return m;
 }
 

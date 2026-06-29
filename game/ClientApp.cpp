@@ -82,6 +82,9 @@ void ClientApp::on_init() {
     goods_mesh_.create(renderer_->device(),
                        primitives::crate(Vec3{-0.22f, 0.0f, -0.22f}, Vec3{0.22f, 0.44f, 0.22f},
                                          Vec3{0.55f, 0.40f, 0.22f}));
+    // Per-cargo-kind looks: a crate of weapons + a cask of ale (chosen by the active wagon's kind).
+    cargo_weapons_mesh_.create(renderer_->device(), build_cargo_weapons());
+    cargo_casks_mesh_.create(renderer_->device(), build_cargo_casks());
     // A large wave grid that follows the player; the water shader animates it.
     water_mesh_.create(renderer_->device(), primitives::grid(80, 2.0f, Vec3{0.1f, 0.3f, 0.4f}));
     // A unit-length plank bridge, stretched per river crossing where a road bridges a river.
@@ -562,6 +565,8 @@ void ClientApp::on_shutdown() {
     fish_body_mesh_.destroy();
     rope_mesh_.destroy();
     goods_mesh_.destroy();
+    cargo_weapons_mesh_.destroy();
+    cargo_casks_mesh_.destroy();
     water_mesh_.destroy();
     bridge_mesh_stone_.destroy();
     bridge_mesh_wood_.destroy();

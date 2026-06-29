@@ -128,6 +128,24 @@ inline constexpr f32 kBanditWaveInterval = 8.0f; // seconds between bandit waves
 inline constexpr u32 kBanditWaveSize = 2;        // bandits per wave
 inline constexpr usize kRepairBanditCap = 8;     // don't pile on past this many ambushers at once
 
+// What a wagon is hauling. Open carts/wagons carry crates of WEAPONS or CASKS of ale (which slide
+// in the bed, spill on rough ground + can be reloaded); the enclosed covered wagon carries
+// PASSENGERS (nobles who board from a house + disembark at the destination). Deterministic per
+// offer so the server + client agree without an extra negotiation.
+enum class CargoKind : u8 {
+    Weapons = 0,    // crates of arms - blades/spears poking out
+    Casks = 1,      // barrels of ale that roll about
+    Passengers = 2, // people riding the covered wagon
+};
+inline const char* cargo_kind_name(CargoKind k) {
+    switch (k) {
+        case CargoKind::Weapons: return "ARMS";
+        case CargoKind::Casks: return "ALE CASKS";
+        case CargoKind::Passengers: return "PASSENGERS";
+    }
+    return "CARGO";
+}
+
 // A transport wagon: an offer while Parked, the active cargo once accepted.
 struct Wagon {
     u32 id = 0;
@@ -144,6 +162,7 @@ struct Wagon {
     f32 progress = 0.0f;          // index-space progress along `route` (driver)
     u8 ambush_waves_spawned = 0;  // how many ambush waves have triggered
     u8 goods_total = 0;           // crates a full load carries (reward scales by aboard/total)
+    u8 cargo_kind = 0;            // CargoKind: weapons / casks / passengers
 };
 
 // Index of the route node nearest `pos` (the cart's current spot). Used to resume a hired driver from
