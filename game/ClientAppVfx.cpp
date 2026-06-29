@@ -582,18 +582,20 @@ void ClientApp::draw_surf() {
             const f32 along = glm::dot(Vec2{wx, wz}, tangent);
             const f32 wave = 0.5f + 0.5f * std::sin(t * 1.4f + along * 0.5f);
             const f32 crest = glm::smoothstep(0.2f, 1.0f, wave);
-            const f32 a = fade * (0.16f + 0.34f * crest); // soft, always a hint, brighter at the crest
-            if (a < 0.02f) {
+            const f32 a = fade * (0.4f + 0.45f * crest); // a clear foam line, brightest at the crest
+            if (a < 0.04f) {
                 continue;
             }
             const Vec2 p = Vec2{wx, wz} + up_slope * (crest * 0.4f - 0.1f); // laps at the waterline
             const f32 ang = std::atan2(-tangent.y, tangent.x);   // local +X -> shore tangent
             const f32 len = 1.5f + hcell(cx, cz, 7) * 0.7f;      // a streak spanning ~the cell
             const f32 wid = 0.26f + crest * 0.18f;               // thin across, swells a touch
+            // A flat single-sided up-quad (NOT a box): a flattened solid would show its dark
+            // underside in the no-depth-write transparent pass, rendering the foam black.
             const Mat4 m = glm::translate(Mat4{1.0f}, Vec3{p.x, worldgen::water_level + 0.05f, p.y}) *
                            glm::rotate(Mat4{1.0f}, ang, Vec3{0.0f, 1.0f, 0.0f}) *
-                           glm::scale(Mat4{1.0f}, Vec3{len, 0.05f, wid});
-            renderer_->draw_transparent(shape_box_, m, Vec4{0.95f, 0.98f, 1.0f, a});
+                           glm::scale(Mat4{1.0f}, Vec3{len, 1.0f, wid});
+            renderer_->draw_transparent(shape_quad_, m, Vec4{0.95f, 0.98f, 1.0f, a});
         }
     }
 }

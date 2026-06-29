@@ -770,6 +770,7 @@ private:
     Mesh shape_cylinder_;
     Mesh shape_capsule_;
     Mesh shape_rounded_;
+    Mesh shape_quad_; // a flat single-sided up-facing unit quad (shore foam streaks)
     std::vector<Vertex> skin_scratch_; // reused buffer for CPU-skinning a body each frame (no per-frame alloc)
     std::vector<std::pair<int, Mesh>> mesh_graveyard_; // retired NPC body meshes, freed after a few frames
     Mesh marker_;

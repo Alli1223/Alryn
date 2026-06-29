@@ -121,6 +121,7 @@ void ClientApp::on_init() {
     shape_cylinder_.create(renderer_->device(), primitives::cylinder(16, Vec3{1.0f}));
     shape_capsule_.create(renderer_->device(), primitives::capsule(18, 6, Vec3{1.0f}));
     shape_rounded_.create(renderer_->device(), primitives::rounded_box(0.32f, Vec3{1.0f}));
+    shape_quad_.create(renderer_->device(), primitives::grid(1, 1.0f, Vec3{1.0f})); // flat up-quad
 
     // Upload the prop catalogue (bushes, rocks, logs, fences, lanterns) to GPU.
     auto upload_props = [&](const std::vector<PropDef>& defs, std::vector<GpuProp>& out) {
@@ -526,6 +527,7 @@ void ClientApp::on_shutdown() {
     shape_cylinder_.destroy();
     shape_capsule_.destroy();
     shape_rounded_.destroy();
+    shape_quad_.destroy();
     for (auto& tv : tree_library_) {
         tv.trunk.destroy();
         tv.foliage.destroy();
