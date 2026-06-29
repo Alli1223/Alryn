@@ -64,21 +64,26 @@ void ClientApp::setup_cloth(PlayerVisual& v, PlayerRole role, const Equipment& e
         v.cloth.push_back(std::move(c));
     };
 
-    // A robe skirt: a ring of chains hanging off the waist, drawn as a closed tube around the legs.
+    // A flowing robe / surcoat: a ring of chains draped from the UPPER BODY (the shoulder line), not
+    // the waist, drawn as a closed tube down over the torso + legs - so every character's cloth
+    // "starts" at the shoulders like a real robe/cloak rather than spawning at the hips. Anchored to
+    // the Torso bone (it follows the body's lean, not the head) with a y-offset up to the shoulders.
     auto add_skirt = [&](const Vec3& color, f32 radius, int segs, f32 seg, f32 flare, f32 wind_gain) {
         ClothInstance c;
-        c.anchor = BonePart::Pelvis;
+        c.anchor = BonePart::Torso;
         c.ring = true;
         c.segments = segs;
         c.seg = seg;
-        c.collide_r = 0.28f; // a skirt wraps just outside the leg+outfit cluster (~0.25-0.27)
+        c.collide_r = 0.31f; // wrap just outside the torso + tucked arms
         c.color = color;
-        constexpr int kN = 8; // panels around the waist
+        constexpr int kN = 8;          // panels around the body
+        constexpr f32 top_y = 0.42f;   // up to the shoulder line above the Torso joint
+        const f32 ring_r = radius + 0.05f; // a touch wider so the collar clears the chest at the shoulders
         c.chains.resize(kN);
         for (int i = 0; i < kN; ++i) {
             const f32 ang = TwoPi * static_cast<f32>(i) / static_cast<f32>(kN);
             const Vec3 radial{std::sin(ang), 0.0f, std::cos(ang)};
-            c.anchor_locals.push_back(radial * radius + Vec3{0.0f, 0.06f, 0.0f}); // the waist ring
+            c.anchor_locals.push_back(radial * ring_r + Vec3{0.0f, top_y, 0.0f}); // the shoulder ring
             c.hang_locals.push_back(glm::normalize(radial * flare + Vec3{0.0f, -1.0f, 0.0f})); // down + flared
             c.chains[static_cast<usize>(i)].stiffness = 0.6f;
             c.chains[static_cast<usize>(i)].damping = 0.07f;
@@ -93,17 +98,17 @@ void ClientApp::setup_cloth(PlayerVisual& v, PlayerRole role, const Equipment& e
     } else if (vt == 2 && role == PlayerRole::Hunter) {
         add_cape(pal.dark, 1.5f); // the beastmaster's tattered dark cape
     }
-    // A flowing cloth LOWER GARMENT on every role (an 8-panel skirt/robe tube over the waist), so they
-    // all wear cloth, not just a cape - the Mage/Cleric's long robe, the Knight's surcoat over the
-    // plate, the Hunter's leather tunic skirt.
+    // A flowing cloth garment on every role, now draped from the SHOULDERS (above) - the Mage/Cleric's
+    // long robe, the Knight's surcoat over the plate, the Hunter's tunic. Segment counts are raised
+    // vs the old waist skirt so the hems still reach down from the higher anchor.
     if (role == PlayerRole::Mage) {
-        add_skirt(pal.primary, 0.17f, 6, 0.15f, 0.34f, 1.0f);
+        add_skirt(pal.primary, 0.17f, 9, 0.15f, 0.34f, 1.0f);
     } else if (role == PlayerRole::Cleric) {
-        add_skirt(pal.primary, 0.17f, 7, 0.15f, 0.3f, 0.9f);
+        add_skirt(pal.primary, 0.17f, 10, 0.15f, 0.3f, 0.9f);
     } else if (role == PlayerRole::Knight) {
-        add_skirt(pal.primary, 0.19f, 4, 0.13f, 0.26f, 0.7f); // surcoat to mid-thigh
+        add_skirt(pal.primary, 0.19f, 7, 0.13f, 0.26f, 0.7f); // surcoat from the shoulders to mid-thigh
     } else if (role == PlayerRole::Hunter) {
-        add_skirt(pal.primary, 0.17f, 3, 0.12f, 0.3f, 0.9f); // a short tunic skirt
+        add_skirt(pal.primary, 0.17f, 6, 0.12f, 0.3f, 0.9f); // a tunic from the shoulders
     }
 
     // Minor flowing pieces.
