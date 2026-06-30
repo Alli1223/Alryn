@@ -213,6 +213,7 @@ private:
     vk::Pipeline pipeline_vegetation_;
     vk::Pipeline pipeline_shadow_;
     vk::Pipeline pipeline_ui_;
+    vk::Pipeline pipeline_sky_; // gradient sky + sun disc (drawn first in the main pass)
     VkPipeline current_pipeline_ = VK_NULL_HANDLE; // avoids redundant binds within a frame
 
     // Shadow map: a depth texture rendered from the sun, sampled in the main pass.

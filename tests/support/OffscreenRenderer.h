@@ -45,9 +45,16 @@ public:
 
     // Renders the draws and returns RGBA8 pixels (width*height*4, row-major). When
     // ppm_path is non-empty also writes a binary P6 PPM there.
+    // `sun_color`: rgb = sun colour, w = intensity. Default {1,1,1,1} = the original full white key
+    // (scene-shot baselines unchanged). Pass a dimmer/warmer key (e.g. character previews) so surfaces
+    // don't blow out near-white and materials read with proper contrast - matching the moodier in-game look.
+    // `water` draws use the real water.* shaders (reflective surface) and `transparent` draws are
+    // alpha-blended (e.g. shore foam) - both rendered after the opaque pass, depth-tested but not
+    // depth-written, so the environment shots show water + foam the way the game does.
     std::vector<u8> render(const std::vector<Draw>& draws, const Mat4& view, const Mat4& proj,
-                           const Vec3& background, const Vec3& sun_dir,
-                           const std::string& ppm_path = "");
+                           const Vec3& background, const Vec3& sun_dir, const std::string& ppm_path = "",
+                           const Vec4& sun_color = Vec4{1.0f}, const std::vector<Draw>& water = {},
+                           const std::vector<Draw>& transparent = {});
 
     void shutdown();
 
@@ -66,6 +73,8 @@ private:
     vk::Buffer light_ubo_;
     vk::Buffer readback_;
     vk::Pipeline pipeline_;
+    vk::Pipeline pipeline_water_; // the real water.* shaders (reflective, alpha-blended, no depth write)
+    vk::Pipeline pipeline_trans_; // alpha-blended mesh.* (shore foam + other transparency)
     VkDescriptorSetLayout set_layout_ = VK_NULL_HANDLE;
     VkDescriptorPool pool_ = VK_NULL_HANDLE;
     VkDescriptorSet set_ = VK_NULL_HANDLE;

@@ -5,6 +5,21 @@
 
 namespace alryn::game {
 
+namespace {
+// Magicka-style signature outfit colour per role (an index into outfit_tints): blue Knight, green
+// Hunter, white Cleric, violet Mage - so the four roles read as distinct colours by default. Picking
+// a role sets this as the starting outfit tint; the player can still recolour from the swatches.
+u8 signature_tint(PlayerRole r) {
+    switch (r) {
+        case PlayerRole::Knight: return 0; // royal blue
+        case PlayerRole::Hunter: return 2; // forest green
+        case PlayerRole::Cleric: return 5; // white / silver
+        case PlayerRole::Mage: return 3;   // arcane violet
+    }
+    return 0;
+}
+} // namespace
+
 void ClientApp::escape_pressed() {
     if (state_ == AppState::Menu) {
         menu_escape();
@@ -214,7 +229,11 @@ void ClientApp::build_customise(f32 w, f32 h) {
               "ROLE",
               std::vector<std::string>{"KNIGHT (TANK)", "HUNTER (DMG)", "CLERIC (HEAL)", "MAGE (DMG)"},
               static_cast<usize>(role_),
-              [this](usize i) { role_ = static_cast<PlayerRole>(i % kRoleCount); }),
+              [this](usize i) {
+                  role_ = static_cast<PlayerRole>(i % kRoleCount);
+                  equip_loadout_.outfit_tint = signature_tint(role_); // role's signature colour
+                  rebuild_ui(); // re-lay so the outfit-colour swatch reflects the new role
+              }),
           46.0f);
 
     caption("SKIN TONE");
@@ -228,6 +247,16 @@ void ClientApp::build_customise(f32 w, f32 h) {
               std::vector<Vec3>(hair_colors().begin(), hair_colors().end()),
               appearance_.hair_color,
               [this](usize i) { appearance_.hair_color = static_cast<u8>(i); rebuild_preview(); }),
+          40.0f);
+
+    caption("OUTFIT COLOUR");
+    place(panel.add<ui::SwatchRow>(
+              std::vector<Vec3>(outfit_tints().begin(), outfit_tints().end()),
+              equip_loadout_.outfit_tint,
+              [this](usize i) {
+                  equip_loadout_.outfit_tint = static_cast<u8>(i);
+                  rebuild_preview();
+              }),
           40.0f);
 
     place(panel.add<ui::Stepper>(
@@ -279,6 +308,7 @@ void ClientApp::build_class(f32 w, f32 h) {
         f32 y = card.y + pad;
         auto& b = panel.add<ui::Button>(names[i], [this, i] {
             role_ = static_cast<PlayerRole>(i);
+            equip_loadout_.outfit_tint = signature_tint(role_); // role's signature colour
             rebuild_ui(); // re-lay to highlight the new selection
         });
         b.primary = (static_cast<int>(role_) == i);
@@ -366,6 +396,11 @@ void ClientApp::draw_preview() {
                       preview_anim_.body_offset(); // soft idle breathe on the turntable
     const std::vector<Quat> pose = preview_anim_.pose(preview_model_);
     draw_rig(preview_model_, preview_model_.bone_matrices(root, pose));
+    // Show the role's weapon in hand on the turntable too (master tier, the chosen colour).
+    Equipment preview_eq = equip_loadout_;
+    preview_eq.outfit_tier = 3;
+    preview_eq.weapon_tier = 3;
+    draw_role_weapon(preview_model_, preview_model_.joint_matrices(root, pose), role_, preview_eq);
 }
 
 } // namespace alryn::game

@@ -5,42 +5,97 @@
 
 namespace alryn::game {
 
+void ClientApp::update_wagon_smooth(Timestep dt) {
+    if (!have_snapshot_) {
+        return;
+    }
+    // Critically-damped ease toward the authoritative position; short time constant so it kills the
+    // inter-snapshot jitter without lagging noticeably behind the moving cart.
+    constexpr f32 tau = 0.06f;
+    const f32 a = 1.0f - std::exp(-dt.seconds / tau);
+    for (const net::WagonState& wg : snapshot_.wagons) {
+        WagonSmooth& s = wagon_smooth_[wg.id];
+        if (!s.init) {
+            s.pos = wg.position;
+            s.step = Vec2{0.0f};
+            s.init = true;
+            continue;
+        }
+        const Vec3 prev = s.pos;
+        s.pos += (wg.position - s.pos) * a;
+        s.step = Vec2{s.pos.x - prev.x, s.pos.z - prev.z};
+
+        // Wading splash: a cart rolling through water throws spray off its wheels. Paced by the
+        // distance it rolls while submerged; near enough to see only.
+        const f32 sub = worldgen::water_level - s.pos.y;
+        const f32 dist = glm::length(s.step);
+        if (sub > 0.06f && dist > 1e-3f && glm::length(s.pos - local_feet()) < 70.0f) {
+            s.splash_acc += dist;
+            if (s.splash_acc > 0.6f) {
+                s.splash_acc = 0.0f;
+                const f32 spd = dist / std::max(dt.seconds, 1e-3f);
+                const Vec2 lat{-std::sin(wg.yaw), std::cos(wg.yaw)}; // across the cart (wheel line)
+                for (const f32 side : {-1.0f, 1.0f}) {
+                    emit_splash(Vec3{s.pos.x + lat.x * side, worldgen::water_level, s.pos.z + lat.y * side},
+                                spd);
+                }
+            }
+        } else {
+            s.splash_acc = 0.0f;
+        }
+    }
+    // Forget wagons that are no longer in the snapshot.
+    for (auto it = wagon_smooth_.begin(); it != wagon_smooth_.end();) {
+        const bool live = std::any_of(snapshot_.wagons.begin(), snapshot_.wagons.end(),
+                                      [&](const net::WagonState& w) { return w.id == it->first; });
+        it = live ? std::next(it) : wagon_smooth_.erase(it);
+    }
+}
+
 void ClientApp::wagon_orient(const net::WagonState& wg, f32 moved, f32& pitch, f32& roll, f32& bob) const {
+    const Vec3 rp = wagon_render_pos(wg); // smoothed position - sample the slope + bob phase there
     const f32 cy = std::cos(wg.yaw);
     const f32 sy = std::sin(wg.yaw);
     const Vec2 fwd{cy, sy};  // world xz the cart faces (local +X under rotate(-yaw))
     const Vec2 lat{-sy, cy}; // world xz across the cart (local +Z)
     constexpr f32 d = 0.75f;
+    // Bridge-aware ground: over a bridge the cart tilts to the DECK, not the terrain in the gorge
+    // below it (matches the server's bridge-aware ground_at that sets the cart's height).
     auto height = [&](const Vec2& o) {
-        return worldgen::height(wg.position.x + o.x, wg.position.z + o.y, world_seed_);
+        const f32 hx = rp.x + o.x, hz = rp.z + o.y;
+        return std::max(worldgen::height(hx, hz, world_seed_), roads::bridge_height(hx, hz, world_seed_));
     };
     const f32 slope_f = (height(fwd * d) - height(fwd * -d)) / (2.0f * d);
     const f32 slope_l = (height(lat * d) - height(lat * -d)) / (2.0f * d);
     pitch = glm::clamp(std::atan(slope_f), -0.6f, 0.6f); // nose up going uphill
     roll = glm::clamp(-std::atan(slope_l), -0.6f, 0.6f); // lean across the slope
-    bob = std::sin(elapsed_ * 11.0f + wg.position.x * 0.7f) * 0.04f *
-          glm::clamp(moved * 12.0f, 0.0f, 1.0f);
+    bob = std::sin(elapsed_ * 11.0f + rp.x * 0.7f) * 0.04f * glm::clamp(moved * 12.0f, 0.0f, 1.0f);
 }
 
 Mat4 ClientApp::wagon_model(const net::WagonState& wg, f32 moved) const {
     // The wagon mesh faces local +X. The server yaw has forward = (cos, sin) in world
     // xz, and glm::rotate(-yaw) maps local +X exactly there - so the tongue points the
-    // way the cart travels (toward its puller).
+    // way the cart travels (toward its puller). Built off the SMOOTHED render position.
     f32 pitch, roll, bob;
     wagon_orient(wg, moved, pitch, roll, bob);
-    return glm::translate(Mat4{1.0f}, Vec3{wg.position.x, wg.position.y + bob, wg.position.z}) *
+    const Vec3 rp = wagon_render_pos(wg);
+    return glm::translate(Mat4{1.0f}, Vec3{rp.x, rp.y + bob, rp.z}) *
            glm::rotate(Mat4{1.0f}, -wg.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
            glm::rotate(Mat4{1.0f}, pitch, Vec3{0.0f, 0.0f, 1.0f}) *
            glm::rotate(Mat4{1.0f}, roll, Vec3{1.0f, 0.0f, 0.0f});
 }
 
 Vec3 ClientApp::attach_to_wagon(const net::WagonState& wg, const Vec3& flat_world) const {
-    f32 pitch, roll, bob;
-    wagon_orient(wg, wagon_frame_move(wg), pitch, roll, bob);
-    const Mat4 tilt = glm::rotate(Mat4{1.0f}, pitch, Vec3{0.0f, 0.0f, 1.0f}) *
-                      glm::rotate(Mat4{1.0f}, roll, Vec3{1.0f, 0.0f, 0.0f});
-    const Vec3 off = Vec3{tilt * Vec4{flat_world - wg.position, 0.0f}};
-    return wg.position + off + Vec3{0.0f, bob, 0.0f};
+    // Place a rider/driver EXACTLY where the cart mesh puts the matching point: convert their flat
+    // server seat to the cart's local frame (un-yaw it about the RAW origin the server used), then
+    // run it through the full smoothed wagon model (translate+bob, yaw, tilt). So the occupant rides
+    // the same smoothed, tilted, bobbing cart the mesh draws - no float, no speed mismatch.
+    const f32 cy = std::cos(wg.yaw);
+    const f32 sy = std::sin(wg.yaw);
+    const Vec3 world_off = flat_world - wg.position;         // seat offset in world xz (flat)
+    const Vec3 local{world_off.x * cy + world_off.z * sy,    // un-rotate by +yaw -> cart-local
+                     world_off.y, -world_off.x * sy + world_off.z * cy};
+    return Vec3{wagon_model(wg, wagon_frame_move(wg)) * Vec4{local, 1.0f}};
 }
 
 void ClientApp::draw_wagons() {
@@ -59,17 +114,13 @@ void ClientApp::draw_wagons() {
 
         // Spin the wheels at their true rolling speed: with no slip the wheel turns
         // (ground distance / wheel radius) radians. Sign it by the travel direction so a
-        // reversing carriage rolls its wheels backward.
+        // reversing carriage rolls its wheels backward. Driven off the SMOOTHED per-frame step
+        // (update_wagon_smooth), so the spin + bob stay steady instead of stuttering with snapshots.
         f32& roll = wagon_roll_[wg.id];
-        f32 moved = 0.0f;
-        const auto prev = wagon_prev_.find(wg.id);
-        if (prev != wagon_prev_.end()) {
-            const Vec2 delta{wg.position.x - prev->second.x, wg.position.z - prev->second.z};
-            moved = glm::length(delta);
-            const Vec2 fwd{std::cos(wg.yaw), std::sin(wg.yaw)};
-            roll -= glm::dot(delta, fwd) / vt.wheel_radius(); // signed distance / radius
-        }
-        wagon_prev_[wg.id] = wg.position;
+        const Vec2 delta = wagon_frame_step(wg);
+        const f32 moved = glm::length(delta);
+        const Vec2 fwd{std::cos(wg.yaw), std::sin(wg.yaw)};
+        roll -= glm::dot(delta, fwd) / vt.wheel_radius(); // signed distance / radius
 
         const f32 wscale = vt.wheel_radius() / kWagonWheelRadius;
         const std::vector<Vec3> wheels = vt.wheels();
@@ -170,15 +221,45 @@ void ClientApp::draw_wagons() {
     }
 }
 
+const Mesh& ClientApp::cargo_mesh() const {
+    if (const net::WagonState* aw = active_wagon()) {
+        switch (static_cast<CargoKind>(aw->cargo_kind)) {
+            case CargoKind::Weapons: return cargo_weapons_mesh_;
+            case CargoKind::Casks: return cargo_casks_mesh_;
+            default: break; // Passengers (covered wagon) carry no loose crates; fall back to the crate
+        }
+    }
+    return goods_mesh_;
+}
+
 void ClientApp::draw_goods() {
     if (renderer_ == nullptr || !have_snapshot_) {
         return;
     }
     const net::WagonState* aw = active_wagon();
+    const bool casks = aw != nullptr && static_cast<CargoKind>(aw->cargo_kind) == CargoKind::Casks;
+    const Mesh& cargo = cargo_mesh();
     const Mat4 cart = aw != nullptr ? wagon_model(*aw, wagon_frame_move(*aw)) : Mat4{1.0f};
+    constexpr f32 cask_r = 0.16f; // ale-cask radius (matches build_cargo_casks)
+    if (!casks) {
+        cask_roll_.clear(); // not carrying casks -> drop the per-cask roll state
+    }
     for (const net::GoodState& g : snapshot_.goods) {
         Mat4 m;
-        if (g.loose == 0 && aw != nullptr) {
+        if (g.loose == 0 && aw != nullptr && casks) {
+            // An ale cask rolls about its long axis as it slides fore/aft (cart-local X) in the bed:
+            // accumulate the roll from the change in its bed-local position, then lay the barrel
+            // ACROSS the bed (its built +X axis -> Z) and spin it about that long axis.
+            CaskRoll& cr = cask_roll_[g.id];
+            if (cr.seen) {
+                cr.roll = std::fmod(cr.roll + (g.position.x - cr.prev.x) / cask_r, TwoPi);
+            }
+            cr.prev = g.position;
+            cr.seen = true;
+            m = cart * glm::translate(Mat4{1.0f}, g.position + Vec3{0.0f, cask_r, 0.0f}) *
+                glm::rotate(Mat4{1.0f}, cr.roll, Vec3{0.0f, 0.0f, 1.0f}) *
+                glm::rotate(Mat4{1.0f}, glm::half_pi<f32>(), Vec3{0.0f, 1.0f, 0.0f});
+        } else if (g.loose == 0 && aw != nullptr) {
             // Bed-local position -> world via the cart transform (centred crate on the floor).
             m = cart * glm::translate(Mat4{1.0f}, g.position + Vec3{0.0f, kCargoHalf, 0.0f});
         } else {
@@ -187,7 +268,15 @@ void ClientApp::draw_goods() {
                 glm::rotate(Mat4{1.0f}, static_cast<f32>(g.id) * 1.3f, Vec3{0.0f, 1.0f, 0.0f}) *
                 glm::rotate(Mat4{1.0f}, 0.18f, Vec3{1.0f, 0.0f, 0.0f});
         }
-        renderer_->draw(goods_mesh_, m);
+        renderer_->draw(cargo, m);
+    }
+    // Forget casks no longer in the bed (delivered / spilled out).
+    for (auto it = cask_roll_.begin(); it != cask_roll_.end();) {
+        const bool live = std::any_of(snapshot_.goods.begin(), snapshot_.goods.end(),
+                                      [&](const net::GoodState& g) {
+                                          return g.id == it->first && g.loose == 0;
+                                      });
+        it = live ? std::next(it) : cask_roll_.erase(it);
     }
 }
 
@@ -196,7 +285,7 @@ void ClientApp::draw_carried_good(const Vec3& feet, f32 yaw) {
     const Vec3 pos = feet + Vec3{0.0f, 0.85f, 0.0f} + fwd * 0.35f;
     const Mat4 m = glm::translate(Mat4{1.0f}, pos) *
                    glm::rotate(Mat4{1.0f}, -yaw, Vec3{0.0f, 1.0f, 0.0f});
-    renderer_->draw(goods_mesh_, m);
+    renderer_->draw(cargo_mesh(), m);
 }
 
 void ClientApp::draw_ropes(u32 id) {
@@ -249,7 +338,7 @@ void ClientApp::update_ropes(Timestep dt) {
         std::array<RopeTrace, 2>& ropes = wagon_ropes_[wg.id];
         for (int side = 0; side < 2; ++side) {
             const f32 s = side == 0 ? 1.0f : -1.0f;
-            const Vec3 A = to_world(wg.position, wg.yaw, Vec3{2.4f, 0.75f, 0.12f * s}); // shaft tip
+            const Vec3 A = to_world(wagon_render_pos(wg), wg.yaw, Vec3{2.4f, 0.75f, 0.12f * s}); // shaft tip (smoothed cart)
             const Vec3 B = to_world(wg.horse_pos, wg.horse_yaw, Vec3{0.45f, 1.05f, 0.18f * s}); // collar
             RopeTrace& r = ropes[side];
             if (!r.init) {

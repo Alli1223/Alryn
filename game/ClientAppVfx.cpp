@@ -70,6 +70,16 @@ void ClientApp::emit_ring(const Vec3& center, const Vec4& color, int n, f32 spee
     }
 }
 
+void ClientApp::emit_splash(const Vec3& at, f32 intensity) {
+    const int n = 4 + static_cast<int>(glm::clamp(intensity, 0.0f, 7.0f));
+    // Droplets spray up + out and arc back down under gravity (white-blue, lightly transparent).
+    emit_burst(at + Vec3{0.0f, 0.05f, 0.0f}, Vec4{0.86f, 0.94f, 1.0f, 0.9f}, n,
+               1.6f + intensity * 0.25f, 0.45f, 0.06f, /*style=*/1, /*up=*/2.0f + intensity * 0.2f,
+               /*gravity=*/7.5f);
+    // A low ripple ring skating outward across the surface.
+    emit_ring(at, Vec4{0.92f, 0.97f, 1.0f, 0.5f}, 7, 1.2f, 0.5f, 0.05f);
+}
+
 void ClientApp::update_particles(Timestep dt) {
     const f32 s = dt.seconds;
     for (Particle& p : particles_) {
@@ -254,6 +264,94 @@ void ClientApp::draw_ambient_life() {
         }
     }
 
+    // Daytime DUST / POLLEN motes drifting in the light - warm pale specks anchored to fixed world
+    // cells (like the fireflies), so you move THROUGH them rather than dragging them along. They
+    // swirl gently + bob up and down, twinkle as they catch the light, and fade out at the view edge.
+    if (night < 0.6f) {
+        const f32 day = 1.0f - night; // stronger in full daylight, gone by dusk
+        const f32 cs = 3.2f;          // cell size (mote spacing)
+        const int cr = 4;             // cells around the player
+        const int bcx = static_cast<int>(std::floor(feet.x / cs));
+        const int bcz = static_cast<int>(std::floor(feet.z / cs));
+        for (int dz = -cr; dz <= cr; ++dz) {
+            for (int dx = -cr; dx <= cr; ++dx) {
+                const int cx = bcx + dx, cz = bcz + dz;
+                if (hcell(cx, cz, 13) > 0.62f) {
+                    continue; // ~62% of cells host a mote
+                }
+                const f32 ax = (static_cast<f32>(cx) + hcell(cx, cz, 15)) * cs;
+                const f32 az = (static_cast<f32>(cz) + hcell(cx, cz, 17)) * cs;
+                const f32 g = worldgen::height(ax, az, world_seed_);
+                if (g < worldgen::water_level + 0.3f) {
+                    continue; // not out over the water
+                }
+                const f32 ph = hcell(cx, cz, 19) * TwoPi;
+                const f32 px = ax + std::sin(t * 0.32f + ph) * 1.3f + std::sin(t * 0.13f + ph * 2.1f) * 0.7f;
+                const f32 pz = az + std::cos(t * 0.27f + ph) * 1.3f;
+                const f32 py = g + 0.9f + 1.1f * (0.5f + 0.5f * std::sin(t * 0.4f + ph * 1.6f));
+                const f32 dxz = glm::length(Vec2{px - feet.x, pz - feet.z});
+                if (dxz > 16.0f) {
+                    continue;
+                }
+                const f32 edge = glm::smoothstep(16.0f, 10.0f, dxz);
+                const f32 twinkle =
+                    0.35f + 0.65f * std::pow(0.5f + 0.5f * std::sin(t * 1.3f + ph * 4.0f), 2.0f);
+                const f32 a = day * 0.7f * twinkle * edge;
+                renderer_->draw_glow(shape_sphere_,
+                                     glm::translate(Mat4{1.0f}, Vec3{px, py, pz}) *
+                                         glm::scale(Mat4{1.0f}, Vec3{0.06f}),
+                                     Vec4{1.0f, 0.95f, 0.74f, a}); // warm sun-catching pollen/dust
+            }
+        }
+    }
+    // Falling autumn LEAVES drifting down in the woods - tumbling, autumn-tinted, anchored to world
+    // cells (so you walk through the fall instead of dragging it along) and gated to FOREST biomes so
+    // they never appear over desert / snow / open water. Each cell sheds one leaf that falls + sways +
+    // tumbles, fading in at the top + out near the ground so the loop doesn't pop.
+    {
+        const f32 cs = 6.0f; // sparse - a gentle drift, not a blizzard
+        const int cr = 3;    // ~18 m of cells around the player
+        const int bcx = static_cast<int>(std::floor(feet.x / cs));
+        const int bcz = static_cast<int>(std::floor(feet.z / cs));
+        const Vec3 autumn[4] = {{0.82f, 0.58f, 0.18f},  // gold
+                                {0.86f, 0.42f, 0.14f},  // orange
+                                {0.70f, 0.26f, 0.15f},  // russet red
+                                {0.55f, 0.40f, 0.20f}}; // brown
+        for (int dz = -cr; dz <= cr; ++dz) {
+            for (int dx = -cr; dx <= cr; ++dx) {
+                const int cx = bcx + dx, cz = bcz + dz;
+                if (hcell(cx, cz, 21) > 0.55f) {
+                    continue; // ~55% of forest cells shed a leaf
+                }
+                const f32 ax = (static_cast<f32>(cx) + hcell(cx, cz, 23)) * cs;
+                const f32 az = (static_cast<f32>(cz) + hcell(cx, cz, 25)) * cs;
+                if (worldgen::biome_at(ax, az, world_seed_) != worldgen::Biome::Forest) {
+                    continue; // only in the woods
+                }
+                const f32 g = worldgen::height(ax, az, world_seed_);
+                if (g < worldgen::water_level + 0.4f) {
+                    continue;
+                }
+                const f32 ph = hcell(cx, cz, 27) * TwoPi;
+                const f32 fall = std::fmod(t * 0.16f + ph, 1.0f);          // 0 top .. 1 ground
+                const f32 px = ax + std::sin(t * 1.3f + ph * 3.0f) * 0.9f; // sway as it falls
+                const f32 pz = az + std::cos(t * 1.0f + ph * 2.0f) * 0.9f;
+                const f32 py = g + 0.2f + 4.4f * (1.0f - fall);
+                const f32 dxz = glm::length(Vec2{px - feet.x, pz - feet.z});
+                if (dxz > 17.0f) {
+                    continue;
+                }
+                const f32 edge = glm::smoothstep(17.0f, 11.0f, dxz);
+                const f32 life = glm::smoothstep(0.0f, 0.08f, fall) * glm::smoothstep(1.0f, 0.88f, fall);
+                const Vec3 col = autumn[static_cast<int>(hcell(cx, cz, 29) * 4.0f) & 3];
+                const Mat4 m = glm::translate(Mat4{1.0f}, Vec3{px, py, pz}) *
+                               glm::rotate(Mat4{1.0f}, t * 1.8f + ph, Vec3{0.0f, 1.0f, 0.0f}) *
+                               glm::rotate(Mat4{1.0f}, std::sin(t * 2.2f + ph) * 0.9f, Vec3{0.0f, 0.0f, 1.0f}) *
+                               glm::scale(Mat4{1.0f}, Vec3{0.18f, 0.04f, 0.22f}); // a small flat leaf
+                renderer_->draw_transparent(shape_sphere_, m, Vec4{col, 0.9f * edge * life});
+            }
+        }
+    }
     // (The day "bird flock" + night owl were removed - they orbited the camera at a fixed offset,
     // so they read as stationary shapes floating behind the player with shadows that didn't move.)
 }
@@ -321,6 +419,183 @@ void ClientApp::draw_deer() {
             const Mat4 lm = base * glm::translate(Mat4{1.0f}, kDeerLegs[k]) *
                             glm::rotate(Mat4{1.0f}, swing, Vec3{0.0f, 0.0f, 1.0f});
             renderer_->draw(deer_leg_mesh_, lm);
+        }
+    }
+}
+
+void ClientApp::update_fish(Timestep dt) {
+    if (renderer_ == nullptr || world_seed_ == 0) {
+        return;
+    }
+    const Vec3 feet = local_feet();
+    auto ground = [&](f32 x, f32 z) { return worldgen::height(x, z, world_seed_); };
+    // The biome around the player decides the fish look: warm seas get bright tropical fish, cold /
+    // freshwater gets silvery / dark ones.
+    const auto biome = worldgen::biome_at(feet.x, feet.z, world_seed_);
+    const bool warm = worldgen::temperature(feet.x, feet.z, world_seed_) > 0.46f &&
+                      (biome == worldgen::Biome::Ocean || biome == worldgen::Biome::Beach);
+    static const Vec3 tropical[] = {{1.0f, 0.55f, 0.18f}, {1.0f, 0.82f, 0.25f}, {0.30f, 0.62f, 1.0f},
+                                    {0.95f, 0.42f, 0.55f}, {0.45f, 0.85f, 0.78f}};
+    static const Vec3 temperate[] = {{0.78f, 0.80f, 0.86f}, {0.55f, 0.62f, 0.60f}, {0.62f, 0.56f, 0.42f},
+                                     {0.70f, 0.74f, 0.82f}};
+
+    // Spawn a shoal in the water near the player. Each fish wants a wet spot (real water, a little
+    // below the waterline) within view; if none is found in a few tries we just hold the count.
+    auto wet_spot = [&](Vec3& out) {
+        for (int tries = 0; tries < 6; ++tries) {
+            const f32 a = frand(0.0f, TwoPi), r = frand(8.0f, 26.0f);
+            const Vec3 p{feet.x + std::cos(a) * r, 0.0f, feet.z + std::sin(a) * r};
+            const f32 g = ground(p.x, p.z);
+            if (g < worldgen::water_level - 0.5f) { // genuinely under water (not just a damp shore)
+                out = Vec3{p.x, glm::max(g + 0.25f, worldgen::water_level - frand(0.25f, 0.9f)), p.z};
+                return true;
+            }
+        }
+        return false;
+    };
+    int guard = 0;
+    while (fish_.size() < 7 && guard++ < 4) {
+        Fish f;
+        if (!wet_spot(f.pos)) {
+            break; // no water nearby - no fish this frame
+        }
+        f.yaw = frand(0.0f, TwoPi);
+        f.target = f.pos;
+        f.scale = frand(0.6f, 1.3f);
+        f.tint = warm ? tropical[static_cast<int>(frand(0.0f, 5.0f)) % 5]
+                      : temperate[static_cast<int>(frand(0.0f, 4.0f)) % 4];
+        fish_.push_back(f);
+    }
+
+    for (Fish& f : fish_) {
+        const f32 dist = glm::length(Vec2{f.pos.x - feet.x, f.pos.z - feet.z});
+        const f32 g = ground(f.pos.x, f.pos.z);
+        if (dist > 34.0f || g > worldgen::water_level - 0.3f) {
+            // wandered out of range or beached - respawn at a fresh wet spot (or cull if no water).
+            if (!wet_spot(f.pos)) {
+                f.pos.y = -1e6f; // mark for removal
+            }
+            f.retarget = 0.0f;
+            f.darting = false;
+            continue;
+        }
+        f.darting = dist < 6.0f; // dart away if the player wades close
+        f.retarget -= dt.seconds;
+        if (f.darting) {
+            const Vec2 away = glm::normalize(Vec2{f.pos.x - feet.x, f.pos.z - feet.z} + Vec2{1e-3f});
+            f.target = f.pos + Vec3{away.x, 0.0f, away.y} * 8.0f;
+        } else if (f.retarget <= 0.0f) {
+            const f32 a = frand(0.0f, TwoPi), r = frand(2.0f, 7.0f);
+            f.target = f.pos + Vec3{std::cos(a) * r, 0.0f, std::sin(a) * r};
+            f.retarget = frand(1.5f, 4.0f);
+        }
+        const Vec2 to{f.target.x - f.pos.x, f.target.z - f.pos.z};
+        const f32 td = glm::length(to);
+        const f32 spd = (f.darting ? 7.0f : 1.8f) * dt.seconds;
+        if (td > 0.1f) {
+            const Vec2 step = to / td * std::min(spd, td);
+            const f32 ng = ground(f.pos.x + step.x, f.pos.z + step.y);
+            if (ng < worldgen::water_level - 0.2f) { // only swim where it stays wet
+                f.pos.x += step.x;
+                f.pos.z += step.y;
+                f.yaw = std::atan2(step.y, step.x);
+            } else {
+                f.retarget = 0.0f; // hit the bank - pick a new heading
+            }
+            // hold just under the surface, above the bed
+            f.pos.y = glm::clamp(f.pos.y, ground(f.pos.x, f.pos.z) + 0.2f, worldgen::water_level - 0.12f);
+            f.wiggle += glm::length(step) * 6.0f + dt.seconds * (f.darting ? 18.0f : 7.0f);
+        } else {
+            f.wiggle += dt.seconds * 6.0f;
+        }
+    }
+    std::erase_if(fish_, [](const Fish& f) { return f.pos.y < -1e5f; });
+}
+
+void ClientApp::draw_fish() {
+    if (renderer_ == nullptr) {
+        return;
+    }
+    for (const Fish& f : fish_) {
+        // A swimming wiggle: oscillate the heading a touch so the body + tail sashay side to side.
+        const f32 wob = std::sin(f.wiggle) * (f.darting ? 0.45f : 0.28f);
+        const Mat4 m = glm::translate(Mat4{1.0f}, f.pos) *
+                       glm::rotate(Mat4{1.0f}, -(f.yaw + wob), Vec3{0.0f, 1.0f, 0.0f}) *
+                       glm::scale(Mat4{1.0f}, Vec3{f.scale});
+        renderer_->draw(fish_body_mesh_, m, Vec4{f.tint, 1.0f});
+    }
+}
+
+void ClientApp::draw_surf() {
+    if (renderer_ == nullptr || world_seed_ == 0) {
+        return;
+    }
+    const Vec3 feet = local_feet();
+    const f32 t = elapsed_;
+    auto ground = [&](f32 x, f32 z) { return worldgen::height(x, z, world_seed_); };
+    auto hcell = [](int x, int z, int s) {
+        u32 v = static_cast<u32>(x * 73856093) ^ static_cast<u32>(z * 19349663) ^
+                static_cast<u32>(s * 83492791);
+        v ^= v >> 13;
+        v *= 0x2545F491u;
+        v ^= v >> 16;
+        return static_cast<f32>((v >> 8) & 0xFFFFu) / 65535.0f;
+    };
+    // Surf foam hugging the shore. Scan WORLD cells around the player; for cells right on the
+    // waterline (water on one side, land on the other) lay a thin, soft foam STREAK oriented ALONG
+    // the shore (parallel to the waterline, perpendicular to the slope), so adjacent cells line up
+    // into a broken foam line that follows the coast - not big discs/blobs. The streak's brightness
+    // rides a wave that rolls along the shore and it laps in/out a touch along the slope, so the
+    // surf shimmers and washes. World-anchored, so it stays put on the beach as the camera moves.
+    constexpr f32 cell = 1.5f, radius = 24.0f;
+    const int bcx = static_cast<int>(std::floor(feet.x / cell));
+    const int bcz = static_cast<int>(std::floor(feet.z / cell));
+    const int cr = static_cast<int>(radius / cell) + 1;
+    for (int dz = -cr; dz <= cr; ++dz) {
+        for (int dx = -cr; dx <= cr; ++dx) {
+            const int cx = bcx + dx, cz = bcz + dz;
+            const f32 wx = static_cast<f32>(cx) * cell + cell * 0.5f;
+            const f32 wz = static_cast<f32>(cz) * cell + cell * 0.5f;
+            const f32 gh = ground(wx, wz);
+            if (gh < worldgen::water_level - 0.22f || gh > worldgen::water_level + 0.2f) {
+                continue; // a tight band right at the waterline
+            }
+            const f32 hl = ground(wx - cell, wz), hr = ground(wx + cell, wz);
+            const f32 hu = ground(wx, wz - cell), hd = ground(wx, wz + cell);
+            const f32 lo = std::min(std::min(hl, hr), std::min(hu, hd));
+            const f32 hi = std::max(std::max(hl, hr), std::max(hu, hd));
+            if (lo > worldgen::water_level - 0.18f || hi < worldgen::water_level + 0.04f) {
+                continue; // needs both water + land around it to be a real shore
+            }
+            const Vec2 grad{hr - hl, hd - hu};
+            if (glm::length(grad) < 1e-3f) {
+                continue; // need a real slope to know which way the shore runs
+            }
+            const Vec2 up_slope = glm::normalize(grad);          // uphill = toward land
+            const Vec2 tangent{up_slope.y, -up_slope.x};         // along the shore (the foam line)
+            const f32 dist = glm::length(Vec2{wx - feet.x, wz - feet.z});
+            if (dist > radius) {
+                continue;
+            }
+            const f32 fade = glm::smoothstep(radius, radius * 0.5f, dist);
+            // Wave rolls along the shore; foam brightens near the crest and laps in/out a touch.
+            const f32 along = glm::dot(Vec2{wx, wz}, tangent);
+            const f32 wave = 0.5f + 0.5f * std::sin(t * 1.4f + along * 0.5f);
+            const f32 crest = glm::smoothstep(0.2f, 1.0f, wave);
+            const f32 a = fade * (0.4f + 0.45f * crest); // a clear foam line, brightest at the crest
+            if (a < 0.04f) {
+                continue;
+            }
+            const Vec2 p = Vec2{wx, wz} + up_slope * (crest * 0.4f - 0.1f); // laps at the waterline
+            const f32 ang = std::atan2(-tangent.y, tangent.x);   // local +X -> shore tangent
+            const f32 len = 1.5f + hcell(cx, cz, 7) * 0.7f;      // a streak spanning ~the cell
+            const f32 wid = 0.26f + crest * 0.18f;               // thin across, swells a touch
+            // A flat single-sided up-quad (NOT a box): a flattened solid would show its dark
+            // underside in the no-depth-write transparent pass, rendering the foam black.
+            const Mat4 m = glm::translate(Mat4{1.0f}, Vec3{p.x, worldgen::water_level + 0.05f, p.y}) *
+                           glm::rotate(Mat4{1.0f}, ang, Vec3{0.0f, 1.0f, 0.0f}) *
+                           glm::scale(Mat4{1.0f}, Vec3{len, 1.0f, wid});
+            renderer_->draw_transparent(shape_quad_, m, Vec4{0.95f, 0.98f, 1.0f, a});
         }
     }
 }

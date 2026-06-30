@@ -61,6 +61,15 @@ struct UIPush {
     Vec2 screen;
 };
 
+// Must match the push_constant block in sky.frag.
+struct SkyPush {
+    Vec4 zenith;     // rgb
+    Vec4 horizon;    // rgb
+    Vec4 sun_color;  // rgb, w = intensity
+    Vec4 sun_screen; // xy = sun pixel position, z = 1 if in front of the camera
+    Vec4 screen;     // xy = viewport pixels
+};
+
 // A view-frustum extracted from a view-projection matrix (Gribb-Hartmann), used to cull
 // draw items per pass: the camera frustum (main pass), the sun frustum (shadow pass) and
 // each spot light's frustum (atlas pass - a light cannot light/shadow what's outside it).
@@ -238,7 +247,24 @@ bool Renderer::create_pipelines() {
     ui.cull_mode = VK_CULL_MODE_NONE;
     ui.blend = true;
     ui.vertexless = true;
-    return pipeline_ui_.create(device_, ui);
+    if (!pipeline_ui_.create(device_, ui)) {
+        return false;
+    }
+
+    // Gradient sky + sun disc: a vertexless fullscreen triangle drawn FIRST in the main pass.
+    // depth_format matches the main pass (so it's render-compatible) but depth test + write are OFF,
+    // so it fills the background and the scene geometry draws over it.
+    vk::PipelineConfig sky;
+    sky.vertex_spv = shader_path("sky.vert.spv").string();
+    sky.fragment_spv = shader_path("sky.frag.spv").string();
+    sky.color_format = swapchain_.format();
+    sky.depth_format = kDepthFormat;
+    sky.push_constant_size = sizeof(SkyPush);
+    sky.cull_mode = VK_CULL_MODE_NONE;
+    sky.vertexless = true;
+    sky.depth_test = false;
+    sky.depth_write = false;
+    return pipeline_sky_.create(device_, sky);
 }
 
 bool Renderer::create_shadow_resources() {
@@ -717,6 +743,30 @@ void Renderer::record_main_pass(VkCommandBuffer cmd) {
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
+    // Gradient sky + sun disc behind everything (fullscreen, no depth test/write). Drawn first so the
+    // scene geometry overwrites it; the colours track the day/night cycle.
+    if (pipeline_sky_.valid()) {
+        pipeline_sky_.bind(cmd);
+        SkyPush sp{};
+        sp.zenith = Vec4{sky_color_, 1.0f};
+        sp.horizon = Vec4{fog_color_, 1.0f};
+        sp.sun_color = Vec4{sun_color_, sun_intensity_};
+        sp.screen = Vec4{static_cast<f32>(extent.width), static_cast<f32>(extent.height), 0.0f, 0.0f};
+        // Project the sun onto the screen for its glow (visible at dawn/dusk near the top of the frame).
+        const Vec3 cam_pos = Vec3{glm::inverse(view_)[3]};
+        const Vec4 clip = projection_ * view_ * Vec4{cam_pos + sun_direction_ * 1000.0f, 1.0f};
+        sp.sun_screen = Vec4{-1.0f, -1.0f, 0.0f, 0.0f};
+        if (clip.w > 0.0f) {
+            const f32 nx = clip.x / clip.w, ny = clip.y / clip.w;
+            sp.sun_screen = Vec4{(nx * 0.5f + 0.5f) * static_cast<f32>(extent.width),
+                                 (ny * 0.5f + 0.5f) * static_cast<f32>(extent.height), 1.0f, 0.0f};
+        }
+        vkCmdPushConstants(cmd, pipeline_sky_.layout(),
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(SkyPush),
+                           &sp);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+    }
+
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_opaque_.layout(), 0, 1,
                             &frame.shadow_set, 0, nullptr);
 
@@ -953,6 +1003,7 @@ void Renderer::on_shutdown() {
     pipeline_vegetation_.destroy();
     pipeline_shadow_.destroy();
     pipeline_ui_.destroy();
+    pipeline_sky_.destroy();
     if (shadow_sampler_ != VK_NULL_HANDLE) {
         vkDestroySampler(device_.handle(), shadow_sampler_, nullptr);
         shadow_sampler_ = VK_NULL_HANDLE;

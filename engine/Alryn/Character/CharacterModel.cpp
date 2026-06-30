@@ -48,35 +48,45 @@ void CharacterModel::add_features(CharacterModel& m, const CharacterAppearance& 
     const f32 r = hs * 0.5f;        // head half-extent
     const Vec3 c = head.box_center; // head centre in the head-joint frame
 
-    // A feature bone: joint at the head joint, geometry offset via box_center.
+    // A feature bone: joint at the head joint, geometry offset via box_center. Marked an attachment
+    // so it rides ON TOP of the skinned body (the continuous body mesh has no face/hair yet).
     auto add = [&](Vec3 center, Vec3 size, BoneColor color, BoneShape shape) {
-        m.bones_.push_back(Bone{BonePart::None, kHeadIndex, Vec3{0.0f}, size, center, color, shape});
+        Bone b{BonePart::None, kHeadIndex, Vec3{0.0f}, size, center, color, shape};
+        b.attachment = true;
+        m.bones_.push_back(b);
     };
 
-    // ---- Eyes (on the front face, +Z) ----
+    // ---- Eyes + nose (on the front face, +Z) ----
+    // Kept SIMPLE: small dark eyes + a subtle nose, no big anime eyes or expressive brows - clean
+    // low-poly faces like the reference art.
     {
-        const f32 fz = c.z + r * 0.96f;       // front surface
-        const f32 ey = c.y + r * 0.12f;       // a touch above centre
-        f32 ex = r * 0.42f;                   // horizontal spacing
-        Vec3 size{hs * 0.16f, hs * 0.16f, hs * 0.10f};
+        const f32 fz = c.z + r * 0.97f;       // front surface
+        const f32 ey = c.y + r * 0.1f;        // a touch above centre
+        f32 ex = r * 0.36f;                   // horizontal spacing
+        Vec3 size{hs * 0.12f, hs * 0.13f, hs * 0.08f}; // small + understated, but reads clearly
         BoneShape shape = BoneShape::Sphere;
         switch (app.eyes) {
             case EyeStyle::Round: break;
             case EyeStyle::Wide:
-                ex = r * 0.52f;
-                size = Vec3{hs * 0.20f, hs * 0.20f, hs * 0.10f};
+                ex = r * 0.42f;
+                size = Vec3{hs * 0.12f, hs * 0.12f, hs * 0.07f};
                 break;
             case EyeStyle::Sleepy:
-                size = Vec3{hs * 0.20f, hs * 0.08f, hs * 0.10f};
+                size = Vec3{hs * 0.13f, hs * 0.06f, hs * 0.07f};
                 shape = BoneShape::RoundedBox;
                 break;
             case EyeStyle::Sharp:
-                size = Vec3{hs * 0.18f, hs * 0.11f, hs * 0.10f};
+                size = Vec3{hs * 0.12f, hs * 0.07f, hs * 0.07f};
                 shape = BoneShape::Box;
                 break;
         }
         add(Vec3{-ex, ey, fz}, size, BoneColor::Eye, shape);
         add(Vec3{ex, ey, fz}, size, BoneColor::Eye, shape);
+
+        // A small, subtle nose so the face isn't a bare ball - no brow ridge / eyebrows (those read
+        // anime). Skin-coloured and low-relief.
+        add(Vec3{0.0f, ey - r * 0.24f, c.z + r * 0.96f}, Vec3{hs * 0.09f, hs * 0.2f, hs * 0.13f},
+            BoneColor::Skin, BoneShape::RoundedBox);
     }
 
     // ---- Ears (on the sides, ±X) ----
@@ -107,24 +117,30 @@ void CharacterModel::add_features(CharacterModel& m, const CharacterAppearance& 
         case HairStyle::Bald:
             break;
         case HairStyle::Short:
-            add(Vec3{c.x, c.y + r * 0.74f, c.z}, Vec3{hs * 1.04f, hs * 0.42f, hs * 1.04f},
-                BoneColor::Hair, BoneShape::RoundedBox);
+            add(Vec3{c.x, c.y + r * 0.74f, c.z}, Vec3{hs * 1.06f, hs * 0.46f, hs * 1.06f},
+                BoneColor::Hair, BoneShape::RoundedBox); // crown cap
+            add(Vec3{c.x, c.y + r * 0.34f, c.z + r * 0.78f}, Vec3{hs * 0.96f, hs * 0.26f, hs * 0.34f},
+                BoneColor::Hair, BoneShape::Box); // a swept fringe over the forehead
             break;
         case HairStyle::Spiky:
-            add(Vec3{c.x, c.y + r * 0.76f, c.z}, Vec3{hs * 1.02f, hs * 0.42f, hs * 1.02f},
-                BoneColor::Hair, BoneShape::RoundedBox);
-            add(Vec3{c.x, c.y + r * 1.2f, c.z}, Vec3{hs * 0.55f, hs * 0.7f, hs * 0.55f},
-                BoneColor::Hair, BoneShape::Sphere);
+            add(Vec3{c.x, c.y + r * 0.74f, c.z}, Vec3{hs * 1.04f, hs * 0.42f, hs * 1.04f},
+                BoneColor::Hair, BoneShape::RoundedBox); // base
+            for (f32 sx : {-0.42f, 0.0f, 0.42f}) { // a row of angular spikes (not one soft blob)
+                add(Vec3{c.x + sx * r, c.y + r * 1.12f, c.z}, Vec3{hs * 0.3f, hs * 0.62f, hs * 0.3f},
+                    BoneColor::Hair, BoneShape::Box);
+            }
             break;
         case HairStyle::Mohawk:
-            add(Vec3{c.x, c.y + r * 1.0f, c.z}, Vec3{hs * 0.18f, hs * 0.6f, hs * 1.0f},
-                BoneColor::Hair, BoneShape::RoundedBox);
+            add(Vec3{c.x, c.y + r * 1.0f, c.z}, Vec3{hs * 0.2f, hs * 0.64f, hs * 1.04f}, BoneColor::Hair,
+                BoneShape::Box); // angular crest
             break;
         case HairStyle::Ponytail:
-            add(Vec3{c.x, c.y + r * 0.74f, c.z}, Vec3{hs * 1.04f, hs * 0.42f, hs * 1.04f},
-                BoneColor::Hair, BoneShape::RoundedBox);
-            add(Vec3{c.x, c.y + r * 0.2f, c.z - r * 0.95f}, Vec3{hs * 0.34f, hs * 0.7f, hs * 0.34f},
-                BoneColor::Hair, BoneShape::Cylinder);
+            add(Vec3{c.x, c.y + r * 0.74f, c.z}, Vec3{hs * 1.06f, hs * 0.44f, hs * 1.06f},
+                BoneColor::Hair, BoneShape::RoundedBox); // crown
+            add(Vec3{c.x, c.y + r * 0.34f, c.z + r * 0.78f}, Vec3{hs * 0.92f, hs * 0.24f, hs * 0.32f},
+                BoneColor::Hair, BoneShape::Box); // fringe
+            add(Vec3{c.x, c.y + r * 0.2f, c.z - r * 0.95f}, Vec3{hs * 0.36f, hs * 0.74f, hs * 0.36f},
+                BoneColor::Hair, BoneShape::Cylinder); // tail
             break;
     }
 }
@@ -142,70 +158,110 @@ CharacterModel CharacterModel::generate(u32 seed) {
     Rng rng(seed);
     CharacterModel m;
 
-    const f32 hscale = rng.range(0.85f, 1.05f); // overall height (short + cute)
-    const f32 build = rng.range(0.95f, 1.25f);  // width / bulk (stubby)
+    const f32 hscale = rng.range(0.97f, 1.06f); // overall height
+    const f32 build = rng.range(0.94f, 1.12f);  // width / bulk
 
-    // Chibi proportions: a big round head over a short tubby torso with stubby little
-    // limbs - exaggerated for the soft, blobby look.
-    const f32 leg_upper = 0.25f * hscale;
-    const f32 leg_lower = 0.23f * hscale;
+    // Cute, stylised "chibi" proportions (~4.8 heads, total ~1.45 m): a big head over a compact torso
+    // with SHORT, chunky limbs - the look of the reference art, not a realistic 7.5-head adult. The
+    // body masses are faceted rounded boxes; the limbs are capsules; the feet are boot boxes. The
+    // skinned body + outfits read these segment lengths, so changing them re-proportions everything.
+    const f32 leg_upper = 0.31f * hscale; // short stubby legs
+    const f32 leg_lower = 0.29f * hscale;
     const f32 leg_len = leg_upper + leg_lower;
-    const f32 torso = 0.42f * hscale;
-    const f32 head = 0.46f * hscale;
-    const f32 arm_upper = 0.20f * hscale;
-    const f32 arm_lower = 0.18f * hscale;
+    const f32 torso = 0.52f * hscale;
+    const f32 head_h = 0.30f * hscale; // a big cute head
+    const f32 head_w = 0.25f * hscale;
+    const f32 neck = 0.045f * hscale;     // short neck
+    const f32 arm_upper = 0.23f * hscale; // short arms
+    const f32 arm_lower = 0.21f * hscale;
 
-    // Palette.
+    // Palette (base skin + drab starting clothes; outfits recolour on top).
     static const Vec3 skin_tones[] = {{0.86f, 0.66f, 0.52f}, {0.80f, 0.58f, 0.45f},
                                       {0.65f, 0.45f, 0.34f}, {0.50f, 0.34f, 0.26f},
                                       {0.92f, 0.76f, 0.66f}};
     m.palette_.skin = skin_tones[rng.next() % 5u];
-    m.palette_.shirt = hsv(rng.range(0.0f, 1.0f), rng.range(0.45f, 0.85f), rng.range(0.55f, 0.9f));
-    m.palette_.pants = hsv(rng.range(0.0f, 1.0f), rng.range(0.15f, 0.45f), rng.range(0.25f, 0.5f));
+    m.palette_.shirt = hsv(rng.range(0.0f, 1.0f), rng.range(0.2f, 0.4f), rng.range(0.4f, 0.6f));
+    m.palette_.pants = hsv(rng.range(0.0f, 1.0f), rng.range(0.1f, 0.3f), rng.range(0.22f, 0.4f));
 
-    m.height_ = leg_len + torso + head;
-    m.eye_height_ = leg_len + torso * 0.9f + head * 0.55f;
+    m.height_ = leg_len + torso + neck + head_h;
+    m.eye_height_ = leg_len + torso + neck + head_h * 0.6f;
 
     auto add = [&](BonePart part, int parent, Vec3 joint, Vec3 size, Vec3 center, BoneColor color,
                    BoneShape shape) {
         m.bones_.push_back({part, parent, joint, size, center, color, shape});
     };
 
-    const f32 hip_w = 0.11f * build;
-    const f32 shoulder_y = torso * 0.78f;
-    const f32 shoulder_x = 0.40f * build * 0.5f + 0.08f;
+    const f32 hip_w = 0.10f * build;            // half-spacing of the hip joints
+    const f32 shoulder_y = torso * 0.84f;       // shoulders near the top of the torso
+    const f32 shoulder_x = 0.20f * build + 0.03f; // half-spacing of the shoulder joints
+    const f32 arm_r = 0.098f * build;           // arm radius (chunky for the cute look)
+    const f32 leg_r = 0.135f * build;           // leg radius
 
-    // Bubbly body: blobby spherical torso/head/pelvis, soft capsule (sausage) limbs and
-    // little round feet - no hard cylinders or boxes. Parents always precede children
-    // (indices 0..12).
-    add(BonePart::Pelvis, -1, {0.0f, leg_len, 0.0f}, {0.34f * build, 0.27f, 0.26f * build},
-        {0.0f, 0.0f, 0.0f}, BoneColor::Pants, BoneShape::Sphere);
-    add(BonePart::Torso, 0, {0.0f, 0.10f, 0.0f}, {0.46f * build, torso, 0.34f * build},
-        {0.0f, torso * 0.5f, 0.0f}, BoneColor::Shirt, BoneShape::Sphere);
-    add(BonePart::Head, 1, {0.0f, torso * 0.9f, 0.0f}, {head, head * 0.98f, head},
-        {0.0f, head * 0.5f, 0.0f}, BoneColor::Skin, BoneShape::Sphere);
-    add(BonePart::UpperArmL, 1, {-shoulder_x, shoulder_y, 0.0f}, {0.18f, arm_upper, 0.18f},
+    // Core skeleton, indices 0..12 - parts/order unchanged so the animator + the face/hair feature
+    // bones (parented to the head, index 2) still work. Limb segments are made a touch LONGER than
+    // their span so they overlap at the joints, and ball-joint fillers (added after) cover the seams,
+    // so the body reads as one connected figure rather than stacked blocks.
+    add(BonePart::Pelvis, -1, {0.0f, leg_len, 0.0f}, {0.30f * build, 0.24f, 0.23f * build},
+        {0.0f, 0.0f, 0.0f}, BoneColor::Pants, BoneShape::RoundedBox);
+    add(BonePart::Torso, 0, {0.0f, 0.04f, 0.0f}, {0.40f * build, torso, 0.25f * build},
+        {0.0f, torso * 0.52f, 0.0f}, BoneColor::Shirt, BoneShape::RoundedBox);
+    add(BonePart::Head, 1, {0.0f, torso + neck, 0.0f}, {head_w, head_h, head_w * 1.04f},
+        {0.0f, head_h * 0.5f, 0.0f}, BoneColor::Skin, BoneShape::RoundedBox);
+    add(BonePart::UpperArmL, 1, {-shoulder_x, shoulder_y, 0.0f}, {arm_r * 2.0f, arm_upper * 1.16f, arm_r * 2.1f},
         {0.0f, -arm_upper * 0.5f, 0.0f}, BoneColor::Shirt, BoneShape::Capsule);
-    add(BonePart::LowerArmL, 3, {0.0f, -arm_upper, 0.0f}, {0.16f, arm_lower, 0.16f},
+    add(BonePart::LowerArmL, 3, {0.0f, -arm_upper, 0.0f}, {arm_r * 1.7f, arm_lower * 1.2f, arm_r * 1.8f},
         {0.0f, -arm_lower * 0.5f, 0.0f}, BoneColor::Skin, BoneShape::Capsule);
-    add(BonePart::UpperArmR, 1, {shoulder_x, shoulder_y, 0.0f}, {0.18f, arm_upper, 0.18f},
+    add(BonePart::UpperArmR, 1, {shoulder_x, shoulder_y, 0.0f}, {arm_r * 2.0f, arm_upper * 1.16f, arm_r * 2.1f},
         {0.0f, -arm_upper * 0.5f, 0.0f}, BoneColor::Shirt, BoneShape::Capsule);
-    add(BonePart::LowerArmR, 5, {0.0f, -arm_upper, 0.0f}, {0.16f, arm_lower, 0.16f},
+    add(BonePart::LowerArmR, 5, {0.0f, -arm_upper, 0.0f}, {arm_r * 1.7f, arm_lower * 1.2f, arm_r * 1.8f},
         {0.0f, -arm_lower * 0.5f, 0.0f}, BoneColor::Skin, BoneShape::Capsule);
-    add(BonePart::UpperLegL, 0, {-hip_w, 0.0f, 0.0f}, {0.21f, leg_upper, 0.21f},
+    add(BonePart::UpperLegL, 0, {-hip_w, 0.0f, 0.0f}, {leg_r * 2.0f, leg_upper * 1.12f, leg_r * 2.1f},
         {0.0f, -leg_upper * 0.5f, 0.0f}, BoneColor::Pants, BoneShape::Capsule);
-    add(BonePart::LowerLegL, 7, {0.0f, -leg_upper, 0.0f}, {0.19f, leg_lower, 0.19f},
+    add(BonePart::LowerLegL, 7, {0.0f, -leg_upper, 0.0f}, {leg_r * 1.7f, leg_lower * 1.16f, leg_r * 1.8f},
         {0.0f, -leg_lower * 0.5f, 0.0f}, BoneColor::Pants, BoneShape::Capsule);
-    add(BonePart::UpperLegR, 0, {hip_w, 0.0f, 0.0f}, {0.21f, leg_upper, 0.21f},
+    add(BonePart::UpperLegR, 0, {hip_w, 0.0f, 0.0f}, {leg_r * 2.0f, leg_upper * 1.12f, leg_r * 2.1f},
         {0.0f, -leg_upper * 0.5f, 0.0f}, BoneColor::Pants, BoneShape::Capsule);
-    add(BonePart::LowerLegR, 9, {0.0f, -leg_upper, 0.0f}, {0.19f, leg_lower, 0.19f},
+    add(BonePart::LowerLegR, 9, {0.0f, -leg_upper, 0.0f}, {leg_r * 1.7f, leg_lower * 1.16f, leg_r * 1.8f},
         {0.0f, -leg_lower * 0.5f, 0.0f}, BoneColor::Pants, BoneShape::Capsule);
-    add(BonePart::FootL, 8, {0.0f, -leg_lower, 0.0f}, {0.2f, 0.15f, 0.28f}, {0.0f, 0.02f, 0.06f},
-        BoneColor::Pants, BoneShape::Sphere);
-    add(BonePart::FootR, 10, {0.0f, -leg_lower, 0.0f}, {0.2f, 0.15f, 0.28f}, {0.0f, 0.02f, 0.06f},
-        BoneColor::Pants, BoneShape::Sphere);
+    add(BonePart::FootL, 8, {0.0f, -leg_lower, 0.05f}, {0.15f, 0.14f, 0.32f}, {0.0f, -0.01f, 0.07f},
+        BoneColor::Pants, BoneShape::RoundedBox);
+    add(BonePart::FootR, 10, {0.0f, -leg_lower, 0.05f}, {0.15f, 0.14f, 0.32f}, {0.0f, -0.01f, 0.07f},
+        BoneColor::Pants, BoneShape::RoundedBox);
+
+    // Joint fillers + neck + hands (part = None, so they're not animated specially - they just ride
+    // their parent and fill the seam at each joint, connecting the limbs). Parented to the bone whose
+    // JOINT sits at the seam (a child's joint_offset is the seam relative to its parent's joint).
+    auto fill = [&](int parent, Vec3 at, f32 r, BoneColor color) {
+        m.bones_.push_back({BonePart::None, parent, Vec3{0.0f}, Vec3{r * 2.0f}, at, color,
+                            BoneShape::Sphere, QuatIdentity});
+    };
+    const int iTorso = 1, iHeadParent = 1;
+    const int iUAL = 3, iLAL = 4, iUAR = 5, iLAR = 6;
+    const int iULL = 7, iLLL = 8, iULR = 9, iLLR = 10;
+    fill(iHeadParent, {0.0f, torso + neck * 0.5f, 0.0f}, neck * 1.6f, BoneColor::Skin); // neck
+    fill(iTorso, {-shoulder_x, shoulder_y, 0.0f}, arm_r * 1.15f, BoneColor::Shirt);     // shoulders
+    fill(iTorso, {shoulder_x, shoulder_y, 0.0f}, arm_r * 1.15f, BoneColor::Shirt);
+    fill(iUAL, {0.0f, -arm_upper, 0.0f}, arm_r * 0.95f, BoneColor::Skin);               // elbows
+    fill(iUAR, {0.0f, -arm_upper, 0.0f}, arm_r * 0.95f, BoneColor::Skin);
+    fill(iLAL, {0.0f, -arm_lower, 0.0f}, arm_r * 1.0f, BoneColor::Skin);                // hands
+    fill(iLAR, {0.0f, -arm_lower, 0.0f}, arm_r * 1.0f, BoneColor::Skin);
+    fill(0, {-hip_w, 0.0f, 0.0f}, leg_r * 1.05f, BoneColor::Pants);                     // hips
+    fill(0, {hip_w, 0.0f, 0.0f}, leg_r * 1.05f, BoneColor::Pants);
+    fill(iULL, {0.0f, -leg_upper, 0.0f}, leg_r * 0.95f, BoneColor::Pants);              // knees
+    fill(iULR, {0.0f, -leg_upper, 0.0f}, leg_r * 0.95f, BoneColor::Pants);
+    fill(iLLL, {0.0f, -leg_lower, 0.0f}, leg_r * 0.85f, BoneColor::Pants);              // ankles
+    fill(iLLR, {0.0f, -leg_lower, 0.0f}, leg_r * 0.85f, BoneColor::Pants);
 
     return m;
+}
+
+int CharacterModel::bone_index(BonePart part) const {
+    for (usize i = 0; i < bones_.size(); ++i) {
+        if (bones_[i].part == part) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
 }
 
 std::vector<Mat4> CharacterModel::bone_matrices(const Mat4& root,
@@ -218,7 +274,7 @@ std::vector<Mat4> CharacterModel::bone_matrices(const Mat4& root,
         const Quat rotation = i < pose.size() ? pose[i] : QuatIdentity;
         joint[i] = parent * glm::translate(Mat4{1.0f}, b.joint_offset) * glm::mat4_cast(rotation);
         box[i] = joint[i] * glm::translate(Mat4{1.0f}, b.box_center) *
-                 glm::scale(Mat4{1.0f}, b.box_size);
+                 glm::mat4_cast(b.box_rotation) * glm::scale(Mat4{1.0f}, b.box_size);
     }
     return box;
 }

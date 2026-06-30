@@ -317,16 +317,45 @@ f32 gable_roof(MeshData& shell, f32 w, f32 d, f32 h, f32 rr, f32 oh, bool thatch
 }
 
 // ---- Shared yard decor (used by houses + the pub garden) ------------------------------------
-// A low-poly barrel (stacked boxes, slightly belled, with dark iron hoops).
+// A belled wooden barrel centred at `c`: octagonal staves bowing out at mid-height (a sin profile),
+// per-stave shade, an octagonal lid + two proud octagonal iron hoops. Shared by the yard decor helper
+// and the standalone barrel decor prop, so a round belled barrel looks the same everywhere.
+void belled_barrel(MeshData& m, const Vec3& c, f32 r, f32 ht, const Vec3& stave, const Vec3& hoop) {
+    constexpr int sides = 8;
+    auto ang = [](int s) { return TwoPi * (static_cast<f32>(s) + 0.5f) / static_cast<f32>(sides); };
+    auto pt = [&](f32 rr, f32 y, f32 a) {
+        return Vec3{c.x + std::cos(a) * rr, c.y + y, c.z + std::sin(a) * rr};
+    };
+    auto rad = [&](f32 t) { return r * (0.82f + 0.28f * std::sin(t * Pi)); }; // narrow ends, wide middle
+    const Vec3 axis{c.x, c.y + ht * 0.5f, c.z};
+    constexpr int rings = 4;
+    for (int s = 0; s < sides; ++s) {
+        const f32 a0 = ang(s), a1 = ang(s + 1);
+        const Vec3 sc = stave * (0.88f + 0.20f * hashf(static_cast<u32>(s) * 5u + 1u));
+        for (int rr = 0; rr < rings; ++rr) {
+            const f32 t0 = static_cast<f32>(rr) / rings, t1 = static_cast<f32>(rr + 1) / rings;
+            const Vec3 b0 = pt(rad(t0), t0 * ht, a0), b1 = pt(rad(t0), t0 * ht, a1);
+            const Vec3 u0 = pt(rad(t1), t1 * ht, a0), u1 = pt(rad(t1), t1 * ht, a1);
+            emit_tri(m, b0, b1, u1, axis, sc);
+            emit_tri(m, b0, u1, u0, axis, sc);
+        }
+        emit_tri(m, Vec3{c.x, c.y + ht, c.z}, pt(rad(1.0f) * 0.96f, ht, a0),
+                 pt(rad(1.0f) * 0.96f, ht, a1), Vec3{c.x, c.y - 1.0f, c.z}, stave * 0.95f); // lid fan
+    }
+    for (const f32 t : {0.22f, 0.78f}) {
+        const f32 y = t * ht, rr = rad(t) + r * 0.06f;
+        for (int s = 0; s < sides; ++s) {
+            const f32 a0 = ang(s), a1 = ang(s + 1);
+            emit_tri(m, pt(rr, y - ht * 0.06f, a0), pt(rr, y - ht * 0.06f, a1), pt(rr, y + ht * 0.06f, a1),
+                     axis, hoop);
+            emit_tri(m, pt(rr, y - ht * 0.06f, a0), pt(rr, y + ht * 0.06f, a1), pt(rr, y + ht * 0.06f, a0),
+                     axis, hoop);
+        }
+    }
+}
+// A low-poly belled barrel for house/pub/blacksmith yards (sits on the ground at `base`).
 void add_barrel(MeshData& m, const Vec3& base, f32 r, f32 ht) {
-    const Vec3 stave{0.46f, 0.3f, 0.16f}, hoop{0.18f, 0.16f, 0.15f};
-    add_box(m, {base.x - r, base.y, base.z - r}, {base.x + r, base.y + ht, base.z + r}, stave);
-    add_box(m, {base.x - r * 1.12f, base.y + ht * 0.12f, base.z - r * 1.12f},
-            {base.x + r * 1.12f, base.y + ht * 0.9f, base.z + r * 1.12f}, stave * 1.05f);
-    add_box(m, {base.x - r * 1.16f, base.y + ht * 0.2f, base.z - r * 1.16f},
-            {base.x + r * 1.16f, base.y + ht * 0.32f, base.z + r * 1.16f}, hoop);
-    add_box(m, {base.x - r * 1.16f, base.y + ht * 0.66f, base.z - r * 1.16f},
-            {base.x + r * 1.16f, base.y + ht * 0.78f, base.z + r * 1.16f}, hoop);
+    belled_barrel(m, base, r, ht, Vec3{0.46f, 0.30f, 0.16f}, Vec3{0.18f, 0.16f, 0.15f});
 }
 // A stack of cut logs (cut faces lighter, facing +z), in a pyramid - a woodpile against a wall.
 void add_woodpile(MeshData& m, const Vec3& c, f32 len, int rows) {
@@ -575,8 +604,16 @@ PropDef PropLibrary::build_fence(int variant) {
     def.name = "fence_post";
     const Vec3 wood = variant % 2 == 0 ? Vec3{0.42f, 0.30f, 0.18f} : Vec3{0.36f, 0.26f, 0.16f};
     MeshData m;
-    add_box(m, {-0.075f, 0.0f, -0.075f}, {0.075f, 1.0f, 0.075f}, wood);        // post
-    add_box(m, {-0.095f, 0.9f, -0.095f}, {0.095f, 1.04f, 0.095f}, wood * 0.85f); // cap
+    add_box(m, {-0.075f, 0.0f, -0.075f}, {0.075f, 0.92f, 0.075f}, wood);            // post
+    add_box(m, {-0.095f, 0.88f, -0.095f}, {0.095f, 0.95f, 0.095f}, wood * 0.86f);   // chamfer collar
+    // a pointed pyramidal cap (a weather-shedding fence-post top, not a flat block)
+    const Vec3 apex{0.0f, 1.13f, 0.0f}, ctr{0.0f, 0.95f, 0.0f};
+    constexpr f32 cr = 0.095f;
+    const Vec3 q0{-cr, 0.95f, -cr}, q1{cr, 0.95f, -cr}, q2{cr, 0.95f, cr}, q3{-cr, 0.95f, cr};
+    emit_tri(m, q0, q1, apex, ctr, wood);
+    emit_tri(m, q1, q2, apex, ctr, wood);
+    emit_tri(m, q2, q3, apex, ctr, wood);
+    emit_tri(m, q3, q0, apex, ctr, wood);
     def.parts.push_back({std::move(m), PropLayer::Opaque});
     BoxCollider c;
     c.half_extents = Vec2{0.1f, 0.1f};
@@ -616,14 +653,30 @@ PropDef PropLibrary::build_lantern_post() {
     const Vec3 glow{1.0f, 0.78f, 0.4f}; // warm amber flame
     MeshData op;
     MeshData em;
-    add_box(op, {-0.05f, 0.0f, -0.05f}, {0.05f, 1.7f, 0.05f}, wood);          // post
-    add_box(op, {-0.11f, 1.68f, -0.11f}, {0.11f, 1.74f, 0.11f}, frame);        // top cap
-    add_box(op, {-0.11f, 1.42f, -0.11f}, {0.11f, 1.46f, 0.11f}, frame);        // bottom cap
-    add_box(em, {-0.085f, 1.46f, -0.085f}, {0.085f, 1.68f, 0.085f}, glow);     // glass
+    add_box(op, {-0.055f, 0.0f, -0.055f}, {0.055f, 1.42f, 0.055f}, wood);      // post
+    add_box(op, {-0.10f, 0.0f, -0.10f}, {0.10f, 0.12f, 0.10f}, wood * 0.85f);  // base block
+    add_box(op, {-0.13f, 1.40f, -0.13f}, {0.13f, 1.46f, 0.13f}, frame);        // lantern floor plate
+    add_box(em, {-0.085f, 1.47f, -0.085f}, {0.085f, 1.76f, 0.085f}, glow);     // glowing glass panes
+    // Four metal corner posts caging the glass.
+    for (const f32 sx : {-0.10f, 0.10f}) {
+        for (const f32 sz : {-0.10f, 0.10f}) {
+            add_box(op, {sx - 0.018f, 1.44f, sz - 0.018f}, {sx + 0.018f, 1.79f, sz + 0.018f}, frame);
+        }
+    }
+    // Peaked roof cap (four faces to an apex) + a finial spike, instead of a flat lid.
+    const Vec3 apex{0.0f, 1.98f, 0.0f};
+    const Vec3 cap_c{0.0f, 1.82f, 0.0f}; // centre, so emit_tri orients the roof faces outward
+    constexpr f32 cr = 0.155f;
+    const Vec3 r0{-cr, 1.77f, -cr}, r1{cr, 1.77f, -cr}, r2{cr, 1.77f, cr}, r3{-cr, 1.77f, cr};
+    emit_tri(op, r0, r1, apex, cap_c, frame);
+    emit_tri(op, r1, r2, apex, cap_c, frame);
+    emit_tri(op, r2, r3, apex, cap_c, frame);
+    emit_tri(op, r3, r0, apex, cap_c, frame);
+    add_box(op, {-0.025f, 1.96f, -0.025f}, {0.025f, 2.06f, 0.025f}, frame); // finial spike
     def.parts.push_back({std::move(op), PropLayer::Opaque});
     def.parts.push_back({std::move(em), PropLayer::Emissive});
     PropLight l;
-    l.offset = Vec3{0.0f, 1.55f, 0.0f};
+    l.offset = Vec3{0.0f, 1.6f, 0.0f};
     l.direction = glm::normalize(Vec3{0.0f, -1.0f, 0.0f});
     l.color = Vec3{1.0f, 0.74f, 0.42f};
     l.range = 14.0f;
@@ -1539,9 +1592,37 @@ PropDef PropLibrary::build_gate() {
         add_box(op, {-mr, mt, o - 0.2f}, {-mr + 0.16f, mt + 0.36f, o + 0.2f}, stone); // -x edge
     }
 
-    // A brazier burning on the battlement.
-    add_box(op, {-0.16f, mt, -0.16f}, {0.16f, mt + 0.28f, 0.16f}, wood);          // basket
-    add_box(em, {-0.24f, mt + 0.28f, -0.24f}, {0.24f, mt + 0.64f, 0.24f}, fire);  // flame
+    // A fire-basket brazier on the battlement: a dark iron bowl (octagonal, tapering out to the rim)
+    // on a short stand, holding glowing coals with a few flame tongues licking up - a proper brazier
+    // rather than a glowing cube.
+    const Vec3 iron{0.17f, 0.15f, 0.15f};
+    const Vec3 coal{1.0f, 0.5f, 0.16f};
+    auto cup = [](MeshData& dst, f32 y0, f32 y1, f32 r0, f32 r1, const Vec3& col) {
+        const Vec3 ctr{0.0f, (y0 + y1) * 0.5f, 0.0f}; // axis point -> emit_tri faces normals outward
+        for (int i = 0; i < 8; ++i) {
+            const f32 a0 = static_cast<f32>(i) / 8.0f * TwoPi;
+            const f32 a1 = static_cast<f32>(i + 1) / 8.0f * TwoPi;
+            const Vec3 b0{r0 * std::cos(a0), y0, r0 * std::sin(a0)}, b1{r0 * std::cos(a1), y0, r0 * std::sin(a1)};
+            const Vec3 t0{r1 * std::cos(a0), y1, r1 * std::sin(a0)}, t1{r1 * std::cos(a1), y1, r1 * std::sin(a1)};
+            emit_tri(dst, b0, b1, t1, ctr, col);
+            emit_tri(dst, b0, t1, t0, ctr, col);
+        }
+    };
+    auto tongue = [](MeshData& dst, const Vec3& base, f32 h, f32 w, const Vec3& col) {
+        const Vec3 tip{base.x, base.y + h, base.z};
+        const Vec3 a{base.x - w, base.y, base.z - w}, b{base.x + w, base.y, base.z - w};
+        const Vec3 c{base.x + w, base.y, base.z + w}, d{base.x - w, base.y, base.z + w};
+        emit_tri(dst, a, b, tip, base, col);
+        emit_tri(dst, b, c, tip, base, col);
+        emit_tri(dst, c, d, tip, base, col);
+        emit_tri(dst, d, a, tip, base, col);
+    };
+    add_box(op, {-0.06f, mt - 0.1f, -0.06f}, {0.06f, mt + 0.04f, 0.06f}, iron); // short stand
+    cup(op, mt + 0.02f, mt + 0.3f, 0.09f, 0.2f, iron);                          // iron bowl (tapers out)
+    add_box(em, {-0.15f, mt + 0.18f, -0.15f}, {0.15f, mt + 0.3f, 0.15f}, coal); // glowing coals
+    tongue(em, {0.0f, mt + 0.28f, 0.0f}, 0.36f, 0.11f, fire);                   // central flame
+    tongue(em, {0.08f, mt + 0.28f, 0.05f}, 0.24f, 0.07f, fire);                 // side flame tongues
+    tongue(em, {-0.07f, mt + 0.28f, -0.06f}, 0.27f, 0.07f, fire);
 
     def.parts.push_back({std::move(op), PropLayer::Opaque});
     def.parts.push_back({std::move(em), PropLayer::Emissive});
@@ -1566,17 +1647,31 @@ PropDef PropLibrary::build_tower() {
     PropDef def;
     def.name = "tower";
     const Vec3 stone{0.53f, 0.55f, 0.59f}; // cool blue-grey (matches the wall)
+    const Vec3 slitc{0.10f, 0.11f, 0.14f}; // dark arrow-slit recess
     MeshData op;
     constexpr f32 r = 0.55f;
     constexpr f32 gh = 3.6f;
     add_box(op, {-r - 0.08f, 0.0f, -r - 0.08f}, {r + 0.08f, 0.5f, r + 0.08f}, stone * 0.94f); // battered base
     add_box(op, {-r, 0.0f, -r}, {r, gh, r}, stone);
-    stone_face(op, true, r, 1.0f, -r, r, 0.5f, gh, stone, 71u);
+    // Textured running-bond masonry on ALL FOUR faces (was just one), so the tower reads as stone
+    // from every angle it's seen along the wall, not flat on its sides.
+    stone_face(op, true, r, 1.0f, -r, r, 0.5f, gh, stone, 71u);    // +z
+    stone_face(op, true, -r, -1.0f, -r, r, 0.5f, gh, stone, 83u);  // -z
+    stone_face(op, false, r, 1.0f, -r, r, 0.5f, gh, stone, 91u);   // +x
+    stone_face(op, false, -r, -1.0f, -r, r, 0.5f, gh, stone, 97u); // -x
+    // A tall arrow slit on each face (a dark recess set just proud of the masonry).
+    add_box(op, {-0.05f, gh * 0.46f, r - 0.02f}, {0.05f, gh * 0.72f, r + 0.07f}, slitc);
+    add_box(op, {-0.05f, gh * 0.46f, -r - 0.07f}, {0.05f, gh * 0.72f, -r + 0.02f}, slitc);
+    add_box(op, {r - 0.02f, gh * 0.30f, -0.05f}, {r + 0.07f, gh * 0.56f, 0.05f}, slitc);
+    add_box(op, {-r - 0.07f, gh * 0.30f, -0.05f}, {-r + 0.02f, gh * 0.56f, 0.05f}, slitc);
     add_box(op, {-r - 0.1f, gh, -r - 0.1f}, {r + 0.1f, gh + 0.14f, r + 0.1f}, stone * 1.05f); // parapet lip
+    // Crenellations ringing ALL FOUR sides (were only on +z / -z), for a complete battlement.
     for (int i = -1; i <= 1; ++i) {
         const f32 o = static_cast<f32>(i) * (r * 0.9f);
-        add_box(op, {o - 0.14f, gh + 0.14f, r - 0.1f}, {o + 0.14f, gh + 0.46f, r + 0.1f}, stone * 1.07f); // +z merlons
-        add_box(op, {o - 0.14f, gh + 0.14f, -r - 0.1f}, {o + 0.14f, gh + 0.46f, -r + 0.1f}, stone * 1.07f);
+        add_box(op, {o - 0.14f, gh + 0.14f, r - 0.1f}, {o + 0.14f, gh + 0.46f, r + 0.1f}, stone * 1.07f); // +z
+        add_box(op, {o - 0.14f, gh + 0.14f, -r - 0.1f}, {o + 0.14f, gh + 0.46f, -r + 0.1f}, stone * 1.07f); // -z
+        add_box(op, {r - 0.1f, gh + 0.14f, o - 0.14f}, {r + 0.1f, gh + 0.46f, o + 0.14f}, stone * 1.07f); // +x
+        add_box(op, {-r - 0.1f, gh + 0.14f, o - 0.14f}, {-r + 0.1f, gh + 0.46f, o + 0.14f}, stone * 1.07f); // -x
     }
     def.parts.push_back({std::move(op), PropLayer::Opaque});
     BoxCollider c;
@@ -1592,30 +1687,58 @@ PropDef PropLibrary::build_tower() {
 PropDef PropLibrary::build_well() {
     PropDef def;
     def.name = "well";
-    const Vec3 stone{0.52f, 0.51f, 0.49f};
+    const Vec3 stone{0.50f, 0.50f, 0.49f};
+    const Vec3 coping{0.61f, 0.60f, 0.57f};
     const Vec3 wood{0.36f, 0.25f, 0.15f};
-    const Vec3 water{0.12f, 0.26f, 0.34f};
+    const Vec3 darkwood{0.25f, 0.17f, 0.10f};
+    const Vec3 shingle{0.46f, 0.30f, 0.20f};
+    const Vec3 rope{0.60f, 0.52f, 0.36f};
+    const Vec3 iron{0.30f, 0.31f, 0.34f};
+    const Vec3 water{0.09f, 0.20f, 0.28f};
     MeshData m;
-    constexpr f32 ro = 0.95f; // rim outer half-extent
-    constexpr f32 ri = 0.62f; // rim inner half-extent
-    constexpr f32 rim_h = 0.62f;
-    // Square stone rim (four kerb walls) around the shaft.
+    constexpr f32 ro = 0.95f;   // rim outer half-extent
+    constexpr f32 ri = 0.60f;   // rim inner half-extent (the shaft opening)
+    constexpr f32 rim_h = 0.66f;
+    // Solid square stone curb (four kerb walls) around the shaft...
     add_box(m, {-ro, 0.0f, -ro}, {ro, rim_h, -ri}, stone);
     add_box(m, {-ro, 0.0f, ri}, {ro, rim_h, ro}, stone);
     add_box(m, {-ro, 0.0f, -ri}, {-ri, rim_h, ri}, stone);
     add_box(m, {ri, 0.0f, -ri}, {ro, rim_h, ri}, stone);
-    add_box(m, {-ri, 0.05f, -ri}, {ri, 0.42f, ri}, water); // dark water surface
-    // Two posts + crossbeam carrying a bucket.
-    add_box(m, {-ro + 0.05f, rim_h, -0.12f}, {-ro + 0.25f, rim_h + 1.6f, 0.12f}, wood);
-    add_box(m, {ro - 0.25f, rim_h, -0.12f}, {ro - 0.05f, rim_h + 1.6f, 0.12f}, wood);
-    add_box(m, {-ro, rim_h + 1.55f, -0.1f}, {ro, rim_h + 1.72f, 0.1f}, wood);
-    add_box(m, {-0.22f, rim_h + 0.55f, -0.22f}, {0.22f, rim_h + 0.95f, 0.22f}, wood * 0.85f); // bucket
-    // Little gable roof.
-    const f32 yr = rim_h + 1.72f;
-    add_quad(m, {-ro - 0.15f, yr, ro + 0.15f}, {ro + 0.15f, yr, ro + 0.15f},
-             {ro + 0.15f, yr + 0.55f, 0.0f}, {-ro - 0.15f, yr + 0.55f, 0.0f}, wood * 1.1f);
-    add_quad(m, {ro + 0.15f, yr, -ro - 0.15f}, {-ro - 0.15f, yr, -ro - 0.15f},
-             {-ro - 0.15f, yr + 0.55f, 0.0f}, {ro + 0.15f, yr + 0.55f, 0.0f}, wood * 1.0f);
+    // ...textured with proud, shade-jittered running-bond blocks on the four outer faces.
+    stone_face(m, true, -ro, -1.0f, -ro, ro, 0.0f, rim_h, stone, 11u);
+    stone_face(m, true, ro, 1.0f, -ro, ro, 0.0f, rim_h, stone, 23u);
+    stone_face(m, false, -ro, -1.0f, -ro, ro, 0.0f, rim_h, stone, 37u);
+    stone_face(m, false, ro, 1.0f, -ro, ro, 0.0f, rim_h, stone, 51u);
+    // A lighter coping cap lipping over the curb (a ring of four boxes, shaft left open).
+    const f32 cy0 = rim_h, cy1 = rim_h + 0.11f, co = ro + 0.07f;
+    add_box(m, {-co, cy0, -co}, {co, cy1, -ri}, coping);
+    add_box(m, {-co, cy0, ri}, {co, cy1, co}, coping);
+    add_box(m, {-co, cy0, -ri}, {-ri, cy1, ri}, coping);
+    add_box(m, {ri, cy0, -ri}, {co, cy1, ri}, coping);
+    add_box(m, {-ri + 0.04f, 0.30f, -ri + 0.04f}, {ri - 0.04f, 0.40f, ri - 0.04f}, water); // dark water below
+    // Two posts rising from the cap to carry the roof + windlass.
+    const f32 post_top = cy1 + 1.70f;
+    for (f32 px : {-0.80f, 0.80f}) {
+        add_box(m, {px - 0.09f, cy1, -0.09f}, {px + 0.09f, post_top, 0.09f}, wood);
+    }
+    // The windlass: a horizontal wooden roller spanning the posts, with a wound rope and an
+    // iron crank handle you'd turn to raise the bucket.
+    const f32 wy = post_top - 0.20f;
+    add_box(m, {-0.80f, wy - 0.10f, -0.10f}, {0.80f, wy + 0.10f, 0.10f}, darkwood);     // roller
+    add_box(m, {-0.30f, wy - 0.11f, -0.11f}, {0.30f, wy + 0.11f, 0.11f}, rope * 0.85f); // rope wound on it
+    add_box(m, {0.80f, wy - 0.04f, 0.10f}, {0.90f, wy + 0.04f, 0.36f}, iron);           // crank arm
+    add_box(m, {0.80f, wy - 0.30f, 0.30f}, {0.90f, wy + 0.04f, 0.38f}, wood);           // crank grip
+    // The bucket: a staved wooden pail with two iron bands + a bail, hung on a rope from the
+    // windlass, dangling just above the rim.
+    const f32 bb0 = cy1 + 0.30f, bb1 = bb0 + 0.34f;
+    add_box(m, {-0.02f, bb1 + 0.12f, -0.02f}, {0.02f, wy, 0.02f}, rope); // rope down from the roller
+    add_box(m, {-0.17f, bb0, -0.17f}, {0.17f, bb1, 0.17f}, wood * 0.92f);
+    add_box(m, {-0.185f, bb0 + 0.03f, -0.185f}, {0.185f, bb0 + 0.08f, 0.185f}, iron); // lower band
+    add_box(m, {-0.185f, bb1 - 0.08f, -0.185f}, {0.185f, bb1 - 0.03f, 0.185f}, iron); // upper band
+    add_box(m, {-0.17f, bb1, -0.02f}, {0.17f, bb1 + 0.12f, 0.02f}, iron);             // bail handle
+    // A proper shingled gable roof on the posts (shared stepped-shingle builder); a modest
+    // footprint + rise keeps the eave "swoop" gentle at this small scale.
+    gable_roof(m, ro + 0.16f, ro + 0.16f, post_top, 0.42f, 0.14f, false, shingle, darkwood, wood, 7u);
     def.parts.push_back({std::move(m), PropLayer::Opaque});
     BoxCollider c;
     c.half_extents = Vec2{ro, ro};
@@ -1723,21 +1846,30 @@ PropDef PropLibrary::build_market() {
                 add_box(m, {ex - 0.06f, 0.0f, ez - 0.06f}, {ex + 0.06f, ph, ez + 0.06f}, dark);
             }
         }
-        // Striped awning sloping down toward the plaza (the customer side).
+        // Striped awning sloping down toward the plaza, with a scalloped striped valance (fringe)
+        // hanging off its front lip - the classic market-stall look (was just a flat sloped quad).
         constexpr int strips = 4;
         const f32 back = axis == 0 ? cz - sdir * (hd + 0.2f) : cx - sdir * (hd + 0.2f);
         const f32 front = axis == 0 ? cz + sdir * (hd + 0.55f) : cx + sdir * (hd + 0.55f);
+        auto P = [&](f32 u, f32 y, f32 perp) {
+            return axis == 0 ? Vec3{cx + u, y, perp} : Vec3{perp, y, cz + u};
+        };
+        const Vec3 sc{cx, ph, cz}; // stall-top centre, to orient the fringe normals outward
         for (int k = 0; k < strips; ++k) {
             const f32 u0 = -hw + (2.0f * hw) * static_cast<f32>(k) / static_cast<f32>(strips);
             const f32 u1 = -hw + (2.0f * hw) * static_cast<f32>(k + 1) / static_cast<f32>(strips);
+            const f32 um = 0.5f * (u0 + u1);
             const Vec3 c = (k % 2 == 0) ? cloth : cream;
+            add_quad(m, P(u0, ph + 0.45f, back), P(u1, ph + 0.45f, back), P(u1, ph, front),
+                     P(u0, ph, front), c); // awning panel
+            // Valance: a striped band off the front lip + a downward scallop point per strip.
             if (axis == 0) {
-                add_quad(m, {cx + u0, ph + 0.45f, back}, {cx + u1, ph + 0.45f, back},
-                         {cx + u1, ph, front}, {cx + u0, ph, front}, c);
+                add_box(m, {cx + u0, ph - 0.18f, front - 0.03f}, {cx + u1, ph, front + 0.03f}, c);
             } else {
-                add_quad(m, {back, ph + 0.45f, cz + u0}, {back, ph + 0.45f, cz + u1},
-                         {front, ph, cz + u1}, {front, ph, cz + u0}, c);
+                add_box(m, {front - 0.03f, ph - 0.18f, cz + u0}, {front + 0.03f, ph, cz + u1}, c);
             }
+            emit_tri(m, P(u0, ph - 0.18f, front), P(u1, ph - 0.18f, front), P(um, ph - 0.36f, front),
+                     sc, c);
         }
         BoxCollider col;
         col.center = Vec3{cx, 0.0f, cz};
@@ -1845,11 +1977,33 @@ PropDef PropLibrary::build_wagon() {
     add_box(m, {-1.0f, 0.72f, -0.58f}, {1.0f, 1.05f, -0.50f}, wood);        // left rail
     add_box(m, {0.92f, 0.72f, -0.58f}, {1.0f, 1.05f, 0.58f}, wood);         // front board
     add_box(m, {-1.0f, 0.72f, -0.58f}, {-0.92f, 1.15f, 0.58f}, wood);       // back board (taller)
+    // Vertical plank staves on the long side rails (per-plank shade), so the bed reads as planked
+    // boards, not a smooth box.
+    for (int i = 0; i < 8; ++i) {
+        const f32 x = -0.95f + 1.9f * (static_cast<f32>(i) + 0.5f) / 8.0f;
+        const Vec3 pc = wood * (0.84f + 0.26f * hashf(static_cast<u32>(i) * 7u + 3u));
+        add_box(m, {x - 0.07f, 0.72f, 0.575f}, {x + 0.07f, 1.05f, 0.605f}, pc);   // +z face plank
+        add_box(m, {x - 0.07f, 0.72f, -0.605f}, {x + 0.07f, 1.05f, -0.575f}, pc); // -z face plank
+    }
+    // Iron corner brackets binding the rails.
+    for (const f32 cx : {-0.95f, 0.95f}) {
+        for (const f32 cz : {-0.54f, 0.54f}) {
+            add_box(m, {cx - 0.05f, 0.96f, cz - 0.06f}, {cx + 0.05f, 1.08f, cz + 0.06f}, metal);
+        }
+    }
 
-    // Cargo crates on the bed.
-    add_box(m, {-0.55f, 0.72f, -0.34f}, {0.05f, 1.18f, 0.28f}, crate);
-    add_box(m, {0.12f, 0.72f, -0.1f}, {0.62f, 1.02f, 0.4f}, crate * 0.9f);
-    add_box(m, {0.18f, 0.72f, -0.42f}, {0.58f, 0.98f, -0.06f}, crate * 1.05f);
+    // Cargo: a varied, stacked, lashed load so the haul reads as properly loaded (not a couple of bare
+    // crates) - crates + burlap sacks tied down under rope straps.
+    const Vec3 sack{0.50f, 0.44f, 0.32f};
+    add_box(m, {-0.55f, 0.72f, -0.34f}, {0.05f, 1.18f, 0.28f}, crate);         // big crate (front-left)
+    add_box(m, {-0.5f, 1.18f, -0.26f}, {-0.04f, 1.44f, 0.2f}, crate * 1.08f);  // a crate stacked on top
+    add_box(m, {0.12f, 0.72f, -0.1f}, {0.62f, 1.02f, 0.4f}, crate * 0.9f);     // crate (right)
+    add_box(m, {0.18f, 0.72f, -0.42f}, {0.58f, 0.98f, -0.06f}, crate * 1.05f); // crate (right-back)
+    add_box(m, {-0.04f, 0.72f, 0.2f}, {0.32f, 0.96f, 0.46f}, sack);            // burlap sack in a gap
+    add_box(m, {0.36f, 1.02f, 0.04f}, {0.64f, 1.2f, 0.36f}, sack * 0.92f);     // sack atop the right crate
+    for (f32 rx : {-0.32f, 0.34f}) {                                           // rope straps over the load
+        add_box(m, {rx - 0.03f, 1.14f, -0.56f}, {rx + 0.03f, 1.2f, 0.56f}, dark);
+    }
 
     // Draw tongue + handle out the front.
     add_box(m, {1.0f, 0.5f, -0.07f}, {1.9f, 0.62f, 0.07f}, dark);
@@ -1972,14 +2126,51 @@ PropDef PropLibrary::build_path_tile() {
 PropDef PropLibrary::build_planter() {
     PropDef def;
     def.name = "planter";
-    const Vec3 pot{0.46f, 0.36f, 0.28f};
-    const Vec3 soil{0.20f, 0.14f, 0.10f};
+    const Vec3 wood{0.44f, 0.30f, 0.17f};
+    const Vec3 band{0.20f, 0.17f, 0.14f};
+    const Vec3 soil{0.18f, 0.13f, 0.09f};
     MeshData op;
-    add_box(op, {-0.4f, 0.0f, -0.4f}, {0.4f, 0.5f, 0.4f}, pot);       // pot body
-    add_box(op, {-0.45f, 0.5f, -0.45f}, {0.45f, 0.6f, 0.45f}, pot * 1.1f); // rim
-    add_box(op, {-0.34f, 0.45f, -0.34f}, {0.34f, 0.52f, 0.34f}, soil);     // soil
+    // A round, tapered wooden tub (octagonal, narrower at the base) with iron-band hoops, a rim lip
+    // and soil - a proper barrel-planter, not a square box.
+    constexpr int sides = 8;
+    constexpr f32 rb = 0.30f, rt = 0.42f, h = 0.56f;
+    const Vec3 axis{0.0f, h * 0.5f, 0.0f};
+    auto pt = [](f32 r, f32 y, f32 a) { return Vec3{std::cos(a) * r, y, std::sin(a) * r}; };
+    auto ang = [](int s) { return TwoPi * (static_cast<f32>(s) + 0.5f) / static_cast<f32>(sides); };
+    // tapered stave walls (per-stave shade)
+    for (int s = 0; s < sides; ++s) {
+        const f32 a0 = ang(s), a1 = ang(s + 1);
+        const Vec3 b0 = pt(rb, 0.0f, a0), b1 = pt(rb, 0.0f, a1), t0 = pt(rt, h, a0), t1 = pt(rt, h, a1);
+        const Vec3 c = wood * (0.86f + 0.22f * hashf(static_cast<u32>(s) * 5u + 1u));
+        emit_tri(op, b0, b1, t1, axis, c);
+        emit_tri(op, b0, t1, t0, axis, c);
+    }
+    // two iron-band hoops + a lighter rim lip, each a short proud octagonal ring
+    auto ring_band = [&](f32 y0, f32 y1, f32 r, const Vec3& col) {
+        for (int s = 0; s < sides; ++s) {
+            const f32 a0 = ang(s), a1 = ang(s + 1);
+            emit_tri(op, pt(r, y0, a0), pt(r, y0, a1), pt(r, y1, a1), axis, col);
+            emit_tri(op, pt(r, y0, a0), pt(r, y1, a1), pt(r, y1, a0), axis, col);
+        }
+    };
+    ring_band(0.09f, 0.16f, rb + (rt - rb) * 0.16f + 0.02f, band); // lower hoop
+    ring_band(0.40f, 0.47f, rb + (rt - rb) * 0.78f + 0.02f, band); // upper hoop
+    ring_band(h - 0.02f, h + 0.06f, rt + 0.03f, wood * 1.12f);     // rim lip
+    // soil disc filling the top (a triangle fan, facing up)
+    const Vec3 below{0.0f, -1.0f, 0.0f};
+    const f32 sy = h - 0.02f;
+    for (int s = 0; s < sides; ++s) {
+        emit_tri(op, Vec3{0.0f, sy, 0.0f}, pt(rt - 0.05f, sy, ang(s)), pt(rt - 0.05f, sy, ang(s + 1)),
+                 below, soil);
+    }
     def.parts.push_back({std::move(op), PropLayer::Opaque});
-    def.parts.push_back({primitives::bush(0, Vec3{0.26f, 0.46f, 0.22f}), PropLayer::Foliage});
+    // A compact plant sitting IN the pot (shrunk + raised onto the soil) so the tub shows.
+    MeshData fol = primitives::bush(0, Vec3{0.26f, 0.46f, 0.22f});
+    for (Vertex& v : fol.vertices) {
+        v.position *= 0.60f;
+        v.position.y += 0.50f;
+    }
+    def.parts.push_back({std::move(fol), PropLayer::Foliage});
     BoxCollider c;
     c.half_extents = Vec2{0.42f, 0.42f};
     c.height = 0.6f;
@@ -1992,12 +2183,30 @@ PropDef PropLibrary::build_fountain() {
     PropDef def;
     def.name = "fountain";
     const Vec3 stone{0.55f, 0.54f, 0.50f};
-    const Vec3 water{0.18f, 0.34f, 0.46f};
+    const Vec3 coping{0.65f, 0.64f, 0.59f};
+    const Vec3 water{0.15f, 0.40f, 0.54f};
+    const Vec3 spray{0.55f, 0.80f, 0.92f}; // bright frothy water (emissive, so it glints)
     MeshData op;
     MeshData em;
+    // A round tier (a scaled unit cylinder) - its outward/cap normals stay valid under axis scaling.
+    auto add_cyl = [](MeshData& dst, f32 r, f32 y0, f32 y1, const Vec3& col) {
+        const MeshData c = primitives::cylinder(14, col);
+        const f32 sy = y1 - y0, cy = (y0 + y1) * 0.5f;
+        const u32 base = static_cast<u32>(dst.vertices.size());
+        for (Vertex v : c.vertices) {
+            v.position.x *= r * 2.0f;
+            v.position.z *= r * 2.0f;
+            v.position.y = v.position.y * sy + cy;
+            dst.vertices.push_back(v);
+        }
+        for (u32 idx : c.indices) {
+            dst.indices.push_back(base + idx);
+        }
+    };
     constexpr int n = 12;
     constexpr f32 ro = 1.7f, ri = 1.35f, rim_h = 0.5f;
-    // Octa/dodeca-gonal stone rim + water surface, built as wedges.
+    const f32 wlevel = rim_h * 0.7f;
+    // Dodecagonal stone rim + water surface, built as wedges (per-wedge shade reads as masonry).
     for (int i = 0; i < n; ++i) {
         const f32 a0 = TwoPi * static_cast<f32>(i) / static_cast<f32>(n);
         const f32 a1 = TwoPi * static_cast<f32>(i + 1) / static_cast<f32>(n);
@@ -2006,17 +2215,25 @@ PropDef PropLibrary::build_fountain() {
         const Vec3 i0{std::cos(a0) * ri, 0.0f, std::sin(a0) * ri};
         const Vec3 i1{std::cos(a1) * ri, 0.0f, std::sin(a1) * ri};
         const Vec3 up{0.0f, rim_h, 0.0f};
-        add_quad(op, o0, o1, o1 + up, o0 + up, stone);             // outer rim wall
-        add_quad(op, i0 + up, i1 + up, o1 + up, o0 + up, stone * 1.05f); // rim top
-        add_quad(op, i0, i0 + Vec3{0, rim_h * 0.7f, 0}, i1 + Vec3{0, rim_h * 0.7f, 0}, i1,
-                 stone * 0.9f); // inner wall
-        const Vec3 wc{0.0f, rim_h * 0.7f, 0.0f};
-        add_tri(op, wc, Vec3{i1.x, rim_h * 0.7f, i1.z}, Vec3{i0.x, rim_h * 0.7f, i0.z}, water);
+        const Vec3 lo{0.0f, wlevel, 0.0f};
+        const Vec3 sj = stone * (0.86f + 0.26f * hashf(static_cast<u32>(i) * 7u + 3u));
+        add_quad(op, o0, o0 + up, o1 + up, o1, sj);                 // outer rim wall (outward normal)
+        add_quad(op, i0 + up, i1 + up, o1 + up, o0 + up, coping);   // rim top coping (faces up)
+        add_quad(op, i0, i1, i1 + lo, i0 + lo, stone * 0.88f);      // inner wall (faces the water)
+        add_tri(op, Vec3{0.0f, wlevel, 0.0f}, Vec3{i1.x, wlevel, i1.z}, Vec3{i0.x, wlevel, i0.z},
+                water); // basin water surface
     }
-    // Central tiered spout.
-    add_box(op, {-0.25f, rim_h * 0.7f, -0.25f}, {0.25f, 1.4f, 0.25f}, stone);
-    add_box(op, {-0.5f, 1.0f, -0.5f}, {0.5f, 1.15f, 0.5f}, stone * 1.05f);
-    add_box(em, {-0.18f, 1.4f, -0.18f}, {0.18f, 1.6f, 0.18f}, water * 1.4f); // glinting water top
+    // Round, tiered "wedding-cake" centrepiece: a pedestal -> lower bowl -> stem -> upper bowl,
+    // each bowl catching water, topped by a bubbling-water finial.
+    add_cyl(op, 0.30f, wlevel, 0.74f, stone);  // lower pedestal
+    add_cyl(op, 0.64f, 0.74f, 0.88f, coping);  // lower bowl lip
+    add_cyl(op, 0.56f, 0.84f, 0.90f, water);   // water in the lower bowl
+    add_cyl(op, 0.18f, 0.90f, 1.26f, stone);   // stem
+    add_cyl(op, 0.40f, 1.26f, 1.39f, coping);  // upper bowl lip
+    add_cyl(op, 0.33f, 1.35f, 1.41f, water);   // water in the upper bowl
+    // The finial: a little dome of bright water welling up + spilling, emissive so it glints.
+    add_cyl(em, 0.10f, 1.41f, 1.58f, spray);
+    add_cyl(em, 0.16f, 1.54f, 1.66f, spray);
     def.parts.push_back({std::move(op), PropLayer::Opaque});
     def.parts.push_back({std::move(em), PropLayer::Emissive});
     BoxCollider c;
@@ -2044,21 +2261,34 @@ PropDef PropLibrary::build_decor(int variant) {
         c.height = h;
         def.colliders.push_back(c);
     };
+    // A wooden CRATE: a light planked body framed by darker reinforcing corner posts + a base rail
+    // and a lid seam band (each standing a hair proud), so it reads as a slatted crate rather than a
+    // plain coloured box. Shared by the crate stack + the market-stall goods crate.
+    auto crate = [&](const Vec3& lo, const Vec3& hi, const Vec3& body) {
+        add_box(m, lo, hi, body);
+        const Vec3 frame = dark * 1.2f;
+        constexpr f32 p = 0.045f, e = 0.014f;
+        for (f32 sx : {lo.x, hi.x}) { // four vertical corner posts (edge reinforcement)
+            for (f32 sz : {lo.z, hi.z}) {
+                add_box(m, {sx - p, lo.y - e, sz - p}, {sx + p, hi.y + e, sz + p}, frame);
+            }
+        }
+        const f32 lid = hi.y - 0.16f * (hi.y - lo.y); // a lid seam near the top
+        add_box(m, {lo.x - e, lid - 0.02f, lo.z - e}, {hi.x + e, lid + 0.02f, hi.z + e}, frame * 0.92f);
+        add_box(m, {lo.x - e, lo.y + 0.05f, lo.z - e}, {hi.x + e, lo.y + 0.09f, hi.z + e},
+                frame * 0.92f); // base band
+    };
     switch (variant % static_cast<int>(kDecorVariants)) {
-        case 0: // a barrel
+        case 0: // a belled wooden barrel (shared with the yard helper)
             def.name = "barrel";
-            add_box(m, {-0.33f, 0.0f, -0.33f}, {0.33f, 0.9f, 0.33f}, wood);
-            add_box(m, {-0.37f, 0.16f, -0.37f}, {0.37f, 0.28f, 0.37f}, dark);  // iron hoop
-            add_box(m, {-0.37f, 0.56f, -0.37f}, {0.37f, 0.68f, 0.37f}, dark);  // iron hoop
-            add_box(m, {-0.29f, 0.9f, -0.29f}, {0.29f, 0.96f, 0.29f}, wood * 0.9f); // lid
-            collider(0.36f, 0.36f, 0.9f);
+            belled_barrel(m, Vec3{0.0f, 0.0f, 0.0f}, 0.38f, 0.9f, wood, dark);
+            collider(0.38f, 0.38f, 0.9f);
             break;
-        case 1: // a stack of crates
+        case 1: // a stack of reinforced wooden crates
             def.name = "crates";
-            add_box(m, {-0.42f, 0.0f, -0.42f}, {0.42f, 0.72f, 0.42f}, wood * 1.08f);
-            add_box(m, {-0.44f, 0.31f, -0.44f}, {0.44f, 0.4f, 0.44f}, dark); // banding
-            add_box(m, {-0.18f, 0.72f, -0.36f}, {0.5f, 1.34f, 0.3f}, wood);   // crate on top
-            add_box(m, {-0.5f, 0.0f, 0.16f}, {0.04f, 0.52f, 0.66f}, wood * 0.92f); // crate beside
+            crate({-0.42f, 0.0f, -0.42f}, {0.42f, 0.72f, 0.42f}, wood * 1.08f); // base crate
+            crate({-0.18f, 0.72f, -0.36f}, {0.5f, 1.34f, 0.3f}, wood);          // crate on top
+            crate({-0.5f, 0.0f, 0.16f}, {0.04f, 0.52f, 0.66f}, wood * 0.92f);   // crate beside
             collider(0.58f, 0.58f, 0.72f);
             break;
         case 2: // hay bales
@@ -2079,30 +2309,58 @@ PropDef PropLibrary::build_decor(int variant) {
                     add_box(m, {ex - 0.05f, 0.0f, ez - 0.05f}, {ex + 0.05f, 2.1f, ez + 0.05f}, dark);
                 }
             }
-            for (int k = 0; k < 4; ++k) { // striped awning sloping to the front
+            // Striped awning sloping to the front. Emit via emit_tri with a centre BELOW so the
+            // normals face UP and the visible top is lit (a plain add_quad here faced its normal
+            // down, leaving the awning near-black). A short valance hangs off the lit front edge.
+            for (int k = 0; k < 4; ++k) {
                 const f32 x0 = -1.0f + 0.5f * static_cast<f32>(k);
                 const f32 x1 = -1.0f + 0.5f * static_cast<f32>(k + 1);
                 const Vec3 c = (k % 2 == 0) ? cloth : cream;
-                add_quad(m, {x0, 2.3f, -0.6f}, {x1, 2.3f, -0.6f}, {x1, 2.0f, 0.7f}, {x0, 2.0f, 0.7f}, c);
+                const Vec3 below{0.5f * (x0 + x1), 0.6f, 0.05f}; // under the awning -> normals point up
+                const Vec3 p0{x0, 2.3f, -0.6f}, p1{x1, 2.3f, -0.6f}, p2{x1, 2.0f, 0.7f}, p3{x0, 2.0f, 0.7f};
+                emit_tri(m, p0, p1, p2, below, c);
+                emit_tri(m, p0, p2, p3, below, c);
+                add_box(m, {x0, 1.78f, 0.66f}, {x1, 2.0f, 0.72f}, c * 0.92f); // valance off the front edge
             }
-            add_box(m, {-0.7f, 0.92f, -0.2f}, {-0.3f, 1.2f, 0.2f}, wood * 1.1f);         // crate of goods
+            crate({-0.7f, 0.92f, -0.2f}, {-0.3f, 1.2f, 0.2f}, wood * 1.1f);             // crate of goods
             add_box(m, {0.2f, 0.92f, -0.2f}, {0.6f, 1.12f, 0.2f}, Vec3{0.6f, 0.5f, 0.3f}); // sacks
             collider(1.0f, 0.45f, 0.85f);
             break;
         }
-        case 4: // a signpost with two pointing boards
+        case 4: { // a signpost with two POINTED directional boards + a capped post
             def.name = "signpost";
             add_box(m, {-0.07f, 0.0f, -0.07f}, {0.07f, 1.85f, 0.07f}, wood);
-            add_box(m, {0.05f, 1.35f, -0.04f}, {0.95f, 1.7f, 0.04f}, cream);          // board (+x)
-            add_box(m, {-0.95f, 0.95f, -0.04f}, {-0.05f, 1.3f, 0.04f}, cream * 0.92f); // board (-x)
+            add_box(m, {-0.1f, 1.85f, -0.1f}, {0.1f, 1.95f, 0.1f}, wood * 0.85f); // post cap
+            // A plank that points: a rectangle from x0 to x1 with a pyramidal arrow tip beyond x1.
+            auto board = [&](f32 x0, f32 x1, f32 ymid, f32 dir, const Vec3& col) {
+                constexpr f32 yh = 0.17f, zh = 0.04f;
+                const f32 lo = x0 < x1 ? x0 : x1, hi = x0 < x1 ? x1 : x0;
+                add_box(m, {lo, ymid - yh, -zh}, {hi, ymid + yh, zh}, col);
+                const Vec3 P{x1 + dir * 0.22f, ymid, 0.0f}, ctr{x1, ymid, 0.0f};
+                const Vec3 A{x1, ymid + yh, zh}, B{x1, ymid - yh, zh}, C{x1, ymid - yh, -zh},
+                    D{x1, ymid + yh, -zh};
+                emit_tri(m, A, B, P, ctr, col);
+                emit_tri(m, B, C, P, ctr, col);
+                emit_tri(m, C, D, P, ctr, col);
+                emit_tri(m, D, A, P, ctr, col);
+            };
+            board(0.05f, 0.82f, 1.55f, 1.0f, cream);            // upper board points +x
+            board(-0.05f, -0.82f, 1.12f, -1.0f, cream * 0.92f); // lower board points -x
             collider(0.1f, 0.1f, 1.6f);
             break;
-        case 5: // a stone water trough
+        }
+        case 5: { // a stone water trough - a HOLLOW basin holding water (was a solid block hiding it)
             def.name = "trough";
-            add_box(m, {-0.95f, 0.0f, -0.42f}, {0.95f, 0.5f, 0.42f}, stone);
-            add_box(m, {-0.8f, 0.16f, -0.3f}, {0.8f, 0.46f, 0.3f}, water); // water surface inside
+            constexpr f32 ox = 0.95f, oz = 0.42f, th = 0.5f, wl = 0.13f;
+            add_box(m, {-ox, 0.0f, -oz}, {ox, th, -oz + wl}, stone);             // -z wall
+            add_box(m, {-ox, 0.0f, oz - wl}, {ox, th, oz}, stone * 0.96f);        // +z wall
+            add_box(m, {-ox, 0.0f, -oz + wl}, {-ox + wl, th, oz - wl}, stone * 1.04f); // -x end
+            add_box(m, {ox - wl, 0.0f, -oz + wl}, {ox, th, oz - wl}, stone * 1.04f);    // +x end
+            add_box(m, {-ox + wl, 0.0f, -oz + wl}, {ox - wl, 0.14f, oz - wl}, stone * 0.88f); // floor
+            add_box(m, {-ox + wl, 0.14f, -oz + wl}, {ox - wl, 0.42f, oz - wl}, water);  // water (now visible)
             collider(0.95f, 0.42f, 0.5f);
             break;
+        }
         case 6: // a stacked woodpile (split logs)
             def.name = "woodpile";
             for (int row = 0; row < 3; ++row) {
@@ -2159,7 +2417,7 @@ PropDef PropLibrary::build_arch_bridge() {
         const f32 d0 = deck_top(x0), d1 = deck_top(x1);
         const f32 s0 = soffit(x0), s1 = soffit(x1);
         const Vec3 axis{(x0 + x1) * 0.5f, (d0 + s0) * 0.5f, 0.0f};
-        add_quad(m, {x0, d0, -hw}, {x1, d1, -hw}, {x1, d1, hw}, {x0, d0, hw}, cobble); // roadway
+        add_quad(m, {x0, d0, hw}, {x1, d1, hw}, {x1, d1, -hw}, {x0, d0, -hw}, cobble); // roadway (CCW: normal up)
         for (f32 sz : {-1.0f, 1.0f}) { // the two spandrel faces (the visible arch)
             const f32 z = sz * hw;
             emit_tri(m, {x0, s0, z}, {x1, s1, z}, {x1, d1, z}, axis, stone);
@@ -2180,8 +2438,8 @@ PropDef PropLibrary::build_arch_bridge() {
                 emit_tri(m, {x0, d0, z + zo}, {x1, d1 + 0.56f, z + zo}, {x0, d0 + 0.56f, z + zo}, axis,
                          stone);
             }
-            add_quad(m, {x0, d0 + 0.56f, z - 0.14f}, {x1, d1 + 0.56f, z - 0.14f},
-                     {x1, d1 + 0.56f, z + 0.14f}, {x0, d0 + 0.56f, z + 0.14f}, dark); // parapet cap
+            add_quad(m, {x0, d0 + 0.56f, z + 0.14f}, {x1, d1 + 0.56f, z + 0.14f},
+                     {x1, d1 + 0.56f, z - 0.14f}, {x0, d0 + 0.56f, z - 0.14f}, dark); // parapet cap (CCW: normal up)
         }
     }
     def.parts.push_back({std::move(m), PropLayer::Opaque});
@@ -2277,7 +2535,9 @@ PropDef PropLibrary::build_plank_bridge() {
 PropDef PropLibrary::build_river() {
     PropDef def;
     def.name = "river";
-    const Vec3 water{0.16f, 0.33f, 0.44f};
+    // Match the reflective open-water palette (a clean medium blue), not the old muddy teal, so the
+    // town canal reads as the same water as the lakes/sea rather than a saturated strip.
+    const Vec3 water{0.12f, 0.40f, 0.58f};
     const Vec3 stone{0.48f, 0.47f, 0.45f};
     const Vec3 earth{0.30f, 0.23f, 0.15f};
     MeshData op;
@@ -2288,8 +2548,9 @@ PropDef PropLibrary::build_river() {
 
     // Water surface, just above the ground plane (hides the flat terrain beneath it).
     add_box(op, {-hl, 0.0f, -wb}, {hl, 0.1f, wb}, water);
-    // A brighter shimmer strip down the middle (emissive, so it glints like moving water).
-    add_box(em, {-hl, 0.11f, -0.7f}, {hl, 0.13f, 0.7f}, Vec3{0.32f, 0.55f, 0.62f});
+    // A soft brighter sheen down the middle - kept gentle + close to the water colour so the
+    // repeated per-tile strip doesn't read as a hard segmented bar down the canal.
+    add_box(em, {-hl, 0.11f, -1.0f}, {hl, 0.12f, 1.0f}, Vec3{0.20f, 0.46f, 0.60f});
 
     // Raised stone embankments either side, with an earthy outer slope down to the ground.
     for (f32 s : {-1.0f, 1.0f}) {
@@ -2403,6 +2664,24 @@ PropDef PropLibrary::build_glow_shroom(int variant) {
         v *= 0x2545F491u;
         return static_cast<f32>((v >> 9) & 0xFFFFu) / 65536.0f;
     };
+    // A domed, 8-sided mushroom cap (a lower flare band + a top cone to the apex) - reads as a
+    // toadstool cap, not a box. emit_tri orients each face's normal away from the cap centre.
+    auto glow_cap = [](MeshData& dst, f32 cx, f32 cz, f32 base_y, f32 r, f32 h, const Vec3& col) {
+        constexpr int sides = 8;
+        const Vec3 ctr{cx, base_y + h * 0.45f, cz};
+        const Vec3 apex{cx, base_y + h, cz};
+        const f32 r1 = r * 0.62f, y1 = base_y + h * 0.62f;
+        for (int s = 0; s < sides; ++s) {
+            const f32 a0 = TwoPi * static_cast<f32>(s) / sides, a1 = TwoPi * static_cast<f32>(s + 1) / sides;
+            const Vec3 b0{cx + std::cos(a0) * r, base_y, cz + std::sin(a0) * r};
+            const Vec3 b1{cx + std::cos(a1) * r, base_y, cz + std::sin(a1) * r};
+            const Vec3 m0{cx + std::cos(a0) * r1, y1, cz + std::sin(a0) * r1};
+            const Vec3 m1{cx + std::cos(a1) * r1, y1, cz + std::sin(a1) * r1};
+            emit_tri(dst, b0, b1, m1, ctr, col); // lower flare band (two facets)
+            emit_tri(dst, b0, m1, m0, ctr, col);
+            emit_tri(dst, m0, m1, apex, ctr, col); // top cone to the apex
+        }
+    };
     const int n = 3 + static_cast<int>(rnd(1) * 3.0f);
     for (int i = 0; i < n; ++i) {
         const f32 ang = TwoPi * (static_cast<f32>(i) / static_cast<f32>(n)) + rnd(i * 5 + 2);
@@ -2411,9 +2690,8 @@ PropDef PropLibrary::build_glow_shroom(int variant) {
         const f32 sc = (i == 0 ? 1.0f : 0.55f + rnd(i * 5 + 4) * 0.5f);
         const f32 sh = 0.32f * sc, cr = 0.2f * sc;
         add_box(op, {cxx - 0.05f * sc, 0.0f, czz - 0.05f * sc}, {cxx + 0.05f * sc, sh, czz + 0.05f * sc}, stem);
-        // glowing cap (emissive) - a little domed disc
-        add_box(em, {cxx - cr, sh, czz - cr}, {cxx + cr, sh + 0.1f * sc, czz + cr}, glow);
-        add_box(em, {cxx - cr * 0.6f, sh + 0.08f * sc, czz - cr * 0.6f}, {cxx + cr * 0.6f, sh + 0.16f * sc, czz + cr * 0.6f}, glow * 1.1f);
+        // glowing DOMED cap (emissive toadstool, not a box)
+        glow_cap(em, cxx, czz, sh, cr, 0.22f * sc, glow);
         // a faint underglow disc just above the ground
         add_box(em, {cxx - cr * 1.3f, 0.01f, czz - cr * 1.3f}, {cxx + cr * 1.3f, 0.04f, czz + cr * 1.3f}, glow * 0.5f);
     }
@@ -2450,14 +2728,26 @@ PropDef PropLibrary::build_campfire() {
     add_box(op, {-0.42f, 0.05f, -0.1f}, {0.42f, 0.18f, 0.1f}, char_);
     add_box(op, {-0.1f, 0.05f, -0.42f}, {0.1f, 0.18f, 0.42f}, wood * 0.7f);
     add_box(em, {-0.22f, 0.1f, -0.22f}, {0.22f, 0.24f, 0.22f}, Vec3{0.4f, 0.12f, 0.05f}); // embers
-    // flickering flame tongues (emissive) + an additive bloom (glow pass)
+    // Layered TAPERED flame tongues (emissive pyramids to a point) rising from the embers - orange
+    // outside, yellow inside, a white-hot core - so the fire reads as flickering flames, not a box.
+    auto flame = [&](f32 cx, f32 cz, f32 base_r, f32 h, const Vec3& col) {
+        const Vec3 apex{cx, h, cz};
+        const Vec3 ctr{cx, h * 0.45f, cz}; // for emit_tri's outward-normal orientation
+        const Vec3 b0{cx - base_r, 0.16f, cz - base_r}, b1{cx + base_r, 0.16f, cz - base_r};
+        const Vec3 b2{cx + base_r, 0.16f, cz + base_r}, b3{cx - base_r, 0.16f, cz + base_r};
+        emit_tri(em, b0, b1, apex, ctr, col);
+        emit_tri(em, b1, b2, apex, ctr, col);
+        emit_tri(em, b2, b3, apex, ctr, col);
+        emit_tri(em, b3, b0, apex, ctr, col);
+    };
     for (int i = 0; i < 5; ++i) {
         const f32 a = TwoPi * static_cast<f32>(i) / 5.0f;
-        const f32 fx = std::cos(a) * 0.12f, fz = std::sin(a) * 0.12f;
-        const f32 fh = 0.5f + 0.35f * std::abs(std::sin(static_cast<f32>(i) * 1.7f));
-        add_box(em, {fx - 0.1f, 0.18f, fz - 0.1f}, {fx + 0.1f, fh, fz + 0.1f}, fire * (0.95f + 0.1f * static_cast<f32>(i % 2)));
+        const f32 fx = std::cos(a) * 0.14f, fz = std::sin(a) * 0.14f;
+        const f32 fh = 0.40f + 0.30f * std::abs(std::sin(static_cast<f32>(i) * 1.7f));
+        flame(fx, fz, 0.11f, fh, fire * (0.92f + 0.12f * static_cast<f32>(i % 2))); // outer orange tongues
     }
-    add_box(em, {-0.14f, 0.22f, -0.14f}, {0.14f, 0.95f, 0.14f}, Vec3{1.6f, 1.0f, 0.4f}); // bright core
+    flame(0.0f, 0.02f, 0.11f, 0.92f, Vec3{1.35f, 0.85f, 0.28f}); // tall yellow inner tongue
+    flame(0.0f, 0.0f, 0.07f, 1.05f, Vec3{1.7f, 1.15f, 0.5f});    // white-hot core
     PropLight l;
     l.offset = Vec3{0.0f, 0.6f, 0.0f};
     l.direction = Vec3{0.0f, 1.0f, 0.0f};
@@ -2485,6 +2775,8 @@ PropDef PropLibrary::build_monument(int variant) {
     const Vec3 dark{0.4f, 0.41f, 0.39f};
     const Vec3 moss{0.32f, 0.42f, 0.26f};
     MeshData m;
+    MeshData em;          // emissive glyphs (only the carved obelisk glows)
+    bool glowing = false; // -> push the emissive part + a soft arcane light
     auto rnd = [&](u32 s) {
         u32 v = (static_cast<u32>(variant) * 2654435761u + s * 0x9E3779B9u);
         v ^= v >> 15;
@@ -2493,12 +2785,14 @@ PropDef PropLibrary::build_monument(int variant) {
     };
     f32 cr = 0.7f;
     if (variant % kMonumentVariants == 0) {
-        // carved obelisk on a stepped plinth
+        // a carved obelisk on a stepped plinth - masonry-textured, with a glowing ancient rune
         add_box(m, {-0.85f, 0.0f, -0.85f}, {0.85f, 0.28f, 0.85f}, stone * 0.95f);
         add_box(m, {-0.62f, 0.28f, -0.62f}, {0.62f, 0.52f, 0.62f}, stone);
-        add_box(m, {-0.34f, 0.52f, -0.34f}, {0.34f, 3.6f, 0.34f}, stone * 1.04f); // shaft
-        add_box(m, {-0.36f, 1.3f, -0.36f}, {0.36f, 1.5f, 0.36f}, dark);           // carved band
-        add_box(m, {-0.36f, 2.4f, -0.36f}, {0.36f, 2.6f, 0.36f}, dark);
+        add_box(m, {-0.34f, 0.52f, -0.34f}, {0.34f, 3.6f, 0.34f}, stone * 1.04f); // shaft core
+        stone_face(m, true, 0.34f, 1.0f, -0.34f, 0.34f, 0.52f, 3.5f, stone, 11u);   // +z masonry
+        stone_face(m, true, -0.34f, -1.0f, -0.34f, 0.34f, 0.52f, 3.5f, stone, 23u); // -z
+        stone_face(m, false, 0.34f, 1.0f, -0.34f, 0.34f, 0.52f, 3.5f, stone, 37u);  // +x
+        stone_face(m, false, -0.34f, -1.0f, -0.34f, 0.34f, 0.52f, 3.5f, stone, 51u); // -x
         // a small pyramidal cap
         const Vec3 apex{0.0f, 4.05f, 0.0f};
         add_tri(m, {-0.34f, 3.6f, 0.34f}, {0.34f, 3.6f, 0.34f}, apex, stone * 1.06f);
@@ -2506,6 +2800,16 @@ PropDef PropLibrary::build_monument(int variant) {
         add_tri(m, {0.34f, 3.6f, 0.34f}, {0.34f, 3.6f, -0.34f}, apex, stone);
         add_tri(m, {-0.34f, 3.6f, -0.34f}, {-0.34f, 3.6f, 0.34f}, apex, stone);
         add_box(m, {-0.36f, 0.5f, -0.36f}, {0.0f, 0.9f, -0.32f}, moss); // moss patch
+        // Glowing carved rune: an emissive band ringing the shaft + a vertical glyph, proud of the
+        // masonry (an arcane cyan), so it reads as ancient magic and pools soft light at night.
+        const Vec3 rune{0.34f, 0.82f, 0.95f};
+        add_box(em, {-0.30f, 1.66f, 0.355f}, {0.30f, 1.95f, 0.40f}, rune);   // +z band
+        add_box(em, {-0.30f, 1.66f, -0.40f}, {0.30f, 1.95f, -0.355f}, rune); // -z band
+        add_box(em, {0.355f, 1.66f, -0.30f}, {0.40f, 1.95f, 0.30f}, rune);   // +x band
+        add_box(em, {-0.40f, 1.66f, -0.30f}, {-0.355f, 1.95f, 0.30f}, rune); // -x band
+        add_box(em, {-0.05f, 1.30f, 0.355f}, {0.05f, 2.35f, 0.40f}, rune);   // vertical glyph (front)
+        add_box(em, {-0.05f, 1.30f, -0.40f}, {0.05f, 2.35f, -0.355f}, rune); // vertical glyph (back)
+        glowing = true;
         cr = 0.55f;
     } else if (variant % kMonumentVariants == 1) {
         // a broken, leaning pillar + rubble at the base
@@ -2531,6 +2835,17 @@ PropDef PropLibrary::build_monument(int variant) {
         cr = 0.95f;
     }
     def.parts.push_back({std::move(m), PropLayer::Opaque});
+    if (glowing) {
+        def.parts.push_back({std::move(em), PropLayer::Emissive});
+        PropLight l;
+        l.offset = Vec3{0.0f, 1.85f, 0.0f};
+        l.direction = glm::normalize(Vec3{0.0f, -1.0f, 0.0f});
+        l.color = Vec3{0.30f, 0.66f, 0.82f}; // soft arcane glow
+        l.range = 9.0f;
+        l.intensity = 1.1f;
+        l.cone_deg = 150.0f;
+        def.lights.push_back(l);
+    }
     BoxCollider c;
     c.half_extents = Vec2{cr, cr};
     c.height = 1.6f;
@@ -2578,10 +2893,25 @@ PropDef PropLibrary::build_watchtower() {
     add_box(m, {-r, ph + 0.14f, -r}, {-r + 0.14f, ph + 1.6f, r * 0.4f}, wood);  // side posts
     add_box(m, {r - 0.14f, ph + 0.14f, -r}, {r, ph + 1.6f, r * 0.4f}, wood);
     const f32 ry = ph + 1.6f;
-    add_tri(m, {-r - 0.2f, ry, r + 0.2f}, {r + 0.2f, ry, r + 0.2f}, {0.0f, ry + 0.7f, -r * 0.3f}, roof);
-    add_tri(m, {r + 0.2f, ry, -r - 0.2f}, {-r - 0.2f, ry, -r - 0.2f}, {0.0f, ry + 0.7f, -r * 0.3f}, roof * 0.92f);
-    add_tri(m, {r + 0.2f, ry, r + 0.2f}, {r + 0.2f, ry, -r - 0.2f}, {0.0f, ry + 0.7f, -r * 0.3f}, roof);
-    add_tri(m, {-r - 0.2f, ry, -r - 0.2f}, {-r - 0.2f, ry, r + 0.2f}, {0.0f, ry + 0.7f, -r * 0.3f}, roof);
+    // Stepped (tiered) wooden roof - reads as a tiled pagoda-ish cap, not a flat pyramid slab.
+    const f32 br = r + 0.25f;
+    add_box(m, {-br, ry, -br}, {br, ry + 0.22f, br}, roof);
+    add_box(m, {-br * 0.66f, ry + 0.20f, -br * 0.66f}, {br * 0.66f, ry + 0.44f, br * 0.66f}, roof * 0.93f);
+    add_box(m, {-br * 0.34f, ry + 0.42f, -br * 0.34f}, {br * 0.34f, ry + 0.66f, br * 0.34f}, roof * 1.06f);
+    // a flagpole + red pennant on the peak (a watchtower signal), drawn both sides
+    add_box(m, {-0.04f, ry + 0.66f, -0.04f}, {0.04f, ry + 1.5f, 0.04f}, dark);
+    add_tri(m, {0.04f, ry + 1.42f, 0.0f}, {0.04f, ry + 1.12f, 0.0f}, {0.52f, ry + 1.27f, 0.0f},
+            Vec3{0.72f, 0.2f, 0.16f});
+    add_tri(m, {0.04f, ry + 1.12f, 0.0f}, {0.04f, ry + 1.42f, 0.0f}, {0.52f, ry + 1.27f, 0.0f},
+            Vec3{0.6f, 0.16f, 0.13f});
+    // a ladder climbing the +x face from the ground up to the platform (two rails + rungs)
+    const f32 lx = r + 0.32f;
+    for (const f32 lz : {-0.32f, 0.32f}) {
+        add_box(m, {lx - 0.04f, 0.0f, lz - 0.04f}, {lx + 0.04f, ph + 0.1f, lz + 0.04f}, dark);
+    }
+    for (f32 lr = 0.35f; lr < ph; lr += 0.42f) {
+        add_box(m, {lx - 0.06f, lr, -0.34f}, {lx + 0.07f, lr + 0.06f, 0.34f}, wood * 0.9f);
+    }
     def.parts.push_back({std::move(m), PropLayer::Opaque});
     // colliders on the four legs (the bay between them is walkable)
     for (f32 sx : {-1.0f, 1.0f}) {
@@ -2619,8 +2949,8 @@ PropDef PropLibrary::build_stone_bridge() {
             // deck plank between prev and current (a sloped box)
             const f32 x0 = prev_x, x1 = x;
             const f32 y0 = prev_y, y1 = y;
-            add_quad(m, {x0, y0 + 0.5f, -hw}, {x1, y1 + 0.5f, -hw}, {x1, y1 + 0.5f, hw}, {x0, y0 + 0.5f, hw},
-                     stone); // deck top
+            add_quad(m, {x0, y0 + 0.5f, hw}, {x1, y1 + 0.5f, hw}, {x1, y1 + 0.5f, -hw}, {x0, y0 + 0.5f, -hw},
+                     stone); // deck top (CCW: normal up)
             add_box(m, {std::min(x0, x1), -0.1f, -hw}, {std::max(x0, x1), std::min(y0, y1) + 0.5f, hw},
                     stone * 0.96f); // deck body down to the water
             // parapets

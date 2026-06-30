@@ -72,14 +72,19 @@ void ClientApp::on_init() {
     ox_leg_mesh_.create(renderer_->device(), build_ox_leg());
     deer_body_mesh_.create(renderer_->device(), build_deer_body());
     deer_leg_mesh_.create(renderer_->device(), build_deer_leg());
+    fish_body_mesh_.create(renderer_->device(), build_fish_body());
     // A unit rope segment (along +Y, 0..1) for the verlet harness traces; scaled per link.
     rope_mesh_.create(renderer_->device(),
                       primitives::box(Vec3{-0.5f, 0.0f, -0.5f}, Vec3{0.5f, 1.0f, 0.5f},
                                       Vec3{0.16f, 0.11f, 0.06f}));
-    // A cargo crate (spilled goods on the ground / carried back to the cart).
+    // A cargo crate (rides on the cart bed / spilled on the ground / carried back to the cart) -
+    // a framed slatted crate so the goods you escort read as crates, not plain boxes.
     goods_mesh_.create(renderer_->device(),
-                       primitives::box(Vec3{-0.22f, 0.0f, -0.22f}, Vec3{0.22f, 0.44f, 0.22f},
-                                       Vec3{0.55f, 0.40f, 0.22f}));
+                       primitives::crate(Vec3{-0.22f, 0.0f, -0.22f}, Vec3{0.22f, 0.44f, 0.22f},
+                                         Vec3{0.55f, 0.40f, 0.22f}));
+    // Per-cargo-kind looks: a crate of weapons + a cask of ale (chosen by the active wagon's kind).
+    cargo_weapons_mesh_.create(renderer_->device(), build_cargo_weapons());
+    cargo_casks_mesh_.create(renderer_->device(), build_cargo_casks());
     // A large wave grid that follows the player; the water shader animates it.
     water_mesh_.create(renderer_->device(), primitives::grid(80, 2.0f, Vec3{0.1f, 0.3f, 0.4f}));
     // A unit-length plank bridge, stretched per river crossing where a road bridges a river.
@@ -113,10 +118,13 @@ void ClientApp::on_init() {
     }
     // Shared white character shapes, tinted per bone with each player's palette.
     shape_box_.create(renderer_->device(), primitives::cube(1.0f, Vec3{1.0f}));
-    shape_sphere_.create(renderer_->device(), primitives::sphere(10, 7, Vec3{1.0f}));
-    shape_cylinder_.create(renderer_->device(), primitives::cylinder(10, Vec3{1.0f}));
-    shape_capsule_.create(renderer_->device(), primitives::capsule(12, 3, Vec3{1.0f}));
-    shape_rounded_.create(renderer_->device(), primitives::rounded_box(0.12f, Vec3{1.0f}));
+    // Smoother character shapes (more subdivisions + a stronger bevel) so the rig + gear read as
+    // rounded, contoured forms rather than hard blocks.
+    shape_sphere_.create(renderer_->device(), primitives::sphere(18, 12, Vec3{1.0f}));
+    shape_cylinder_.create(renderer_->device(), primitives::cylinder(16, Vec3{1.0f}));
+    shape_capsule_.create(renderer_->device(), primitives::capsule(18, 6, Vec3{1.0f}));
+    shape_rounded_.create(renderer_->device(), primitives::rounded_box(0.32f, Vec3{1.0f}));
+    shape_quad_.create(renderer_->device(), primitives::grid(1, 1.0f, Vec3{1.0f})); // flat up-quad
 
     // Upload the prop catalogue (bushes, rocks, logs, fences, lanterns) to GPU.
     auto upload_props = [&](const std::vector<PropDef>& defs, std::vector<GpuProp>& out) {
@@ -202,6 +210,10 @@ void ClientApp::return_to_menu() {
     visuals_.clear();
     enemy_visuals_.clear();
     villager_visuals_.clear();
+    for (auto& [frames, m] : mesh_graveyard_) {
+        m.destroy();
+    }
+    mesh_graveyard_.clear();
     have_snapshot_ = false;
     my_id_ = 0;
     state_ = AppState::Menu;
@@ -210,6 +222,11 @@ void ClientApp::return_to_menu() {
 
 void ClientApp::on_update(Timestep dt) {
     elapsed_ += dt.seconds;
+    frame_dt_ = glm::clamp(dt.seconds, 1.0f / 240.0f, 1.0f / 20.0f); // clamp so a hitch can't explode the cloth
+    // Client-side haul clock for the rush-bonus HUD readout (the server's payout is authoritative).
+    haul_elapsed_ = (snapshot_.contract_phase == static_cast<u8>(ContractPhase::Active))
+                        ? haul_elapsed_ + dt.seconds
+                        : 0.0f;
     if (renderer_ != nullptr) {
         renderer_->set_time(elapsed_);
     }
@@ -245,6 +262,7 @@ void ClientApp::on_update(Timestep dt) {
             }
         }
 
+        apply_gamepad(dt); // fold a connected controller into the input path (before aim + camera)
         update_camera();
         if (renderer_ != nullptr) {
             renderer_->set_player_position(local_feet()); // bends nearby vegetation
@@ -287,15 +305,21 @@ void ClientApp::on_update(Timestep dt) {
         update_visuals(dt);
         update_enemy_visuals(dt);
         update_villager_visuals(dt);
+        update_cloth_triggers(); // cut cloth on a hit / blow it off in a storm
+        tick_mesh_graveyard(); // free retired NPC body meshes once their frames-in-flight have passed
         update_gates(dt);
         update_feedback(dt);
+        update_debug(dt);
+        update_wagon_smooth(dt); // ease wagon render positions toward the snapshot (kills jitter)
         update_ropes(dt);
         update_deer(dt);
+        update_fish(dt);
 
         if (terrain_ != nullptr && renderer_ != nullptr) {
             terrain_->update(local_feet(), renderer_->device());
         }
     } else if (renderer_ != nullptr) {
+        apply_gamepad(dt); // controller drives the main-menu focus navigation (in-game path is above)
         renderer_->set_sky_color(menu_sky_); // calm backdrop behind the menu
         if (current_screen_ == Screen::Customise) {
             preview_turn_ += dt.seconds * 0.6f; // slow turntable
@@ -362,6 +386,8 @@ void ClientApp::on_render() {
     draw_buffs();
     draw_particles();
     draw_deer();         // ambient wildlife grazing in the meadows
+    draw_fish();         // ambient fish swimming in nearby water (opaque - the water tints them)
+    draw_surf();         // foam waves lapping along the nearby shoreline
     draw_ambient_life(); // flock of birds by day, fireflies + an owl by night
 
     // Tree trunks (opaque, but they obey the peek-through dissolve so a trunk between
@@ -476,6 +502,9 @@ void ClientApp::on_render() {
     if (skills_open_) {
         draw_skills();
     }
+    if (wardrobe_open_) {
+        draw_wardrobe();
+    }
     }
 
     if (state_ == AppState::Menu && current_screen_ == Screen::Customise) {
@@ -491,12 +520,19 @@ void ClientApp::on_shutdown() {
     if (renderer_ != nullptr) {
         renderer_->device().wait_idle();
     }
-    visuals_.clear();
+    visuals_.clear();           // PlayerVisuals own dynamic body/outfit GPU meshes (freed via ~Mesh)
+    enemy_visuals_.clear();     // EnemyVisuals own a dynamic body mesh
+    villager_visuals_.clear();
+    for (auto& [frames, m] : mesh_graveyard_) {
+        m.destroy();
+    }
+    mesh_graveyard_.clear();
     shape_box_.destroy();
     shape_sphere_.destroy();
     shape_cylinder_.destroy();
     shape_capsule_.destroy();
     shape_rounded_.destroy();
+    shape_quad_.destroy();
     for (auto& tv : tree_library_) {
         tv.trunk.destroy();
         tv.foliage.destroy();
@@ -528,8 +564,11 @@ void ClientApp::on_shutdown() {
     ox_leg_mesh_.destroy();
     deer_body_mesh_.destroy();
     deer_leg_mesh_.destroy();
+    fish_body_mesh_.destroy();
     rope_mesh_.destroy();
     goods_mesh_.destroy();
+    cargo_weapons_mesh_.destroy();
+    cargo_casks_mesh_.destroy();
     water_mesh_.destroy();
     bridge_mesh_stone_.destroy();
     bridge_mesh_wood_.destroy();
@@ -540,19 +579,30 @@ void ClientApp::on_shutdown() {
 }
 
 ClientApp::PlayerVisual& ClientApp::ensure_visual(net::PlayerId id,
-                                                  const CharacterAppearance& appearance) {
+                                                  const CharacterAppearance& appearance, u8 role,
+                                                  const Equipment& equipment) {
+    auto build = [&](PlayerVisual& v) {
+        v.appearance = appearance;
+        v.role = role;
+        v.equipment = equipment;
+        v.model = CharacterModel::create(id, appearance);
+        const OutfitKind kind = outfit_kind_for_role(role);
+        apply_outfit(v.model, kind, equipment); // the networked, server-clamped gear (decorative attachments)
+        v.body_skin = build_body_mesh(v.model);            // continuous body for this character's proportions
+        v.outfit_skin = build_outfit_mesh(v.model, kind, equipment); // continuous worn armour/cloth
+        setup_cloth(v, static_cast<PlayerRole>(role % kRoleCount), equipment); // flowing simulated cloth
+    };
     const auto it = visuals_.find(id);
     if (it != visuals_.end()) {
-        // Rebuild the model if the player changed their look.
-        if (!(it->second.appearance == appearance)) {
-            it->second.appearance = appearance;
-            it->second.model = CharacterModel::create(id, appearance);
+        // Rebuild the model if the player changed their look, role, or gear.
+        if (!(it->second.appearance == appearance) || it->second.role != role ||
+            !(it->second.equipment == equipment)) {
+            build(it->second);
         }
         return it->second;
     }
     PlayerVisual v;
-    v.appearance = appearance;
-    v.model = CharacterModel::create(id, appearance);
+    build(v);
     return visuals_.emplace(id, std::move(v)).first->second;
 }
 
@@ -647,8 +697,20 @@ void ClientApp::update_camera() {
     const f32 cam_pitch = radians(iso::pitch_deg);
     const Vec3 dir_to_cam{std::cos(cam_pitch) * std::cos(cam_yaw), std::sin(cam_pitch),
                           std::cos(cam_pitch) * std::sin(cam_yaw)};
-    const Vec3 target = local_feet() + Vec3{0.0f, cam::target_height, 0.0f};
-    Vec3 eye = target + dir_to_cam * cam_distance_;
+    const Vec3 want = local_feet() + Vec3{0.0f, cam::target_height, 0.0f};
+    const f32 dt = glm::clamp(frame_dt_, 0.0001f, 0.1f); // clamp so a frame hitch can't fling the camera
+    // Follow-smoothing: the camera target GLIDES toward the player instead of snapping every frame (a
+    // softer, less rigid feel), but SNAPS on a big jump (first frame / respawn / teleport) so it never
+    // sails across the world.
+    if (glm::length(want - cam_target_) > 8.0f) {
+        cam_target_ = want;
+    } else {
+        cam_target_ += (want - cam_target_) * (1.0f - std::exp(-12.0f * dt));
+    }
+    // Combat zoom: pull in slightly while an ambush is on (enemies present) for intensity, ease back out.
+    const f32 zoom_goal = snapshot_.enemies.empty() ? 1.0f : 0.86f;
+    combat_zoom_ += (zoom_goal - combat_zoom_) * (1.0f - std::exp(-2.5f * dt));
+    Vec3 eye = cam_target_ + dir_to_cam * (cam_distance_ * combat_zoom_);
     // Camera-terrain collision: never let the eye sink into a hillside - going up a hill, the fixed
     // iso offset can bury the camera in the slope, clipping through the ground. Lift the eye to stay a
     // clearance above the terrain at its own position (smooth, since the height field is continuous).
@@ -660,7 +722,7 @@ void ClientApp::update_camera() {
     }
     camera_.set_perspective(radians(iso::fov_deg), renderer_->aspect(), cam::near_plane,
                             cam::far_plane);
-    camera_.look_at(eye, target);
+    camera_.look_at(eye, cam_target_);
 }
 
 void ClientApp::update_visuals(Timestep dt) {
@@ -668,7 +730,7 @@ void ClientApp::update_visuals(Timestep dt) {
         return;
     }
     for (const net::PlayerState& p : snapshot_.players) {
-        PlayerVisual& v = ensure_visual(p.id, p.appearance);
+        PlayerVisual& v = ensure_visual(p.id, p.appearance, p.role, p.equipment);
         f32 measured = 0.0f;
         if (v.has_last && dt.seconds > 0.0001f) {
             Vec3 d = p.position - v.last_pos;
@@ -679,16 +741,45 @@ void ClientApp::update_visuals(Timestep dt) {
         v.last_pos = p.position;
         v.has_last = true;
 
+        // Wading splash: moving through water kicks up droplets + a ripple at the waterline. Paced
+        // by distance travelled while submerged, and only for players near enough to see.
+        const f32 wsub = worldgen::water_level - p.position.y;
+        if (wsub > 0.06f && v.speed > 0.8f &&
+            glm::length(p.position - local_feet()) < 55.0f) {
+            v.splash_acc += v.speed * dt.seconds;
+            if (v.splash_acc > 0.55f) {
+                v.splash_acc = 0.0f;
+                emit_splash(Vec3{p.position.x, worldgen::water_level, p.position.z}, v.speed);
+            }
+        } else {
+            v.splash_acc = 0.0f;
+        }
+
         // Drive the action layer. The local player uses its own input for zero-latency
         // feedback; remote players follow the networked `action` field.
         const bool is_local = p.id == my_id_;
         v.animator.set_blocking(is_local ? blocking_ : (p.action == 2));
-        if (is_local) {
-            if (pending_local_swing_) {
+        // Pick the attack animation by the role's weapon: a ranged bow/staff casts (forward thrust),
+        // a melee sword/mace swings.
+        auto attack_anim = [&]() {
+            const WeaponType wt = role_weapon(p.role, 0);
+            if (wt == WeaponType::Bow || wt == WeaponType::Staff) {
+                v.animator.play_cast();
+            } else {
                 v.animator.play_swing();
             }
+        };
+        if (is_local) {
+            if (pending_local_swing_) {
+                attack_anim();
+            }
         } else if (p.action == 1 && v.last_action != 1) {
-            v.animator.play_swing(); // rising edge of a remote swing
+            attack_anim(); // rising edge of a remote attack
+        }
+        // Dodge roll: kick up a dust puff at the feet on the rising edge (local + remote).
+        if (p.action == 3 && v.last_action != 3) {
+            emit_burst(p.position + Vec3{0.0f, 0.12f, 0.0f}, Vec4{0.74f, 0.69f, 0.58f, 0.65f}, 12,
+                       2.4f, 0.45f, 0.14f, 1, 0.5f, 3.5f);
         }
         v.last_action = p.action;
         v.animator.update(v.speed, dt);
@@ -703,6 +794,52 @@ void ClientApp::update_feedback(Timestep dt) {
     }
     last_health_ = hp;
     hit_flash_ = std::max(0.0f, hit_flash_ - dt.seconds * 1.8f);
+
+    // Hit marker: the server bumps the local player's hit_fx counter whenever one of our
+    // attacks lands a confirmed hit (melee swing, arrow, bolt, thrown rock - all of them).
+    // When it ticks up we pop a crisp screen-centre marker + a little impact spark, so every
+    // attack that connects feels like it did something.
+    if (const net::PlayerState* lp = local_player()) {
+        if (!hit_fx_init_) {
+            last_hit_fx_ = lp->hit_fx; // adopt the first value so joining mid-fight doesn't false-pop
+            hit_fx_init_ = true;
+        } else if (lp->hit_fx != last_hit_fx_) {
+            hit_marker_ = 1.0f;
+            // A burst of sparks at the point we're aiming at (the enemy we struck is right there).
+            if (aim_valid_) {
+                emit_burst(aim_ + Vec3{0.0f, 0.9f, 0.0f}, Vec4{1.0f, 0.92f, 0.6f, 1.0f}, 14, 4.5f, 0.35f,
+                           0.12f, /*style=*/1, /*up=*/1.5f);
+            }
+            last_hit_fx_ = lp->hit_fx;
+        }
+    }
+    hit_marker_ = std::max(0.0f, hit_marker_ - dt.seconds * 3.2f);
+}
+
+void ClientApp::update_debug(Timestep dt) {
+    // Client frame rate, sampled over a ~0.4 s window so the number is readable, not jittery.
+    fps_accum_ += dt.seconds;
+    ++fps_frames_;
+    if (fps_accum_ >= 0.4f) {
+        fps_ = static_cast<f32>(fps_frames_) / fps_accum_;
+        frame_ms_ = 1000.0f * fps_accum_ / static_cast<f32>(fps_frames_);
+        fps_accum_ = 0.0f;
+        fps_frames_ = 0;
+    }
+    // Server tick rate, measured from how fast the authoritative snapshot tick advances (works for a
+    // listen server AND a remote one, since it just reads the networked tick counter).
+    if (have_snapshot_) {
+        if (snapshot_.tick > tps_last_tick_) {
+            tps_ticks_ += snapshot_.tick - tps_last_tick_;
+        }
+        tps_last_tick_ = snapshot_.tick;
+    }
+    tps_accum_ += dt.seconds;
+    if (tps_accum_ >= 0.4f) {
+        server_tps_ = static_cast<f32>(tps_ticks_) / tps_accum_;
+        tps_accum_ = 0.0f;
+        tps_ticks_ = 0;
+    }
 }
 
 ApplicationConfig ClientApp::make_config(u64 max_frames) {

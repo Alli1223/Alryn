@@ -38,6 +38,11 @@ public:
     void bind(VkCommandBuffer cmd) const;
     void draw(VkCommandBuffer cmd) const;
 
+    // Re-upload vertex data to the (host-visible) vertex buffer IN PLACE - for a skinned mesh that is
+    // re-deformed every frame. Only positions/normals/colours move; the bytes must not exceed what the
+    // mesh was created with (same vertex count).
+    void update_vertices(const std::vector<Vertex>& vertices);
+
     u32 index_count() const { return index_count_; }
     bool valid() const { return index_count_ > 0; }
 
@@ -49,6 +54,7 @@ private:
     vk::Buffer vertex_buffer_;
     vk::Buffer index_buffer_;
     u32 index_count_ = 0;
+    VkDeviceSize vertex_bytes_ = 0; // capacity of the vertex buffer (for in-place re-upload)
     Vec3 bounds_center_{0.0f};
     f32 bounds_radius_ = 0.0f;
 };

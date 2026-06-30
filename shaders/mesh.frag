@@ -27,7 +27,7 @@ layout(set = 0, binding = 2) uniform Lights {
     ivec4 count; // x = shadow-casting spot count, y = unshadowed point count
     Spot spots[9];
     Point points[48];
-    vec4 playerPeek; // (unused here; kept so the std140 offsets match the shared UBO)
+    vec4 playerPeek; // xyz = player position (world); used as the fog reference (zoom-independent)
     vec4 camPos;     // xyz = camera position (world)
     vec4 fogColor;   // rgb = atmospheric fog/haze colour, w = density
     vec4 screen;     // xy = framebuffer resolution (px), z = town "gloom" 0..1
@@ -182,7 +182,12 @@ float fbm(vec2 p) {
 // clear bubble around the player then walls in fast, modulated by animated wisps for a volumetric
 // feel and height-attenuated so it pools on the ground while tall geometry pokes out of it.
 float fogFactor(vec3 wpos) {
-    float dist = length(wpos - lights.camPos.xyz);
+    // Distance haze is measured from the PLAYER, not the camera: with the iso follow-cam, zooming
+    // out moves the eye far back, and a camera-relative fog would then haze the whole scene around
+    // the player (washing out the wagon lamp + other lights). Player-relative fog keeps the near
+    // scene clear + the lights at a constant intensity whether the camera is close or zoomed out,
+    // while distant terrain (far from the player too) still fades for aerial perspective.
+    float dist = length(wpos - lights.playerPeek.xyz);
     float dn = dist * lights.fogColor.w;
     float f = 1.0 - exp(-dn * dn);
 

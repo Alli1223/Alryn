@@ -36,8 +36,22 @@ public:
     bool text(char c) { return root_.dispatch_text(c); }
     bool key(KeyCode k) { return root_.dispatch_key(k); }
 
+    // ---- Focus navigation (controller / keyboard) ---------------------------
+    // Operate the menu without a pointer: a focused widget is highlighted with an accent ring (drawn
+    // in render()) and acted on directly. Focus order is the on-screen layout (top-to-bottom, then
+    // left-to-right). A menu rebuild (the focusable set changes) drops stale focus automatically.
+    void focus_move(int dir);  // -1 previous (up) / +1 next (down) in screen order
+    void focus_nav(int dir);   // -1/+1 left/right: adjust the focused widget (slider/stepper/swatch)
+    void focus_activate();     // A / Enter: click / toggle the focused widget (or focus the first)
+    void clear_focus() { focus_index_ = -1; }
+    bool has_focus() const { return focus_index_ >= 0; }
+
 private:
+    std::vector<Widget*> collect_focusable() const; // visible+enabled+can_focus, in screen order
+
     Widget root_;
+    int focus_index_ = -1;       // index into collect_focusable() order (-1 = nothing focused)
+    usize last_focus_count_ = 0; // detect a menu rebuild (count change) -> drop stale focus
 };
 
 } // namespace alryn::ui

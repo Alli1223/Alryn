@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Alryn/Character/CharacterAppearance.h>
+#include <Alryn/Character/Equipment.h>
 #include <Alryn/Core/Math.h>
 #include <Alryn/Core/Types.h>
 #include <Alryn/Net/ByteBuffer.h>
@@ -44,7 +45,12 @@ struct PlayerInput {
     u8 ability = 0;      // ability invoked this tick: 0 = none, 1/2/3 = slot+1 (keys 1/2/3)
     u8 spell = 0;        // Mage combo spell cast this tick (SpellId; 0 = none) - resolved client-side
     bool block = false;  // holding the shield up (Knight, right mouse) - guard + block pose
+    bool dodge = false;  // dodge-roll this tick (Shift): a quick burst in the move/facing dir + i-frames
     CharacterAppearance appearance; // the player's chosen look (sent each tick)
+    Equipment equipment;            // the player's worn gear loadout (server clamps earned tiers)
+    u8 buy = 0;                     // shop: the gear tier the player is trying to OWN (0 = no request;
+                                    // the server buys up to it one tier at a time in a town, if affordable)
+    u8 buy_rig = 0;                 // 1 = buy the next wagon-rig upgrade level (in a town, if affordable)
 };
 
 struct PlayerState {
@@ -60,7 +66,10 @@ struct PlayerState {
     u8 action = 0;                  // body action: 0 none, 1 swinging, 2 blocking (-> animation)
     u8 shield = 0;                  // Aegis shield strength 0..255 (0 = none) -> shield sphere
     u8 buffs = 0;                   // co-op buff bitflags: bit0 = empowered, bit1 = hasted
+    u8 hit_fx = 0;                  // monotonic counter: bumps when THIS player's attack lands a hit (-> hit marker)
     CharacterAppearance appearance; // so every client renders the right avatar
+    Equipment equipment;            // the authoritative worn gear (drives the outfit + weapon + stats)
+    u8 owned_tier = 0;              // highest gear tier this player has bought (for their wardrobe)
 };
 
 // A live enemy, broadcast each tick so clients can render + animate it.
@@ -115,6 +124,7 @@ struct WagonState {
     u8 wheel_index = 0;   // which axle shed its wheel (0..3) - the cart lists onto that corner
     Vec3 wheel_pos{0.0f}; // the fallen/carried wheel's world position (when wheel_off)
     u8 repair = 0;        // 0..255 wheel re-attach progress
+    u8 cargo_kind = 0;    // CargoKind: weapons / casks / passengers (drives the cargo look)
 };
 
 // A burning building, broadcast so clients render flames at its position. A low
@@ -176,8 +186,11 @@ struct Snapshot {
     u8 houses_standing = 0;  // un-burnt houses in the defended town
     u8 houses_total = 0;
     u32 money = 0;            // shared party wallet
+    u8 rig_level = 0;        // wagon-rig upgrade level bought by the party (0 = stock)
     u8 contract_phase = 0;   // ContractPhase (Offer / Active / Settle)
     u8 contract_outcome = 0; // 0 none, 1 delivered, 2 wrecked (for the settle banner)
+    u8 delivery_streak = 0;  // consecutive PERFECT (full-cargo) deliveries -> a stacking pay bonus
+    u8 contract_kills = 0;   // ambushers felled on the active haul (-> a kill bounty on delivery)
     std::vector<PlayerState> players;
     std::vector<ProjectileState> projectiles;
     std::vector<EnemyState> enemies;

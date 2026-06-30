@@ -98,6 +98,32 @@ void ClientApp::skills_click(const Vec2& p) {
     }
 }
 
+void ClientApp::apply_debug_flags() {
+    // The debug gameplay toggles only have teeth on a listen server we host (we own the sim).
+    if (host_local_ && local_server_.running()) {
+        local_server_.set_debug_god(debug_god_);
+        local_server_.set_debug_no_ambush(debug_no_ambush_);
+    }
+}
+
+bool ClientApp::debug_click(const Vec2& p) {
+    if (in_rect(p, god_btn_)) {
+        debug_god_ = !debug_god_;
+        apply_debug_flags();
+        return true;
+    }
+    if (in_rect(p, noatk_btn_)) {
+        debug_no_ambush_ = !debug_no_ambush_;
+        apply_debug_flags();
+        return true;
+    }
+    if (in_rect(p, npc_paths_btn_)) {
+        debug_paths_ = !debug_paths_; // client-only visual toggle (no server state to push)
+        return true;
+    }
+    return false;
+}
+
 bool ClientApp::abilitybar_press(const Vec2& p) {
     for (u8 i = 0; i < kAbilitySlots; ++i) {
         if (bar_[i] >= 0 && in_rect(p, ability_slot_rects_[i])) {
@@ -159,7 +185,7 @@ void ClientApp::on_event(Event& event) {
         dispatcher.dispatch<KeyPressedEvent>([&](KeyPressedEvent& e) {
             if (e.key() == key::M) {
                 map_open_ = !map_open_;
-                skills_open_ = false;
+                skills_open_ = wardrobe_open_ = false;
                 if (map_open_) { // open centred on the player at the default zoom
                     const Vec3 f = local_feet();
                     map_center_ = Vec2{f.x, f.z};
@@ -171,27 +197,48 @@ void ClientApp::on_event(Event& event) {
             }
             if (e.key() == key::K) {
                 skills_open_ = !skills_open_;
-                map_open_ = false;
+                map_open_ = wardrobe_open_ = false;
                 consumed = true;
                 return true;
             }
-            if ((map_open_ || skills_open_) && e.key() == key::Escape) {
+            if (e.key() == key::U) {
+                wardrobe_open_ = !wardrobe_open_;
                 map_open_ = skills_open_ = false;
+                consumed = true;
+                return true;
+            }
+            if (e.key() == key::C) {
+                // Debug: cut all of the local player's flowing cloth off (it flutters to the ground).
+                const auto vit = visuals_.find(my_id_);
+                if (vit != visuals_.end()) {
+                    for (ClothInstance& c : vit->second.cloth) {
+                        detach_cloth(c, rand_dir() * frand(0.04f, 0.07f) + Vec3{0.0f, 0.05f, 0.0f});
+                    }
+                }
+                consumed = true;
+                return true;
+            }
+            if ((map_open_ || skills_open_ || wardrobe_open_) && e.key() == key::Escape) {
+                map_open_ = skills_open_ = wardrobe_open_ = false;
                 consumed = true;
                 return true;
             }
             return false;
         });
-        // Clicks inside the open skills tree equip / unequip the ability node hit.
-        if (skills_open_) {
+        // Clicks inside an open overlay route to its hit-tester (equip a skill / buy gear).
+        if (skills_open_ || wardrobe_open_) {
             dispatcher.dispatch<MouseButtonPressedEvent>([&](MouseButtonPressedEvent& e) {
                 if (e.button() == 0) {
-                    skills_click(pointer_pos());
+                    if (skills_open_) {
+                        skills_click(pointer_pos());
+                    } else {
+                        wardrobe_click(pointer_pos());
+                    }
                 }
                 return true;
             });
         }
-        if (map_open_ || skills_open_ || consumed) {
+        if (map_open_ || skills_open_ || wardrobe_open_ || consumed) {
             return;
         }
     }
@@ -213,18 +260,11 @@ void ClientApp::on_event(Event& event) {
                 selected_wagon_ = 0; // withdraw the offer
                 return true;
             }
-            // Primary attack is role-specific: the Knight swings the held sword, the Hunter
-            // looses an arrow, the Cleric casts a damage spell (both fire a role projectile
-            // the server picks). Only the Knight melees + plays the sword swing.
-            if (role_ == PlayerRole::Knight) {
-                pending_attack_ = true;      // melee swing (carves terrain if nothing to hit)
-                pending_local_swing_ = true; // swing the actual held sword on our own model
-            } else if (role_ == PlayerRole::Mage) {
-                cast_mage_spell(SpellId::Fireball); // basic bolt (1-4 = elements, CTRL = combos)
-            } else {
-                pending_fire_ = true;        // Hunter arrow / Cleric arcane bolt
-                spawn_primary_vfx();         // muzzle / cast flourish at the hand
+            // A click on the debug overlay's toggles takes priority over melee.
+            if (debug_open_ && debug_click(p)) {
+                return true;
             }
+            primary_action(); // role-specific attack (shared with the controller's right trigger)
         } else if (e.button() == 1) {
             // Right mouse is held: a Knight raises their shield, a Cleric channels a heal
             // aura (charges while held). Everyone else builds terrain.
@@ -247,6 +287,26 @@ void ClientApp::on_event(Event& event) {
         return false;
     });
     dispatcher.dispatch<KeyPressedEvent>([&](KeyPressedEvent& e) {
+        // Debug overlay (F1) + its toggles (F2 godmode, F3 stop wagon ambushes). Also clickable in
+        // the panel; the keys are the quick path and work whatever the role.
+        if (e.key() == key::F1) {
+            debug_open_ = !debug_open_;
+            return true;
+        }
+        if (e.key() == key::F2) {
+            debug_god_ = !debug_god_;
+            apply_debug_flags();
+            return true;
+        }
+        if (e.key() == key::F3) {
+            debug_no_ambush_ = !debug_no_ambush_;
+            apply_debug_flags();
+            return true;
+        }
+        if (e.key() == key::F4) {
+            debug_paths_ = !debug_paths_; // draw NPC pathfinding routes as lines (listen server only)
+            return true;
+        }
         // Mage casting: tap a number key (1-4) to instantly cast that element's spell; or hold
         // Ctrl to weave a COMBO (queue several elements, release to cast the advanced spell).
         if (role_ == PlayerRole::Mage) {
@@ -278,6 +338,8 @@ void ClientApp::on_event(Event& event) {
             escape_pressed(); // opens the pause menu
         } else if (e.key() == key::F) {
             pending_fire_ = true; // throw a rock toward the cursor
+        } else if (key::is_shift(e.key()) && !e.is_repeat()) {
+            pending_dodge_ = true; // dodge roll (a quick burst + brief i-frames)
         } else if (e.key() == key::E) {
             pending_grab_ = true; // hitch / unhitch the nearest wagon (manual haul)
         } else if (e.key() == key::H) {
@@ -299,6 +361,165 @@ void ClientApp::on_event(Event& event) {
         }
         return false;
     });
+}
+
+void ClientApp::primary_action() {
+    // The left-click / right-trigger primary attack is role-specific: the Knight swings the held
+    // sword, the Hunter looses an arrow, the Cleric casts a damage spell (both fire a role projectile
+    // the server picks), the Mage throws a basic fireball. Only the Knight melees + plays the swing.
+    if (role_ == PlayerRole::Knight) {
+        pending_attack_ = true;      // melee swing (carves terrain if nothing to hit)
+        pending_local_swing_ = true; // swing the actual held sword on our own model
+    } else if (role_ == PlayerRole::Mage) {
+        cast_mage_spell(SpellId::Fireball); // basic bolt (1-4 = elements, CTRL = combos)
+    } else {
+        pending_fire_ = true; // Hunter arrow / Cleric arcane bolt
+        spawn_primary_vfx();  // muzzle / cast flourish at the hand
+    }
+}
+
+// Fold the connected gamepad into the same input path as mouse + keyboard. The left stick is added
+// to the move vector in send_input (where the camera-relative basis lives); here we handle the
+// buttons, triggers, bumper-zoom and the menu/overlay toggles, plus the device auto-switch that
+// decides whether the aim follows the right stick or the mouse cursor.
+void ClientApp::apply_gamepad(Timestep dt) {
+    Input* in = input();
+    if (in == nullptr) {
+        return;
+    }
+    const bool present = in->gamepad_present();
+    // Auto-switch the active device: any controller activity selects the pad; any real mouse motion
+    // selects KBM. This only chooses the aim source + reticle - both devices always drive movement.
+    if (present) {
+        bool active = glm::length(in->left_stick()) > 0.0f || glm::length(in->right_stick()) > 0.0f ||
+                      in->left_trigger() > 0.2f || in->right_trigger() > 0.2f;
+        for (int b = 0; b < 15 && !active; ++b) {
+            active = in->pad_down(b);
+        }
+        if (active) {
+            using_gamepad_ = true;
+        }
+    }
+    if (glm::length(in->mouse_delta()) > 0.5f) {
+        using_gamepad_ = false;
+    }
+    if (!present) {
+        using_gamepad_ = false;
+        return;
+    }
+
+    // Analog triggers are axes, not buttons, so we edge-detect them ourselves.
+    const bool rt = in->right_trigger() > pad::trigger_threshold;
+    const bool lt = in->left_trigger() > pad::trigger_threshold;
+    const bool rt_edge = rt && !pad_rt_prev_;
+    const bool lt_edge = lt && !pad_lt_prev_;
+    pad_rt_prev_ = rt;
+    pad_lt_prev_ = lt;
+    auto pressed = [&](int b) { return in->pad_pressed(b); };
+
+    // The full-screen overlays (map / skills / wardrobe) aren't focus-navigable lists - the pad just
+    // closes them (the same B/Back that opened them).
+    if (state_ == AppState::Playing && (map_open_ || skills_open_ || wardrobe_open_)) {
+        if (pressed(pad::B) || pressed(pad::Back)) {
+            map_open_ = skills_open_ = wardrobe_open_ = false;
+        }
+        return;
+    }
+    // The main menu (Menu state) and the in-game pause menu (paused_) are widget trees we navigate by
+    // focus: D-pad up/down moves between controls, left/right adjusts a slider/stepper/swatch, A
+    // activates, B goes back. The mouse and pad share the menu - mouse motion hides the focus ring.
+    if (state_ != AppState::Playing || paused_) {
+        if (!using_gamepad_) {
+            ui_.clear_focus();
+            return;
+        }
+        bool navigated = false;
+        if (pressed(pad::DDown)) {
+            ui_.focus_move(+1);
+            navigated = true;
+        } else if (pressed(pad::DUp)) {
+            ui_.focus_move(-1);
+            navigated = true;
+        }
+        if (pressed(pad::DRight)) {
+            ui_.focus_nav(+1);
+            navigated = true;
+        } else if (pressed(pad::DLeft)) {
+            ui_.focus_nav(-1);
+            navigated = true;
+        }
+        if (pressed(pad::A)) {
+            ui_.focus_activate();
+            navigated = true;
+        }
+        // B = back (resume when paused), but never on the root menu screen (escape_pressed -> close()
+        // there would quit the game out from under the player); Start resumes from the pause menu.
+        const bool on_root_menu = state_ == AppState::Menu && current_screen_ == Screen::Main;
+        if ((pressed(pad::B) && !on_root_menu) || (paused_ && pressed(pad::Start))) {
+            escape_pressed();
+            navigated = true;
+        }
+        if (!navigated && !ui_.has_focus()) {
+            ui_.focus_move(+1); // entering a menu with the pad: show the ring on the first control
+        }
+        return;
+    }
+    // In-game: Back opens the map; Start opens the pause menu.
+    if (pressed(pad::Back)) {
+        map_open_ = true;
+        skills_open_ = wardrobe_open_ = false;
+        const Vec3 f = local_feet();
+        map_center_ = Vec2{f.x, f.z};
+        map_zoom_ = 1.0f;
+        map_dragging_ = false;
+        return;
+    }
+    if (pressed(pad::Start)) {
+        escape_pressed();
+        return;
+    }
+
+    // In-game actions (mirrors the mouse/keyboard bindings).
+    if (rt_edge) {
+        primary_action(); // right trigger = primary attack
+    }
+    if (role_ == PlayerRole::Knight || role_ == PlayerRole::Cleric) {
+        blocking_ = lt; // hold left trigger to guard (Knight) / channel a heal (Cleric)
+    } else if (lt_edge) {
+        pending_add_ = true; // build terrain
+    }
+    if (pressed(pad::X)) {
+        pending_grab_ = true; // hitch / unhitch the nearest wagon, interact
+    }
+    if (pressed(pad::B)) {
+        pending_dodge_ = true; // dodge roll
+    }
+    if (pressed(pad::Y)) {
+        pending_fire_ = true; // throw a rock / loose toward the aim
+    }
+    // D-pad -> abilities 1-4 (for the Mage, cast that single element's spell, like the number keys).
+    const int dpad[4] = {pad::DUp, pad::DRight, pad::DDown, pad::DLeft};
+    for (u8 i = 0; i < 4 && i < kAbilitySlots; ++i) {
+        if (!pressed(dpad[i])) {
+            continue;
+        }
+        if (role_ == PlayerRole::Mage) {
+            const int f = i == 0, w = i == 1, e = i == 2, n = i == 3;
+            cast_mage_spell(spell_for_combo(f, w, e, n));
+        } else {
+            cast_bar_slot(i);
+        }
+    }
+    // Bumpers zoom the camera continuously while held (mirrors the scroll wheel).
+    constexpr f32 zoom_rate = 6.0f;
+    if (in->pad_down(pad::RB)) { // zoom in (closer)
+        cam_distance_ = glm::clamp(cam_distance_ * std::pow(cam::zoom_step, zoom_rate * dt.seconds),
+                                   cam::min_distance, cam::max_distance);
+    }
+    if (in->pad_down(pad::LB)) { // zoom out (farther)
+        cam_distance_ = glm::clamp(cam_distance_ * std::pow(cam::zoom_step, -zoom_rate * dt.seconds),
+                                   cam::min_distance, cam::max_distance);
+    }
 }
 
 void ClientApp::send_input() {
@@ -329,6 +550,16 @@ void ClientApp::send_input() {
         if (in->key_down(key::D)) { move += cam_right; steer += 1.0f; } // rein right
         if (in->key_down(key::A)) { move -= cam_right; steer -= 1.0f; } // rein left
         jump = in->key_down(key::Space);
+        // Controller left stick: same camera-relative mapping as WASD, but analog - partial
+        // deflection walks slower (the controller clamps the move length to 1.0, so the magnitude
+        // carries through as speed). Stick up (-y) is "into the screen" / forward, like W.
+        const Vec2 ls = in->left_stick();
+        if (ls.x != 0.0f || ls.y != 0.0f) {
+            move += cam_fwd * (-ls.y) + cam_right * ls.x;
+            throttle += -ls.y; // forward/back for piloting a carriage
+            steer += ls.x;     // rein left/right
+        }
+        jump = jump || in->pad_down(pad::A); // A jumps
     }
     if (glm::length(move) > 0.01f) {
         face_yaw_ = std::atan2(move.z, move.x); // face the way we walk
@@ -344,6 +575,7 @@ void ClientApp::send_input() {
     packet.add = pending_add_;
     packet.fire = pending_fire_;
     packet.attack = pending_attack_;
+    packet.dodge = pending_dodge_;
     packet.build = pending_build_;
     packet.rally = pending_rally_;
     packet.grab = pending_grab_;
@@ -364,12 +596,24 @@ void ClientApp::send_input() {
     // Right-mouse hold: Knight shield guard / Cleric heal channel.
     packet.block = blocking_ && (role_ == PlayerRole::Knight || role_ == PlayerRole::Cleric);
     packet.appearance = appearance_;
+    packet.equipment = equip_loadout_; // desired loadout; the server clamps tiers to what's owned
+    // A pending shop purchase: keep requesting until the server grants it (owned_tier reaches it).
+    if (const net::PlayerState* me = local_player(); me != nullptr && me->owned_tier >= pending_buy_) {
+        pending_buy_ = 0;
+    }
+    packet.buy = pending_buy_;
+    // Wagon-rig purchase: keep requesting until the server's rig_level reaches the target.
+    if (snapshot_.rig_level >= pending_buy_rig_) {
+        pending_buy_rig_ = 0;
+    }
+    packet.buy_rig = pending_buy_rig_;
     client_.send_input(packet);
     pending_ability_ = 0;
     pending_spell_ = 0;
     pending_add_ = false;
     pending_fire_ = false;
     pending_attack_ = false;
+    pending_dodge_ = false;
     pending_build_ = false;
     pending_rally_ = false;
     pending_grab_ = false;
@@ -378,6 +622,31 @@ void ClientApp::send_input() {
 void ClientApp::update_aim() {
     aim_valid_ = false;
     if (terrain_ == nullptr || renderer_ == nullptr) {
+        return;
+    }
+    // Controller: there's no cursor, so aim along the right stick relative to the fixed camera (a
+    // centred stick aims where you're facing). Project to a point a few metres ahead and drop it
+    // onto the ground so digging / throwing / spells land where the stick points.
+    if (using_gamepad_) {
+        constexpr f32 reach = 6.0f;
+        const f32 cam_yaw = radians(iso::yaw_deg);
+        const Vec3 cam_fwd{-std::cos(cam_yaw), 0.0f, -std::sin(cam_yaw)};
+        const Vec3 cam_right{-cam_fwd.z, 0.0f, cam_fwd.x};
+        Vec2 rs{0.0f};
+        if (Input* in = input()) {
+            rs = in->right_stick();
+        }
+        const Vec3 dir = (glm::length(rs) > 0.15f)
+                             ? glm::normalize(cam_fwd * (-rs.y) + cam_right * rs.x)
+                             : Vec3{std::cos(face_yaw_), 0.0f, std::sin(face_yaw_)};
+        const Vec3 target = local_feet() + dir * reach;
+        if (const auto hit = terrain_->raycast(target + Vec3{0.0f, 30.0f, 0.0f},
+                                               Vec3{0.0f, -1.0f, 0.0f}, 60.0f)) {
+            aim_ = *hit;
+        } else {
+            aim_ = target; // no ground under the point - aim at the flat target anyway
+        }
+        aim_valid_ = true;
         return;
     }
     const VkExtent2D extent = renderer_->extent();

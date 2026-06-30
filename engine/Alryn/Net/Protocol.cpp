@@ -17,6 +17,18 @@ void read_appearance(ByteReader& r, CharacterAppearance& a) {
     a.ears = static_cast<EarStyle>(r.read_u8());
     a.hair = static_cast<HairStyle>(r.read_u8());
 }
+void write_equipment(ByteWriter& w, const Equipment& e) {
+    w.write_u8(e.outfit_tier);
+    w.write_u8(e.weapon_tier);
+    w.write_u8(e.outfit_tint);
+    w.write_u8(e.weapon_index);
+}
+void read_equipment(ByteReader& r, Equipment& e) {
+    e.outfit_tier = r.read_u8();
+    e.weapon_tier = r.read_u8();
+    e.outfit_tint = r.read_u8();
+    e.weapon_index = r.read_u8();
+}
 } // namespace
 
 void write(ByteWriter& w, const PlayerInput& in) {
@@ -38,7 +50,11 @@ void write(ByteWriter& w, const PlayerInput& in) {
     w.write_u8(in.ability);
     w.write_u8(in.spell);
     w.write_u8(in.block ? 1 : 0);
+    w.write_u8(in.dodge ? 1 : 0);
     write_appearance(w, in.appearance);
+    write_equipment(w, in.equipment);
+    w.write_u8(in.buy);
+    w.write_u8(in.buy_rig);
 }
 
 bool read(ByteReader& r, PlayerInput& in) {
@@ -64,7 +80,11 @@ bool read(ByteReader& r, PlayerInput& in) {
     in.ability = r.read_u8();
     in.spell = r.read_u8();
     in.block = r.read_u8() != 0;
+    in.dodge = r.read_u8() != 0;
     read_appearance(r, in.appearance);
+    read_equipment(r, in.equipment);
+    in.buy = r.read_u8();
+    in.buy_rig = r.read_u8();
     return r.ok();
 }
 
@@ -79,8 +99,11 @@ void write(ByteWriter& w, const Snapshot& s) {
     w.write_u8(s.houses_standing);
     w.write_u8(s.houses_total);
     w.write_u32(s.money);
+    w.write_u8(s.rig_level);
     w.write_u8(s.contract_phase);
     w.write_u8(s.contract_outcome);
+    w.write_u8(s.delivery_streak);
+    w.write_u8(s.contract_kills);
     w.write_u16(static_cast<u16>(s.players.size()));
     for (const PlayerState& p : s.players) {
         w.write_u32(p.id);
@@ -95,7 +118,10 @@ void write(ByteWriter& w, const Snapshot& s) {
         w.write_u8(p.action);
         w.write_u8(p.shield);
         w.write_u8(p.buffs);
+        w.write_u8(p.hit_fx);
         write_appearance(w, p.appearance);
+        write_equipment(w, p.equipment);
+        w.write_u8(p.owned_tier);
     }
     w.write_u16(static_cast<u16>(s.projectiles.size()));
     for (const ProjectileState& pr : s.projectiles) {
@@ -156,6 +182,7 @@ void write(ByteWriter& w, const Snapshot& s) {
         w.write_u8(wg.wheel_index);
         w.write_vec3(wg.wheel_pos);
         w.write_u8(wg.repair);
+        w.write_u8(wg.cargo_kind);
     }
     w.write_u16(static_cast<u16>(s.goods.size()));
     for (const GoodState& g : s.goods) {
@@ -189,8 +216,11 @@ bool read(ByteReader& r, Snapshot& s) {
     s.houses_standing = r.read_u8();
     s.houses_total = r.read_u8();
     s.money = r.read_u32();
+    s.rig_level = r.read_u8();
     s.contract_phase = r.read_u8();
     s.contract_outcome = r.read_u8();
+    s.delivery_streak = r.read_u8();
+    s.contract_kills = r.read_u8();
     const u16 count = r.read_u16();
     s.players.clear();
     s.players.reserve(count);
@@ -208,7 +238,10 @@ bool read(ByteReader& r, Snapshot& s) {
         p.action = r.read_u8();
         p.shield = r.read_u8();
         p.buffs = r.read_u8();
+        p.hit_fx = r.read_u8();
         read_appearance(r, p.appearance);
+        read_equipment(r, p.equipment);
+        p.owned_tier = r.read_u8();
         s.players.push_back(p);
     }
     const u16 proj_count = r.read_u16();
@@ -293,6 +326,7 @@ bool read(ByteReader& r, Snapshot& s) {
         wg.wheel_index = r.read_u8();
         wg.wheel_pos = r.read_vec3();
         wg.repair = r.read_u8();
+        wg.cargo_kind = r.read_u8();
         s.wagons.push_back(wg);
     }
     const u16 good_count = r.read_u16();

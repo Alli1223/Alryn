@@ -27,18 +27,25 @@ void CharacterAnimator::update(f32 speed, Timestep dt) {
         wobble_ -= TwoPi;
     }
 
-    // Action layer: advance a one-shot swing to completion, and ease the held-block weight.
+    // Action layer: advance the one-shot swing/cast to completion, and ease the held-block weight.
     if (swing_t_ >= 0.0f) {
         swing_t_ += dts;
         if (swing_t_ > kSwingDur) {
             swing_t_ = -1.0f;
         }
     }
+    if (cast_t_ >= 0.0f) {
+        cast_t_ += dts;
+        if (cast_t_ > kCastDur) {
+            cast_t_ = -1.0f;
+        }
+    }
     const f32 target_block = blocking_ ? 1.0f : 0.0f;
     block_w_ += (target_block - block_w_) * std::min(1.0f, dts * 12.0f);
 }
 
-void CharacterAnimator::play_swing() { swing_t_ = 0.0f; }
+void CharacterAnimator::play_swing() { swing_t_ = 0.0f; cast_t_ = -1.0f; }
+void CharacterAnimator::play_cast() { cast_t_ = 0.0f; swing_t_ = -1.0f; }
 void CharacterAnimator::set_blocking(bool blocking) { blocking_ = blocking; }
 
 std::vector<Quat> CharacterAnimator::pose(const CharacterModel& model) const {
@@ -48,12 +55,14 @@ std::vector<Quat> CharacterAnimator::pose(const CharacterModel& model) const {
     const f32 ph = phase_;
     const f32 sn = std::sin(ph);
     const f32 cs = std::cos(ph);
-    const f32 leg_amp = 0.7f;
-    const f32 arm_amp = 0.6f;
-    const f32 knee_amp = 0.8f;
-    const f32 elbow_amp = 0.4f;
-    const f32 arm_splay = 0.2f;   // constant outward bow - relaxed, blobby arms
-    const f32 arm_circle = 0.16f; // sideways arm sweep, 90deg out of phase => circular hands
+    // Amplitudes toned down from the chibi's floppy "Gang Beasts" wobble to suit the proportioned
+    // adult rig - a lively but grounded walk that reads under the armour/robe.
+    const f32 leg_amp = 0.55f;
+    const f32 arm_amp = 0.5f;
+    const f32 knee_amp = 0.7f;
+    const f32 elbow_amp = 0.3f;
+    const f32 arm_splay = 0.1f;   // a slight outward bow at the shoulders
+    const f32 arm_circle = 0.1f;  // sideways arm sweep, 90deg out of phase => loose circular hands
 
     const Vec3 ax{1.0f, 0.0f, 0.0f};
     const Vec3 ay{0.0f, 1.0f, 0.0f};
@@ -98,9 +107,12 @@ std::vector<Quat> CharacterAnimator::pose(const CharacterModel& model) const {
         }
     }
 
-    // Blend the upper-body action over the locomotion base (a swing takes over from a block).
+    // Blend the upper-body action over the locomotion base (a one-shot swing/cast takes priority over
+    // a held block; the legs keep their walk/idle cycle underneath either way).
     if (swing_t_ >= 0.0f) {
         overlay_swing(model, pose);
+    } else if (cast_t_ >= 0.0f) {
+        overlay_cast(model, pose);
     } else if (block_w_ > 1e-3f) {
         overlay_block(model, pose);
     }
@@ -124,33 +136,35 @@ void blend_overlay(const CharacterModel& model, std::vector<Quat>& pose, f32 wei
 }
 } // namespace
 
-// An overhead sword chop. The SWORD arm is on the player's right side, which (the rig's L/R
-// labels are mirrored) is the *L*-suffixed arm; the SHIELD arm is the *R*-suffixed one. The
-// shoulder swings about the body's left-right axis (the bone's local X) on a single smooth,
-// monotonic angle: wind up overhead-and-back (+), sweep down to the FRONT (-), settle to rest.
-// Only the upper body is masked, so the legs keep their walk/idle cycle underneath.
+// A HORIZONTAL sword slash, swung from the player's RIGHT across to their LEFT (not the old
+// top-to-bottom chop). The SWORD arm is on the player's right side, which (the rig's L/R labels
+// are mirrored) is the *L*-suffixed arm; the SHIELD arm is the *R*-suffixed one. The arm is
+// raised to ~chest height (a forward pitch about local X) and then swept side-to-side by a yaw
+// about the vertical axis (local Y): wind up cocked to the right (+), slash across to the left
+// (-), settle to rest. Only the upper body is masked, so the legs keep their walk/idle cycle.
 void CharacterAnimator::overlay_swing(const CharacterModel& model, std::vector<Quat>& pose) const {
     const f32 t = glm::clamp(swing_t_ / kSwingDur, 0.0f, 1.0f);
     const f32 env = glm::smoothstep(0.0f, 0.10f, t) * (1.0f - glm::smoothstep(0.86f, 1.0f, t));
 
-    f32 a; // shoulder pitch
-    if (t < 0.30f) {
-        a = glm::mix(0.0f, 2.3f, glm::smoothstep(0.0f, 0.30f, t)); // raise overhead + back
-    } else if (t < 0.60f) {
-        a = glm::mix(2.3f, -1.1f, glm::smoothstep(0.30f, 0.60f, t)); // chop down to the front
+    f32 sweep; // shoulder YAW about local Y: + = cocked to the player's right, - = followed through left
+    if (t < 0.26f) {
+        sweep = glm::mix(0.0f, 1.25f, glm::smoothstep(0.0f, 0.26f, t)); // wind up across to the right
+    } else if (t < 0.52f) {
+        sweep = glm::mix(1.25f, -1.6f, glm::smoothstep(0.26f, 0.52f, t)); // SLASH across hard to the left
     } else {
-        a = glm::mix(-1.1f, 0.0f, glm::smoothstep(0.60f, 1.0f, t)); // recover to rest
+        sweep = glm::mix(-1.6f, 0.0f, glm::smoothstep(0.52f, 1.0f, t)); // recover to rest
     }
-    const f32 cock = glm::smoothstep(0.0f, 0.28f, t) * (1.0f - glm::smoothstep(0.30f, 0.56f, t));
-    const f32 lean = glm::smoothstep(0.32f, 0.58f, t) * (1.0f - glm::smoothstep(0.60f, 0.95f, t));
+    const f32 raise = -1.42f; // hold the arm forward to ~chest height for the whole swing (eased by env)
+    const f32 cock = glm::smoothstep(0.0f, 0.24f, t) * (1.0f - glm::smoothstep(0.26f, 0.5f, t));
 
     const Vec3 ax{1.0f, 0.0f, 0.0f};
     const Vec3 ay{0.0f, 1.0f, 0.0f};
-    const Quat sword_upper = glm::angleAxis(a, ax);
-    const Quat sword_lower = glm::angleAxis(0.8f * cock, ax); // cock the elbow, extend on impact
-    const Quat torso = glm::angleAxis(0.22f * lean, ax) * glm::angleAxis(-0.25f * lean, ay);
-    const Quat head = glm::angleAxis(0.1f * lean, ax);
-    const Quat off_upper = glm::angleAxis(-0.25f * lean, ax); // shield arm counter-swings
+    // Raise the arm forward (about X) FIRST, then yaw it horizontally (about Y) to sweep the blade.
+    const Quat sword_upper = glm::angleAxis(sweep, ay) * glm::angleAxis(raise, ax);
+    const Quat sword_lower = glm::angleAxis(0.55f + 0.4f * cock, ax); // cock the elbow, extend on impact
+    const Quat torso = glm::angleAxis(0.34f * sweep, ay) * glm::angleAxis(0.08f * cock, ax); // twist into the slash
+    const Quat head = glm::angleAxis(0.2f * sweep, ay);
+    const Quat off_upper = glm::angleAxis(-0.22f * sweep, ay); // shield arm counter-rotates
 
     blend_overlay(
         model, pose, env,
@@ -172,6 +186,57 @@ void CharacterAnimator::overlay_swing(const CharacterModel& model, std::vector<Q
                 case BonePart::Head: return 0.35f;
                 case BonePart::UpperArmR: return 0.4f;
                 default: return 0.0f; // legs + the rest keep walking
+            }
+        });
+}
+
+// A spell cast: the weapon arm (player's right = the L-suffixed bones) sweeps the staff/hand FORWARD
+// and up, with a thrust pulse at the climax; the off hand raises in a gesture and the torso leans in.
+// Only the upper body is masked, so the legs keep walking - you can cast on the move.
+void CharacterAnimator::overlay_cast(const CharacterModel& model, std::vector<Quat>& pose) const {
+    const f32 t = glm::clamp(cast_t_ / kCastDur, 0.0f, 1.0f);
+    const f32 env = glm::smoothstep(0.0f, 0.12f, t) * (1.0f - glm::smoothstep(0.82f, 1.0f, t));
+
+    f32 raise; // shoulder pitch (negative raises the arm forward + up)
+    if (t < 0.35f) {
+        raise = glm::mix(0.0f, -1.55f, glm::smoothstep(0.0f, 0.35f, t)); // bring the staff forward + up
+    } else {
+        raise = glm::mix(-1.55f, -1.2f, glm::smoothstep(0.35f, 1.0f, t)); // hold, then settle
+    }
+    const f32 thrust = glm::smoothstep(0.30f, 0.5f, t) * (1.0f - glm::smoothstep(0.5f, 0.72f, t)); // push
+    const f32 gesture = glm::smoothstep(0.0f, 0.3f, t) * (1.0f - glm::smoothstep(0.7f, 1.0f, t));
+
+    const Vec3 ax{1.0f, 0.0f, 0.0f};
+    const Vec3 ay{0.0f, 1.0f, 0.0f};
+    const Quat weapon_upper = glm::angleAxis(raise - 0.2f * thrust, ax);
+    const Quat weapon_lower = glm::angleAxis(0.5f - 0.45f * thrust, ax); // elbow bent, extends on thrust
+    const Quat off_upper = glm::angleAxis(-0.9f * gesture, ax) * glm::angleAxis(0.2f * gesture, ay);
+    const Quat off_lower = glm::angleAxis(0.6f * gesture, ax);
+    const Quat torso = glm::angleAxis(0.15f * gesture, ax);
+    const Quat head = glm::angleAxis(-0.1f * gesture, ax); // look forward at the target
+
+    blend_overlay(
+        model, pose, env,
+        [&](BonePart p) -> Quat {
+            switch (p) {
+                case BonePart::UpperArmL: return weapon_upper; // weapon arm (player's right)
+                case BonePart::LowerArmL: return weapon_lower;
+                case BonePart::UpperArmR: return off_upper;
+                case BonePart::LowerArmR: return off_lower;
+                case BonePart::Torso: return torso;
+                case BonePart::Head: return head;
+                default: return QuatIdentity;
+            }
+        },
+        [](BonePart p) -> f32 {
+            switch (p) {
+                case BonePart::UpperArmL:
+                case BonePart::LowerArmL: return 1.0f;
+                case BonePart::UpperArmR:
+                case BonePart::LowerArmR: return 0.7f;
+                case BonePart::Torso: return 0.4f;
+                case BonePart::Head: return 0.3f;
+                default: return 0.0f; // legs keep walking
             }
         });
 }

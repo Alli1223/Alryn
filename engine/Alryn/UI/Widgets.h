@@ -57,6 +57,8 @@ protected:
     bool on_pointer_move(const Vec2& p) override;
     bool on_pointer_down(const Vec2& p, int button) override;
     bool on_pointer_up(const Vec2& p, int button) override;
+    bool can_focus() const override { return enabled; }
+    void on_activate() override; // A / Enter: fire on_click
 
 private:
     bool hovered_ = false;
@@ -81,6 +83,9 @@ protected:
     void on_draw(DrawList& dl) override;
     bool on_pointer_move(const Vec2& p) override;
     bool on_pointer_down(const Vec2& p, int button) override;
+    bool can_focus() const override { return true; }
+    void on_activate() override;     // A / Enter: flip
+    void on_nav(int dir) override;   // left/right: flip
 
 private:
     Rect switch_rect() const; // the pill on the right of the row
@@ -109,6 +114,8 @@ protected:
     bool on_pointer_move(const Vec2& p) override;
     bool on_pointer_down(const Vec2& p, int button) override;
     bool on_pointer_up(const Vec2& p, int button) override;
+    bool can_focus() const override { return true; }
+    void on_nav(int dir) override; // left/right: step the value by 5% (or 1 if integer)
 
 private:
     Rect track_rect() const;
@@ -137,6 +144,9 @@ protected:
     void on_draw(DrawList& dl) override;
     bool on_pointer_move(const Vec2& p) override;
     bool on_pointer_down(const Vec2& p, int button) override;
+    bool can_focus() const override { return true; }
+    void on_activate() override;   // A / Enter: advance one option
+    void on_nav(int dir) override; // left/right: step the option
 
 private:
     Rect left_arrow() const;
@@ -162,6 +172,9 @@ protected:
     void on_draw(DrawList& dl) override;
     bool on_pointer_move(const Vec2& p) override;
     bool on_pointer_down(const Vec2& p, int button) override;
+    bool can_focus() const override { return true; }
+    void on_activate() override;   // A / Enter: advance one swatch
+    void on_nav(int dir) override; // left/right: move the selection
 
 private:
     Rect swatch_rect(usize i) const;
@@ -188,6 +201,8 @@ protected:
     bool on_pointer_down(const Vec2& p, int button) override;
     bool on_text(char c) override;
     bool on_key(KeyCode key) override;
+    bool can_focus() const override { return true; }
+    void on_activate() override; // A / Enter: toggle keyboard focus (type the value on the keyboard)
 
 private:
     f32 caret_blink_ = 0.0f;

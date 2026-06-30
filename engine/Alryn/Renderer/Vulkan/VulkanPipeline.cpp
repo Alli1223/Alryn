@@ -103,7 +103,7 @@ bool Pipeline::create(const Device& device, const PipelineConfig& config) {
     const bool has_depth = config.depth_format != VK_FORMAT_UNDEFINED;
     VkPipelineDepthStencilStateCreateInfo depth_stencil{};
     depth_stencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-    depth_stencil.depthTestEnable = has_depth ? VK_TRUE : VK_FALSE;
+    depth_stencil.depthTestEnable = (has_depth && config.depth_test) ? VK_TRUE : VK_FALSE;
     depth_stencil.depthWriteEnable = (has_depth && config.depth_write) ? VK_TRUE : VK_FALSE;
     depth_stencil.depthCompareOp = VK_COMPARE_OP_LESS;
 

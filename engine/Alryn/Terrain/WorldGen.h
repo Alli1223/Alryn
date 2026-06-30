@@ -209,6 +209,28 @@ inline std::optional<Village> village_at(int vcx, int vcz, u32 seed) {
             }
         }
     }
+    // Reject a site a river threads through: a town straddling the carved channel floats its market
+    // stalls + drops its wagons in the water. The flat check above already rejects a river running
+    // near the footprint's edge/corner samples (height() carves the channel); this covers the gap
+    // across the core (market + wagon depot + inner houses). The river is the zero-contour of
+    // river_field, so a sign flip between the centre and a core-ring sample means a river runs
+    // between them; an in-channel sample (river_amount) catches one tangent to the ring.
+    {
+        const f32 rc = river_field(cx, cz, seed);
+        if (river_amount(cx, cz, seed) > 0.2f) {
+            return std::nullopt; // the centre itself is in a channel
+        }
+        const f32 rr = half * 0.55f; // covers the market (9), wagon spots (~12) + the inner houses
+        for (int i = 0; i < 12; ++i) {
+            const f32 a = TwoPi * static_cast<f32>(i) / 12.0f;
+            const f32 rx = cx + std::cos(a) * rr;
+            const f32 rz = cz + std::sin(a) * rr;
+            const f32 rf = river_field(rx, rz, seed);
+            if (std::abs(rf) < 0.024f || (rf < 0.0f) != (rc < 0.0f)) {
+                return std::nullopt; // a river runs through the town's core
+            }
+        }
+    }
     return Village{Vec2{cx, cz}, gh, half, detail::tree_hash(vcx, vcz, salt + 7u)};
 }
 

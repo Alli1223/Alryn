@@ -29,8 +29,7 @@ constexpr f32 kAggroRadius = 16.0f;       // an ambusher chases a player within 
 constexpr f32 kArcherShootRange = 16.0f;
 constexpr f32 kArcherKeepDist = 9.0f;
 constexpr f32 kArcherInterval = 2.4f;
-constexpr f32 kArrowSpeed = 20.0f;
-constexpr f32 kArrowDamage = 8.0f;
+constexpr f32 kArrowDamage = 8.0f; // fallback for any hostile arrow without an explicit damage
 constexpr f32 kDriverStuckSeconds = 2.0f; // no waypoint progress for this long => skip it
 constexpr f32 kUnstickSeconds = 2.0f; // cart snagged (tow-gate pinned) this long => pull it free
 
@@ -302,6 +301,9 @@ void GameServer::update_contracts(Timestep dt, const DensitySampler& density) {
                     riders_.erase(id);
                 } else if (tower_ == id) {
                     tower_ = 0;
+                    if (active_mode_ == WagonMode::Driver) {
+                        resync_driver_progress(); // hand the cart back to the AI driver from here on
+                    }
                 } else if (pilot_ == id) {
                     pilot_ = 0;
                 } else if (glm::length(ppos - active_.position) < kWagonGrabRange + vt.reach()) {
@@ -318,11 +320,15 @@ void GameServer::update_contracts(Timestep dt, const DensitySampler& density) {
                 }
             }
             if (tower_ != 0 && players_.count(tower_) == 0u) {
-                tower_ = 0;
+                tower_ = 0; // the hauling player vanished - hand the cart back to the AI driver from here
+                if (active_mode_ == WagonMode::Driver) {
+                    resync_driver_progress();
+                }
             }
             if (pilot_ != 0 && players_.count(pilot_) == 0u) {
                 pilot_ = 0;
             }
+            update_passenger(dt, density); // walk the noble to the wagon to board (cart waits)
             update_wheel(dt, density);
             const Vec3 cart_before = active_.position;
             update_wagon(dt, density);
@@ -336,6 +342,7 @@ void GameServer::update_contracts(Timestep dt, const DensitySampler& density) {
             break;
         }
         case ContractPhase::Settle: {
+            update_passenger(dt, density); // the delivered noble keeps walking off to a house
             settle_timer_ -= dt.seconds;
             if (settle_timer_ <= 0.0f) {
                 contract_outcome_ = 0;
@@ -413,8 +420,19 @@ void GameServer::generate_offers() {
         }
         type = static_cast<u8>(std::min<u32>(type, vehicle_type_count() - 1u));
         wg.type = type;
-        wg.reward = static_cast<u32>(std::lround(
-            contract_reward(dist, difficulty, false) * capacity_reward_mult(vehicle_type(type).capacity())));
+        // Cargo kind: the enclosed covered wagon (tall-walled bed) carries PASSENGERS; open
+        // carts/wagons carry WEAPONS or CASKS of ale, alternating deterministically by offer id so
+        // the board mixes the two and the client agrees without an extra wire negotiation.
+        if (vehicle_type(type).bed().wall > 2.0f) {
+            wg.cargo_kind = static_cast<u8>(CargoKind::Passengers);
+        } else {
+            wg.cargo_kind = static_cast<u8>((wg.id % 2u == 0u) ? CargoKind::Weapons : CargoKind::Casks);
+        }
+        // A per-offer modifier (hazardous / bulk / safe, deterministic from the id) varies the pay.
+        wg.reward = static_cast<u32>(
+            std::lround(contract_reward(dist, difficulty, false) *
+                        capacity_reward_mult(vehicle_type(type).capacity()) *
+                        modifier_effect(contract_modifier(wg.id)).pay_mult));
         // Face along the first leg of the route (the way it leaves town through its gate).
         Vec2 dir = dest.center - origin->center;
         if (route.size() >= 2) {
@@ -457,9 +475,13 @@ void GameServer::accept_contract(const Wagon& chosen, WagonMode mode) {
     if (active_.route.empty()) {
         active_.route = roads::route_polyline(active_.source, active_.dest, seed);
     }
-    active_.health = kWagonHealth;
+    active_.health = rig_max_health(rig_level_); // a reinforced rig starts (and caps) tougher
     active_.ambush_waves_spawned = 0;
-    active_.goods_total = goods_for_capacity(vehicle_type(active_.type).capacity());
+    // A Passengers-kind covered wagon carries PEOPLE, not crates - so it loads no cargo boxes (the
+    // delivered "load" is the noble who rides it).
+    const bool passengers = static_cast<CargoKind>(active_.cargo_kind) == CargoKind::Passengers;
+    active_.goods_total =
+        passengers ? 0 : goods_for_capacity(vehicle_type(active_.type).capacity());
     wagon_prev_pos_ = active_.position;
     wagon_vel_ = Vec2{0.0f};
     wagon_vy_ = 0.0f;
@@ -538,6 +560,31 @@ void GameServer::accept_contract(const Wagon& chosen, WagonMode mode) {
         d.rng = d.id | 1u;
         driver_ = d;
     };
+    // A noble rides the covered wagon (Passengers): spawn a fancy NPC (kind 4) seated inside. The
+    // seat is placed each tick by seat_occupants; networked as a villager so every client renders it.
+    passenger_.reset();
+    passenger_phase_ = PassengerPhase::None;
+    if (passengers) {
+        Villager p;
+        p.id = active_.id ^ 0x70B1Eu; // distinct from the teamster's id (active_.id ^ 0xD1234u)
+        p.kind = 4; // noble passenger
+        p.appearance = villager_look(p.id);
+        // Board on foot: the noble starts at a house door in the source town (fallback: a few metres
+        // behind the wagon, toward town) and walks to the parked wagon - the cart waits until aboard.
+        Vec3 board_start = active_.position - Vec3{fdir.x, 0.0f, fdir.y} * 6.0f;
+        if (const auto door = town_house_door(active_.source, p.id)) {
+            board_start = *door;
+        }
+        board_start.y = worldgen::height(board_start.x, board_start.z, seed);
+        p.position = board_start;
+        p.yaw = active_.yaw;
+        p.home_center = active_.source;
+        p.rng = p.id | 1u;
+        passenger_ = p;
+        passenger_phase_ = PassengerPhase::Boarding;
+        passenger_target_ = active_.position;
+        passenger_timer_ = 0.0f;
+    }
     if (has_horse_) {
         // Carriages are horse-drawn: a horse pulls in front (in either mode).
         const Vec2 hp = Vec2{active_.position.x, active_.position.z} + fdir * (vt.reach() + 1.8f);
@@ -553,13 +600,53 @@ void GameServer::accept_contract(const Wagon& chosen, WagonMode mode) {
         make_driver(2, Vec3{ahead.x, worldgen::height(ahead.x, ahead.y, seed), ahead.y});
     }
     contract_phase_ = ContractPhase::Active;
+    contract_elapsed_ = 0.0f; // start the rush-bonus clock
+    contract_kills_ = 0;      // fresh kill-bounty tally for this haul
+    contract_downs_ = 0;      // fresh no-casualty (unscathed) tally for this haul
+    for (auto& [pid, pl] : players_) {
+        pl.used_second_wind = false; // each player gets one clutch second wind per haul
+        pl.rampage_stacks = 0;       // fresh kill momentum for the new haul
+        pl.rampage_timer = 0.0f;
+    }
     ALRYN_INFO("Contract accepted ({}), reward {}", mode == WagonMode::Manual ? "manual" : "driver",
                active_.reward);
 }
 
+void GameServer::resync_driver_progress() {
+    // A player took the handles, towed the cart (maybe well past several route waypoints), then let go.
+    // Resume the hired teamster from the route node NEAREST the cart's CURRENT position - continuing
+    // forward from there - instead of marching back to the stale waypoint it was heading for. The
+    // cached A* path is dropped so the driver re-routes fresh from where the cart now sits.
+    if (active_.route.empty()) {
+        return;
+    }
+    const Vec2 here{active_.position.x, active_.position.z};
+    const int besti = nearest_route_index(here, active_.route);
+    // Aim at the node just AHEAD of the nearest, so the driver heads onward (not back to a node it has
+    // effectively already reached).
+    const int last = static_cast<int>(active_.route.size()) - 1;
+    active_.progress = static_cast<f32>(besti + 1 < last ? besti + 1 : last);
+    driver_path_.clear();
+    driver_path_i_ = 0;
+    driver_repath_ = 0.0f;
+    driver_stuck_ = 0.0f;
+    driver_best_dist_ = 1e9f;
+}
+
 void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
     Wagon& w = active_;
+    contract_elapsed_ += dt.seconds; // the rush-bonus clock runs the whole haul (even while stranded)
     const u32 wseed = sampler_.seed(); // so the cart + its puller ride bridges over rivers
+    // Boarding: the covered wagon waits at the depot until the noble has walked over from a town
+    // house and climbed aboard (update_passenger advances that walk). Keep it grounded; don't tow or
+    // advance the driver yet. seat_occupants still seats any players, but skips the not-yet-aboard noble.
+    if (passenger_phase_ == PassengerPhase::Boarding) {
+        w.position.y = ground_at(density, w.position.x, w.position.z, wseed);
+        wagon_vel_ = Vec2{0.0f};
+        wagon_prev_pos_ = w.position;
+        seat_occupants(vehicle_type(w.type));
+        return;
+    }
     // A wheel is off: the cart is stranded - it can't roll until a player refits the wheel. Keep it
     // grounded + zero its velocity (so cargo settles), but don't tow or advance it.
     if (wheel_off_) {
@@ -571,7 +658,15 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
     }
     const VehicleType& vt = vehicle_type(w.type);
     const f32 hitch = vt.horse_drawn() ? vt.reach() + 1.8f : kHitchDist;
-    const f32 dmg = damage_speed_factor(w.health / kWagonHealth); // a battered cart moves slower
+    // A battered cart moves slower. The laden-weight penalty (load_speed_factor) is applied ONLY to
+    // a PLAYER hauling by hand - their walk speed, in the GameServer step loop - where the heaviness
+    // is felt as gameplay. The hired driver/horse keeps a steady professional pace: its deterministic
+    // route is what the wheel-breakdown physics (a shed wheel rolling + settling) depend on, so
+    // perturbing it by the live cargo count would land the wheel in a different, sometimes unreachable
+    // spot.
+    // (A reinforced rig also tows faster - rig_speed_mult is 1.0 at stock level 0, so the deterministic
+    // wheel/ambush tests, which run on a stock rig, are unaffected.)
+    const f32 dmg = damage_speed_factor(w.health / kWagonHealth) * rig_speed_mult(rig_level_);
 
     // Walks a puller (horse or teamster) toward the next route waypoint, A*-routing around
     // obstacles so it never snags. It targets sparse, string-pulled nodes using the LIVE
@@ -588,6 +683,19 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
                 collision_->gather(pos, collider_scratch_);
             }
             append_walls(pos, collider_scratch_); // the teamster A* routes AROUND Mage rock walls
+            // Inside a town, keep the cart OUT of the central market plaza: add the market footprint as
+            // a circular keep-out so the driver rounds it on the streets instead of cutting across (the
+            // open plaza has no stall colliders, so the A* would otherwise barrel straight through it).
+            // Sized < kDeliverRadius so the cart can still reach the plaza edge to deliver.
+            if (const auto town = worldgen::village_containing(pos.x, pos.z, wseed, kMarketKeepout)) {
+                Collider mk;
+                mk.shape = Collider::Shape::Cylinder;
+                mk.center = Vec3{town->center.x, pos.y, town->center.y};
+                mk.radius = kMarketKeepout;
+                mk.y_min = pos.y - 1.0f;
+                mk.y_max = pos.y + 2.0f;
+                collider_scratch_.push_back(mk);
+            }
             driver_path_ = astar_path({pos.x, pos.z}, wp, collider_scratch_, vt.reach() + 0.2f, pos.y);
             driver_path_i_ = 0;
             driver_repath_ = 0.6f;
@@ -731,6 +839,14 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
     }
 
     if (towed) {
+        // A cart bogs down in water: scale the tow pace by how deep the cart sits below the
+        // waterline. (A player-hauled cart is also slowed via the puller, who wades slowly too;
+        // this slows the hired teamster's cart and keeps the trailer from out-running a wading
+        // puller.) The lag this opens up makes the tow_gate ease the driver to match.
+        const f32 cart_sub = worldgen::water_level - w.position.y;
+        if (cart_sub > 0.02f) {
+            speed *= glm::mix(1.0f, 0.42f, glm::smoothstep(0.0f, 1.2f, cart_sub));
+        }
         // Trailer kinematics: the puller holds the drawbar at the cart's front, so the cart
         // body trails `hitch` behind and its heading SWINGS to follow the pull (capped turn
         // rate - a cart can't pivot in place or flip instantly). It eases toward its ideal
@@ -780,20 +896,42 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
             w.goods_total > 0 ? static_cast<f32>(cargo_.size()) / static_cast<f32>(w.goods_total) : 1.0f;
         const f32 base = manual ? static_cast<f32>(w.reward) * kManualRewardMult
                                 : static_cast<f32>(w.reward);
-        money_ += static_cast<u32>(std::lround(base * frac));
+        // Bonus for delivering the wagon INTACT (scales with remaining health) - defending it pays.
+        const f32 intact = intact_bonus_mult(w.health / kWagonHealth);
+        const f32 rdist = roads::route_length(w.route);
+        // RUSH bonus: a fast delivery pays extra (decays over the route's time budget).
+        const f32 rush = rush_bonus_mult(contract_elapsed_, rush_expected_time(rdist));
+        // FRESHNESS: perishable cargo loses value if delivered past its (tight) spoil deadline.
+        const f32 fresh = perishable_value_mult(contract_elapsed_, rdist, contract_modifier(w.id));
+        // STREAK: a PERFECT delivery (the whole load arrived) extends the clean-delivery streak for a
+        // stacking pay bonus; losing any cargo breaks it back to nothing.
+        const bool perfect = w.goods_total == 0 || cargo_.size() >= w.goods_total;
+        delivery_streak_ = perfect ? std::min<u32>(delivery_streak_ + 1u, kStreakMax) : 0u;
+        const f32 streak = streak_mult(delivery_streak_);
+        // CONVOY: a bigger escort party earns a better contract (co-op incentive; solo = 1.0).
+        const f32 convoy = convoy_mult(static_cast<u32>(players_.size()));
+        // UNSCATHED: a no-casualty haul pays a premium (fades with each party member downed).
+        const f32 unscathed = unscathed_mult(contract_downs_);
+        // The reward (scaled by all the multipliers) PLUS a flat kill bounty for the raiders felled.
+        money_ += static_cast<u32>(
+                      std::lround(base * frac * intact * rush * fresh * streak * convoy * unscathed)) +
+                  kill_bounty(contract_kills_);
         contract_outcome_ = 1;
         contract_phase_ = ContractPhase::Settle;
         settle_timer_ = kSettleSeconds;
-        ALRYN_INFO("Wagon delivered ({}/{} crates)! Party money now {}", cargo_.size(), w.goods_total,
-                   money_);
+        ALRYN_INFO("Wagon delivered ({}/{} crates, x{:.2f} intact, x{:.2f} convoy, x{:.2f} unscathed)! "
+                   "Party money now {}",
+                   cargo_.size(), w.goods_total, intact, convoy, unscathed, money_);
+        start_passenger_disembark(); // the noble hops off and walks to a destination-town house
         end_contract_cleanup();
         return;
     }
-    // Wrecked: the ambush destroyed it.
+    // Wrecked: the ambush destroyed it. A failed haul breaks the clean-delivery streak.
     if (w.health <= 0.0f) {
         contract_outcome_ = 2;
         contract_phase_ = ContractPhase::Settle;
         settle_timer_ = kSettleSeconds;
+        delivery_streak_ = 0u;
         end_contract_cleanup();
         ALRYN_INFO("Wagon was wrecked - contract failed");
     }
@@ -961,6 +1099,12 @@ void GameServer::end_contract_cleanup() {
     tower_ = 0;
     pilot_ = 0;
     driver_.reset();
+    // A noble who's disembarking keeps walking to a house through the post-delivery Settle phase
+    // (update_passenger clears them on arrival); otherwise (wreck / new contract) drop them now.
+    if (passenger_phase_ != PassengerPhase::Leaving) {
+        passenger_.reset();
+        passenger_phase_ = PassengerPhase::None;
+    }
     driver_path_.clear();
     riders_.clear();
     has_horse_ = false;
@@ -1012,6 +1156,14 @@ void GameServer::debug_place_player(net::PlayerId id, const Vec3& pos) {
     const auto it = players_.find(id);
     if (it != players_.end()) {
         it->second.controller.set_position(pos);
+    }
+}
+
+void GameServer::unlock_tier(net::PlayerId id, u8 tier) {
+    const auto it = players_.find(id);
+    if (it != players_.end()) {
+        it->second.owned_tier =
+            std::max(it->second.owned_tier, static_cast<u8>(std::min<u8>(tier, kTierCount - 1u)));
     }
 }
 
@@ -1108,6 +1260,10 @@ void GameServer::seat_occupants(const VehicleType& vt) {
         driver_->position = seat_world(vt.driver_seat());
         driver_->yaw = active_.yaw;
     }
+    if (passenger_ && passenger_phase_ == PassengerPhase::Aboard) { // the noble rides once aboard
+        passenger_->position = seat_world(Vec3{-0.25f, 0.95f, 0.0f});
+        passenger_->yaw = active_.yaw;
+    }
     const std::vector<Seat> seats = vt.seats();
     std::vector<net::PlayerId> rs(riders_.begin(), riders_.end());
     std::sort(rs.begin(), rs.end()); // stable seat assignment by id
@@ -1119,6 +1275,87 @@ void GameServer::seat_occupants(const VehicleType& vt) {
         const Vec3 local = seats.empty() ? Vec3{-0.6f, 0.85f, 0.0f} : seats[i % seats.size()].pos;
         it->second.controller.set_position(seat_world(local));
     }
+}
+
+// A house's door position in the town centred at `town_center`, chosen deterministically by `pick`.
+// Mirrors the siege villager spawn: each House prop's local door_spot transformed into the world.
+// Returns nothing if the point isn't in a town or the town has no houses (caller falls back).
+std::optional<Vec3> GameServer::town_house_door(Vec2 town_center, u32 pick) {
+    const u32 seed = sampler_.seed();
+    const auto v = worldgen::village_containing(town_center.x, town_center.y, seed);
+    if (!v) {
+        return std::nullopt;
+    }
+    std::vector<Vec3> doors;
+    for (const PropInstance& pr : village_props(*v, seed)) {
+        if (pr.category != PropCategory::House) {
+            continue;
+        }
+        const f32 cs = std::cos(pr.yaw);
+        const f32 sn = std::sin(pr.yaw);
+        const PropDef& hd = prop_lib_.resolve(pr); // this house variant's layout (door_spot)
+        const Vec3 l = hd.door_spot;
+        Vec3 d = pr.position + Vec3{l.x * cs + l.z * sn, l.y, -l.x * sn + l.z * cs};
+        d.y = worldgen::height(d.x, d.z, seed);
+        doors.push_back(d);
+    }
+    if (doors.empty()) {
+        return std::nullopt;
+    }
+    return doors[pick % static_cast<u32>(doors.size())];
+}
+
+// Drive the covered-wagon noble's on-foot walk. Boarding: walk from the source house to the parked
+// wagon, then climb aboard (the cart waits via update_wagon's gate). Leaving (post-delivery): walk to
+// a destination-town house and vanish on arrival. A timeout force-advances each phase so a snagged
+// noble can never stall the haul or the settle.
+void GameServer::update_passenger(Timestep dt, const DensitySampler& density) {
+    if (!passenger_ || passenger_phase_ == PassengerPhase::None ||
+        passenger_phase_ == PassengerPhase::Aboard) {
+        return; // None: nobody walking; Aboard: seat_occupants rides them on the moving cart
+    }
+    passenger_timer_ += dt.seconds;
+    if (collision_) {
+        collision_->gather(passenger_->position, collider_scratch_);
+    } else {
+        collider_scratch_.clear();
+    }
+    if (passenger_phase_ == PassengerPhase::Boarding) {
+        passenger_target_ = active_.position; // the parked wagon (the cart waits while we approach)
+        step_villager(*passenger_, density, collider_scratch_, passenger_target_, dt, kNobleWalkSpeed);
+        const f32 d = glm::length(Vec2{passenger_->position.x - active_.position.x,
+                                       passenger_->position.z - active_.position.z});
+        if (d < kBoardRange || passenger_timer_ > kBoardTimeout) {
+            passenger_phase_ = PassengerPhase::Aboard; // climbed aboard - the haul can roll
+        }
+    } else { // Leaving
+        step_villager(*passenger_, density, collider_scratch_, passenger_target_, dt, kNobleWalkSpeed);
+        const f32 d = glm::length(Vec2{passenger_->position.x - passenger_target_.x,
+                                       passenger_->position.z - passenger_target_.z});
+        if (d < kDisembarkArrive || passenger_timer_ > kDisembarkTimeout) {
+            passenger_.reset(); // reached a house (or gave up) - the noble has gone home
+            passenger_phase_ = PassengerPhase::None;
+        }
+    }
+}
+
+// On delivery: the noble hops off and heads for a house in the destination town, vanishing on arrival
+// (update_passenger walks them there through the Settle phase; end_contract_cleanup keeps them alive
+// while Leaving). Falls back to the town centre if no house door is found.
+void GameServer::start_passenger_disembark() {
+    if (!passenger_ || passenger_phase_ == PassengerPhase::None) {
+        return;
+    }
+    const u32 seed = sampler_.seed();
+    Vec3 target{active_.dest.x, 0.0f, active_.dest.y};
+    if (const auto door = town_house_door(active_.dest, passenger_->id)) {
+        target = *door;
+    }
+    target.y = worldgen::height(target.x, target.z, seed);
+    passenger_target_ = target;
+    passenger_phase_ = PassengerPhase::Leaving;
+    passenger_timer_ = 0.0f;
+    passenger_->position.y = worldgen::height(passenger_->position.x, passenger_->position.z, seed);
 }
 
 // The active cart's bed is a moving platform: the deck-top height where (x,z) sits over the cart
@@ -1171,6 +1408,11 @@ void GameServer::carry_top_riders(const Vec2& delta, const VehicleType& vt) {
 
 void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
     Wagon& w = active_;
+    // Debug: stop the wagon ambushes entirely - clear any raiders in progress and never spawn more.
+    if (debug_no_ambush_) {
+        ambush_.clear();
+        return;
+    }
     // So ambushers chasing the cart cross bridges with it instead of dropping into the river.
     const u32 wseed = sampler_.seed();
     const auto bridge = [wseed](f32 x, f32 z) { return roads::bridge_height(x, z, wseed); };
@@ -1182,8 +1424,15 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                                             7000u);
             Enemy e;
             e.id = next_ambush_id_++;
-            const u32 roll = h % 6u;
-            e.kind = roll == 0u ? 2u : roll == 1u ? 3u : 0u; // ~1/6 brute, ~1/6 archer, rest grunts
+            const u32 roll = h % 8u;
+            // ~1/8 each of brute / archer / shield-bearer / healer / sapper / warlord, the rest grunts.
+            e.kind = roll == 0u   ? 2u
+                     : roll == 1u ? 3u
+                     : roll == 2u ? kEnemyShield
+                     : roll == 3u ? kEnemyHealer
+                     : roll == 4u ? kEnemySapper
+                     : roll == 5u ? kEnemyWarlord
+                                  : 0u;
             e.health = enemy_max_health(e.kind);
             const f32 a = detail::hash01(h) * TwoPi;
             const f32 r = kAmbushSpawnRadius + detail::hash01(h ^ 0x55u) * 6.0f;
@@ -1197,7 +1446,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
     // spawn inside the town while it's still parked / crossing / being hitched.
     const bool left_town =
         glm::length(Vec2{w.position.x - w.source.x, w.position.z - w.source.y}) > w.source_half + 4.0f;
-    const u32 total = ambush_count(w.difficulty);
+    const u32 total = ambush_count(w.difficulty, contract_modifier(w.id));
     if (w.ambush_waves_spawned == 0) {
         if (!left_town) {
             return; // still in town - no ambush yet
@@ -1232,6 +1481,12 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
         if (e.taunt_cd > 0.0f) {
             e.taunt_cd -= dt.seconds;
         }
+        if (e.stagger > 0.0f) {
+            // Reeling from a heavy hit: no movement or attack this frame (step_enemy still resolves
+            // knockback + terrain + ticks the stagger timer down), opening a follow-up combo window.
+            step_enemy(e, density, collider_scratch_, e.position, dt, 0.0f, bridge);
+            continue;
+        }
         Vec3 goal = w.position;
         f32 best = kAggroRadius;
         ServerPlayer* victim = nullptr;
@@ -1253,53 +1508,159 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             }
         }
 
-        if (e.kind == 3u) { // archer: kite to range and loose hostile arrows
+        if (e.kind == kEnemyHealer) {
+            // Hang back out of reach (kite from the nearest player) and mend the most-wounded raider.
             const Vec3 target = victim != nullptr ? victim->controller.position() : w.position;
             const f32 td = glm::length(target - e.position);
             Vec3 g = goal;
-            if (td < kArcherShootRange) {
-                g = e.position;
-                if (td < kArcherKeepDist) {
-                    Vec3 away = e.position - target;
-                    away.y = 0.0f;
-                    if (glm::length(away) > 1e-3f) {
-                        g = e.position + glm::normalize(away) * 5.0f;
-                    }
+            if (td < kHealerKeepDist) {
+                Vec3 away = e.position - target;
+                away.y = 0.0f;
+                if (glm::length(away) > 1e-3f) {
+                    g = e.position + glm::normalize(away) * 5.0f;
                 }
             }
             step_enemy(e, density, collider_scratch_, g, dt, kEnemySpeed, bridge);
-            if (e.attack_cd <= 0.0f && td < kArcherShootRange) {
-                const Vec3 from = e.position + Vec3{0.0f, 1.3f, 0.0f};
-                Vec3 dir = (target + Vec3{0.0f, 0.6f, 0.0f}) - from;
-                if (glm::length(dir) > 0.3f) {
-                    Projectile arrow;
-                    arrow.position = from + glm::normalize(dir) * 0.5f;
-                    arrow.velocity = glm::normalize(dir) * kArrowSpeed;
-                    arrow.kind = 1;
-                    arrow.hostile = true;
-                    arrow.radius = 0.15f;
-                    arrow.life = 3.0f;
-                    projectiles_.push_back(arrow);
+            const int widx = most_wounded_ally(e, std::span<const Enemy>(ambush_), kHealerRange);
+            if (widx >= 0) {
+                Enemy& ally = ambush_[static_cast<usize>(widx)];
+                ally.health = std::min(enemy_max_health(ally.kind),
+                                       ally.health + kHealerHealRate * dt.seconds);
+            }
+            continue;
+        }
+
+        if (e.kind == 3u) { // archer: kite to range, AIM (telegraph), then loose a heavy arrow
+            const Vec3 target = victim != nullptr ? victim->controller.position() : w.position;
+            const f32 td = glm::length(target - e.position);
+            if (e.slam_windup > 0.0f) {
+                // Aiming: plant + wind up; loose a heavy, fast arrow when the telegraph elapses.
+                e.slam_windup -= dt.seconds;
+                step_enemy(e, density, collider_scratch_, e.position, dt, 0.0f, bridge);
+                if (e.slam_windup <= 0.0f) {
+                    e.slam_windup = 0.0f;
+                    const Vec3 from = e.position + Vec3{0.0f, 1.3f, 0.0f};
+                    Vec3 dir = (target + Vec3{0.0f, 0.6f, 0.0f}) - from;
+                    if (glm::length(dir) > 0.3f) {
+                        Projectile arrow;
+                        arrow.position = from + glm::normalize(dir) * 0.5f;
+                        arrow.velocity = glm::normalize(dir) * kAimedArrowSpeed;
+                        arrow.kind = 1;
+                        arrow.hostile = true;
+                        arrow.radius = 0.15f;
+                        arrow.damage = kAimedShotDamage; // heavy (the hostile-hit site reads pr.damage)
+                        arrow.life = 3.0f;
+                        projectiles_.push_back(arrow);
+                    }
                     e.attack_cd = kArcherInterval;
+                }
+            } else {
+                // Kite to/around range; begin aiming once in range + off cooldown.
+                Vec3 g = goal;
+                if (td < kArcherShootRange) {
+                    g = e.position;
+                    if (td < kArcherKeepDist) {
+                        Vec3 away = e.position - target;
+                        away.y = 0.0f;
+                        if (glm::length(away) > 1e-3f) {
+                            g = e.position + glm::normalize(away) * 5.0f;
+                        }
+                    }
+                }
+                step_enemy(e, density, collider_scratch_, g, dt, kEnemySpeed, bridge);
+                if (e.attack_cd <= 0.0f && td < kArcherShootRange) {
+                    e.slam_windup = kAimWindup; // start the aim telegraph
                 }
             }
             continue;
         }
 
-        const f32 spd = e.kind == 2u ? kEnemySpeed * 0.62f : kEnemySpeed;
-        const f32 dmg = e.kind == 2u ? kEnemyAttackDamage * 2.3f : kEnemyAttackDamage;
+        if (e.kind == kEnemySapper) {
+            // Sapper: ignores the players and rushes the WAGON, then DETONATES on contact - a heavy
+            // hit to the cargo + a small blast on nearby players. Intercept it before it arrives!
+            step_enemy(e, density, collider_scratch_, w.position, dt, kSapperSpeed, bridge);
+            if (glm::length(w.position - e.position) < kSapperRange) {
+                if (!debug_god_) {
+                    w.health -= kSapperDamage * rig_damage_mult(rig_level_);
+                }
+                for (auto& [pid, pl] : players_) {
+                    if (glm::length(pl.controller.position() - e.position) < kSapperBlastRadius) {
+                        pl.take_damage(kSapperBlastDamage); // i-frames (a dodge roll) evade the blast
+                    }
+                }
+                e.alive = false; // it's spent - blew itself up on the cart
+            }
+            continue;
+        }
+
+        if (e.kind == 2u) {
+            // Brute: lumbers in, then a telegraphed radial SLAM the party can read + dodge out of.
+            if (e.slam_windup > 0.0f) {
+                e.slam_windup -= dt.seconds;
+                step_enemy(e, density, collider_scratch_, e.position, dt, 0.0f, bridge); // plant + wind up
+                if (e.slam_windup <= 0.0f) {
+                    e.slam_windup = 0.0f;
+                    for (auto& [pid, pl] : players_) {
+                        if (brute_slam_hits(e.position, pl.controller.position())) {
+                            pl.take_damage(kSlamDamage); // role armour / block / shield soak it
+                        }
+                    }
+                    if (brute_slam_hits(e.position, w.position) && !debug_god_) {
+                        w.health -= kSlamWagonDamage * rig_damage_mult(rig_level_);
+                    }
+                    e.attack_cd = kSlamCooldown;
+                }
+            } else {
+                step_enemy(e, density, collider_scratch_, goal, dt, kEnemySpeed * 0.62f, bridge);
+                if (e.attack_cd <= 0.0f) {
+                    const f32 trig = kSlamRadius * 0.8f; // commit once a target is well inside the ring
+                    const bool nearV = victim != nullptr && best < trig;
+                    const bool nearW = glm::length(w.position - e.position) < trig;
+                    if (nearV || nearW) {
+                        e.slam_windup = kSlamWindup;
+                    }
+                }
+            }
+            continue;
+        }
+
+        // The lone last raider goes berserk - a faster, harder "finish it" climax (not the brute).
+        const f32 enrage = is_enraged(ambush_.size(), e.kind) ? kEnrageMult : 1.0f;
+        // A nearby WARLORD rallies the swarm: allied raiders march faster + hit harder until it falls.
+        const f32 rally = near_warlord(e, std::span<const Enemy>(ambush_)) ? kWarlordBuff : 1.0f;
+        const f32 spd = (e.kind == kEnemyShield ? kEnemySpeed * 0.85f // shield-bearer is weighed down
+                                                : kEnemySpeed) *
+                        enrage * rally;
+        const f32 dmg = kEnemyAttackDamage * enrage * rally;
         step_enemy(e, density, collider_scratch_, goal, dt, spd, bridge);
         if (e.attack_cd <= 0.0f) {
             const f32 reach = kEnemyAttackRange + kEnemyRadius;
             if (victim != nullptr && best < reach) {
-                victim->take_damage(dmg); // role armour / block / Aegis shield soak it
+                if (victim->try_parry()) {
+                    // PARRY: the shield turns the blow (no damage) AND staggers the attacker, opening a
+                    // punish window - a skill-timed reward for raising the guard right as it strikes.
+                    e.stagger = kStaggerDuration;
+                    Vec3 kdir = e.position - victim->controller.position();
+                    kdir.y = 0.0f;
+                    if (glm::length(kdir) > 1e-3f) {
+                        e.knockback = glm::normalize(kdir) * (kKnockbackMax * 0.5f);
+                    }
+                } else {
+                    victim->take_damage(dmg); // role armour / block / Aegis shield soak it
+                }
                 e.attack_cd = kEnemyAttackInterval;
             } else if (glm::length(w.position - e.position) < reach + 0.7f) {
-                w.health -= kWagonDamage;
+                if (!debug_god_) {
+                    w.health -= kWagonDamage * rig_damage_mult(rig_level_); // armored sides shrug off some
+                }
                 e.attack_cd = kEnemyAttackInterval;
             }
         }
     }
+
+    // A near-wrecked wagon rallies its defenders: LAST STAND ramps their outgoing damage as the cart
+    // nears destruction (a comeback chance). Same for everyone - keyed on the shared cargo's health.
+    const f32 last_stand = last_stand_mult(w.health / rig_max_health(rig_level_));
 
     // Thrown rocks hurt ambushers; hostile arrows hurt players. A spent projectile that has
     // landed (resting) no longer deals damage - it's just stuck in the ground.
@@ -1311,7 +1672,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             for (auto& [id, pl] : players_) {
                 const Vec3 chest = pl.controller.position() + Vec3{0.0f, 0.9f, 0.0f};
                 if (glm::length(chest - pr.position) < pr.radius + 0.55f) {
-                    pl.take_damage(kArrowDamage);
+                    pl.take_damage(pr.damage > 0.0f ? pr.damage : kArrowDamage); // aimed shots hit heavy
                     pr.alive = false;
                 }
             }
@@ -1322,7 +1683,38 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             for (Enemy& e : ambush_) {
                 const Vec3 chest = e.position + Vec3{0.0f, 0.9f, 0.0f};
                 if (glm::length(chest - pr.position) < pr.radius + kEnemyRadius + 0.3f) {
-                    e.health -= (pr.damage > 0.0f ? pr.damage : kThrowDamage) * boost;
+                    f32 dmg = (pr.damage > 0.0f ? pr.damage : kThrowDamage) * boost * last_stand;
+                    const f32 raw = dmg; // pre-block magnitude, for the sunder check
+                    // A shield-bearer soaks most of a shot that strikes its front (a point back
+                    // along the projectile's path is where it came from).
+                    if (enemy_blocks_hit(e, pr.position - pr.velocity * 0.1f)) {
+                        dmg *= (1.0f - kShieldReduction);
+                    }
+                    const f32 e_before = e.health;
+                    e.health -= dmg;
+                    if (ownit != players_.end()) {
+                        ++ownit->second.hit_fx; // confirmed hit -> the shooter's client pops a hit marker
+                    }
+                    // A HEAVY shot (a charged ability) staggers a shield-bearer, dropping its guard for
+                    // follow-ups - even one this hit blocked (the shield took the brunt + cracked).
+                    if (e.kind == kEnemyShield && raw >= kSunderThreshold) {
+                        e.sunder_cd = kSunderDuration;
+                    }
+                    if (raw >= kStaggerThreshold) {
+                        e.stagger = kStaggerDuration; // a heavy hit reels any enemy (combo window)
+                    }
+                    Vec3 kdir = pr.velocity; // shove along the shot's flight direction (less if blocked)
+                    kdir.y = 0.0f;
+                    if (glm::length(kdir) > 1e-3f) {
+                        e.knockback = glm::normalize(kdir) * std::min(dmg * kKnockbackPerDamage, kKnockbackMax);
+                    }
+                    // RAMPAGE: the felling shot stokes the shooter's kill momentum (crossing zero this hit).
+                    if (e.health <= 0.0f && e_before > 0.0f) {
+                        if (ownit != players_.end()) {
+                            ownit->second.on_kill();
+                        }
+                        flinch_allies(e.position, std::span<Enemy>(ambush_)); // MORALE: rattle the pack
+                    }
                     pr.alive = false;
                 }
             }
@@ -1353,26 +1745,113 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
         }
         if (hit != nullptr) {
             // weapon hits as hard as the role, amplified while Empowered (co-op buff)
-            hit->health -= role_stats(pl.role).melee_damage * pl.outgoing_mult();
+            f32 dmg = role_stats(pl.role).melee_damage * pl.outgoing_mult() * last_stand;
+            const f32 raw = dmg; // pre-block magnitude, for the sunder check
+            // A shield-bearer blocks most of a frontal swing - so flank it (or knock it loose).
+            if (enemy_blocks_hit(*hit, pl.controller.position())) {
+                dmg *= (1.0f - kShieldReduction);
+            }
+            const f32 hit_before = hit->health;
+            hit->health -= dmg;
+            ++pl.hit_fx; // confirmed melee hit -> the attacker's client pops a hit marker
+            // LIFESTEAL: felling a raider in melee mends the attacker a little (sustain by fighting).
+            if (hit->health <= 0.0f) {
+                pl.heal(kMeleeKillHeal);
+                if (hit_before > 0.0f) {
+                    pl.on_kill(); // RAMPAGE: the felling blow stokes kill momentum
+                    flinch_allies(hit->position, std::span<Enemy>(ambush_)); // MORALE: rattle the pack
+                }
+            }
+            // A HEAVY swing (e.g. an Empowered Knight blow) staggers it, breaking its guard a while.
+            if (hit->kind == kEnemyShield && raw >= kSunderThreshold) {
+                hit->sunder_cd = kSunderDuration;
+            }
+            if (raw >= kStaggerThreshold) {
+                hit->stagger = kStaggerDuration; // a heavy hit reels any enemy (combo window)
+            }
+            Vec3 kdir = hit->position - pl.controller.position(); // shove away from the attacker (less if blocked)
+            kdir.y = 0.0f;
+            if (glm::length(kdir) > 1e-3f) {
+                hit->knockback = glm::normalize(kdir) * std::min(dmg * kKnockbackPerDamage, kKnockbackMax);
+            }
             pl.melee_cd = 0.35f;
         }
     }
 
-    std::erase_if(ambush_, [](const Enemy& e) { return !e.alive || e.health <= 0.0f; });
+    // Cull the dead; each one removed here was felled by the party -> tally it for the kill bounty.
+    contract_kills_ +=
+        static_cast<u32>(std::erase_if(ambush_, [](const Enemy& e) { return !e.alive || e.health <= 0.0f; }));
 
     // Player health: regen out of combat, respawn at the town on death.
     for (auto& [id, pl] : players_) {
         pl.since_hit += dt.seconds;
+        pl.decay_rampage(dt.seconds); // kill momentum fades if you stop felling raiders
         if (pl.health > 0.0f && pl.since_hit > kPlayerRegenDelay) {
             pl.health = std::min(pl.max_health, pl.health + kPlayerRegen * dt.seconds);
         }
-        if (pl.health <= 0.0f) {
+        // A lethal blow: the once-per-haul SECOND WIND catches the first one (clinging on at low HP for
+        // a clutch comeback); after that, slain players respawn at the town.
+        if (pl.health <= 0.0f && !pl.try_second_wind()) {
             pl.controller.set_position(spawn_point(id));
             pl.health = pl.max_health;
             pl.since_hit = kPlayerRegenDelay;
+            ++contract_downs_; // a real casualty this haul - costs the UNSCATHED delivery bonus
             ALRYN_INFO("Player {} was slain and respawned", id);
         }
     }
+
+    // FIELD REPAIR: between waves (no raiders alive), a player staying near the cart patches it up,
+    // mending its health slowly - so clearing a wave then tending the cart lets a battered haul recover.
+    if (w.health > 0.0f && ambush_.empty()) {
+        bool tended = false;
+        for (const auto& [pid, pl] : players_) {
+            if (glm::length(pl.controller.position() - w.position) < kFieldRepairRange) {
+                tended = true;
+                break;
+            }
+        }
+        w.health = field_repair(w.health, rig_max_health(rig_level_), tended, dt.seconds);
+    }
+}
+
+// Gather the live NPC navigation routes for the client's pathfinding debug overlay: the hired
+// teamster's A* path (around obstacles), the active wagon's high-level road route, and a goal line
+// for every townsfolk/guard + ambusher. World-space polylines lifted just above the ground.
+std::vector<GameServer::DebugNavPath> GameServer::debug_nav_paths() const {
+    std::vector<DebugNavPath> out;
+    const u32 seed = sampler_.seed();
+    auto lift = [&](f32 x, f32 z) { return Vec3{x, worldgen::height(x, z, seed) + 0.3f, z}; };
+
+    // The teamster's A* path (the around-buildings route it's following), from the driver onward.
+    if (driver_ && driver_path_.size() > driver_path_i_) {
+        DebugNavPath p;
+        p.kind = 0;
+        p.points.push_back(lift(driver_->position.x, driver_->position.z));
+        for (usize i = driver_path_i_; i < driver_path_.size(); ++i) {
+            p.points.push_back(lift(driver_path_[i].x, driver_path_[i].y));
+        }
+        if (p.points.size() >= 2) {
+            out.push_back(std::move(p));
+        }
+    }
+    // The active wagon's high-level road route (the waypoints the haul aims through).
+    if (contract_phase_ == ContractPhase::Active && active_.route.size() >= 2) {
+        DebugNavPath p;
+        p.kind = 1;
+        for (const Vec2& w : active_.route) {
+            p.points.push_back(lift(w.x, w.y));
+        }
+        out.push_back(std::move(p));
+    }
+    // Each townsfolk / guard: a line to its current wander/charge goal.
+    for (const auto& [id, vg] : villagers_) {
+        out.push_back({{lift(vg.position.x, vg.position.z), lift(vg.target.x, vg.target.z)}, 2});
+    }
+    // Each ambusher: a line to its objective (the wagon / town it marches on).
+    for (const Enemy& e : ambush_) {
+        out.push_back({{lift(e.position.x, e.position.z), lift(e.home.x, e.home.z)}, 3});
+    }
+    return out;
 }
 
 } // namespace alryn

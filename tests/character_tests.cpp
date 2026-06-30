@@ -1,22 +1,324 @@
 #include <doctest/doctest.h>
 
+#include <Alryn/Character/BodyMesh.h>
 #include <Alryn/Character/CharacterAnimator.h>
+#include <Alryn/Character/ClothRig.h>
 #include <Alryn/Character/CharacterModel.h>
+#include <Alryn/Character/Equipment.h>
+#include <Alryn/Character/Outfit.h>
+#include <Alryn/Character/OutfitMesh.h>
+#include <Alryn/Character/SkinnedMesh.h>
 
 #include <algorithm>
 #include <cmath>
 
 using namespace alryn;
 
+TEST_CASE("SkinnedMesh: linear-blend skinning deforms vertices with the bones") {
+    // Two bones, both bound at the identity (inverse-bind = identity).
+    SkinnedMesh m;
+    m.inverse_bind = {Mat4{1.0f}, Mat4{1.0f}};
+
+    SkinVertex a; // fully weighted to bone 1
+    a.position = Vec3{1.0f, 0.0f, 0.0f};
+    a.set_weights({{1, 1.0f}});
+    SkinVertex b; // 50/50 between bone 0 (identity) and bone 1
+    b.position = Vec3{1.0f, 0.0f, 0.0f};
+    b.set_weights({{0, 1.0f}, {1, 1.0f}});
+    m.add_vertex(a);
+    m.add_vertex(b);
+
+    std::vector<Vertex> out;
+
+    // Bind pose (both joints identity): vertices stay put.
+    skin(m, {Mat4{1.0f}, Mat4{1.0f}}, out);
+    REQUIRE(out.size() == 2);
+    CHECK(glm::length(out[0].position - Vec3{1.0f, 0.0f, 0.0f}) < 1e-4f);
+
+    // Rotate bone 1 by +90deg about Z: (1,0,0) -> (0,1,0).
+    const Mat4 rot = glm::rotate(Mat4{1.0f}, HalfPi, Vec3{0.0f, 0.0f, 1.0f});
+    skin(m, {Mat4{1.0f}, rot}, out);
+    CHECK(glm::length(out[0].position - Vec3{0.0f, 1.0f, 0.0f}) < 1e-3f); // follows bone 1 fully
+    // The 50/50 vertex lands between (1,0,0) [bone 0] and (0,1,0) [bone 1] - the LBS average.
+    CHECK(out[1].position.x > 0.1f);
+    CHECK(out[1].position.x < 0.9f);
+    CHECK(out[1].position.y > 0.1f);
+    CHECK(out[1].position.y < 0.9f);
+
+    // A translating bone carries its vertices.
+    const Mat4 trans = glm::translate(Mat4{1.0f}, Vec3{0.0f, 2.0f, 0.0f});
+    skin(m, {Mat4{1.0f}, trans}, out);
+    CHECK(glm::length(out[0].position - Vec3{1.0f, 2.0f, 0.0f}) < 1e-4f);
+
+    // The palette resolves the material id to a colour.
+    bool called = false;
+    skin(m, {Mat4{1.0f}, Mat4{1.0f}}, out, [&](u8) {
+        called = true;
+        return Vec3{0.2f, 0.4f, 0.6f};
+    });
+    CHECK(called);
+    CHECK(out[0].color == Vec3{0.2f, 0.4f, 0.6f});
+}
+
+TEST_CASE("BodyMesh/OutfitMesh: skinned body + outfit are valid and deform with the bones") {
+    CharacterAppearance app;
+    CharacterModel model = CharacterModel::create(7u, app);
+
+    const SkinnedMesh body = build_body_mesh(model);
+    REQUIRE(body.vertices.size() > 0);
+    REQUIRE(body.indices.size() % 3 == 0);
+    REQUIRE(body.inverse_bind.size() == model.bone_count());
+    // Every vertex references valid bones and carries a normalised weight set.
+    for (const SkinVertex& v : body.vertices) {
+        f32 wsum = 0.0f;
+        for (int k = 0; k < kMaxInfluences; ++k) {
+            CHECK(v.bones[k] >= 0);
+            CHECK(v.bones[k] < static_cast<int>(model.bone_count()));
+            wsum += v.weights[k];
+        }
+        CHECK(wsum == doctest::Approx(1.0f));
+    }
+
+    // Skinned at the bind pose, the body spans roughly the character's height (feet ~0, head ~height).
+    const std::vector<Mat4> bind = model.joint_matrices(Mat4{1.0f}, {});
+    std::vector<Vertex> out;
+    skin(body, bind, out);
+    REQUIRE(out.size() == body.vertices.size());
+    f32 lo = 1e9f, hi = -1e9f;
+    for (const Vertex& v : out) {
+        lo = std::min(lo, v.position.y);
+        hi = std::max(hi, v.position.y);
+    }
+    CHECK(lo < 0.3f);                  // feet near the ground
+    CHECK(hi > model.height() * 0.7f); // reaches up toward the head
+
+    // A posed joint moves the skinned surface: rotating the whole character lifts nothing but a bent
+    // knee pose should shift some lower-leg vertices relative to bind.
+    std::vector<Quat> pose(model.bone_count(), QuatIdentity);
+    const int knee = model.bone_index(BonePart::LowerLegL);
+    REQUIRE(knee >= 0);
+    pose[static_cast<usize>(knee)] = glm::angleAxis(0.6f, Vec3{1.0f, 0.0f, 0.0f});
+    std::vector<Vertex> posed;
+    skin(body, model.joint_matrices(Mat4{1.0f}, pose), posed);
+    f32 max_shift = 0.0f;
+    for (usize i = 0; i < out.size(); ++i) {
+        max_shift = std::max(max_shift, glm::length(posed[i].position - out[i].position));
+    }
+    CHECK(max_shift > 0.02f); // the knee bend visibly deforms the mesh
+
+    // The outfit mesh is built per role, valid, and weighted to the same skeleton.
+    for (OutfitKind kind : {OutfitKind::Plate, OutfitKind::Robe, OutfitKind::Leather, OutfitKind::Holy}) {
+        Equipment eq;
+        eq.outfit_tier = 3;
+        CharacterModel m2 = CharacterModel::create(7u, app);
+        apply_outfit(m2, kind, eq);
+        const SkinnedMesh outfit = build_outfit_mesh(m2, kind, eq);
+        REQUIRE(outfit.vertices.size() > 0);
+        REQUIRE(outfit.indices.size() % 3 == 0);
+        REQUIRE(outfit.inverse_bind.size() == m2.bone_count());
+        for (const SkinVertex& v : outfit.vertices) {
+            for (int k = 0; k < kMaxInfluences; ++k) {
+                CHECK(v.bones[k] >= 0);
+                CHECK(v.bones[k] < static_cast<int>(m2.bone_count()));
+            }
+        }
+    }
+}
+
+TEST_CASE("Character: the cape collar anchors at the shoulders, not the waist") {
+    // Cloaks (ClientAppCloth add_cape / setup_noble_cape) anchor to the HEAD joint + a small offset,
+    // so the collar must sit high on the body and hang from the shoulders. The Torso joint sits at
+    // mid-body (~the waist), so a cape must NOT be anchored there. Guards against the cape regressing
+    // to a waist anchor. Checked in a walk pose (the in-game case), not just bind.
+    CharacterModel model = CharacterModel::create(7u, CharacterAppearance{});
+    CharacterAnimator anim;
+    for (int i = 0; i < 20; ++i) {
+        anim.update(2.5f, Timestep{1.0f / 60.0f});
+    }
+    const std::vector<Mat4> jm = model.joint_matrices(Mat4{1.0f}, anim.pose(model));
+    const int head = model.bone_index(BonePart::Head);
+    const int torso = model.bone_index(BonePart::Torso);
+    REQUIRE(head >= 0);
+    REQUIRE(torso >= 0);
+    // The exact cape-collar anchor the cloth uses: Head joint * the add_cape centre-panel offset.
+    const Vec3 collar =
+        Vec3{(jm[static_cast<usize>(head)] * glm::translate(Mat4{1.0f}, Vec3{0.0f, 0.05f, -0.30f}))[3]};
+    const f32 torso_y = jm[static_cast<usize>(torso)][3].y;
+    CHECK(collar.y > model.height() * 0.72f); // the collar is up at the shoulders / neck
+    CHECK(collar.y > torso_y + 0.4f);          // and well above the mid-body (waist) joint
+}
+
+TEST_CASE("BodyMesh: the action overlay deforms the skinned upper body (legs keep the walk)") {
+    CharacterModel model = CharacterModel::create(11u, CharacterAppearance{});
+    const SkinnedMesh body = build_body_mesh(model);
+
+    // Two animators advanced to the SAME locomotion phase (53 frames); one also plays a swing. So the
+    // legs match exactly and any difference in the skinned mesh is the upper-body action overlay alone.
+    const Timestep dt{1.0f / 60.0f};
+    CharacterAnimator walk_only, with_swing;
+    for (int k = 0; k < 53; ++k) {
+        walk_only.update(5.0f, dt);
+    }
+    for (int k = 0; k < 40; ++k) {
+        with_swing.update(5.0f, dt);
+    }
+    with_swing.play_swing();
+    for (int k = 0; k < 13; ++k) {
+        with_swing.update(5.0f, dt); // ~mid-chop, now at frame 53 like walk_only
+    }
+
+    std::vector<Vertex> a, b;
+    skin(body, model.joint_matrices(Mat4{1.0f}, walk_only.pose(model)), a);
+    skin(body, model.joint_matrices(Mat4{1.0f}, with_swing.pose(model)), b);
+    REQUIRE(a.size() == b.size());
+
+    f32 max_shift = 0.0f, leg_shift = 0.0f;
+    for (usize i = 0; i < a.size(); ++i) {
+        const f32 d = glm::length(b[i].position - a[i].position);
+        max_shift = std::max(max_shift, d);
+        if (a[i].position.y < 0.4f) {
+            leg_shift = std::max(leg_shift, d); // lower-leg / foot vertices
+        }
+    }
+    CHECK(max_shift > 0.1f);  // the swing visibly deforms the skinned mesh (the arm sweeps up)
+    CHECK(leg_shift < 0.02f); // the legs are untouched by the upper-body action (same walk phase)
+}
+
+TEST_CASE("CharacterAnimator: the attack swing is a horizontal right-to-left slash") {
+    CharacterModel model = CharacterModel::create(11u, CharacterAppearance{});
+    const int hand = model.bone_index(BonePart::LowerArmL); // sword hand (rig labels mirrored: L = player's right)
+    REQUIRE(hand >= 0);
+
+    // The sword-hand joint position at `t` seconds into a fresh swing (idle underneath, so only the
+    // swing moves the arm). The rig faces +Z, so the player's right is +X.
+    auto hand_x_y = [&](f32 t) {
+        CharacterAnimator anim;
+        anim.play_swing();
+        const Timestep dt{1.0f / 240.0f};
+        for (f32 e = 0.0f; e < t; e += dt.seconds) {
+            anim.update(0.0f, dt);
+        }
+        const Vec3 p{model.joint_matrices(Mat4{1.0f}, anim.pose(model))[hand][3]};
+        return Vec2{p.x, p.y};
+    };
+
+    const Vec2 windup = hand_x_y(0.10f); // cocked to the player's right
+    const Vec2 follow = hand_x_y(0.24f); // followed through to the left
+
+    CHECK(windup.x > follow.x);                              // sweeps right -> left
+    CHECK(std::abs(follow.x - windup.x) > std::abs(follow.y - windup.y)); // horizontal, not a chop
+}
+
+TEST_CASE("ClothChain: hangs under gravity, blows in wind, and falls when detached") {
+    const f32 dt = 1.0f / 60.0f;
+    const Vec3 anchor{0.0f, 1.5f, 0.0f};
+    ClothChain c;
+    c.init(anchor, Vec3{0.0f, -1.0f, 0.0f}, 4, 0.12f, 0.2f);
+    REQUIRE(c.pos.size() == 5);
+
+    // Settle under gravity (no wind): it hangs straight down below the anchor.
+    for (int k = 0; k < 180; ++k) {
+        c.step(anchor, Vec3{0.0f}, 9.0f, dt);
+    }
+    CHECK(c.pos.front().y == doctest::Approx(anchor.y)); // node 0 stays pinned to the anchor
+    CHECK(c.pos.back().y < anchor.y - 0.3f);             // the hem hangs well below
+    CHECK(std::abs(c.pos.back().x) < 0.05f);             // roughly straight down
+
+    // A steady wind along +x blows the hem downwind.
+    for (int k = 0; k < 180; ++k) {
+        c.step(anchor, Vec3{9.0f, 0.0f, 0.0f}, 9.0f, dt);
+    }
+    CHECK(c.pos.back().x > 0.08f);
+
+    // Detached: node 0 is no longer pinned, so the whole chain free-falls.
+    c.detach();
+    CHECK_FALSE(c.attached);
+    for (int k = 0; k < 90; ++k) {
+        c.step(anchor, Vec3{0.0f}, 9.0f, dt);
+    }
+    CHECK(c.pos.front().y < anchor.y - 0.2f); // the anchor end has dropped
+
+    // A detach with a sideways velocity kick (a cut / blow) drifts the piece horizontally as it falls.
+    ClothChain k2;
+    k2.init(anchor, Vec3{0.0f, -1.0f, 0.0f}, 4, 0.12f, 0.2f);
+    for (int i = 0; i < 60; ++i) {
+        k2.step(anchor, Vec3{0.0f}, 9.0f, dt); // settle
+    }
+    const f32 x0 = k2.pos.back().x;
+    k2.detach();
+    for (Vec3& pp : k2.prev) {
+        pp -= Vec3{0.06f, 0.0f, 0.0f}; // a +x velocity kick (prev behind pos)
+    }
+    for (int i = 0; i < 30; ++i) {
+        k2.step(anchor, Vec3{0.0f}, 9.0f, dt);
+    }
+    CHECK(k2.pos.back().x > x0 + 0.1f); // it flew off in +x, not straight down
+
+    // The sheet mesh builds as valid double-sided geometry.
+    MeshData md;
+    build_cloth_mesh(c, Vec3{1.0f, 0.0f, 0.0f}, Vec3{0.4f, 0.3f, 0.6f}, md);
+    CHECK(md.vertices.size() > 0);
+    CHECK(md.indices.size() % 3 == 0);
+}
+
+TEST_CASE("Equipment: tiers grant a monotonic, buyable power bonus") {
+    // Ragged (the starting gear) grants nothing.
+    const Equipment ragged; // all defaults = tier 0
+    const EquipBonus r = equipment_bonus(ragged);
+    CHECK(r.health_add == doctest::Approx(0.0f));
+    CHECK(r.mitigation_add == doctest::Approx(0.0f));
+    CHECK(r.damage_mult == doctest::Approx(1.0f));
+    CHECK(tier_price(EquipmentTier::Ragged) == 0u);
+
+    // Each tier is a clear step up in survivability + damage.
+    f32 last_hp = -1.0f, last_dmg = 0.0f;
+    u32 last_price = 0;
+    for (u8 t = 0; t < kTierCount; ++t) {
+        Equipment e;
+        e.outfit_tier = t;
+        e.weapon_tier = t;
+        const EquipBonus b = equipment_bonus(e);
+        CHECK(b.health_add >= last_hp);
+        CHECK(b.damage_mult >= last_dmg);
+        CHECK(b.mitigation_add < 1.0f);
+        last_hp = b.health_add;
+        last_dmg = b.damage_mult;
+        if (t > 0) {
+            CHECK(tier_price(static_cast<EquipmentTier>(t)) > last_price); // dearer each tier
+        }
+        last_price = tier_price(static_cast<EquipmentTier>(t));
+    }
+
+    // Master gear is a big, distinct upgrade over ragged.
+    Equipment master;
+    master.outfit_tier = 3;
+    master.weapon_tier = 3;
+    const EquipBonus mb = equipment_bonus(master);
+    CHECK(mb.health_add > 50.0f);
+    CHECK(mb.damage_mult > 1.4f);
+    CHECK(mb.mitigation_add > 0.0f);
+
+    // Palette lookups wrap safely; tiers carry distinct accents (rags vs gold).
+    CHECK(outfit_tints().size() == 8);
+    CHECK(outfit_tint_of(200) == outfit_tints()[200 % 8]);
+    CHECK(tier_accent(EquipmentTier::Master) != tier_accent(EquipmentTier::Ragged));
+    CHECK(tier_sheen(EquipmentTier::Master) > tier_sheen(EquipmentTier::Ragged));
+}
+
 TEST_CASE("CharacterModel: deterministic generation and valid hierarchy") {
     const CharacterModel a = CharacterModel::generate(7);
     const CharacterModel b = CharacterModel::generate(7);
 
-    REQUIRE(a.bone_count() == 13);
-    CHECK(b.bone_count() == 13);
+    // 13 core skeleton bones (parts 0..12) + joint fillers (neck/hands/ball joints) that connect them.
+    REQUIRE(a.bone_count() >= 13);
+    CHECK(b.bone_count() == a.bone_count());
+    CHECK(a.bone_index(BonePart::Head) == 2); // head stays index 2 (face/hair features parent to it)
+    CHECK(a.bone_index(BonePart::FootR) >= 0);
     CHECK(a.palette().skin == b.palette().skin);   // same seed => identical
     CHECK(a.palette().shirt == b.palette().shirt);
     CHECK(a.height() == doctest::Approx(b.height()));
+    CHECK(a.height() > 1.2f); // cute chibi proportions (~1.45 m, big head + short limbs)
+    CHECK(a.height() < 1.7f);
 
     // Parents always precede their children (single-pass transform safe).
     for (usize i = 0; i < a.bones().size(); ++i) {
@@ -55,9 +357,9 @@ TEST_CASE("CharacterModel: create() applies appearance and adds feature bones") 
         if (m.bones()[i].color == BoneColor::Hair) ++hair;
     }
     CHECK(eyes == 2);
-    CHECK(hair >= 1);
+    CHECK(hair >= 1); // at least one Mohawk bone
 
-    // A bald character adds no hair bones.
+    // A bald character adds no hair bones (the simple face has no eyebrows).
     CharacterAppearance bald = look;
     bald.hair = HairStyle::Bald;
     const CharacterModel b = CharacterModel::create(7, bald);
@@ -238,4 +540,20 @@ TEST_CASE("CharacterAnimator: actions blend over locomotion (legs keep walking)"
         CHECK_FALSE(same(bone(pw, BonePart::UpperArmL), bone(pb, BonePart::UpperArmL)));
         CHECK(same(bone(pw, BonePart::UpperLegR), bone(pb, BonePart::UpperLegR)));
     }
+
+    // Casting thrusts the weapon arm forward (a one-shot) while the legs keep walking.
+    acting.set_blocking(false);
+    step_both(30); // let the block ease out
+    acting.play_cast();
+    CHECK(acting.casting());
+    step_both(14); // ~mid-cast
+    {
+        const std::vector<Quat> pw = plain.pose(m);
+        const std::vector<Quat> pc = acting.pose(m);
+        CHECK_FALSE(same(bone(pw, BonePart::UpperArmL), bone(pc, BonePart::UpperArmL))); // weapon arm thrusts
+        CHECK(same(bone(pw, BonePart::UpperLegL), bone(pc, BonePart::UpperLegL)));        // legs in step
+        CHECK(same(bone(pw, BonePart::UpperLegR), bone(pc, BonePart::UpperLegR)));
+    }
+    step_both(50);
+    CHECK_FALSE(acting.casting()); // one-shot ends, the arm rejoins locomotion
 }

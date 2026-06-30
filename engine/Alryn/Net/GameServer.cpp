@@ -111,6 +111,11 @@ void GameServer::tick(Timestep dt) {
     const DensitySampler density = sampler_.as_sampler();
     manager_.update(dt); // advances the day/night clock + (later) the transport objective
 
+    // Debug godmode: make every player invincible this tick (their damage routes through take_damage).
+    for (auto& [id, player] : players_) {
+        player.invincible = debug_god_;
+    }
+
     for (const net::ServerEvent& e : server_.poll()) {
         switch (e.type) {
             case net::ServerEventType::ClientConnected: {
@@ -125,6 +130,10 @@ void GameServer::tick(Timestep dt) {
                 const auto it = players_.find(e.client);
                 if (it == players_.end()) {
                     break;
+                }
+                // PARRY: raising the shield (block false->true) opens a brief parry window.
+                if (e.input.block && !it->second.input.block) {
+                    it->second.parry_window = kParryWindow;
                 }
                 it->second.input = e.input;
                 if (e.input.dig) {
@@ -179,14 +188,48 @@ void GameServer::tick(Timestep dt) {
             continue; // riding/driving the wagon - position is set by the contract update
         }
         Vec3 move = player.input.move;
-        if (id == tower_ && contract_phase_ == ContractPhase::Active) {
-            // Hauling a cart is heavy work: slow the puller by the cart's size + damage.
+        player.decay_parry(dt.seconds); // the Knight parry window closes quickly after raising the shield
+        // DODGE ROLL: a quick burst in a locked direction with i-frames (take_damage evades while
+        // roll_timer > 0). Overrides walking / hauling for its brief duration.
+        if (player.roll_cd > 0.0f) {
+            player.roll_cd -= dt.seconds;
+        }
+        bool rolling = false;
+        if (player.roll_timer > 0.0f) {
+            player.roll_timer -= dt.seconds;
+            rolling = true;
+        } else if (player.input.dodge && player.roll_cd <= 0.0f) {
+            Vec3 d{player.input.move.x, 0.0f, player.input.move.z};
+            if (glm::length(d) < 0.1f) {
+                d = Vec3{std::cos(player.input.yaw), 0.0f, std::sin(player.input.yaw)}; // roll where you face
+            }
+            player.roll_dir = glm::normalize(d);
+            player.roll_timer = kRollDuration;
+            player.roll_cd = kRollCooldown;
+            rolling = true;
+        }
+        if (rolling) {
+            move = player.roll_dir * kRollBoost; // fast burst, overrides walking / hauling
+        } else if (id == tower_ && contract_phase_ == ContractPhase::Active) {
+            // Hauling a cart is heavy work: slow the puller by the cart's size + damage, and by how
+            // laden the bed is (a full load drags; it lightens + quickens as cargo spills).
             const f32 hf = active_.health / kWagonHealth;
-            const f32 f = tow_speed_factor(vehicle_type(active_.type).capacity(), hf);
+            const f32 f = tow_speed_factor(vehicle_type(active_.type).capacity(), hf) *
+                          load_speed_factor(static_cast<u32>(cargo_.size()), active_.goods_total) *
+                          rig_speed_mult(rig_level_); // a reinforced rig tows faster (1.0 at stock)
             const f32 l = glm::length(Vec2{move.x, move.z});
             if (l > 1e-3f) {
                 move = move / l * f; // exact fraction of walk speed, any direction
             }
+        }
+        // Wading through water is slow going: scale movement down by how submerged the feet are
+        // (ankle-deep barely slows; waist-deep wading is a hard slog). Server-authoritative, so the
+        // slowdown shows up in everyone's snapshot.
+        const f32 submersion = worldgen::water_level - player.controller.position().y;
+        if (submersion > 0.02f) {
+            const f32 wf = glm::mix(1.0f, 0.4f, glm::smoothstep(0.0f, 1.1f, submersion));
+            move.x *= wf;
+            move.z *= wf;
         }
         if (collision_) {
             collision_->gather(player.controller.position(), collider_scratch_);
@@ -223,6 +266,9 @@ void GameServer::tick(Timestep dt) {
     snapshot.time_of_day = manager_.time_of_day();
     snapshot.weather = static_cast<u8>(glm::clamp(manager_.weather(), 0.0f, 1.0f) * 255.0f);
     snapshot.money = money_;
+    snapshot.delivery_streak = static_cast<u8>(delivery_streak_);
+    snapshot.contract_kills = static_cast<u8>(std::min<u32>(contract_kills_, 255u));
+    snapshot.rig_level = rig_level_;
     snapshot.contract_phase = static_cast<u8>(contract_phase_);
     snapshot.contract_outcome = contract_outcome_;
     snapshot.players.reserve(players_.size());
@@ -236,7 +282,10 @@ void GameServer::tick(Timestep dt) {
         const f32 yaw = seated ? active_.yaw : player.input.yaw; // seated -> face the vehicle
         // Body action for the animation layer: blocking (held) wins, else a swing while the
         // attack input is held (the client sends it for one frame per click).
-        const u8 action = player.input.block ? 2u : (player.input.attack ? 1u : 0u);
+        const u8 action = player.roll_timer > 0.0f ? 3u // dodge roll -> client plays it + a dust puff
+                          : player.input.block      ? 2u
+                          : player.input.attack     ? 1u
+                                                    : 0u;
         const u8 shield = static_cast<u8>(
             glm::clamp(player.shield_hp / kAegisAmount, 0.0f, 1.0f) * 255.0f);
         const u8 buffs = static_cast<u8>((player.damage_boost_timer > 0.0f ? 1u : 0u) |
@@ -245,7 +294,8 @@ void GameServer::tick(Timestep dt) {
                                     static_cast<u8>(seated ? 1 : 0),
                                     static_cast<u8>(player.carrying ? 1 : 0),
                                     static_cast<u8>(player.role), player.cast_fx, action, shield,
-                                    buffs, player.input.appearance});
+                                    buffs, player.hit_fx, player.input.appearance, player.equipment,
+                                    player.owned_tier});
     }
     snapshot.projectiles.reserve(projectiles_.size());
     for (const Projectile& pr : projectiles_) {
@@ -261,15 +311,34 @@ void GameServer::tick(Timestep dt) {
         snapshot.villagers.push_back({driver_->id, driver_->position, driver_->yaw, 255, driver_->kind,
                                       0, driver_->appearance});
     }
+    // The covered-wagon (Passengers) noble - a kind-4 villager (rendered fancy). Networked whenever
+    // present, not just while Active, so the client also shows them walking to board the parked wagon
+    // and walking off to a house after delivery (during the Settle phase).
+    if (passenger_) {
+        snapshot.villagers.push_back({passenger_->id, passenger_->position, passenger_->yaw, 255,
+                                      passenger_->kind, 0, passenger_->appearance});
+    }
     // Ambushers ride in the existing enemy list (rendered red by the client).
     snapshot.enemies.reserve(ambush_.size());
     for (const Enemy& en : ambush_) {
         const u8 hp = static_cast<u8>(
             glm::clamp(en.health / enemy_max_health(en.kind), 0.0f, 1.0f) * 255.0f);
-        // Flag a swing for the brief window just after the enemy struck (attack_cd was reset),
-        // so the client plays the attack animation in sync with the hit.
-        const u8 action =
-            (en.kind != 3 && en.attack_cd > kEnemyAttackInterval - 0.18f) ? 1u : 0u; // melee only
+        // Networked action cue for the client (no new wire field - EnemyState.action is reused):
+        // brute slam telegraph (2 = winding up) / strike (3 = just slammed), else a melee swing (1).
+        u8 action = 0u;
+        if (en.kind == 2u) {
+            if (en.slam_windup > 0.0f) {
+                action = 2u; // winding up -> client draws the danger ring
+            } else if (en.attack_cd > kSlamCooldown - 0.18f) {
+                action = 3u; // just slammed -> client draws the shockwave
+            }
+        } else if (en.kind == 3u) {
+            if (en.slam_windup > 0.0f) {
+                action = 2u; // archer aiming -> client draws a charging glow on the bow
+            }
+        } else if (en.attack_cd > kEnemyAttackInterval - 0.18f) {
+            action = 1u; // melee swing in sync with the hit
+        }
         snapshot.enemies.push_back({en.id, en.position, en.yaw, en.kind, hp, action});
     }
     // Wagons: the parked offers while choosing, or the single active cargo en route.
@@ -297,6 +366,7 @@ void GameServer::tick(Timestep dt) {
         s.votes = votes;
         s.goods_aboard = static_cast<u8>(cargo_.size()); // crates still in the bed
         s.goods_total = w.goods_total;
+        s.cargo_kind = w.cargo_kind;
         if (with_horse) {
             s.has_horse = 1;
             s.horse_pos = horse_pos_;

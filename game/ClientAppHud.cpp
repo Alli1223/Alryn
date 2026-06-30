@@ -78,6 +78,19 @@ void ClientApp::draw_hud() {
     const std::string money = std::format("$ {}", snapshot_.money);
     draw.text(Vec2{W - draw.text_width(money, ts) - 24.0f, 22.0f}, money, ts,
               Vec4{0.96f, 0.86f, 0.4f, 1.0f});
+    // Clean-delivery streak (perfect full-cargo runs) + its stacking pay bonus, just under the wallet.
+    if (snapshot_.delivery_streak > 0) {
+        const u32 s = snapshot_.delivery_streak;
+        const int pct = static_cast<int>(std::lround((streak_mult(s) - 1.0f) * 100.0f));
+        const std::string str = std::format("STREAK x{}  +{}%", s, pct);
+        draw.text(Vec2{W - draw.text_width(str, ts * 0.7f) - 24.0f, 22.0f + ts * 1.15f}, str, ts * 0.7f,
+                  Vec4{0.55f, 0.95f, 0.7f, 1.0f});
+    }
+
+    // Always-on corner minimap (hidden while the full M map is open).
+    if (!map_open_) {
+        draw_minimap(draw, feet, W, H);
+    }
 
     if (phase == static_cast<u8>(ContractPhase::Offer)) {
         draw.text(Vec2{24.0f, 22.0f}, "WALK UP TO A WAGON TO VIEW ITS CONTRACT", ts,
@@ -123,6 +136,49 @@ void ClientApp::draw_hud() {
                   3.0f);
         draw.rect(Vec4{24.0f, 22.0f + ts * 2.6f, 220.0f * std::max(wf, 0.0f), 12.0f},
                   Vec4{glm::mix(Vec3{0.8f, 0.3f, 0.2f}, Vec3{0.5f, 0.7f, 0.4f}, wf), 0.95f}, 3.0f);
+        // Status + bonus lines, stacked in ONE left column below the health bar with a running y
+        // cursor. (The bonuses used to sit in a fixed right-hand column at x=252, which the wide
+        // status line - "TEND THE CART TO REPAIR IT" - ran straight into, overlapping the text.)
+        f32 oy = 22.0f + ts * 2.6f + 18.0f; // just below the wagon health bar
+        // LAST STAND: a near-wrecked wagon rallies the defenders (ramping their damage) - flag it.
+        if (wf > 0.0f && wf < kLastStandThreshold) {
+            const int lsb = static_cast<int>(std::lround((last_stand_mult(wf) - 1.0f) * 100.0f));
+            const f32 pulse = 0.55f + 0.45f * std::sin(elapsed_ * 9.0f);
+            draw.text(Vec2{24.0f, oy}, std::format("LAST STAND  +{}% DMG", lsb), ts * 0.82f,
+                      Vec4{1.0f, 0.3f + 0.25f * pulse, 0.2f, 1.0f});
+            oy += ts * 1.05f;
+        } else if (wf > 0.0f && wf < 0.999f && snapshot_.enemies.empty()) {
+            // Damaged + no raiders left: prompt the field-repair (stay near the cart to mend it).
+            draw.text(Vec2{24.0f, oy}, "TEND THE CART TO REPAIR IT", ts * 0.78f,
+                      Vec4{0.55f, 0.9f, 0.65f, 1.0f});
+            oy += ts * 1.05f;
+        }
+        // Intact-delivery bonus: keeping the wagon's health up earns up to +bonus pay on arrival, so
+        // it's worth fighting the ambushers off rather than just outrunning them.
+        const int ibonus = static_cast<int>(std::lround((intact_bonus_mult(wf) - 1.0f) * 100.0f));
+        draw.text(Vec2{24.0f, oy}, std::format("INTACT +{}% PAY", ibonus), ts * 0.62f,
+                  Vec4{glm::mix(Vec3{0.85f, 0.5f, 0.3f}, Vec3{0.6f, 0.86f, 0.5f}, wf), 1.0f});
+        oy += ts * 0.85f;
+        // Rush bonus: delivering fast pays extra (it decays over the route), so there's a real choice -
+        // hurry past the ambushers, or stop and fight for the intact bonus. Approximate client estimate
+        // (route ~ 1.3x the straight line); the server's payout is authoritative.
+        const f32 sld = glm::length(Vec2{wg.dest.x - wg.source.x, wg.dest.z - wg.source.z}) * 1.3f;
+        const int rbonus =
+            static_cast<int>(std::lround((rush_bonus_mult(haul_elapsed_, rush_expected_time(sld)) - 1.0f) * 100.0f));
+        if (rbonus > 0) {
+            draw.text(Vec2{24.0f, oy}, std::format("RUSH +{}% PAY", rbonus), ts * 0.62f,
+                      Vec4{0.95f, 0.78f, 0.42f, 1.0f});
+            oy += ts * 0.85f;
+        }
+        // Kill bounty: a running tally of raiders felled this haul + the bonus it pays on delivery
+        // (so fighting the ambush is rewarded, not just outrunning it).
+        if (snapshot_.contract_kills > 0) {
+            draw.text(Vec2{24.0f, oy},
+                      std::format("BOUNTY $ {}  ({} DOWN)", kill_bounty(snapshot_.contract_kills),
+                                  snapshot_.contract_kills),
+                      ts * 0.62f, Vec4{1.0f, 0.55f, 0.5f, 1.0f});
+            oy += ts * 0.85f;
+        }
         // Contextual E hint: righting a flipped cart / handling goods take priority.
         bool carrying = false;
         for (const net::PlayerState& pp : snapshot_.players) {
@@ -154,7 +210,8 @@ void ClientApp::draw_hud() {
         } else {
             hint = "[E] haul / ride the wagon";
         }
-        draw.text(Vec2{24.0f, 22.0f + ts * 4.0f}, hint, ts * 0.72f, Vec4{0.66f, 0.78f, 0.7f, 1.0f});
+        oy += ts * 0.4f; // a small gap before the contextual hint
+        draw.text(Vec2{24.0f, oy}, hint, ts * 0.72f, Vec4{0.66f, 0.78f, 0.7f, 1.0f});
         // Wheel-off: a prominent centred alert + the re-attach progress bar while someone refits.
         if (wheel_off) {
             const char* warn = "WHEEL OFF! THE WAGON IS STRANDED";
@@ -188,21 +245,21 @@ void ClientApp::draw_hud() {
         draw.text(Vec2{(W - draw.text_width(msg, bs)) * 0.5f, H * 0.34f}, msg, bs, c);
     }
 
-    draw.text(Vec2{24.0f, H - 52.0f}, "[M] MAP    [K] SKILLS", ts * 0.72f,
-              Vec4{0.72f, 0.80f, 0.88f, 1.0f});
-
-    // Health bar.
+    // Bottom-left: the health bar, with the role label and the control hints STACKED above it (they
+    // used to be pinned to overlapping y positions, so "KNIGHT" sat on top of "[M] MAP ...").
     const f32 bw = std::min(320.0f, W * 0.28f);
     const f32 bh = 18.0f;
     const f32 x = 24.0f;
-    const f32 y = H - 24.0f - bh;
+    const f32 y = H - 24.0f - bh;        // health bar
+    const f32 role_y = y - ts * 1.1f;    // role label, a clear line above the bar
+    const f32 controls_y = role_y - ts * 1.1f; // controls hint, above the role label
+    draw.text(Vec2{x, controls_y}, "[M] MAP    [K] SKILLS    [U] GEAR", ts * 0.72f,
+              Vec4{0.72f, 0.80f, 0.88f, 1.0f});
     draw.rect(Vec4{x - 3.0f, y - 3.0f, bw + 6.0f, bh + 6.0f}, Vec4{0.05f, 0.05f, 0.07f, 0.7f},
               5.0f);
     const Vec3 col = glm::mix(Vec3{0.85f, 0.2f, 0.18f}, Vec3{0.35f, 0.8f, 0.35f}, hp);
     draw.rect(Vec4{x, y, bw * std::max(hp, 0.0f), bh}, Vec4{col, 0.95f}, 4.0f);
-    // Role label above the health bar.
-    draw.text(Vec2{x, y - ts * 0.95f}, role_name(role_), ts * 0.72f,
-              Vec4{0.74f, 0.82f, 0.92f, 1.0f});
+    draw.text(Vec2{x, role_y}, role_name(role_), ts * 0.72f, Vec4{0.74f, 0.82f, 0.92f, 1.0f});
 
     // Cleric heal-channel charge bar (centre screen while charging the AOE heal).
     if (role_ == PlayerRole::Cleric && heal_charge_fx_ > 0.001f) {
@@ -254,6 +311,139 @@ void ClientApp::draw_hud() {
     }
 
     draw_ability_bar(draw, W, H, ts);
+
+    // Damage flash: a red wash over the screen when WE take a hit (revived feedback - it pairs
+    // with the hit marker below so both giving and taking damage read instantly).
+    if (hit_flash_ > 0.001f) {
+        draw.rect(Vec4{0.0f, 0.0f, W, H}, Vec4{0.85f, 0.12f, 0.12f, hit_flash_ * 0.32f});
+    }
+    // Hit marker: a crisp screen-centre X that pops + fades whenever one of OUR attacks lands a
+    // confirmed hit (any role / any attack). Punchy white, briefly punching outward as it fades.
+    if (hit_marker_ > 0.001f) {
+        const f32 m = hit_marker_;
+        const Vec2 c{W * 0.5f, H * 0.5f};
+        const f32 r0 = 7.0f + (1.0f - m) * 6.0f; // punches outward as it fades
+        const f32 r1 = r0 + 10.0f;
+        const f32 thick = 3.5f;
+        const Vec4 mark_col{1.0f, 0.97f, 0.9f, glm::clamp(m * 1.1f, 0.0f, 1.0f)};
+        const Vec4 mark_shadow{0.0f, 0.0f, 0.0f, glm::clamp(m * 0.6f, 0.0f, 1.0f)};
+        const Vec2 diag[4] = {{0.707f, 0.707f}, {-0.707f, 0.707f}, {0.707f, -0.707f}, {-0.707f, -0.707f}};
+        for (const Vec2& d : diag) {
+            const Vec2 pa = c + d * r0;
+            const Vec2 pb = c + d * r1;
+            draw.line(pa + Vec2{1.5f, 1.5f}, pb + Vec2{1.5f, 1.5f}, thick + 1.5f, mark_shadow); // shadow
+            draw.line(pa, pb, thick, mark_col);
+        }
+    }
+
+    // NPC pathfinding routes (toggled via the F1 overlay's NPC PATHS button / F4). Drawn whether or
+    // not the panel is open, so you can switch it on and watch the routes while playing.
+    draw_nav_paths(draw, W, H);
+
+    // Debug / testing overlay on top of everything (F1).
+    if (debug_open_) {
+        draw_debug(draw, H);
+    }
+}
+
+void ClientApp::draw_nav_paths(ui::DrawList& draw, f32 W, f32 H) {
+    // Only meaningful on a listen server we host: we own the sim, so we have the live path data; a
+    // remote client has none (the routes aren't networked).
+    if (!debug_paths_ || !host_local_ || !local_server_.running()) {
+        return;
+    }
+    // Project a world point through the iso camera. Returns false when the point is behind the camera
+    // (so a segment with an endpoint behind us is skipped); off-screen-but-in-front points still
+    // project, so a line just runs off the screen edge.
+    const Mat4 vp = camera_.view_projection();
+    auto project = [&](const Vec3& wp, Vec2& sp) -> bool {
+        const Vec4 clip = vp * Vec4{wp, 1.0f};
+        if (clip.w <= 0.05f) {
+            return false;
+        }
+        sp = Vec2{(clip.x / clip.w * 0.5f + 0.5f) * W, (clip.y / clip.w * 0.5f + 0.5f) * H};
+        return true;
+    };
+    const Vec4 kind_col[4] = {
+        {0.25f, 0.95f, 1.0f, 0.95f}, // 0 teamster A* path  - cyan (the real around-obstacles route)
+        {1.0f, 0.82f, 0.2f, 0.9f},   // 1 wagon road route  - gold
+        {0.45f, 0.9f, 0.5f, 0.7f},   // 2 villager/guard goal - green
+        {1.0f, 0.4f, 0.32f, 0.8f},   // 3 ambusher goal     - red
+    };
+    for (const GameServer::DebugNavPath& path : local_server_.debug_nav_paths()) {
+        const Vec4 col = kind_col[path.kind % 4];
+        const f32 thick = path.kind <= 1 ? 2.6f : 1.6f; // emphasise the A* path + the wagon route
+        Vec2 prev{};
+        bool have_prev = false;
+        for (const Vec3& wp : path.points) {
+            Vec2 sp{};
+            const bool on = project(wp, sp);
+            if (on && have_prev) {
+                draw.line(prev, sp, thick, col);
+            }
+            if (on && path.kind <= 1) {
+                draw.rect(Vec4{sp.x - 2.5f, sp.y - 2.5f, 5.0f, 5.0f}, col, 1.5f); // waypoint node
+            }
+            prev = sp;
+            have_prev = on;
+        }
+    }
+}
+
+void ClientApp::draw_debug(ui::DrawList& draw, f32 H) {
+    const f32 ds = glm::clamp(H * 0.02f, 13.0f, 22.0f); // debug text size
+    const f32 pad = 12.0f;
+    const f32 pw = std::max(290.0f, draw.text_width("NO WAGON ATTACKS:  OFF", ds) + pad * 2.0f);
+    const f32 x = 16.0f;
+    const f32 y = H * 0.26f;
+    const f32 line = ds * 1.32f;
+    const bool host = host_local_ && local_server_.running();
+    const int rows = 10; // title + 6 metrics + 3 toggles
+    const f32 ph = pad * 2.0f + line * static_cast<f32>(rows) + line * 1.4f; // + hint
+    // Panel.
+    draw.rect(Vec4{x, y, pw, ph}, Vec4{0.04f, 0.05f, 0.07f, 0.82f},
+              Vec4{0.5f, 0.62f, 0.78f, 0.9f}, 1.5f, 7.0f);
+    f32 ty = y + pad;
+    draw.text(Vec2{x + pad, ty}, "DEBUG  [F1]", ds * 1.05f, Vec4{0.7f, 0.85f, 1.0f, 1.0f});
+    ty += line * 1.2f;
+    auto metric = [&](const std::string& s, const Vec4& c) {
+        draw.text(Vec2{x + pad, ty}, s, ds, c);
+        ty += line;
+    };
+    const Vec4 mc{0.82f, 0.88f, 0.95f, 1.0f};
+    const f32 fps = fps_;
+    const Vec4 fps_c = fps >= 55.0f ? Vec4{0.6f, 0.95f, 0.65f, 1.0f}
+                       : fps >= 30.0f ? Vec4{0.95f, 0.85f, 0.45f, 1.0f}
+                                      : Vec4{0.95f, 0.45f, 0.4f, 1.0f};
+    metric(std::format("FPS         {:.0f}  ({:.1f} ms)", fps, frame_ms_), fps_c);
+    metric(std::format("SERVER TPS  {:.0f}", server_tps_), mc);
+    metric(std::format("PLAYERS     {}", snapshot_.players.size()), mc);
+    metric(std::format("ENEMIES     {}", snapshot_.enemies.size()), mc);
+    metric(std::format("PROJECTILES {}", snapshot_.projectiles.size()), mc);
+    metric(std::format("PARTICLES   {}", particles_.size()), mc);
+
+    // Two clickable toggles.
+    auto toggle = [&](const char* label, bool on, ui::Rect& rect) {
+        const f32 bx = x + pad;
+        const f32 bw = pw - pad * 2.0f;
+        const f32 bh = line * 1.05f;
+        rect = ui::Rect{bx, ty, bw, bh};
+        const Vec4 fill = on ? Vec4{0.18f, 0.42f, 0.22f, 0.95f} : Vec4{0.16f, 0.16f, 0.2f, 0.9f};
+        const Vec4 border = on ? Vec4{0.5f, 0.95f, 0.55f, 1.0f} : Vec4{0.45f, 0.48f, 0.55f, 0.9f};
+        draw.rect(Vec4{bx, ty, bw, bh}, fill, border, 1.5f, 5.0f);
+        draw.text(Vec2{bx + 8.0f, ty + bh * 0.5f - ds * 0.5f}, label, ds, Vec4{0.85f, 0.9f, 0.95f, 1.0f});
+        const std::string st = on ? "ON" : "OFF";
+        draw.text(Vec2{bx + bw - draw.text_width(st, ds) - 10.0f, ty + bh * 0.5f - ds * 0.5f}, st, ds,
+                  on ? Vec4{0.6f, 1.0f, 0.65f, 1.0f} : Vec4{0.7f, 0.72f, 0.78f, 1.0f});
+        ty += bh + 4.0f;
+    };
+    toggle("GODMODE  [F2]", debug_god_, god_btn_);
+    toggle("NO WAGON ATTACKS  [F3]", debug_no_ambush_, noatk_btn_);
+    toggle("NPC PATHS  [F4]", debug_paths_, npc_paths_btn_);
+    if (!host) {
+        draw.text(Vec2{x + pad, ty}, "(toggles need a hosted game)", ds * 0.82f,
+                  Vec4{0.85f, 0.6f, 0.45f, 0.95f});
+    }
 }
 
 void ClientApp::draw_contract_panel(ui::DrawList& draw, const net::WagonState& wg, bool accepted, f32 W, f32 H, f32 ts, const Vec3& feet) {
@@ -297,6 +487,15 @@ void ClientApp::draw_contract_panel(ui::DrawList& draw, const net::WagonState& w
     iy += ts * 1.25f;
     draw.text(Vec2{ix, iy}, std::format("PAY        $ {}", wg.reward), ts * 0.9f,
               Vec4{0.98f, 0.88f, 0.42f, 1.0f});
+    // A per-contract modifier (derived from the wagon id) - hazardous / bulk / safe runs vary the
+    // pay + ambush so the board isn't all the same; standard runs show nothing.
+    if (const ContractModifier mod = contract_modifier(wg.id); mod != ContractModifier::Standard) {
+        iy += ts * 1.25f;
+        const Vec4 mcol = mod == ContractModifier::Safe   ? Vec4{0.6f, 0.85f, 0.95f, 1.0f}
+                          : mod == ContractModifier::Bulk ? Vec4{0.82f, 0.74f, 0.96f, 1.0f}
+                                                          : Vec4{0.98f, 0.55f, 0.45f, 1.0f};
+        draw.text(Vec2{ix, iy}, modifier_name(mod), ts * 0.85f, mcol);
+    }
 
     // Mode hint (toggled with H).
     const char* mode = vote_mode_ == 2 ? "HAUL MANUALLY (+pay)" : "HIRE A DRIVER";
@@ -623,6 +822,54 @@ void ClientApp::draw_dest_arrow(ui::DrawList& draw, const Vec3& from, const Vec3
     draw.line(tip, tip - d * hw - perp * hw, 6.0f, amber);
     draw.text(Vec2{c.x - draw.text_width("DESTINATION", 16.0f) * 0.5f, c.y + 22.0f},
               "DESTINATION", 16.0f, amber);
+}
+
+// An always-on corner minimap: a small north-up window around the player showing nearby roads, the
+// active haul's destination (clamped to the edge if off-window), enemy threats, and the player at
+// centre with a facing tick. Cheap (lines + dots, no terrain raster) - the full M map stays the
+// detailed pannable view.
+void ClientApp::draw_minimap(ui::DrawList& draw, const Vec3& feet, f32 W, f32 H) {
+    const f32 sz = glm::clamp(H * 0.2f, 132.0f, 200.0f);
+    const Vec4 box{W - sz - 18.0f, 54.0f, sz, sz}; // top-right, just below the money counter
+    const Vec2 c{box.x + sz * 0.5f, box.y + sz * 0.5f};
+    constexpr f32 mm_radius = 120.0f; // world metres from centre to edge
+    const f32 scale = (sz * 0.5f) / mm_radius;
+    draw.rect(box, Vec4{0.04f, 0.05f, 0.07f, 0.62f}, Vec4{0.72f, 0.62f, 0.4f, 0.8f}, 2.0f, 8.0f);
+
+    const Vec2 pxz{feet.x, feet.z};
+    auto to_mm = [&](Vec2 wxz) { return c + Vec2{(wxz.x - pxz.x) * scale, (wxz.y - pxz.y) * scale}; };
+    auto inside = [&](const Vec2& p) {
+        return p.x >= box.x + 3.0f && p.x <= box.x + sz - 3.0f && p.y >= box.y + 3.0f &&
+               p.y <= box.y + sz - 3.0f;
+    };
+
+    if (world_seed_ != 0) {
+        for (const roads::Segment& s : roads::gather(pxz, mm_radius, world_seed_)) {
+            const Vec2 a = to_mm(s.a), b = to_mm(s.b);
+            if (inside(a) && inside(b)) {
+                draw.line(a, b, 2.5f, Vec4{0.64f, 0.52f, 0.34f, 0.9f});
+            }
+        }
+    }
+    for (const net::EnemyState& e : snapshot_.enemies) { // threats, red
+        const Vec2 p = to_mm(Vec2{e.position.x, e.position.z});
+        if (inside(p)) {
+            draw.rect(Vec4{p.x - 2.5f, p.y - 2.5f, 5.0f, 5.0f}, Vec4{0.92f, 0.27f, 0.2f, 1.0f}, 2.5f);
+        }
+    }
+    if (snapshot_.contract_phase == static_cast<u8>(ContractPhase::Active) && !snapshot_.wagons.empty()) {
+        const net::WagonState& wg = snapshot_.wagons.front(); // gold destination, edge-clamped
+        Vec2 d = to_mm(Vec2{wg.dest.x, wg.dest.z});
+        const f32 r = sz * 0.5f - 7.0f;
+        if (const Vec2 off = d - c; glm::length(off) > r) {
+            d = c + glm::normalize(off) * r;
+        }
+        draw.rect(Vec4{d.x - 4.0f, d.y - 4.0f, 8.0f, 8.0f}, Vec4{0.98f, 0.82f, 0.3f, 1.0f}, 4.0f);
+    }
+    // The player at centre + a heading tick.
+    const Vec2 fwd{std::cos(face_yaw_), std::sin(face_yaw_)};
+    draw.line(c, c + fwd * 11.0f, 2.5f, Vec4{0.9f, 0.95f, 1.0f, 1.0f});
+    draw.rect(Vec4{c.x - 3.0f, c.y - 3.0f, 6.0f, 6.0f}, Vec4{0.95f, 0.97f, 1.0f, 1.0f}, 3.0f);
 }
 
 void ClientApp::rebuild_map_raster(const Vec4& panel, f32 ppm) {
@@ -1009,6 +1256,156 @@ std::string ClientApp::town_name(const Vec3& c) {
     std::string name = pre[h % 16u];
     name += suf[(h >> 8) % 16u];
     return name;
+}
+
+// The GEAR / WARDROBE overlay (U): the party gold, the current kit + its stat bonus, a BUY-upgrade
+// button (only in a town + affordable), recolour swatches, and a change-weapon button. Clicks are
+// hit-tested in wardrobe_click() against the rects stashed here.
+void ClientApp::draw_wardrobe() {
+    if (renderer_ == nullptr) {
+        return;
+    }
+    const VkExtent2D ext = renderer_->extent();
+    const f32 W = static_cast<f32>(ext.width);
+    const f32 H = static_cast<f32>(ext.height);
+    ui::DrawList draw{*renderer_};
+    const ui::Theme& th = ui::theme();
+    const Vec3 accent = role_color(role_);
+
+    draw.rect(Vec4{0.0f, 0.0f, W, H}, Vec4{0.03f, 0.02f, 0.015f, 0.86f});
+    const f32 pw = std::min(W * 0.62f, 720.0f);
+    const f32 ph = std::min(H * 0.82f, 600.0f);
+    const Vec4 panel{(W - pw) * 0.5f, (H - ph) * 0.5f, pw, ph};
+    draw.rect(panel, th.panel, Vec4{accent, 0.7f}, 2.5f, 12.0f);
+
+    const f32 x = panel.x + 30.0f;
+    f32 y = panel.y + 24.0f;
+    draw.text(Vec2{x, y}, "WARDROBE", 34.0f, th.accent_hover);
+    const std::string money = std::format("$ {}", snapshot_.money);
+    draw.text(Vec2{panel.x + panel.z - draw.text_width(money, 24.0f) - 30.0f, y + 8.0f}, money, 24.0f,
+              th.accent_hover);
+    y += 58.0f;
+
+    const net::PlayerState* me = local_player();
+    const u8 owned = me != nullptr ? me->owned_tier : 0;
+    const Vec3 feet = local_feet();
+    const bool in_town =
+        world_seed_ != 0 && worldgen::inside_village(feet.x, feet.z, world_seed_, 6.0f);
+
+    // Current kit + its stat bonus.
+    draw.text(Vec2{x, y},
+              std::format("{}  -  {} KIT", role_name(role_), tier_name(static_cast<EquipmentTier>(owned))),
+              22.0f, Vec4{accent, 1.0f});
+    y += 30.0f;
+    Equipment cur;
+    cur.outfit_tier = owned;
+    cur.weapon_tier = owned;
+    const EquipBonus eb = equipment_bonus(cur);
+    draw.text(Vec2{x, y},
+              std::format("+{} HP    x{:.2f} DAMAGE    +{:.0f}% ARMOUR", static_cast<int>(eb.health_add),
+                          eb.damage_mult, eb.mitigation_add * 100.0f),
+              15.0f, th.text_muted);
+    y += 36.0f;
+
+    // Buy-upgrade button (server gates it on being in a town + affordability; this just requests it).
+    wardrobe_buy_rect_ = ui::Rect{};
+    if (static_cast<u8>(owned + 1) < kTierCount) {
+        const auto next = static_cast<EquipmentTier>(owned + 1);
+        const u32 price = tier_price(next);
+        const bool affordable = snapshot_.money >= price;
+        const bool can = in_town && affordable;
+        const Vec4 btn{x, y, 340.0f, 46.0f};
+        wardrobe_buy_rect_ = ui::Rect{btn.x, btn.y, btn.z, btn.w};
+        draw.rect(btn, can ? Vec4{accent * 0.55f, 0.97f} : Vec4{0.2f, 0.18f, 0.16f, 0.9f},
+                  Vec4{accent, can ? 0.95f : 0.3f}, 2.0f, 8.0f);
+        draw.text(Vec2{btn.x + 16.0f, btn.y + 13.0f},
+                  std::format("BUY {} KIT   -   $ {}", tier_name(next), price), 18.0f,
+                  can ? th.text : th.text_muted);
+        y += 54.0f;
+        const char* hint = !in_town       ? "VISIT A TOWN SHOP TO BUY UPGRADES"
+                           : !affordable  ? "NOT ENOUGH GOLD - DELIVER MORE CARGO"
+                                          : "NICER LOOK + MORE HEALTH, DAMAGE & ARMOUR";
+        draw.text(Vec2{x, y}, hint, 14.0f, th.text_muted);
+        y += 34.0f;
+    } else {
+        draw.text(Vec2{x, y}, "FULLY UPGRADED  -  MASTER GEAR", 18.0f, th.accent_hover);
+        y += 44.0f;
+    }
+
+    // Wagon-RIG upgrade (a money sink): reinforce the cart for more max health + ambush-damage resist.
+    if (const u8 rl = snapshot_.rig_level; rl < kMaxRigLevel) {
+        const u32 rprice = rig_price(static_cast<u8>(rl + 1));
+        const bool rcan = in_town && snapshot_.money >= rprice;
+        const Vec4 btn{x, y, 380.0f, 40.0f};
+        wardrobe_rig_rect_ = ui::Rect{btn.x, btn.y, btn.z, btn.w};
+        draw.rect(btn, rcan ? Vec4{accent * 0.55f, 0.97f} : Vec4{0.2f, 0.18f, 0.16f, 0.9f},
+                  Vec4{accent, rcan ? 0.95f : 0.3f}, 2.0f, 8.0f);
+        draw.text(Vec2{btn.x + 16.0f, btn.y + 11.0f},
+                  std::format("REINFORCE WAGON  Lv {}   -   $ {}", rl + 1, rprice), 17.0f,
+                  rcan ? th.text : th.text_muted);
+        y += 50.0f;
+    } else {
+        wardrobe_rig_rect_ = ui::Rect{};
+        draw.text(Vec2{x, y}, "WAGON FULLY REINFORCED", 17.0f, th.accent_hover);
+        y += 34.0f;
+    }
+
+    // Recolour swatches (the player's chosen primary colour).
+    draw.text(Vec2{x, y}, "OUTFIT COLOUR", 15.0f, th.text);
+    y += 26.0f;
+    const f32 sw = 46.0f;
+    for (int i = 0; i < 8; ++i) {
+        const Vec4 r{x + static_cast<f32>(i) * (sw + 8.0f), y, sw, sw};
+        wardrobe_swatch_rects_[i] = ui::Rect{r.x, r.y, r.z, r.w};
+        const Vec3 c = outfit_tint_of(static_cast<u8>(i));
+        const bool sel = equip_loadout_.outfit_tint == static_cast<u8>(i);
+        draw.rect(r, Vec4{c, 1.0f}, Vec4{sel ? Vec3{1.0f} : accent, sel ? 1.0f : 0.4f},
+                  sel ? 3.0f : 1.5f, 6.0f);
+    }
+    y += sw + 28.0f;
+
+    // Change weapon (cycles the role's options).
+    const WeaponType wt = role_weapon(static_cast<u8>(role_), equip_loadout_.weapon_index);
+    draw.text(Vec2{x, y}, std::format("WEAPON:   {}", weapon_name(wt)), 18.0f, Vec4{accent, 1.0f});
+    wardrobe_weapon_rect_ = ui::Rect{};
+    if (role_weapon_count(static_cast<u8>(role_)) > 1) {
+        const Vec4 btn{x + 280.0f, y - 8.0f, 140.0f, 36.0f};
+        wardrobe_weapon_rect_ = ui::Rect{btn.x, btn.y, btn.z, btn.w};
+        draw.rect(btn, Vec4{accent * 0.55f, 0.97f}, Vec4{accent, 0.95f}, 2.0f, 8.0f);
+        draw.text(Vec2{btn.x + 22.0f, btn.y + 9.0f}, "CHANGE", 16.0f, th.text);
+    }
+
+    draw.text(Vec2{x, panel.y + panel.w - 34.0f}, "PRESS U OR ESC TO CLOSE", 14.0f, th.text_muted);
+}
+
+void ClientApp::wardrobe_click(const Vec2& p) {
+    if (in_rect(p, wardrobe_buy_rect_)) {
+        const net::PlayerState* me = local_player();
+        const u8 owned = me != nullptr ? me->owned_tier : 0;
+        if (static_cast<u8>(owned + 1) < kTierCount) {
+            pending_buy_ = static_cast<u8>(owned + 1); // request the next tier (server gates it)
+        }
+        return;
+    }
+    if (in_rect(p, wardrobe_rig_rect_)) {
+        if (const u8 rl = snapshot_.rig_level; rl < kMaxRigLevel) {
+            pending_buy_rig_ = static_cast<u8>(rl + 1); // request the next rig level (server gates it)
+        }
+        return;
+    }
+    if (in_rect(p, wardrobe_weapon_rect_)) {
+        const u8 n = role_weapon_count(static_cast<u8>(role_));
+        if (n > 1) {
+            equip_loadout_.weapon_index = static_cast<u8>((equip_loadout_.weapon_index + 1) % n);
+        }
+        return;
+    }
+    for (int i = 0; i < 8; ++i) {
+        if (in_rect(p, wardrobe_swatch_rects_[i])) {
+            equip_loadout_.outfit_tint = static_cast<u8>(i);
+            return;
+        }
+    }
 }
 
 } // namespace alryn::game

@@ -24,6 +24,7 @@ void ClientApp::update_enemy_visuals(Timestep dt) {
         EnemyVisual& v = it->second;
         if (created) {
             v.model = CharacterModel::create(en.id ^ 0xE0E0u, enemy_look());
+            v.body_skin = build_body_mesh(v.model);
             v.last_pos = en.position;
         }
         f32 measured = 0.0f;
@@ -43,7 +44,12 @@ void ClientApp::update_enemy_visuals(Timestep dt) {
     for (auto it = enemy_visuals_.begin(); it != enemy_visuals_.end();) {
         const bool live = std::any_of(snapshot_.enemies.begin(), snapshot_.enemies.end(),
                                       [&](const net::EnemyState& e) { return e.id == it->first; });
-        it = live ? std::next(it) : enemy_visuals_.erase(it);
+        if (live) {
+            ++it;
+        } else {
+            retire_mesh(std::move(it->second.body_mesh)); // defer the GPU free past the frames in flight
+            it = enemy_visuals_.erase(it);
+        }
     }
 }
 
@@ -58,17 +64,102 @@ void ClientApp::draw_enemies() {
         }
         EnemyVisual& v = it->second;
         // 0 = grunt (dark red), 1 = torch-bearer (fiery), 2 = brute (big + dark),
-        // 3 = archer (sickly green, carries a bow).
-        const f32 scale = en.kind == 2 ? 1.5f : 1.0f;
+        // 3 = archer (sickly green, carries a bow), 4 = shield-bearer (steel, carries a shield),
+        // 5 = healer (pale mystic, floats a glowing green orb).
+        const f32 scale = en.kind == 2 ? 1.5f : en.kind == kEnemyWarlord ? 1.28f : 1.0f;
         const Mat4 root = glm::translate(Mat4{1.0f}, en.position) *
                           glm::rotate(Mat4{1.0f}, HalfPi - en.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
                           glm::scale(Mat4{1.0f}, Vec3{scale}) * v.animator.body_offset();
         const Vec3 tint = en.kind == 1   ? Vec3{1.5f, 0.7f, 0.18f}
                           : en.kind == 2 ? Vec3{1.05f, 0.26f, 0.4f}
                           : en.kind == 3 ? Vec3{0.5f, 0.85f, 0.45f}
-                                         : Vec3{1.3f, 0.32f, 0.3f};
-        const std::vector<Mat4> emats = v.model.bone_matrices(root, v.animator.pose(v.model));
-        draw_rig(v.model, emats, tint);
+                          : en.kind == 4 ? Vec3{0.62f, 0.66f, 0.78f}
+                          : en.kind == 5 ? Vec3{0.78f, 0.82f, 0.70f}
+                          : en.kind == kEnemySapper ? Vec3{0.5f, 0.42f, 0.30f}  // dark, hunched
+                          : en.kind == kEnemyWarlord ? Vec3{0.85f, 0.14f, 0.26f} // deep crimson champion
+                                                     : Vec3{1.3f, 0.32f, 0.3f};
+        const std::vector<Quat> pose = v.animator.pose(v.model);
+        if (v.body_skin.vertices.empty()) {
+            v.body_skin = build_body_mesh(v.model);
+        }
+        skin_and_draw(v.model, v.body_skin, v.body_mesh, root, pose, tint); // continuous skinned body
+        const std::vector<Mat4> emats = v.model.bone_matrices(root, pose);
+        draw_rig(v.model, emats, tint, /*attachments_only=*/true); // face/hair on top
+        // The lone last raider is ENRAGED (server gives it a speed/damage boost) - a red angry aura
+        // so the climax reads (derived from the snapshot: one non-brute ambusher left).
+        if (snapshot_.enemies.size() == 1 && en.kind != 2) {
+            const f32 puls = 0.6f + 0.4f * std::sin(elapsed_ * 14.0f);
+            renderer_->draw_glow(shape_sphere_,
+                                 glm::translate(Mat4{1.0f}, en.position + Vec3{0.0f, 1.0f, 0.0f}) *
+                                     glm::scale(Mat4{1.0f}, Vec3{1.3f}),
+                                 Vec4{1.0f, 0.18f, 0.12f, 0.4f * puls});
+        }
+        if (en.kind == kEnemyWarlord) {
+            // A rallying champion: a crimson aura ring on the ground (the rally zone - allies inside
+            // march faster + hit harder until it falls, so cut it down first) + a back-banner.
+            const Vec3 base{en.position.x, en.position.y + 0.04f, en.position.z};
+            const f32 puls = 0.55f + 0.3f * std::sin(elapsed_ * 6.0f);
+            renderer_->draw_transparent(
+                shape_sphere_,
+                glm::translate(Mat4{1.0f}, base) *
+                    glm::scale(Mat4{1.0f}, Vec3{kWarlordAuraRadius, 0.04f, kWarlordAuraRadius}),
+                Vec4{0.85f, 0.12f, 0.2f, 0.1f + 0.06f * puls});
+            const Vec3 fwd{std::cos(en.yaw), 0.0f, std::sin(en.yaw)};
+            const Vec3 polebase = en.position - fwd * 0.25f;
+            renderer_->draw(shape_box_,
+                            glm::translate(Mat4{1.0f}, polebase + Vec3{0.0f, 1.4f, 0.0f}) *
+                                glm::scale(Mat4{1.0f}, Vec3{0.05f, 1.4f, 0.05f}),
+                            Vec4{0.15f, 0.1f, 0.08f, 1.0f}); // banner pole
+            renderer_->draw(shape_box_,
+                            glm::translate(Mat4{1.0f}, polebase + Vec3{0.0f, 2.35f, 0.0f} - fwd * 0.18f) *
+                                glm::scale(Mat4{1.0f}, Vec3{0.04f, 0.5f, 0.36f}),
+                            Vec4{0.82f, 0.12f, 0.2f, 1.0f}); // crimson flag
+        }
+        if (en.kind == 2 && (en.action == 2 || en.action == 3)) {
+            // Brute slam telegraph: a pulsing red danger ring on the ground while it winds up
+            // (action 2 - dodge out of it!), then a bright shockwave burst on the strike (action 3).
+            const Vec3 c{en.position.x, en.position.y + 0.06f, en.position.z};
+            if (en.action == 2) {
+                const f32 puls = 0.5f + 0.35f * std::sin(elapsed_ * 12.0f);
+                renderer_->draw_transparent(
+                    shape_sphere_,
+                    glm::translate(Mat4{1.0f}, c) *
+                        glm::scale(Mat4{1.0f}, Vec3{kSlamRadius, 0.05f, kSlamRadius}),
+                    Vec4{0.95f, 0.2f, 0.15f, 0.28f + 0.18f * puls});
+                renderer_->draw_glow(shape_sphere_,
+                                     glm::translate(Mat4{1.0f}, c) *
+                                         glm::scale(Mat4{1.0f}, Vec3{kSlamRadius * 1.03f, 0.04f,
+                                                                     kSlamRadius * 1.03f}),
+                                     Vec4{1.0f, 0.3f, 0.2f, 0.32f * puls});
+            } else { // action 3: the slam landed
+                renderer_->draw_glow(shape_sphere_,
+                                     glm::translate(Mat4{1.0f}, c + Vec3{0.0f, 0.2f, 0.0f}) *
+                                         glm::scale(Mat4{1.0f}, Vec3{kSlamRadius * 1.2f, 0.5f,
+                                                                     kSlamRadius * 1.2f}),
+                                     Vec4{1.0f, 0.55f, 0.25f, 0.6f});
+            }
+        }
+        if (en.kind == kEnemySapper) {
+            // A lit-fuse satchel charge on its back: a dark box + a fast-sparking emissive fuse tip,
+            // so the bomber reads as "intercept me before I reach the cart!".
+            const Vec3 back = en.position -
+                              Vec3{std::cos(en.yaw), 0.0f, std::sin(en.yaw)} * 0.22f +
+                              Vec3{0.0f, 1.05f, 0.0f};
+            renderer_->draw(shape_box_,
+                            glm::translate(Mat4{1.0f}, back) *
+                                glm::scale(Mat4{1.0f}, Vec3{0.26f, 0.26f, 0.18f}),
+                            Vec4{0.22f, 0.18f, 0.13f, 1.0f}); // satchel charge
+            const f32 spark = 0.6f + 0.4f * std::sin(elapsed_ * 26.0f + en.position.x);
+            const Vec3 fuse = back + Vec3{0.0f, 0.22f, 0.0f};
+            renderer_->draw_emissive(shape_sphere_,
+                                     glm::translate(Mat4{1.0f}, fuse) *
+                                         glm::scale(Mat4{1.0f}, Vec3{0.09f * spark}),
+                                     Vec4{1.0f, 0.7f, 0.2f, 1.0f});
+            renderer_->draw_glow(shape_sphere_,
+                                 glm::translate(Mat4{1.0f}, fuse) *
+                                     glm::scale(Mat4{1.0f}, Vec3{0.42f}),
+                                 Vec4{1.0f, 0.5f, 0.15f, 0.5f * spark});
+        }
         if (en.kind == 3) {
             // A bow held out front (a curved stave + string).
             const Vec3 hand = en.position +
@@ -79,6 +170,47 @@ void ClientApp::draw_enemies() {
                                 glm::rotate(Mat4{1.0f}, en.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
                                 glm::scale(Mat4{1.0f}, Vec3{0.04f, 0.85f, 0.04f}),
                             Vec4{0.34f, 0.22f, 0.12f, 1.0f});
+            if (en.action == 2) {
+                // Aiming a heavy shot: a charging glow swells at the bow (telegraph - dodge it!).
+                const f32 chg = 0.5f + 0.5f * std::sin(elapsed_ * 16.0f);
+                renderer_->draw_glow(shape_sphere_,
+                                     glm::translate(Mat4{1.0f}, hand) *
+                                         glm::scale(Mat4{1.0f}, Vec3{0.28f + 0.1f * chg}),
+                                     Vec4{1.0f, 0.4f, 0.18f, 0.55f});
+                renderer_->draw_emissive(shape_sphere_,
+                                         glm::translate(Mat4{1.0f}, hand) *
+                                             glm::scale(Mat4{1.0f}, Vec3{0.10f}),
+                                         Vec4{1.0f, 0.7f, 0.3f, 1.0f});
+            }
+        }
+        if (en.kind == 5) {
+            // A healer floats a pulsing green orb of mending magic above its hand + a soft glow.
+            const f32 puls = 0.85f + 0.15f * std::sin(elapsed_ * 6.0f + en.position.x);
+            const Vec3 orb = en.position + Vec3{std::cos(en.yaw), 0.0f, std::sin(en.yaw)} * 0.42f +
+                             Vec3{0.0f, 1.35f, 0.0f};
+            renderer_->draw_emissive(shape_sphere_,
+                                     glm::translate(Mat4{1.0f}, orb) *
+                                         glm::scale(Mat4{1.0f}, Vec3{0.16f * puls}),
+                                     Vec4{0.4f, 1.0f, 0.5f, 1.0f});
+            renderer_->draw_glow(shape_sphere_,
+                                 glm::translate(Mat4{1.0f}, orb) *
+                                     glm::scale(Mat4{1.0f}, Vec3{0.5f}),
+                                 Vec4{0.4f, 1.0f, 0.5f, 0.35f * puls});
+        }
+        if (en.kind == 4) {
+            // A large round shield held out front (a wide wooden plate + a steel boss),
+            // facing the way it marches - the side it blocks from.
+            const Vec3 fwd{std::cos(en.yaw), 0.0f, std::sin(en.yaw)};
+            const Vec3 mid = en.position + fwd * 0.5f + Vec3{0.0f, 1.0f, 0.0f};
+            const Mat4 face = glm::translate(Mat4{1.0f}, mid) *
+                              glm::rotate(Mat4{1.0f}, -en.yaw, Vec3{0.0f, 1.0f, 0.0f});
+            renderer_->draw(shape_box_,
+                            face * glm::scale(Mat4{1.0f}, Vec3{0.07f, 0.62f, 0.52f}),
+                            Vec4{0.40f, 0.28f, 0.16f, 1.0f}); // wooden plank face
+            renderer_->draw(shape_sphere_,
+                            glm::translate(Mat4{1.0f}, mid + fwd * 0.06f) *
+                                glm::scale(Mat4{1.0f}, Vec3{0.06f, 0.16f, 0.16f}),
+                            Vec4{0.66f, 0.70f, 0.80f, 1.0f}); // steel boss
         }
         if (en.kind == 1) {
             // The torch: a wooden haft + a flickering emissive flame held aloft, with
@@ -417,7 +549,7 @@ void ClientApp::update_villager_visuals(Timestep dt) {
         return;
     }
     for (const net::VillagerState& vl : snapshot_.villagers) {
-        PlayerVisual& v = ensure_villager_visual(vl.id, vl.appearance);
+        PlayerVisual& v = ensure_villager_visual(vl.id, vl.appearance, vl.kind);
         f32 measured = 0.0f;
         if (v.has_last && dt.seconds > 0.0001f) {
             Vec3 d = vl.position - v.last_pos;
@@ -432,12 +564,19 @@ void ClientApp::update_villager_visuals(Timestep dt) {
     for (auto it = villager_visuals_.begin(); it != villager_visuals_.end();) {
         const bool live = std::any_of(snapshot_.villagers.begin(), snapshot_.villagers.end(),
                                       [&](const net::VillagerState& s) { return s.id == it->first; });
-        it = live ? std::next(it) : villager_visuals_.erase(it);
+        if (live) {
+            ++it;
+        } else {
+            retire_mesh(std::move(it->second.body_mesh)); // defer the GPU free past the frames in flight
+            retire_mesh(std::move(it->second.outfit_mesh));
+            it = villager_visuals_.erase(it);
+        }
     }
 }
 
 ClientApp::PlayerVisual& ClientApp::ensure_villager_visual(u32 id,
-                                                           const CharacterAppearance& appearance) {
+                                                           const CharacterAppearance& appearance,
+                                                           u8 kind) {
     const auto it = villager_visuals_.find(id);
     if (it != villager_visuals_.end()) {
         return it->second;
@@ -445,6 +584,22 @@ ClientApp::PlayerVisual& ClientApp::ensure_villager_visual(u32 id,
     PlayerVisual v;
     v.appearance = appearance;
     v.model = CharacterModel::create(id ^ 0x55u, appearance);
+    Equipment eq;
+    if (kind == 4) {
+        // A NOBLE passenger: the reference-grade (Master) plate - gilded armour with a plume - which
+        // the client gold-tints in draw_villagers, plus a large flowing red cape (setup_noble_cape).
+        eq.outfit_tier = static_cast<u8>(EquipmentTier::Master);
+        apply_outfit(v.model, OutfitKind::Plate, eq);
+        v.body_skin = build_body_mesh(v.model);
+        v.outfit_skin = build_outfit_mesh(v.model, OutfitKind::Plate, eq);
+        setup_noble_cape(v);
+    } else {
+        // Generic peasant garb (a belted tunic + trousers + cap), with a little per-NPC variety.
+        eq.outfit_tint = static_cast<u8>(id % 4u);
+        apply_outfit(v.model, OutfitKind::Peasant, eq);
+        v.body_skin = build_body_mesh(v.model);
+        v.outfit_skin = build_outfit_mesh(v.model, OutfitKind::Peasant, eq);
+    }
     return villager_visuals_.emplace(id, std::move(v)).first->second;
 }
 
@@ -458,9 +613,9 @@ void ClientApp::draw_villagers() {
             continue;
         }
         PlayerVisual& v = it->second;
-        // Kind 3 is a hired carriage driver sitting on the top seat (sit pose), attached to
-        // the cart's tilt + bob so they ride with it.
-        const bool seated = vl.kind == 3;
+        // Kind 3 is a hired carriage driver (top seat) and kind 4 a noble passenger riding inside -
+        // both sit (sit pose) attached to the cart's tilt + bob so they ride with it.
+        const bool seated = vl.kind == 3 || vl.kind == 4;
         const net::WagonState* aw = seated ? active_wagon() : nullptr;
         const Vec3 seat = (aw != nullptr) ? attach_to_wagon(*aw, vl.position) : vl.position;
         const Vec3 base = seated ? seat - Vec3{0.0f, 0.42f, 0.0f} : vl.position;
@@ -471,14 +626,27 @@ void ClientApp::draw_villagers() {
         }
         const std::vector<Quat> pose =
             seated ? CharacterAnimator::sit_pose(v.model) : v.animator.pose(v.model);
-        const std::vector<Mat4> mats = v.model.bone_matrices(root, pose);
         // Guards (kind 1) wear a steel tint + carry a spear; wall archers (kind 2) wear a
-        // leather/steel tint + hold a bow.
+        // leather/steel tint + hold a bow; the rest are plain townsfolk.
+        const Vec3 tint = vl.kind == 1   ? Vec3{0.72f, 0.76f, 0.86f}
+                          : vl.kind == 2 ? Vec3{0.66f, 0.70f, 0.80f}
+                          : vl.kind == 4 ? Vec3{1.0f, 0.84f, 0.42f} // noble: gilded armour
+                                         : Vec3{1.0f};
+        if (v.body_skin.vertices.empty()) {
+            v.body_skin = build_body_mesh(v.model);
+        }
+        skin_and_draw(v.model, v.body_skin, v.body_mesh, root, pose, tint);     // continuous skinned body
+        skin_and_draw(v.model, v.outfit_skin, v.outfit_mesh, root, pose, tint); // peasant tunic + trousers
+        const std::vector<Mat4> mats = v.model.bone_matrices(root, pose);
+        draw_rig(v.model, mats, tint, /*attachments_only=*/true); // face/hair/cap/apron on top
+        if (vl.kind == 4) {
+            // The noble's grand crimson cape (simulated cloth) at the joint frames; tint {1} keeps
+            // it red rather than gilding it like the plate.
+            draw_cloth(v, root, v.model.joint_matrices(root, pose), Vec3{1.0f});
+        }
         if (vl.kind == 1) {
-            draw_rig(v.model, mats, Vec3{0.72f, 0.76f, 0.86f});
             draw_held_spear(v.model, mats);
         } else if (vl.kind == 2) {
-            draw_rig(v.model, mats, Vec3{0.66f, 0.70f, 0.80f});
             const std::vector<Bone>& bones = v.model.bones();
             int hand = -1;
             for (usize i = 0; i < bones.size(); ++i) {
@@ -503,8 +671,6 @@ void ClientApp::draw_villagers() {
                                     wood); // recurved tips
                 }
             }
-        } else {
-            draw_rig(v.model, mats);
         }
     }
 }

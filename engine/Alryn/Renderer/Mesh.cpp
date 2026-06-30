@@ -42,6 +42,7 @@ bool Mesh::create(const vk::Device& device, const MeshData& data) {
     vertex_buffer_.upload(data.vertices.data(), vertex_bytes);
     index_buffer_.upload(data.indices.data(), index_bytes);
     index_count_ = static_cast<u32>(data.indices.size());
+    vertex_bytes_ = vertex_bytes;
 
     // Local-space bounding sphere from the AABB centre, for frustum / light culling.
     Vec3 lo = data.vertices[0].position;
@@ -59,10 +60,19 @@ bool Mesh::create(const vk::Device& device, const MeshData& data) {
     return true;
 }
 
+void Mesh::update_vertices(const std::vector<Vertex>& vertices) {
+    if (vertices.empty() || vertex_bytes_ == 0) {
+        return;
+    }
+    const VkDeviceSize bytes = std::min<VkDeviceSize>(sizeof(Vertex) * vertices.size(), vertex_bytes_);
+    vertex_buffer_.upload(vertices.data(), bytes); // host-visible + coherent: visible to the GPU at once
+}
+
 void Mesh::destroy() {
     vertex_buffer_.destroy();
     index_buffer_.destroy();
     index_count_ = 0;
+    vertex_bytes_ = 0;
 }
 
 void Mesh::bind(VkCommandBuffer cmd) const {

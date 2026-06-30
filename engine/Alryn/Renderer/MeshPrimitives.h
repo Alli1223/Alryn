@@ -46,6 +46,12 @@ MeshData fern(int variant = 0, const Vec3& color = Vec3{0.20f, 0.42f, 0.22f});
 // meadow / forest-clearing variety.
 MeshData tall_grass(int blades = 6, const Vec3& color = Vec3{0.34f, 0.52f, 0.26f});
 
+// A full clump of LONG meadow grass: many tall, mostly-upright blades fanned from a
+// small clumped base, arching over at the tips, with a dark-root to bright-tip
+// gradient. Taller and fuller than tall_grass - scale it in Y for the really-long
+// stalks you wade through. Sways strongly in the wind (tall = big sway weight).
+MeshData meadow_grass(int blades = 9, const Vec3& color = Vec3{0.32f, 0.54f, 0.25f});
+
 // A low-poly mushroom: pale stem + a coloured cap, sitting on y = 0. `spots` adds
 // white flecks (the classic toadstool). Scale for tiny sprouts to fat boletes.
 MeshData mushroom(const Vec3& cap = Vec3{0.74f, 0.18f, 0.15f}, f32 scale = 1.0f, bool spots = true);
@@ -61,6 +67,15 @@ MeshData reed(int blades = 4, const Vec3& color = Vec3{0.34f, 0.44f, 0.26f});
 // A low-poly desert cactus (saguaro) rooted at y = 0: a tall ribbed green column with
 // one or two up-bent arms, capped with rounded tips. `variant` toggles the arm count.
 MeshData cactus(int variant = 0, const Vec3& color = Vec3{0.30f, 0.45f, 0.26f});
+
+// A floating lily pad lying flat on y = 0: a wavy-edged round leaf with the classic V notch,
+// a gently domed centre, and a small white/pink water-lily bloom on some of them. Rests on the
+// water surface (scattered at the waterline).
+MeshData lily_pad(int variant = 0, const Vec3& color = Vec3{0.20f, 0.46f, 0.24f});
+
+// A faceted low-poly coral rooted at y = 0, for warm shallow reefs underwater. `variant` picks
+// the form: 0 = forking staghorn branches, 1 = a lumpy brain-coral dome, 2 = a standing sea fan.
+MeshData coral(int variant = 0, const Vec3& color = Vec3{0.92f, 0.42f, 0.46f});
 
 // A fallen log lying along +X on y = 0 (octagonal), bark sides with paler cut ends
 // and a hint of moss on top. A collidable bit of forest-floor debris.
@@ -78,11 +93,17 @@ TreeMeshData tree(int variant);
 MeshData bush(int variant = 0, const Vec3& color = Vec3{0.22f, 0.42f, 0.20f});
 
 // A faceted low-poly boulder sitting on y = 0, deterministically deformed by
-// `variant`. Greyish stone by default.
-MeshData rock(int variant = 0, const Vec3& color = Vec3{0.46f, 0.46f, 0.50f});
+// `variant`. Cool stone grey by default (faces vary in shade, upward faces get
+// moss/lichen, and the base tapers flush to the ground).
+MeshData rock(int variant = 0, const Vec3& color = Vec3{0.40f, 0.42f, 0.47f});
 
 // An axis-aligned box from (min) to (max) with one flat normal per face, colour
 // `color`. Building block for houses, lanterns and other prop geometry.
 MeshData box(const Vec3& min, const Vec3& max, const Vec3& color);
+
+// A wooden CRATE in the box (min..max): a light planked body `color` framed by darker reinforcing
+// corner posts + a base rail and a lid-seam band (standing a hair proud), so it reads as a slatted
+// crate rather than a plain box. Frame thickness scales with the box, so it works at any crate size.
+MeshData crate(const Vec3& min, const Vec3& max, const Vec3& color);
 
 } // namespace alryn::primitives

@@ -14,6 +14,21 @@ void add_box(MeshData& m, const Vec3& lo, const Vec3& hi, const Vec3& color) {
     }
 }
 
+// Append `src` transformed by `xf` (positions + normals), tinted by `tint`.
+void append_xf(MeshData& m, const MeshData& src, const Mat4& xf, const Vec3& tint) {
+    const Mat3 nm{xf};
+    const u32 base = static_cast<u32>(m.vertices.size());
+    for (Vertex v : src.vertices) {
+        v.position = Vec3{xf * Vec4{v.position, 1.0f}};
+        v.normal = glm::normalize(nm * v.normal);
+        v.color *= tint;
+        m.vertices.push_back(v);
+    }
+    for (u32 i : src.indices) {
+        m.indices.push_back(base + i);
+    }
+}
+
 const Vec3 kWood{0.45f, 0.32f, 0.18f};
 const Vec3 kDark{0.27f, 0.19f, 0.11f};
 const Vec3 kMetal{0.30f, 0.30f, 0.33f};
@@ -133,16 +148,23 @@ MeshData build_horse_body() {
     MeshData m;
     const Vec3 hide{0.34f, 0.22f, 0.13f};
     const Vec3 mane{0.16f, 0.11f, 0.07f};
-    add_box(m, {-0.7f, 0.95f, -0.26f}, {0.55f, 1.45f, 0.26f}, hide);        // barrel
-    add_box(m, {-0.85f, 1.0f, -0.2f}, {-0.7f, 1.35f, 0.2f}, hide);         // rump
-    // Neck (angled up-forward) + head.
-    add_box(m, {0.45f, 1.3f, -0.16f}, {0.8f, 1.85f, 0.16f}, hide);         // neck
-    add_box(m, {0.7f, 1.7f, -0.14f}, {1.05f, 2.0f, 0.14f}, hide);          // head
-    add_box(m, {1.0f, 1.78f, -0.12f}, {1.25f, 1.95f, 0.12f}, hide * 0.95f); // muzzle
-    add_box(m, {0.62f, 1.85f, -0.12f}, {0.72f, 2.05f, -0.02f}, mane);      // ears
-    add_box(m, {0.62f, 1.85f, 0.02f}, {0.72f, 2.05f, 0.12f}, mane);
-    add_box(m, {0.45f, 1.45f, -0.05f}, {0.78f, 1.95f, 0.05f}, mane);       // mane
-    add_box(m, {-0.9f, 1.0f, -0.04f}, {-0.78f, 1.4f, 0.04f}, mane);        // tail
+    // Body: a deep chest up front + a rounded haunch behind (two masses, not one flat barrel).
+    add_box(m, {-0.2f, 0.95f, -0.27f}, {0.58f, 1.48f, 0.27f}, hide);   // chest/shoulder (deeper)
+    add_box(m, {-0.86f, 0.95f, -0.24f}, {-0.16f, 1.42f, 0.24f}, hide); // barrel + haunch
+    // Neck: an ARCHED crest stepping up-forward from the shoulder to the head (not a straight box).
+    add_box(m, {0.44f, 1.34f, -0.16f}, {0.74f, 1.74f, 0.16f}, hide);        // lower neck (off the chest)
+    add_box(m, {0.6f, 1.62f, -0.14f}, {0.86f, 1.96f, 0.14f}, hide);         // upper neck (arching up)
+    add_box(m, {0.78f, 1.74f, -0.13f}, {1.08f, 2.02f, 0.13f}, hide);        // head
+    add_box(m, {1.04f, 1.78f, -0.11f}, {1.28f, 1.96f, 0.11f}, hide * 0.95f); // muzzle
+    add_box(m, {0.84f, 2.0f, -0.11f}, {0.94f, 2.18f, -0.02f}, mane);   // ear L
+    add_box(m, {0.84f, 2.0f, 0.02f}, {0.94f, 2.18f, 0.11f}, mane);     // ear R
+    add_box(m, {0.92f, 1.92f, -0.04f}, {1.0f, 2.06f, 0.04f}, mane);    // forelock
+    // Mane: a crest running down the back of the neck (stepped + fuller).
+    add_box(m, {0.58f, 1.66f, -0.05f}, {0.86f, 2.02f, 0.05f}, mane);   // upper mane (along the arch)
+    add_box(m, {0.44f, 1.42f, -0.05f}, {0.68f, 1.8f, 0.05f}, mane);    // lower mane
+    // Tail: a docked top + a long flowing switch hanging down behind the rump.
+    add_box(m, {-0.92f, 1.1f, -0.06f}, {-0.82f, 1.36f, 0.06f}, mane);  // dock (off the rump)
+    add_box(m, {-0.98f, 0.5f, -0.07f}, {-0.86f, 1.14f, 0.07f}, mane);  // long switch hanging down
     return m;
 }
 MeshData build_horse_leg() {
@@ -167,11 +189,19 @@ MeshData build_ox_body() {
     add_box(m, {0.42f, 1.02f, -0.24f}, {0.72f, 1.42f, 0.24f}, hide);   // thick neck
     add_box(m, {0.68f, 0.98f, -0.22f}, {1.02f, 1.4f, 0.22f}, hide);    // head
     add_box(m, {0.98f, 1.0f, -0.17f}, {1.2f, 1.28f, 0.17f}, hide * 0.94f); // muzzle
-    // horns: sweep out + up from the head top
+    add_box(m, {1.18f, 1.02f, -0.1f}, {1.22f, 1.18f, 0.1f}, dark);         // dark nose pad
+    add_box(m, {0.5f, 0.8f, -0.13f}, {0.82f, 1.08f, 0.13f}, hide);         // dewlap (hanging throat fold)
+    // horns: a tapering arc that sweeps OUT to the side, then curves UP and FORWARD to a point
     for (f32 sz : {-1.0f, 1.0f}) {
-        add_box(m, {0.74f, 1.4f, sz * 0.24f - 0.05f}, {0.9f, 1.5f, sz * 0.24f + 0.05f}, horn);
-        add_box(m, {0.76f, 1.46f, sz * 0.36f - 0.05f}, {0.88f, 1.66f, sz * 0.36f + 0.05f}, horn);
-        add_box(m, {0.66f, 1.34f, sz * 0.28f - 0.05f}, {0.76f, 1.44f, sz * 0.28f + 0.05f}, dark); // ear
+        auto seg = [&](f32 cx, f32 cy, f32 cz, f32 h) {
+            add_box(m, {cx - h, cy - h, sz * cz - h}, {cx + h, cy + h, sz * cz + h}, horn);
+        };
+        seg(0.80f, 1.44f, 0.22f, 0.075f); // root on the head crown
+        seg(0.83f, 1.50f, 0.33f, 0.064f); // sweeping outward
+        seg(0.86f, 1.59f, 0.41f, 0.055f); // out + rising
+        seg(0.90f, 1.69f, 0.44f, 0.046f); // curving up
+        seg(0.96f, 1.78f, 0.42f, 0.034f); // forward to the tip
+        add_box(m, {0.64f, 1.30f, sz * 0.27f - 0.05f}, {0.76f, 1.42f, sz * 0.27f + 0.05f}, dark); // ear
     }
     add_box(m, {-0.82f, 0.85f, -0.04f}, {-0.72f, 1.32f, 0.04f}, dark); // tail
     add_box(m, {-0.84f, 0.68f, -0.06f}, {-0.7f, 0.86f, 0.06f}, dark);  // tail tuft
@@ -194,27 +224,102 @@ MeshData build_deer_body() {
     const Vec3 belly{0.8f, 0.68f, 0.52f};
     const Vec3 dark{0.3f, 0.2f, 0.12f};
     const Vec3 antler{0.72f, 0.62f, 0.46f};
-    add_box(m, {-0.48f, 0.98f, -0.17f}, {0.38f, 1.3f, 0.17f}, hide);  // body
-    add_box(m, {-0.46f, 0.94f, -0.15f}, {0.36f, 1.02f, 0.15f}, belly); // pale belly
-    add_box(m, {0.32f, 1.2f, -0.1f}, {0.56f, 1.68f, 0.1f}, hide);     // neck (up-forward)
-    add_box(m, {0.5f, 1.58f, -0.09f}, {0.78f, 1.82f, 0.09f}, hide);   // head
-    add_box(m, {0.74f, 1.6f, -0.07f}, {0.92f, 1.74f, 0.07f}, hide * 0.95f); // muzzle
+    // Body: a deeper chest/shoulder mass up front (higher withers) and a lower, tapering haunch
+    // behind - a sloped topline rather than one flat box, for a lither deer silhouette.
+    add_box(m, {0.02f, 0.98f, -0.17f}, {0.4f, 1.36f, 0.17f}, hide);    // chest/shoulder (withers)
+    add_box(m, {-0.5f, 0.98f, -0.15f}, {0.06f, 1.28f, 0.15f}, hide);   // barrel + haunch (lower, tapering)
+    add_box(m, {-0.46f, 0.92f, -0.13f}, {0.34f, 1.02f, 0.13f}, belly); // pale belly
+    // Neck: a forward-leaning wedge stepping up from the shoulder to the head (not a vertical post).
+    add_box(m, {0.32f, 1.18f, -0.11f}, {0.5f, 1.46f, 0.11f}, hide); // lower neck (off the chest)
+    add_box(m, {0.42f, 1.4f, -0.1f}, {0.6f, 1.62f, 0.1f}, hide);    // upper neck (up-forward)
+    add_box(m, {0.52f, 1.56f, -0.09f}, {0.74f, 1.82f, 0.09f}, hide);        // head
+    add_box(m, {0.72f, 1.58f, -0.07f}, {0.94f, 1.74f, 0.07f}, hide * 0.95f); // muzzle
     for (f32 sz : {-1.0f, 1.0f}) {
-        add_box(m, {0.46f, 1.76f, sz * 0.07f - 0.03f}, {0.54f, 1.94f, sz * 0.07f + 0.03f}, dark); // ear
+        add_box(m, {0.48f, 1.78f, sz * 0.07f - 0.03f}, {0.56f, 1.96f, sz * 0.07f + 0.03f}, dark); // ear
         // a small forked antler
-        add_box(m, {0.52f, 1.8f, sz * 0.06f - 0.03f}, {0.58f, 2.18f, sz * 0.06f + 0.03f}, antler);
-        add_box(m, {0.5f, 2.02f, sz * 0.16f - 0.03f}, {0.6f, 2.1f, sz * 0.16f + 0.03f}, antler);
-        add_box(m, {0.52f, 1.96f, sz * 0.22f - 0.03f}, {0.58f, 2.12f, sz * 0.22f + 0.03f}, antler);
+        add_box(m, {0.54f, 1.8f, sz * 0.06f - 0.03f}, {0.6f, 2.18f, sz * 0.06f + 0.03f}, antler);
+        add_box(m, {0.52f, 2.04f, sz * 0.16f - 0.03f}, {0.62f, 2.12f, sz * 0.16f + 0.03f}, antler);
+        add_box(m, {0.54f, 1.98f, sz * 0.22f - 0.03f}, {0.6f, 2.14f, sz * 0.22f + 0.03f}, antler);
     }
-    add_box(m, {-0.52f, 1.12f, -0.05f}, {-0.44f, 1.34f, 0.05f}, Vec3{0.93f, 0.9f, 0.85f}); // white tail
+    add_box(m, {-0.52f, 1.04f, -0.05f}, {-0.46f, 1.26f, 0.05f},
+            Vec3{0.93f, 0.9f, 0.85f}); // white scut at the rump (hangs at the rear, not on the spine)
     return m;
 }
+MeshData build_fish_body() {
+    MeshData m;
+    const Vec3 body{0.86f, 0.87f, 0.92f}; // light base; tinted per-fish at draw time
+    const Vec3 fin{0.74f, 0.76f, 0.84f};
+    const Vec3 dark{0.22f, 0.24f, 0.30f};
+    // Faces local +X. A flattened spindle (thin in Z) tapering to nose + tail, with fins.
+    add_box(m, {-0.16f, -0.10f, -0.035f}, {0.26f, 0.12f, 0.035f}, body); // main body
+    add_box(m, {0.22f, -0.05f, -0.024f}, {0.40f, 0.07f, 0.024f}, body);  // head / snout taper
+    add_box(m, {-0.28f, -0.07f, -0.020f}, {-0.14f, 0.08f, 0.020f}, body); // caudal peduncle
+    add_box(m, {-0.46f, -0.14f, -0.012f}, {-0.26f, 0.16f, 0.012f}, fin);  // forked tail fin (tall, thin)
+    add_box(m, {-0.04f, 0.10f, -0.010f}, {0.12f, 0.24f, 0.010f}, fin);    // dorsal fin
+    for (const f32 sz : {-1.0f, 1.0f}) {                                  // pectoral fins
+        const f32 z0 = sz > 0.0f ? 0.035f : -0.10f;
+        const f32 z1 = sz > 0.0f ? 0.10f : -0.035f;
+        add_box(m, {0.02f, -0.06f, z0}, {0.16f, 0.02f, z1}, fin);
+    }
+    add_box(m, {0.30f, 0.0f, -0.045f}, {0.36f, 0.06f, 0.045f}, dark);     // eye band
+    return m;
+}
+
 MeshData build_deer_leg() {
     MeshData m;
     const Vec3 hide{0.5f, 0.35f, 0.21f};
     const Vec3 hoof{0.12f, 0.1f, 0.09f};
     add_box(m, {-0.05f, -0.92f, -0.05f}, {0.05f, 0.0f, 0.05f}, hide); // slim leg
     add_box(m, {-0.06f, -0.98f, -0.06f}, {0.06f, -0.92f, 0.06f}, hoof);
+    return m;
+}
+
+// A crate of ARMS: a stout crate with spears + a sword standing in it, blades poking out the top.
+// Sized to the cargo crate footprint (kCargoHalf ~ 0.2), base sits at y = 0.
+MeshData build_cargo_weapons() {
+    MeshData m;
+    const Vec3 crate_c{0.40f, 0.29f, 0.17f};
+    const Vec3 shaft{0.34f, 0.24f, 0.13f};
+    const Vec3 steel{0.62f, 0.64f, 0.70f};
+    const Vec3 hilt{0.55f, 0.42f, 0.20f};
+    append_xf(m, primitives::crate({-0.21f, 0.0f, -0.21f}, {0.21f, 0.28f, 0.21f}, crate_c), Mat4{1.0f},
+              Vec3{1.0f});
+    // Spears stood up in the crate: a thin shaft + a steel blade tip.
+    const Vec3 spears[] = {{-0.10f, 0.0f, -0.06f}, {0.07f, 0.0f, 0.09f}, {0.11f, 0.0f, -0.10f}};
+    const f32 lens[] = {0.30f, 0.24f, 0.36f};
+    for (int i = 0; i < 3; ++i) {
+        const f32 x = spears[i].x, z = spears[i].z, h = lens[i];
+        add_box(m, {x - 0.016f, 0.16f, z - 0.016f}, {x + 0.016f, 0.16f + h, z + 0.016f}, shaft);
+        add_box(m, {x - 0.028f, 0.16f + h, z - 0.01f}, {x + 0.028f, 0.16f + h + 0.11f, z + 0.01f}, steel);
+    }
+    // A sword stood against the back: flat blade + crossguard + grip.
+    add_box(m, {-0.16f, 0.20f, 0.05f}, {-0.10f, 0.62f, 0.07f}, steel);     // blade
+    add_box(m, {-0.18f, 0.18f, 0.03f}, {-0.08f, 0.21f, 0.09f}, hilt);      // crossguard
+    add_box(m, {-0.145f, 0.10f, 0.045f}, {-0.115f, 0.18f, 0.075f}, hilt);  // grip
+    return m;
+}
+
+// A CASK of ale: a hooped barrel lying on its side (along local +X, so it reads as one that rolls).
+// Centred on the cargo-crate footprint, resting at bed height.
+MeshData build_cargo_casks() {
+    MeshData m;
+    const Vec3 wood{0.47f, 0.31f, 0.16f};
+    const Vec3 hoop{0.22f, 0.20f, 0.20f};
+    const Vec3 endc{0.40f, 0.26f, 0.13f};
+    // A horizontal cylinder ring along +X: rotate the (Y-axis) cylinder 90deg about Z, scale to
+    // (length along X, diameter), translate to (x, y=cask-radius, 0).
+    const f32 cy = 0.18f; // barrel radius -> rests with its axis at this height
+    auto ring = [&](f32 x0, f32 x1, f32 r, const Vec3& c) {
+        const Mat4 xf = glm::translate(Mat4{1.0f}, Vec3{(x0 + x1) * 0.5f, cy, 0.0f}) *
+                        glm::rotate(Mat4{1.0f}, glm::half_pi<f32>(), Vec3{0.0f, 0.0f, 1.0f}) *
+                        glm::scale(Mat4{1.0f}, Vec3{r * 2.0f, (x1 - x0), r * 2.0f});
+        append_xf(m, primitives::cylinder(12, c), xf, Vec3{1.0f});
+    };
+    ring(-0.22f, 0.22f, 0.16f, wood);  // staves (body), slightly inset ends
+    ring(-0.235f, -0.18f, 0.135f, endc); // end cap (smaller radius -> the barrel bulges in the middle)
+    ring(0.18f, 0.235f, 0.135f, endc);
+    ring(-0.10f, -0.05f, 0.172f, hoop); // hoops
+    ring(0.05f, 0.10f, 0.172f, hoop);
     return m;
 }
 

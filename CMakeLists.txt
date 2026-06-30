@@ -155,7 +155,9 @@ alryn_compile_shaders(alryn SHADERS
     ${CMAKE_SOURCE_DIR}/shaders/emissive.frag
     ${CMAKE_SOURCE_DIR}/shaders/grass.vert
     ${CMAKE_SOURCE_DIR}/shaders/ui.vert
-    ${CMAKE_SOURCE_DIR}/shaders/ui.frag)
+    ${CMAKE_SOURCE_DIR}/shaders/ui.frag
+    ${CMAKE_SOURCE_DIR}/shaders/sky.vert
+    ${CMAKE_SOURCE_DIR}/shaders/sky.frag)
 
 if(ALRYN_BUILD_GAME)
     add_subdirectory(game)

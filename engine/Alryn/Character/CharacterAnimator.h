@@ -25,13 +25,17 @@ public:
     // character can e.g. swing or block while their legs keep walking. Triggered by the
     // game (left-click -> swing, hold shield -> block); the legs/locomotion are untouched.
 
-    // Trigger a one-shot attack swing (overhead diagonal slash of the right arm). Restarts
-    // the swing if one is already mid-play.
+    // Trigger a one-shot attack swing (a horizontal slash of the right arm, swept right->left).
+    // Restarts the swing if one is already mid-play.
     void play_swing();
+    // Trigger a one-shot spell cast (the weapon arm thrusts the staff/hand forward + up). For the
+    // Mage/Cleric; blends over locomotion like the swing.
+    void play_cast();
     // Hold/release a shield-up guard (left arm raised across the body); eases in/out.
     void set_blocking(bool blocking);
 
     bool swinging() const { return swing_t_ >= 0.0f; }
+    bool casting() const { return cast_t_ >= 0.0f; }
     bool blocking() const { return blocking_; }
 
     // Per-bone pose (rotations) for `model`, indexed to match model.bones(). Includes any
@@ -54,15 +58,18 @@ private:
     // Builds the upper-body action overlay (pose + per-bone blend weight) into `pose`,
     // slerping each masked bone from the locomotion base toward the action target.
     void overlay_swing(const CharacterModel& model, std::vector<Quat>& pose) const;
+    void overlay_cast(const CharacterModel& model, std::vector<Quat>& pose) const;
     void overlay_block(const CharacterModel& model, std::vector<Quat>& pose) const;
 
     static constexpr f32 kSwingDur = 0.46f; // length of one attack swing (seconds)
+    static constexpr f32 kCastDur = 0.55f;  // length of one spell cast (seconds)
 
     f32 phase_ = 0.0f;     // walk-cycle phase (radians)
     f32 stride_ = 0.0f;    // 0 = idle .. 1 = full walk (eased amplitude)
     f32 wobble_ = 0.0f;    // free-running phase for the always-on idle breathe/jelly
     f32 speed_ = 0.0f;     // latest movement speed (drives the forward lean)
     f32 swing_t_ = -1.0f;  // swing playback time; < 0 = not swinging
+    f32 cast_t_ = -1.0f;   // cast playback time; < 0 = not casting
     bool blocking_ = false; // shield-up held?
     f32 block_w_ = 0.0f;   // eased 0..1 block blend weight
 };

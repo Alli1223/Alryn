@@ -108,18 +108,25 @@ MeshData blob(f32 rxz, f32 ry, f32 cy, const Vec3& color) {
 MeshData round_blob(f32 rxz, f32 ry, const Vec3& c, const Vec3& color, int stacks = 4,
                     int slices = 7) {
     MeshData m;
+    constexpr f32 top_light = 0.32f; // sun-lit top + shaded underside, baked per-face, so the canopy
+                                     // reads with depth/dimension instead of a flat clump of one green
     auto vert = [&](int st, int sl) {
         const f32 phi = Pi * static_cast<f32>(st) / static_cast<f32>(stacks);   // 0 (top) .. Pi
         const f32 theta = TwoPi * static_cast<f32>(sl) / static_cast<f32>(slices);
         const f32 sr = std::sin(phi);
         return c + Vec3{std::cos(theta) * sr * rxz, std::cos(phi) * ry, std::sin(theta) * sr * rxz};
     };
+    auto shade = [&](const Vec3& a, const Vec3& b, const Vec3& d) {
+        const f32 fy = (a.y + b.y + d.y) / 3.0f;
+        const f32 yf = glm::clamp((fy - c.y) / (ry > 1e-3f ? ry : 1.0f), -1.0f, 1.0f); // -1 base .. +1 top
+        return color * (1.0f + top_light * yf);
+    };
     for (int st = 0; st < stacks; ++st) {
         for (int sl = 0; sl < slices; ++sl) {
             const Vec3 a = vert(st, sl), b = vert(st, sl + 1);
             const Vec3 d0 = vert(st + 1, sl), d1 = vert(st + 1, sl + 1);
-            emit_tri(m, a, d0, d1, c, color); // degenerate pole tris are auto-dropped by emit_tri
-            emit_tri(m, a, d1, b, c, color);
+            emit_tri(m, a, d0, d1, c, shade(a, d0, d1)); // degenerate pole tris auto-dropped by emit_tri
+            emit_tri(m, a, d1, b, c, shade(a, d1, b));
         }
     }
     return m;
@@ -463,6 +470,30 @@ MeshData tall_grass(int blades, const Vec3& color) {
     return m;
 }
 
+MeshData meadow_grass(int blades, const Vec3& color) {
+    MeshData m;
+    const Vec3 dark = color * 0.5f;                                              // dark at the roots
+    const Vec3 tip = glm::clamp(color * 1.28f + Vec3{0.07f, 0.08f, 0.0f},        // bright bowing tips
+                                Vec3{0.0f}, Vec3{1.0f});
+    for (int i = 0; i < blades; ++i) {
+        const u32 h = static_cast<u32>(i) * 0x9E3779B9u + 3u;
+        const f32 ang = TwoPi * static_cast<f32>(i) / static_cast<f32>(blades) + vrnd(h, 1) * 0.9f;
+        const f32 ca = std::cos(ang);
+        const f32 sa = std::sin(ang);
+        const Vec3 dir{ca, 0.0f, sa};
+        const Vec3 perp{-sa, 0.0f, ca};
+        const Vec3 root = dir * (0.03f + vrnd(h, 5) * 0.06f); // fan the bases into a clump
+        const f32 height = 0.85f + vrnd(h, 2) * 0.5f;         // long blades
+        const f32 lean = 0.20f + vrnd(h, 3) * 0.30f;          // arch over near the tip
+        // Tall, mostly-upright blade that bows over at the top.
+        std::vector<Vec3> rib = {root, root + dir * (lean * 0.22f) + Vec3{0.0f, height * 0.40f, 0.0f},
+                                 root + dir * (lean * 0.6f) + Vec3{0.0f, height * 0.76f, 0.0f},
+                                 root + dir * lean + Vec3{0.0f, height, 0.0f}};
+        ribbon(m, rib, 0.05f, 0.006f, perp, dark, tip);
+    }
+    return m;
+}
+
 MeshData reed(int blades, const Vec3& color) {
     MeshData m;
     const Vec3 dark = color * 0.5f;
@@ -488,6 +519,102 @@ MeshData reed(int blades, const Vec3& color) {
                 v.position += headpos;
             }
             append(m, head);
+        }
+    }
+    return m;
+}
+
+MeshData lily_pad(int variant, const Vec3& color) {
+    MeshData m;
+    const u32 h = static_cast<u32>(variant) * 2654435761u + 11u;
+    const f32 r = 0.30f + vrnd(h, 1) * 0.20f;
+    const f32 dome = 0.03f;
+    const Vec3 ctr{0.0f, dome, 0.0f};
+    const Vec3 below{0.0f, -1.0f, 0.0f}; // orient the fan's normal upward
+    // Pads darken + redden toward the wavy rim (the reference's water-lily leaves).
+    const Vec3 rim = glm::clamp(color * 0.7f + Vec3{0.14f, -0.02f, -0.04f}, Vec3{0.0f}, Vec3{1.0f});
+    constexpr f32 notch = 0.5f; // angular half-width of the wedge cut (the lily-pad slit)
+    constexpr int seg = 18;
+    Vec3 prev{};
+    for (int i = 0; i <= seg; ++i) {
+        const f32 a = notch + (TwoPi - 2.0f * notch) * static_cast<f32>(i) / static_cast<f32>(seg);
+        const f32 wob = 0.86f + 0.16f * std::sin(a * 5.0f + vrnd(h, 3) * 6.2f); // scalloped edge
+        const Vec3 p{std::cos(a) * r * wob, 0.0f, std::sin(a) * r * wob};
+        if (i > 0) {
+            emit_tri(m, ctr, prev, p, below, glm::mix(color, rim, 0.55f));
+        }
+        prev = p;
+    }
+    // A water-lily bloom rises off some pads: a gold heart ringed by two tiers of petals.
+    if (vrnd(h, 7) < 0.34f) {
+        const Vec3 petal = vrnd(h, 8) < 0.5f ? Vec3{0.97f, 0.96f, 0.99f} : Vec3{0.97f, 0.64f, 0.82f};
+        append(m, blob(0.05f, 0.05f, dome + 0.05f, Vec3{0.95f, 0.82f, 0.28f})); // gold centre
+        for (int tier = 0; tier < 2; ++tier) {
+            const int petals = 6 + tier * 2;
+            const f32 lift = 0.40f - tier * 0.18f; // outer petals lie flatter
+            const f32 reach = 0.10f + tier * 0.05f;
+            for (int p = 0; p < petals; ++p) {
+                const f32 a = TwoPi * static_cast<f32>(p) / static_cast<f32>(petals) + tier * 0.4f;
+                const Vec3 d{std::cos(a), 0.0f, std::sin(a)};
+                const Vec3 root = ctr + Vec3{0.0f, 0.04f, 0.0f} + d * 0.03f;
+                const Vec3 tip = root + d * reach + Vec3{0.0f, lift * reach, 0.0f};
+                ribbon(m, {root, glm::mix(root, tip, 0.5f), tip}, 0.022f, 0.004f,
+                       glm::normalize(Vec3{-d.z, 0.0f, d.x}), petal * 0.9f, petal);
+            }
+        }
+    }
+    return m;
+}
+
+MeshData coral(int variant, const Vec3& color) {
+    MeshData m;
+    const u32 h = static_cast<u32>(variant) * 2246822519u + 13u;
+    const Vec3 tipc = glm::clamp(color * 1.18f + Vec3{0.05f}, Vec3{0.0f}, Vec3{1.0f});
+    const int form = variant % 3;
+    if (form == 0) {
+        // Staghorn: a stubby base sprouting a few upward-forking branches.
+        append(m, round_column(0.09f, 0.16f, color * 0.82f, 6));
+        const int arms = 3 + static_cast<int>(vrnd(h, 1) * 3.0f);
+        for (int a = 0; a < arms; ++a) {
+            const f32 ang = TwoPi * static_cast<f32>(a) / static_cast<f32>(arms) + vrnd(h, a * 3) * 0.7f;
+            const Vec3 base{std::cos(ang) * 0.06f, 0.13f, std::sin(ang) * 0.06f};
+            const Vec3 dir = glm::normalize(Vec3{std::cos(ang) * 0.55f, 1.0f, std::sin(ang) * 0.55f});
+            const f32 len = 0.28f + vrnd(h, a * 3 + 1) * 0.22f;
+            limb(m, base, dir, len, 0.05f, 0.03f, color, 5);
+            const Vec3 elbow = base + dir * len;
+            const Vec3 d2 = glm::normalize(dir + Vec3{(vrnd(h, a * 3 + 2) - 0.5f) * 0.9f, 0.5f,
+                                                      (vrnd(h, a * 3 + 5) - 0.5f) * 0.9f});
+            limb(m, elbow, d2, len * 0.62f, 0.03f, 0.018f, tipc, 5);
+        }
+    } else if (form == 1) {
+        // Brain coral: a lumpy rounded dome with a few extra knobs.
+        append(m, round_blob(0.25f, 0.17f, Vec3{0.0f, 0.10f, 0.0f}, color, 4, 8));
+        for (int b = 0; b < 4; ++b) {
+            const f32 ang = TwoPi * static_cast<f32>(b) / 4.0f + vrnd(h, b) * 0.8f;
+            const f32 rr = 0.13f + vrnd(h, b + 4) * 0.07f;
+            MeshData knob = round_blob(0.08f, 0.07f, Vec3{0.0f}, tipc, 3, 6);
+            for (Vertex& v : knob.vertices) {
+                v.position += Vec3{std::cos(ang) * rr, 0.13f, std::sin(ang) * rr};
+            }
+            append(m, knob);
+        }
+    } else {
+        // Sea fan: a standing, fluted vertical plate that fans out from a short stalk.
+        append(m, round_column(0.05f, 0.10f, color * 0.8f, 5));
+        const Vec3 below{0.0f, 0.0f, -1.0f};
+        constexpr int ribs = 9;
+        const f32 span = 0.34f, top = 0.46f;
+        for (int i = 0; i < ribs; ++i) {
+            const f32 u0 = static_cast<f32>(i) / ribs - 0.5f;
+            const f32 u1 = static_cast<f32>(i + 1) / ribs - 0.5f;
+            const f32 base = 0.1f;
+            const f32 wob0 = 0.78f + 0.22f * std::sin(u0 * 9.0f + vrnd(h, 2) * 6.0f);
+            const f32 wob1 = 0.78f + 0.22f * std::sin(u1 * 9.0f + vrnd(h, 2) * 6.0f);
+            const Vec3 a0{u0 * span, base, 0.0f}, a1{u1 * span, base, 0.0f};
+            const Vec3 b0{u0 * span * 1.7f, base + top * wob0, 0.0f};
+            const Vec3 b1{u1 * span * 1.7f, base + top * wob1, 0.0f};
+            emit_tri(m, a0, b0, b1, below, color);
+            emit_tri(m, a0, b1, a1, below, glm::mix(color, tipc, 0.6f));
         }
     }
     return m;
@@ -606,14 +733,28 @@ MeshData fallen_log(int variant, const Vec3& color) {
         const Vec3 bark = (top ? glm::mix(color, moss, 0.5f) : color) * (0.85f + vrnd(h, i + 3) * 0.3f);
         add_quad(m, {x0, r0.y, r0.z}, {x1, r0.y, r0.z}, {x1, r1.y, r1.z}, {x0, r1.y, r1.z}, nrm, bark);
     }
-    // Cut ends (tris fanned to the axis).
-    for (int i = 0; i < sides; ++i) {
-        const Vec3 r0 = ring(i);
-        const Vec3 r1 = ring(i + 1);
-        emit_tri(m, {x1, radius, 0.0f}, {x1, r0.y, r0.z}, {x1, r1.y, r1.z}, {x1 - 1.0f, radius, 0.0f},
-                 end_c);
-        emit_tri(m, {x0, radius, 0.0f}, {x0, r0.y, r0.z}, {x0, r1.y, r1.z}, {x0 + 1.0f, radius, 0.0f},
-                 end_c);
+    // Cut ends with concentric end-grain RINGS (dark heartwood -> pale -> dark bark edge), so a cut
+    // log reads as a real cut log rather than a flat blank disc.
+    const Vec3 ring_cols[3] = {end_c * 0.74f, end_c * 1.06f, end_c * 0.86f};
+    const f32 bands[4] = {0.0f, 0.4f, 0.72f, 1.0f};
+    auto endv = [&](f32 x, int i, f32 t) {
+        const Vec3 r = ring(i); // scale the rim vertex toward the centre (0, radius, 0)
+        return Vec3{x, radius + (r.y - radius) * t, r.z * t};
+    };
+    for (const f32 ex : {x1, x0}) {
+        const Vec3 nrm{ex > 0.0f ? 1.0f : -1.0f, 0.0f, 0.0f};
+        const Vec3 inward{ex + (ex > 0.0f ? -1.0f : 1.0f), radius, 0.0f};
+        for (int b = 0; b < 3; ++b) {
+            for (int i = 0; i < sides; ++i) {
+                if (b == 0) { // innermost band: a fan to the centre point
+                    emit_tri(m, {ex, radius, 0.0f}, endv(ex, i, bands[1]), endv(ex, i + 1, bands[1]),
+                             inward, ring_cols[0]);
+                } else { // outer bands: rings of quads
+                    add_quad(m, endv(ex, i, bands[b]), endv(ex, i + 1, bands[b]),
+                             endv(ex, i + 1, bands[b + 1]), endv(ex, i, bands[b + 1]), nrm, ring_cols[b]);
+                }
+            }
+        }
     }
     return m;
 }
@@ -635,6 +776,25 @@ MeshData box(const Vec3& lo, const Vec3& hi, const Vec3& color) {
     return m;
 }
 
+MeshData crate(const Vec3& lo, const Vec3& hi, const Vec3& color) {
+    MeshData m = box(lo, hi, color);
+    const Vec3 frame = color * 0.45f; // darker reinforcing timber
+    const f32 sx = hi.x - lo.x, sy = hi.y - lo.y, sz = hi.z - lo.z;
+    const f32 s = sx < sz ? sx : sz;
+    const f32 p = 0.10f * s; // corner-post half-thickness (scales with the crate)
+    const f32 e = 0.03f * s; // how far the frame stands proud
+    for (f32 cx : {lo.x, hi.x}) {
+        for (f32 cz : {lo.z, hi.z}) { // four vertical corner posts (edge reinforcement)
+            append(m, box({cx - p, lo.y - e, cz - p}, {cx + p, hi.y + e, cz + p}, frame));
+        }
+    }
+    const f32 band = 0.06f * sy;            // horizontal rail half-thickness
+    const f32 lid = hi.y - 0.18f * sy;      // lid seam near the top
+    append(m, box({lo.x - e, lid - band, lo.z - e}, {hi.x + e, lid + band, hi.z + e}, frame));
+    append(m, box({lo.x - e, lo.y + band, lo.z - e}, {hi.x + e, lo.y + 3.0f * band, hi.z + e}, frame));
+    return m;
+}
+
 MeshData bush(int variant, const Vec3& color) {
     MeshData m;
     const u32 h = static_cast<u32>(variant) * 2654435761u + 1u;
@@ -642,13 +802,17 @@ MeshData bush(int variant, const Vec3& color) {
         const u32 v = (h ^ (static_cast<u32>(salt) * 0x9E3779B9u));
         return static_cast<f32>((v >> 8) & 0xFFFFu) / 65535.0f;
     };
-    const int blobs = 3 + static_cast<int>(rnd(1) * 2.0f);
+    const int blobs = 4 + static_cast<int>(rnd(1) * 3.0f);
     for (int i = 0; i < blobs; ++i) {
         const f32 ang = TwoPi * static_cast<f32>(i) / static_cast<f32>(blobs);
         const f32 r = 0.18f + rnd(i * 3 + 2) * 0.16f;
         const f32 rad = 0.34f + rnd(i * 3 + 3) * 0.18f;
         const f32 cy = 0.28f + rnd(i * 3 + 4) * 0.22f;
-        MeshData b = blob(rad, rad * 0.85f, cy, color * (0.85f + rnd(i * 3 + 5) * 0.3f));
+        // Soft, billowy leafy balls with a baked sun-lit-top gradient (round_blob, as the tree
+        // canopies use) instead of the old hard 6-vertex octahedron - so a bush reads as foliage,
+        // not a faceted green cone.
+        MeshData b = round_blob(rad, rad * 0.88f, Vec3{0.0f, cy, 0.0f},
+                                color * (0.85f + rnd(i * 3 + 5) * 0.3f), 3, 6);
         for (Vertex& v : b.vertices) {
             v.position.x += std::cos(ang) * r;
             v.position.z += std::sin(ang) * r;
@@ -664,18 +828,56 @@ MeshData rock(int variant, const Vec3& color) {
         const u32 v = (h ^ (static_cast<u32>(salt) * 0x85EBCA77u));
         return static_cast<f32>((v >> 9) & 0xFFFFu) / 65535.0f;
     };
-    // Start from a low-poly sphere, then jitter each vertex outward for facets.
-    MeshData m = sphere(8, 5, color);
-    for (Vertex& v : m.vertices) {
+    // Start from a low-poly sphere, jitter each vertex outward for facets, taper the lower
+    // hemisphere inward and clamp it flush to y = 0 so the boulder sits ON the ground with
+    // no floating overhang / dark hollow underneath.
+    MeshData s = sphere(8, 5, color);
+    for (Vertex& v : s.vertices) {
+        const f32 sy = v.position.y; // -1..1 on the unit sphere
         const f32 key = std::floor(v.position.x * 13.0f) + std::floor(v.position.y * 7.0f) +
                         std::floor(v.position.z * 11.0f);
         const u32 hv = h ^ static_cast<u32>(static_cast<i32>(key) * 0x27D4EB2F);
         const f32 j = 0.7f + (static_cast<f32>((hv >> 8) & 0xFFFFu) / 65535.0f) * 0.6f;
-        v.position.x *= j;
-        v.position.z *= j;
-        v.position.y = v.position.y * (0.45f + rnd(2) * 0.2f) + 0.28f; // squashed, sat on ground
+        // Sit the WIDEST ring almost on the ground and dome upward from there, narrowing to
+        // the crown: the whole lower hemisphere clamps flat into y = 0 (hidden under the rock)
+        // so there is no belly that tucks under to cast a dark floating hollow.
+        const f32 up = glm::clamp(sy, 0.0f, 1.0f);
+        const f32 taper = sy < 0.0f ? 1.0f : glm::mix(1.0f, 0.80f, up); // only narrow the crown
+        v.position.x *= j * taper;
+        v.position.z *= j * taper;
+        v.position.y = std::max(sy * (0.48f + rnd(2) * 0.22f), 0.0f); // dome from a flush ground rim
     }
-    m.recompute_flat_normals();
+    // De-index into independent facets so each gets its own crisp flat normal AND its own
+    // stony colour (a shared-vertex sphere averages out to one smooth blob).
+    MeshData m;
+    const Vec3 moss{0.26f, 0.40f, 0.18f};   // damp green on top
+    const Vec3 lichen{0.62f, 0.63f, 0.52f}; // pale crusty fleck
+    for (usize i = 0; i + 2 < s.indices.size(); i += 3) {
+        const Vec3& pa = s.vertices[s.indices[i]].position;
+        const Vec3& pb = s.vertices[s.indices[i + 1]].position;
+        const Vec3& pc = s.vertices[s.indices[i + 2]].position;
+        Vec3 n = glm::cross(pb - pa, pc - pa);
+        const f32 nlen = glm::length(n);
+        if (nlen < 1e-7f) {
+            continue; // skip the flattened-base degenerate faces
+        }
+        n /= nlen;
+        const u32 fh = h ^ (static_cast<u32>(i) * 2654435761u);
+        Vec3 col = color * (0.80f + 0.32f * (static_cast<f32>((fh >> 8) & 0xFFFFu) / 65535.0f));
+        if (n.y > 0.30f) { // dapple moss / lichen onto upward-facing facets
+            const f32 m01 = static_cast<f32>((fh >> 3) & 0xFFu) / 255.0f;
+            if (m01 > 0.60f) {
+                col = glm::mix(col, moss, glm::min((m01 - 0.60f) * 1.8f, 0.85f));
+            } else if (m01 < 0.12f) {
+                col = glm::mix(col, lichen, 0.5f);
+            }
+        }
+        const u32 base = static_cast<u32>(m.vertices.size());
+        m.vertices.push_back({pa, n, col, 0.0f});
+        m.vertices.push_back({pb, n, col, 0.0f});
+        m.vertices.push_back({pc, n, col, 0.0f});
+        m.indices.insert(m.indices.end(), {base, base + 1, base + 2});
+    }
     return m;
 }
 

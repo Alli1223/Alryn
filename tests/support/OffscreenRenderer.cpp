@@ -101,6 +101,24 @@ bool OffscreenRenderer::init(u32 width, u32 height) {
         return false; // shaders not compiled (no glslc) -> caller skips
     }
 
+    // Reflective water surface (the real water.* shaders): alpha-blended, depth-tested but no depth
+    // write (so opaque land above the waterline correctly hides it).
+    vk::PipelineConfig water = config;
+    water.vertex_spv = shader_path("water.vert.spv").string();
+    water.fragment_spv = shader_path("water.frag.spv").string();
+    water.blend = true;
+    water.depth_write = false;
+    if (!pipeline_water_.create(device_, water)) {
+        return false;
+    }
+    // Alpha-blended mesh.* for shore foam + other transparency (drawn after water).
+    vk::PipelineConfig trans = config;
+    trans.blend = true;
+    trans.depth_write = false;
+    if (!pipeline_trans_.create(device_, trans)) {
+        return false;
+    }
+
     const VkDeviceSize bytes = static_cast<VkDeviceSize>(width_) * height_ * 4;
     if (!readback_.create(device_, bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
@@ -217,7 +235,9 @@ Mesh* OffscreenRenderer::upload(const MeshData& data) {
 
 std::vector<u8> OffscreenRenderer::render(const std::vector<Draw>& draws, const Mat4& view,
                                           const Mat4& proj, const Vec3& background,
-                                          const Vec3& sun_dir, const std::string& ppm_path) {
+                                          const Vec3& sun_dir, const std::string& ppm_path,
+                                          const Vec4& sun_color, const std::vector<Draw>& water,
+                                          const std::vector<Draw>& transparent) {
     std::vector<u8> out(static_cast<usize>(width_) * height_ * 4, 0);
     if (!ready_) {
         return out;
@@ -271,28 +291,38 @@ std::vector<u8> OffscreenRenderer::render(const std::vector<Draw>& draws, const 
         const VkRect2D scissor{{0, 0}, {width_, height_}};
         vkCmdSetViewport(cmd, 0, 1, &viewport);
         vkCmdSetScissor(cmd, 0, 1, &scissor);
-        pipeline_.bind(cmd);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.layout(), 0, 1, &set_,
-                                0, nullptr);
-
-        for (const Draw& d : draws) {
-            if (d.mesh == nullptr || !d.mesh->valid()) {
-                continue;
+        const Vec3 cam_pos{glm::inverse(view)[3]};
+        auto record = [&](vk::Pipeline& pipe, const std::vector<Draw>& list, const Vec4& params) {
+            if (list.empty()) {
+                return;
             }
-            PushConstants push{};
-            push.model = d.model;
-            push.mvp = proj * view * d.model;
-            push.light_vp = Mat4{1.0f};
-            push.tint = d.tint;
-            push.params = Vec4{0.0f};
-            push.sun = Vec4{glm::normalize(sun_dir), 1.0f};
-            push.sun_color = Vec4{1.0f, 1.0f, 1.0f, 0.0f}; // white sun, no shadows
-            vkCmdPushConstants(cmd, pipeline_.layout(),
-                               VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                               sizeof(PushConstants), &push);
-            d.mesh->bind(cmd);
-            d.mesh->draw(cmd);
-        }
+            pipe.bind(cmd);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe.layout(), 0, 1, &set_,
+                                    0, nullptr);
+            for (const Draw& d : list) {
+                if (d.mesh == nullptr || !d.mesh->valid()) {
+                    continue;
+                }
+                PushConstants push{};
+                push.model = d.model;
+                push.mvp = proj * view * d.model;
+                push.light_vp = Mat4{1.0f};
+                push.tint = d.tint;
+                push.params = params;
+                push.sun = Vec4{glm::normalize(sun_dir), sun_color.w}; // w = intensity
+                push.sun_color = Vec4{Vec3{sun_color}, 0.0f};          // rgb = colour, no shadows
+                vkCmdPushConstants(cmd, pipe.layout(),
+                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                                   sizeof(PushConstants), &push);
+                d.mesh->bind(cmd);
+                d.mesh->draw(cmd);
+            }
+        };
+        // Opaque land first, then the reflective water (params.x = a fixed wave time, yzw = camera
+        // for the fresnel/reflection), then alpha foam on top.
+        record(pipeline_, draws, Vec4{0.0f});
+        record(pipeline_water_, water, Vec4{1.5f, cam_pos.x, cam_pos.y, cam_pos.z});
+        record(pipeline_trans_, transparent, Vec4{0.0f});
         vkCmdEndRendering(cmd);
 
         barrier(cmd, color_.handle(), VK_IMAGE_ASPECT_COLOR_BIT,
@@ -332,6 +362,8 @@ void OffscreenRenderer::shutdown() {
         device_.wait_idle();
     }
     meshes_.clear(); // free GPU meshes before the device
+    pipeline_trans_.destroy();
+    pipeline_water_.destroy();
     pipeline_.destroy();
     readback_.destroy();
     light_ubo_.destroy();

@@ -258,6 +258,34 @@ TEST_CASE("Worldgen: biome classifier is deterministic, varied, and consistent")
     CHECK(seen.count(Biome::Forest) > 0); // forest still dominates the land
 }
 
+TEST_CASE("Villages: no town is placed straddling a river") {
+    // A town sited on a carved river channel floats its market stalls + drops its wagons in the
+    // water. village_at must reject such sites, so every accepted town's core (market + wagon depot
+    // + inner houses) is dry. Scan several seeds + a wide grid, and require we actually found towns.
+    int total = 0;
+    for (const u32 seed : {1337u, 4242u, 99u, 777u, 51u}) {
+        for (int cz = -12; cz <= 12; ++cz) {
+            for (int cx = -12; cx <= 12; ++cx) {
+                const auto v = worldgen::village_at(cx, cz, seed);
+                if (!v) {
+                    continue;
+                }
+                ++total;
+                CHECK(worldgen::river_amount(v->center.x, v->center.y, seed) < 0.5f);
+                const f32 rr = v->half * 0.55f;
+                for (int i = 0; i < 16; ++i) {
+                    const f32 a = TwoPi * static_cast<f32>(i) / 16.0f;
+                    for (const f32 r : {rr * 0.5f, rr}) {
+                        const Vec2 p = v->center + Vec2{std::cos(a), std::sin(a)} * r;
+                        CHECK(worldgen::river_amount(p.x, p.y, seed) < 0.5f); // dry core, no channel
+                    }
+                }
+            }
+        }
+    }
+    CHECK(total > 0); // we actually validated some towns
+}
+
 TEST_CASE("Roads: town graph routes multi-hop through intermediate towns") {
     const u32 seed = 1337u;
 
@@ -339,6 +367,57 @@ TEST_CASE("Roads: town graph routes multi-hop through intermediate towns") {
         }
     }
     CHECK(found_multihop); // the road graph produces real multi-hop hauls through other towns
+}
+
+TEST_CASE("Roads: the multi-hop route skirts intermediate town market plazas") {
+    // A multi-hop route passes through intermediate towns, whose centres are market squares ringed
+    // by stall colliders. The route must DETOUR around each plaza (so the hired cart doesn't dive
+    // into the stalls and snag), while still entering the town. Find such a pass-through and check
+    // the route enters the town but stays clear of its plaza centre.
+    const u32 seed = 1337u;
+    auto cell_of = [&](const Vec2& c) {
+        return std::pair<int, int>{static_cast<int>(std::floor(c.x / worldgen::village_cell)),
+                                   static_cast<int>(std::floor(c.y / worldgen::village_cell))};
+    };
+    bool checked = false;
+    for (int cz = -16; cz <= 16 && !checked; ++cz) {
+        for (int cx = -16; cx <= 16 && !checked; ++cx) {
+            const auto v = worldgen::village_at(cx, cz, seed);
+            if (!v) {
+                continue;
+            }
+            const auto rr = roads::reachable_towns(v->center, seed, 40);
+            for (const auto& d : rr) {
+                const auto [dcx, dcz] = cell_of(d.center);
+                if (std::max(std::abs(dcx - cx), std::abs(dcz - cz)) <= roads::road_max_cells) {
+                    continue; // want a guaranteed multi-hop destination
+                }
+                const std::vector<Vec2> r = roads::route_through_towns(v->center, d.center, seed);
+                if (r.empty()) {
+                    continue;
+                }
+                for (const auto& mid : rr) {
+                    if (mid.vseed == d.vseed || glm::length(mid.center - v->center) < 1.0f ||
+                        glm::length(mid.center - d.center) < 1.0f) {
+                        continue;
+                    }
+                    f32 best = 1e30f;
+                    for (const Vec2& p : r) {
+                        best = std::min(best, glm::length(p - mid.center));
+                    }
+                    if (best < mid.half - 4.0f) { // the route genuinely passes THROUGH this town
+                        CHECK(best > 9.0f);       // ...but skirts its market plaza (stalls ~6.2, market 9)
+                        checked = true;
+                        break;
+                    }
+                }
+                if (checked) {
+                    break;
+                }
+            }
+        }
+    }
+    CHECK(checked); // we actually exercised an intermediate-town pass-through
 }
 
 TEST_CASE("Roads: a bridge deck is walkable ground over the river") {
@@ -519,7 +598,10 @@ TEST_CASE("Vegetation: grass + flowers bake deterministically onto land") {
     }
     CHECK(total_indices > 0);
     REQUIRE(any);
-    CHECK(min_y >= worldgen::water_level); // nothing grows below the waterline
+    // Land plants grow above water; the new aquatic features (shore stones, fringing reeds,
+    // floating lily pads and coral) sit at or below the waterline, down to the shallow reef
+    // seabed - but nothing sinks into the abyss below it.
+    CHECK(min_y >= worldgen::water_level - 5.0f);
 }
 
 TEST_CASE("Props: library builds geometry, scatter is deterministic & on land") {
@@ -621,6 +703,45 @@ TEST_CASE("Village: houses don't overlap the roads") {
     REQUIRE(towns_checked > 0);
     REQUIRE(houses_seen > 0);
     CHECK(on_road == 0); // no house overlaps a road
+}
+
+// Decorative town props (lanterns/planters/bushes/decor) must sit BESIDE the real (meandering) road,
+// never ON it - village_props' on_road() reject guards this (the idealised town_streets aren't enough
+// since the actual road winds away from them).
+TEST_CASE("Village: decorative props don't spawn on the roads") {
+    const u32 seed = 4242u;
+    int towns_checked = 0;
+    int decor_seen = 0;
+    int on_road = 0;
+    for (int cz = -8; cz <= 8 && towns_checked < 6; ++cz) {
+        for (int cx = -8; cx <= 8 && towns_checked < 6; ++cx) {
+            const auto v = worldgen::village_at(cx, cz, seed);
+            if (!v || roads::reachable_towns(v->center, seed, 1).empty()) {
+                continue;
+            }
+            ++towns_checked;
+            for (const PropInstance& p : village_props(*v, seed)) {
+                const bool decorative =
+                    p.category == PropCategory::Lantern || p.category == PropCategory::Planter ||
+                    p.category == PropCategory::Bush || p.category == PropCategory::Decor;
+                // The fountain is a big basin (~2.6 m radius), so its CENTRE must clear the road by
+                // that footprint, not merely sit off the lane - otherwise the basin overhangs the road.
+                const bool fountain = p.category == PropCategory::Fountain;
+                if (!decorative && !fountain) {
+                    continue;
+                }
+                ++decor_seen;
+                const f32 d = roads::distance(p.position.x, p.position.z, seed);
+                const f32 need = fountain ? roads::road_half_width + 2.0f : roads::road_half_width;
+                if (d < need) {
+                    ++on_road;
+                }
+            }
+        }
+    }
+    REQUIRE(towns_checked > 0);
+    REQUIRE(decor_seen > 0);
+    CHECK(on_road == 0); // nothing decorative (and no fountain basin) sits in the road
 }
 
 // The streaming terrain meshes a fixed vertical band per column; the surface must never rise above
@@ -1071,14 +1192,16 @@ TEST_CASE("StreamingTerrain: streams + unloads chunks around a moving focus") {
 
     // Chunks are generated on a background thread, so pump update() until the worker
     // has filled in enough around the focus (with a generous frame cap so the test is
-    // robust to worker throughput / system load).
+    // robust to worker throughput / system load). The cap is generous because a coastal
+    // focus generates extra shoreline/underwater content per chunk, which takes a touch
+    // longer than open inland ground - the loop still exits the moment the target is met.
     auto pump_until = [&](const Vec3& focus, usize target, int max_frames) {
         for (int i = 0; i < max_frames && terrain.loaded_chunk_count() < target; ++i) {
             terrain.update(focus, device);
             std::this_thread::sleep_for(std::chrono::milliseconds(3));
         }
     };
-    pump_until(Vec3{0.0f, 0.0f, 0.0f}, 9, 600);
+    pump_until(Vec3{0.0f, 0.0f, 0.0f}, 9, 1500);
     CHECK(terrain.loaded_chunk_count() >= 9);
     int meshes = 0;
     terrain.for_each_mesh([&](const Mesh&) { ++meshes; });
@@ -1093,7 +1216,7 @@ TEST_CASE("StreamingTerrain: streams + unloads chunks around a moving focus") {
     for (int i = 0; i < 5; ++i) {
         terrain.update(far, device); // evict the origin chunks (out of range)
     }
-    pump_until(far, 9, 600);
+    pump_until(far, 9, 1500);
     CHECK(terrain.loaded_chunk_count() >= 9);
     CHECK(terrain.loaded_chunk_count() <= 64); // bounded - origin chunks were evicted
 

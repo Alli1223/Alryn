@@ -18,13 +18,20 @@ namespace alryn {
 // keep health clamped to the role's max, and drive the controller's walk speed (with the
 // Hunter's dash boost folded in).
 void GameServer::sync_player_role(ServerPlayer& player) {
+    // Accept the player's cosmetic loadout choices; clamp the EARNED tiers to what they've bought
+    // (owned_tier), so a client can't claim master gear it didn't pay for.
+    player.equipment.outfit_tint = player.input.equipment.outfit_tint;
+    player.equipment.weapon_index = player.input.equipment.weapon_index;
+    player.equipment.outfit_tier = std::min<u8>(player.input.equipment.outfit_tier, player.owned_tier);
+    player.equipment.weapon_tier = std::min<u8>(player.input.equipment.weapon_tier, player.owned_tier);
+    const f32 hp_bonus = equipment_bonus(player.equipment).health_add; // armour adds max health
+
     const auto requested = static_cast<PlayerRole>(player.input.role % kRoleCount);
     if (requested != player.role) {
         player.role = requested;
-        player.max_health = role_stats(requested).max_health;
-        player.health = player.max_health; // a fresh kit starts whole
+        player.health = role_stats(requested).max_health + hp_bonus; // a fresh kit starts whole
     }
-    player.max_health = role_stats(player.role).max_health;
+    player.max_health = role_stats(player.role).max_health + hp_bonus;
     player.health = std::min(player.health, player.max_health);
     f32 speed = role_stats(player.role).move_speed;
     if (player.dash_timer > 0.0f) {
@@ -38,7 +45,31 @@ void GameServer::sync_player_role(ServerPlayer& player) {
 
 void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
     const f32 dts = dt.seconds;
+    const u32 seed = sampler_.seed();
     for (auto& [id, pl] : players_) {
+        // Town shop: buy gear tiers up to the requested target, one at a time, while standing in a
+        // town and the party can afford the next tier (server-authoritative purchase -> owned_tier).
+        const Vec3 pp = pl.controller.position();
+        while (pl.input.buy > pl.owned_tier && static_cast<u8>(pl.owned_tier + 1) < kTierCount &&
+               worldgen::inside_village(pp.x, pp.z, seed, 6.0f)) {
+            const u32 price = tier_price(static_cast<EquipmentTier>(pl.owned_tier + 1));
+            if (money_ < price) {
+                break;
+            }
+            money_ -= price;
+            pl.owned_tier = static_cast<u8>(pl.owned_tier + 1);
+        }
+        // Town shop: buy WAGON-RIG upgrade levels up to the requested target (a money sink), one at a
+        // time, while in a town + the party can afford the next level. buy_rig is the target level.
+        while (pl.input.buy_rig > rig_level_ && rig_level_ < kMaxRigLevel &&
+               worldgen::inside_village(pp.x, pp.z, seed, 6.0f)) {
+            const u32 price = rig_price(static_cast<u8>(rig_level_ + 1));
+            if (money_ < price) {
+                break;
+            }
+            money_ -= price;
+            rig_level_ = static_cast<u8>(rig_level_ + 1);
+        }
         sync_player_role(pl);
         pl.cast_fx = 0; // cleared each tick; set below when an ability actually fires
         for (f32& cd : pl.ability_cd) {

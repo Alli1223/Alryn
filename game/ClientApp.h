@@ -8,8 +8,14 @@
 
 #include <Alryn/Alryn.h>
 
+#include <Alryn/Character/BodyMesh.h>
 #include <Alryn/Character/CharacterAnimator.h>
 #include <Alryn/Character/CharacterModel.h>
+#include <Alryn/Character/ClothRig.h>
+#include <Alryn/Character/Outfit.h>
+#include <Alryn/Character/OutfitMesh.h>
+#include <Alryn/Character/SkinnedMesh.h>
+#include <Alryn/Character/Weapon.h>
 #include <Alryn/Combat/Enemy.h>
 #include <Alryn/Net/GameServer.h>
 #include <Alryn/Net/NetClient.h>
@@ -118,6 +124,12 @@ protected:
 
     void rebuild_preview() {
         preview_model_ = CharacterModel::create(kPreviewSeed, appearance_);
+        // Show the role's full (master) outfit in the chosen colour, so the turntable previews the
+        // class + the colour pick (in-game you start ragged and buy up to this).
+        Equipment eq = equip_loadout_;
+        eq.outfit_tier = 3;
+        eq.weapon_tier = 3;
+        apply_outfit(preview_model_, outfit_kind_for_role(static_cast<u8>(role_)), eq);
     }
 
     void apply_resolution(usize idx);
@@ -132,10 +144,12 @@ protected:
     // (head to feet) always fits without clipping, in any window shape.
     void draw_preview();
 
-    // Draws every bone of a posed character with its palette colour (times `tint`)
-    // and shape mesh. The tint lets enemies read as hostile without new models.
+    // Draws a posed character's bones as primitives, each with its palette colour (times `tint`)
+    // and shape mesh. The tint lets enemies read as hostile without new models. With
+    // `attachments_only`, draws just the face/hair/equipment pieces that ride on top of the skinned
+    // body (Bone::attachment) - the continuous body mesh covers the core body + joint fillers.
     void draw_rig(const CharacterModel& model, const std::vector<Mat4>& mats,
-                  const Vec3& tint = Vec3{1.0f});
+                  const Vec3& tint = Vec3{1.0f}, bool attachments_only = false);
 
     // Draws a spear gripped in the character's right hand (anchored to the lower-arm
     // bone so it swings with the animation, not a stick floating beside them).
@@ -144,19 +158,31 @@ protected:
     // World position of a hand (the far end of a forearm), in the forearm JOINT frame.
     static Mat4 hand_frame(const CharacterModel& model, const std::vector<Mat4>& jmats, BonePart arm);
 
-    // The role's weapon, RIGIDLY gripped in the hand JOINT frame so it rotates WITH the arm - a
+    // The role's weapon(s), RIGIDLY gripped in the hand JOINT frame so they rotate WITH the arm - a
     // Knight's sword swings with the attack animation (it IS the blade you hold) and the shield
     // raises with the block. NOTE: the rig's bone labels are mirrored - the *L* arm is on the
-    // player's RIGHT (the weapon hand), the *R* arm on their LEFT (the shield hand). The Cleric's
-    // staff is handled separately (draw_cleric_staff) so it can behave like a walking stick.
+    // player's RIGHT (the main-hand weapon), the *R* arm on their LEFT (the off-hand shield/dagger).
+    // Built from the shared modular weapon_pieces (Character/Weapon.h).
     void draw_role_weapon(const CharacterModel& model, const std::vector<Mat4>& jmats,
-                          PlayerRole role);
+                          PlayerRole role, const Equipment& eq);
+    void draw_weapon(WeaponType type, const Mat4& hand, const CharacterPalette& pal,
+                     EquipmentTier tier);
+    const Mesh& shape_mesh(BoneShape s) const; // BoneShape -> the matching unit shape mesh
 
     // The Cleric's staff held VERTICAL like a walking stick: the hand grips the top, the shaft
     // drops to the ground, and as they walk the tip plants ahead then drifts back (and lifts to
     // swing forward again), synced to the gait. Idle = a still, upright staff.
     void draw_cleric_staff(const CharacterModel& model, const std::vector<Mat4>& jmats,
                            const Vec3& feet, const CharacterAnimator& anim, f32 yaw);
+
+    // Standing IDLE poses (when a player is still + not acting), so they don't just hang both arms
+    // down: a staff/mace user (Mage / Cleric) rests their weapon hand on the weapon planted like a
+    // walking stick; the Hunter holds the bow lowered at their side. apply_idle_stance overrides the
+    // weapon-arm bones in `pose`; draw_planted_weapon draws the weapon stood on the ground.
+    void apply_idle_stance(const CharacterModel& model, std::vector<Quat>& pose, PlayerRole role,
+                           f32 weight = 1.0f) const;
+    void draw_planted_weapon(const CharacterModel& model, const std::vector<Mat4>& jmats,
+                             const Vec3& feet, PlayerRole role, const Equipment& eq);
 
     // Cast an ability by its index (0..kAbilityCount-1) for the local player: gate on the client
     // cooldown estimate, queue it for the server (as index+1), mirror the cooldown for the HUD, and
@@ -192,15 +218,77 @@ protected:
     void on_shutdown() override;
 
 private:
+    // A flowing cloth piece on a character: a spring-bone ClothChain simulated in WORLD space (so it
+    // lags with the body's motion), rebuilt into a dynamic mesh each frame. The anchor rides a body
+    // joint; the chain hangs along `hang_local` (the character's local frame). Detachable (phase 3).
+    struct ClothInstance {
+        std::vector<ClothChain> chains;      // 1 = a flat sheet (cape); N = a ring tube (skirt / robe)
+        std::vector<Vec3> anchor_locals;     // per-chain anchor offset (local frame, from `anchor` bone)
+        std::vector<Vec3> hang_locals;       // per-chain rest hang direction (local)
+        Mesh mesh;                           // dynamic, rebuilt from the sim each frame
+        Vec3 color{0.5f};
+        BonePart anchor = BonePart::Torso;   // body joint the piece rides
+        Vec3 side_local{1.0f, 0.0f, 0.0f};   // sheet left-right axis (single-chain sheet only)
+        bool ring = false;                   // multi-chain (cape/skirt via tube builder) vs 1-chain sheet
+        bool closed = true;                  // ring: closed tube (skirt) vs open sheet (cape)
+        int segments = 5;
+        f32 seg = 0.13f;
+        f32 half_width = 0.22f;
+        f32 collide_r = 0.2f; // body collision-cylinder radius for this piece (tight for a back cape,
+                              // wide for a leg skirt) - keeps it OUT of the body so it drapes/rests on it
+        bool inited = false;
+        bool detached = false; // cut / blown off: the chains free-fall in world space, then despawn
+        f32 detach_age = 0.0f; // seconds since detaching (lingers on the ground, then sinks + is removed)
+    };
+
+    // Cut / blow a cloth piece off a character: free its chains (free-fall) with a velocity kick, so it
+    // flutters away. `impulse` is a per-step world velocity (the cut/wind direction).
+    void detach_cloth(ClothInstance& c, const Vec3& impulse);
+    // Per-frame detach triggers for all players' cloth: a cut when health drops, a blow-off in a storm.
+    void update_cloth_triggers();
+
     struct PlayerVisual {
         CharacterModel model;
         CharacterAnimator animator;
         CharacterAppearance appearance;
+        Equipment equipment;  // the gear the model is built for (rebuild when it changes)
+        u8 role = 255;  // PlayerRole the model is built for (255 = none yet -> force a build)
         Vec3 last_pos{0.0f};
         f32 speed = 0.0f;
+        f32 splash_acc = 0.0f;  // distance-through-water accumulator, paces the wading splash VFX
         bool has_last = false;
-        u8 last_action = 0; // to fire a swing once on the rising edge of a networked action
+        u8 last_action = 0;     // to fire a swing once on the rising edge of a networked action
+        u8 last_health = 255;   // previous snapshot health % (255 = unseen) - a drop can cut cloth
+        SkinnedMesh body_skin;  // continuous body geometry + bone weights (built with the model)
+        Mesh body_mesh;         // dynamic GPU mesh, re-skinned from the posed joints every frame
+        SkinnedMesh outfit_skin; // continuous worn equipment (armoured/clothed limbs, torso, skirt)
+        Mesh outfit_mesh;        // dynamic GPU mesh for the outfit, re-skinned with the same joints
+        std::vector<ClothInstance> cloth; // simulated flowing pieces (cape, skirt, ...)
     };
+
+    // Set up a character's flowing cloth pieces for its role + gear (called when the visual is built).
+    void setup_cloth(PlayerVisual& v, PlayerRole role, const Equipment& eq);
+    void setup_noble_cape(PlayerVisual& v); // a large flowing red cape for the carriage noble
+    // Step + rebuild + draw a character's cloth pieces. World-space sim (anchor from the posed joints,
+    // renderer wind), mesh localised to `root` so culling stays correct.
+    void draw_cloth(PlayerVisual& v, const Mat4& root, const std::vector<Mat4>& jmats, const Vec3& tint);
+
+    // Skins one continuous SkinnedMesh with `model`'s posed joints (in LOCAL space) into the dynamic GPU
+    // mesh `gpu` (created on first use) and draws it at `root` (its model matrix) through the lit
+    // pipeline. Shared by players (body + outfit), villagers and enemies.
+    void skin_and_draw(const CharacterModel& model, const SkinnedMesh& src, Mesh& gpu, const Mat4& root,
+                       const std::vector<Quat>& pose, const Vec3& tint = Vec3{1.0f});
+
+    // Skins the player's continuous body + worn outfit and draws them; the face/hair/gear attachment
+    // primitives are laid on top by the caller.
+    void draw_skinned_body(PlayerVisual& v, const Mat4& root, const std::vector<Quat>& pose,
+                           const Vec3& tint = Vec3{1.0f});
+
+    // A dynamic GPU mesh can't be freed the instant its owner (a slain enemy / culled villager) goes
+    // away - a frame that drew it may still be in flight. Retire it here; tick_mesh_graveyard frees it
+    // a few frames later (mirrors the terrain mesh deferral).
+    void retire_mesh(Mesh&& m);
+    void tick_mesh_graveyard();
 
     // A networked enemy's renderable: one shared hostile model, animated from
     // snapshot position deltas (no animation data on the wire).
@@ -210,9 +298,12 @@ private:
         Vec3 last_pos{0.0f};
         f32 speed = 0.0f;
         u8 last_action = 0;
+        SkinnedMesh body_skin; // continuous body, built on first sight; re-skinned each frame
+        Mesh body_mesh;        // dynamic GPU mesh
     };
 
-    PlayerVisual& ensure_visual(net::PlayerId id, const CharacterAppearance& appearance);
+    PlayerVisual& ensure_visual(net::PlayerId id, const CharacterAppearance& appearance, u8 role,
+                                const Equipment& equipment);
 
     // Advances the time of day and feeds the renderer a moving sun + sky colour.
     // When connected, the server owns the clock (so lighting matches when villagers
@@ -223,6 +314,18 @@ private:
     void update_camera();
 
     void update_visuals(Timestep dt);
+
+    // The local player's authoritative state from the latest snapshot (or null before one arrives).
+    const net::PlayerState* local_player() const {
+        if (have_snapshot_) {
+            for (const net::PlayerState& p : snapshot_.players) {
+                if (p.id == my_id_) {
+                    return &p;
+                }
+            }
+        }
+        return nullptr;
+    }
 
     // The local player's health fraction (0..1) from the snapshot.
     f32 local_health() const {
@@ -239,6 +342,13 @@ private:
     // Tracks a damage flash: when the local player's health drops, flare the screen red.
     void update_feedback(Timestep dt);
 
+    // ---- Debug / testing overlay (F1; F2 godmode, F3 stop wagon ambushes) ----------
+    void update_debug(Timestep dt);                                 // samples FPS + server tick rate
+    void draw_debug(ui::DrawList& draw, f32 H);                     // the overlay panel + toggles
+    void draw_nav_paths(ui::DrawList& draw, f32 W, f32 H);          // NPC pathfinding routes as lines
+    void apply_debug_flags();                                       // push god/no-ambush to the listen server
+    bool debug_click(const Vec2& p);                                // hit-test the overlay's toggles
+
     // ---- Particle VFX ------------------------------------------------------------
     void emit(const Vec3& pos, const Vec3& vel, const Vec4& color, f32 life, f32 size,
               u8 style = 0, f32 gravity = 0.0f, f32 drag = 1.6f);
@@ -250,6 +360,11 @@ private:
     // A flat expanding ring of motes on the ground (radius grows via outward velocity).
     void emit_ring(const Vec3& center, const Vec4& color, int n, f32 speed, f32 life, f32 size,
                    u8 style = 1);
+
+    // A splash where something wades through water at `at` (sit `at.y` at the water surface):
+    // a spray of droplets that arc up and fall, plus an outward ripple ring. `intensity` (the
+    // mover's speed) scales the count + height.
+    void emit_splash(const Vec3& at, f32 intensity);
 
     void update_particles(Timestep dt);
 
@@ -271,6 +386,9 @@ private:
     void draw_oxen(const Vec3& pos, f32 yaw); // a yoked pair of draft oxen pulling the wagon
     void update_deer(Timestep dt);            // wander/graze/flee the ambient deer (client-side)
     void draw_deer();
+    void update_fish(Timestep dt);            // swim/dart the ambient fish in nearby water (client-side)
+    void draw_fish();
+    void draw_surf();                         // foam waves washing along the nearby shoreline
     void draw_particles();
     // Ambient wildlife VFX (no networking): a flock of birds drifting across the sky by day, and
     // at night a slow gliding owl plus fireflies. The fireflies are anchored to fixed WORLD cells
@@ -350,13 +468,23 @@ private:
         return nullptr;
     }
 
-    // This frame's cart displacement (for the bob), from the position cached in draw_wagons.
+    // Eases each wagon's render position toward its authoritative snapshot position (called once
+    // per frame in on_update, before any wagon drawing). Removes the inter-snapshot jitter.
+    void update_wagon_smooth(Timestep dt);
+
+    // The smoothed render position for a wagon (falls back to the raw position before it's seeded).
+    Vec3 wagon_render_pos(const net::WagonState& wg) const {
+        const auto it = wagon_smooth_.find(wg.id);
+        return it != wagon_smooth_.end() && it->second.init ? it->second.pos : wg.position;
+    }
+    // This frame's smoothed cart displacement (for the bob + wheel spin).
     f32 wagon_frame_move(const net::WagonState& wg) const {
-        const auto it = wagon_prev_.find(wg.id);
-        if (it == wagon_prev_.end()) {
-            return 0.0f;
-        }
-        return glm::length(Vec2{wg.position.x - it->second.x, wg.position.z - it->second.z});
+        const auto it = wagon_smooth_.find(wg.id);
+        return it != wagon_smooth_.end() ? glm::length(it->second.step) : 0.0f;
+    }
+    Vec2 wagon_frame_step(const net::WagonState& wg) const {
+        const auto it = wagon_smooth_.find(wg.id);
+        return it != wagon_smooth_.end() ? it->second.step : Vec2{0.0f};
     }
 
     // Draws the networked wagons (the parked offers, then the active cargo): the body
@@ -413,6 +541,7 @@ private:
     // A bold arrow near the top of the screen pointing from the player toward the wagon's
     // destination (world bearing mapped through the fixed iso camera).
     void draw_dest_arrow(ui::DrawList& draw, const Vec3& from, const Vec3& to, f32 W);
+    void draw_minimap(ui::DrawList& draw, const Vec3& feet, f32 W, f32 H);
 
     // Full-screen world map: the towns near the player and the roads between them
     // (computed deterministically from the shared seed via roads::gather + village_at),
@@ -423,6 +552,8 @@ private:
     // four cooldown-gated abilities, each with its key, icon, cooldown and a description.
     // Medieval-styled; purely an info overlay (world input is frozen while it's open).
     void draw_skills();
+    void draw_wardrobe();              // the gear/wardrobe overlay (U)
+    void wardrobe_click(const Vec2& p); // buy / recolour / change-weapon hit-testing
 
     // Weather: precipitation + lightning, driven by the eased `weather_amt_` (from the networked
     // weather). `draw_rain` is the WORLD-SPACE rain - a column of falling streaks anchored to world
@@ -445,11 +576,20 @@ private:
     // left the snapshot.
     void update_villager_visuals(Timestep dt);
 
-    PlayerVisual& ensure_villager_visual(u32 id, const CharacterAppearance& appearance);
+    PlayerVisual& ensure_villager_visual(u32 id, const CharacterAppearance& appearance, u8 kind = 0);
 
     void draw_villagers();
 
     void send_input();
+
+    // Controller support: sample the gamepad each frame and fold it into the same input path as
+    // mouse/keyboard (the left stick is added in send_input; this handles buttons, triggers, zoom
+    // and menu toggles). Sets `using_gamepad_` - the active input device, auto-switched by activity
+    // - so the aim follows the right stick instead of the cursor while the pad is in use.
+    void apply_gamepad(Timestep dt);
+
+    // The left-click primary attack, role-specific - shared by the mouse button and the pad trigger.
+    void primary_action();
 
     Vec3 local_feet() const {
         if (have_snapshot_) {
@@ -532,6 +672,9 @@ private:
     // Character customisation + its turntable preview.
     static constexpr u32 kPreviewSeed = 7u;
     CharacterAppearance appearance_;
+    // The local player's gear loadout sent to the server (which clamps the tiers to what's owned).
+    // Tiers default to master = "equip the best I own"; the tint + weapon are set by customise/wardrobe.
+    Equipment equip_loadout_{3, 3, 0, 0};
     PlayerRole role_ = PlayerRole::Knight;          // chosen combat role (weapon + abilities)
     u8 pending_ability_ = 0;                         // ability index+1 invoked this frame (0 = none)
     // Mage elemental combo casting: hold Ctrl (casting_), tap element keys (1-4 or W/A/S/D) to fill
@@ -638,6 +781,9 @@ private:
     Mesh shape_cylinder_;
     Mesh shape_capsule_;
     Mesh shape_rounded_;
+    Mesh shape_quad_; // a flat single-sided up-facing unit quad (shore foam streaks)
+    std::vector<Vertex> skin_scratch_; // reused buffer for CPU-skinning a body each frame (no per-frame alloc)
+    std::vector<std::pair<int, Mesh>> mesh_graveyard_; // retired NPC body meshes, freed after a few frames
     Mesh marker_;
     Mesh water_mesh_;
     Mesh bridge_mesh_stone_; // unit stone arch bridge (x:-0.5..0.5), stretched per river crossing
@@ -655,6 +801,8 @@ private:
     std::unordered_map<u64, f32> gate_open_; // eased open amount, keyed by gate position hash
 
     f32 elapsed_ = 0.0f;
+    f32 haul_elapsed_ = 0.0f; // seconds the active haul has run (client-side, for the rush-bonus HUD)
+    f32 frame_dt_ = 1.0f / 60.0f; // last frame's dt, for per-frame sims stepped during rendering (cloth)
     f32 time_of_day_ = daynight::start_time; // 0=midnight, 0.25=sunrise, 0.5=noon, 0.75=sunset
     f32 day_seconds_ = daynight::default_day_seconds;
     f32 sun_intensity_ = 1.0f; // cached from the day/night cycle (0 night .. 1 day)
@@ -664,12 +812,21 @@ private:
     f32 lightning_ = 0.0f;     // current lightning-flash brightness (decays)
     f32 lightning_cd_ = 4.0f;  // seconds until the next storm flash
     f32 cam_distance_ = iso::distance; // scroll-wheel zoom
+    Vec3 cam_target_{0.0f};            // smoothed camera look-at target (glides toward the player)
+    f32 combat_zoom_ = 1.0f;           // distance multiplier eased toward 0.86 while an ambush is on
     Camera camera_;
 
     net::PlayerId my_id_ = 0;
     u32 world_seed_ = 0;     // shared world seed (from Welcome) - for the map's town/road graph
     bool map_open_ = false;  // full-screen map overlay (M)
     bool skills_open_ = false; // full-screen skills tree overlay (K)
+    bool wardrobe_open_ = false; // gear / wardrobe overlay (U): buy tiers, recolour, change weapon
+    u8 pending_buy_ = 0;       // shop: the gear tier we're trying to buy up to (sent in PlayerInput.buy)
+    u8 pending_buy_rig_ = 0;   // shop: the wagon-rig level we're trying to buy up to (PlayerInput.buy_rig)
+    ui::Rect wardrobe_buy_rect_ = {};        // the "buy upgrade" button (from draw_wardrobe)
+    ui::Rect wardrobe_rig_rect_ = {};        // the "reinforce wagon" button
+    ui::Rect wardrobe_weapon_rect_ = {};     // the "change weapon" button
+    ui::Rect wardrobe_swatch_rects_[8] = {}; // the recolour swatches
 
     // World-map view state: a pannable, zoomable terrain minimap. `map_center_` is the world XZ
     // the map is centred on (set to the player when opened, then moved by dragging); `map_ppm_` is
@@ -695,10 +852,17 @@ private:
     bool pending_fire_ = false;
     bool pending_attack_ = false;
     bool pending_build_ = false;
+    bool pending_dodge_ = false;       // dodge-roll this tick (Shift)
     bool pending_local_swing_ = false; // play our own swing animation this frame (left-click)
     bool blocking_ = false;            // Knight holding the shield up (right mouse held)
     bool pending_rally_ = false;
     bool pending_grab_ = false; // one-shot hitch/unhitch the nearest wagon
+    // Controller state. `using_gamepad_` is the active input device (auto-switched: any pad activity
+    // selects it, any mouse motion selects KBM) and decides whether the aim follows the right stick
+    // or the cursor. The trigger edges are tracked here because triggers are analog axes, not buttons.
+    bool using_gamepad_ = false;
+    bool pad_lt_prev_ = false; // left-trigger held last frame (secondary-action edge)
+    bool pad_rt_prev_ = false; // right-trigger held last frame (primary-action edge)
     u32 selected_wagon_ = 0;    // wagon id this client has ACCEPTED (its vote; 0 = none)
     u32 near_wagon_ = 0;        // offered wagon currently in range (shows its info panel)
     u32 panel_wagon_ = 0;       // wagon the on-screen Accept/Cancel buttons act on
@@ -723,10 +887,46 @@ private:
         bool fleeing = false;
     };
     std::vector<Deer> deer_;
+    Mesh fish_body_mesh_;       // ambient wildlife: small fish that swim in the water near the player
+    // A client-side ambient fish (not networked): swims just under the surface, darts from the player.
+    struct Fish {
+        Vec3 pos{0.0f};
+        f32 yaw = 0.0f;
+        f32 wiggle = 0.0f; // swim-tail phase
+        Vec3 target{0.0f};
+        f32 retarget = 0.0f;
+        f32 scale = 1.0f;
+        Vec3 tint{1.0f}; // biome colour (tropical bright vs silver/dark)
+        bool darting = false;
+    };
+    std::vector<Fish> fish_;
     Mesh rope_mesh_;            // a unit harness-trace link, drawn per rope segment
     Mesh goods_mesh_;           // a cargo crate (spilled on the ground / carried by a player)
+    Mesh cargo_weapons_mesh_;   // crate of arms (CargoKind::Weapons)
+    Mesh cargo_casks_mesh_;     // cask of ale (CargoKind::Casks)
+    // The cargo mesh for the active wagon's CargoKind (weapons crate / ale cask / default crate).
+    const Mesh& cargo_mesh() const;
+    // Per-cask roll: an ale cask rolls about its long axis as it slides fore/aft in the bed. The
+    // roll angle is accumulated client-side from the change in the cask's cart-local position
+    // (keyed by good id), so casks visibly trundle around the back of the wagon.
+    struct CaskRoll {
+        Vec3 prev{0.0f};
+        f32 roll = 0.0f;
+        bool seen = false;
+    };
+    std::unordered_map<u32, CaskRoll> cask_roll_;
     std::unordered_map<u32, f32> wagon_roll_;  // accumulated wheel spin per wagon id
-    std::unordered_map<u32, Vec3> wagon_prev_; // last wagon position (to derive roll)
+    // Smoothed render state per wagon: the raw authoritative position arrives in lumpy snapshot
+    // steps, so we ease a render position toward it each frame. Everything visual (the cart mesh,
+    // its bob/tilt, the wheels, and ANY rider/driver attached to it) is driven off this smoothed
+    // state, so they all move together and the cart doesn't jitter between snapshots.
+    struct WagonSmooth {
+        Vec3 pos{0.0f};  // smoothed render position
+        Vec2 step{0.0f}; // this frame's smoothed xz displacement (drives the bob + wheel roll)
+        f32 splash_acc = 0.0f; // distance-through-water accumulator, paces the wading splash VFX
+        bool init = false;
+    };
+    std::unordered_map<u32, WagonSmooth> wagon_smooth_;
     // A shed wheel rolling on the ground: derive its heading + rolling spin from its networked
     // position so the client can render it upright, rolling the way it travels.
     struct FallenWheel {
@@ -749,6 +949,26 @@ private:
     std::unordered_map<u32, std::array<RopeTrace, 2>> wagon_ropes_;
     f32 hit_flash_ = 0.0f;   // red damage-flash intensity (decays)
     f32 last_health_ = 1.0f; // last seen local health fraction (to detect hits)
+    f32 hit_marker_ = 0.0f;  // hit-marker pop intensity when OUR attack lands (decays); drawn at screen centre
+    u8 last_hit_fx_ = 0;     // last seen local hit_fx counter (server bumps it on a confirmed hit)
+    bool hit_fx_init_ = false; // seen the first snapshot value yet (so a fresh join doesn't pop a marker)
+
+    // Debug / testing overlay (F1) state + sampled performance metrics.
+    bool debug_open_ = false;       // the overlay is showing
+    bool debug_god_ = false;        // godmode: players + active wagon invincible
+    bool debug_no_ambush_ = false;  // no wagon ambushes spawn
+    bool debug_paths_ = false;      // draw NPC pathfinding routes as world-space lines (listen server only)
+    f32 fps_ = 0.0f;                // sampled client frames/sec
+    f32 frame_ms_ = 0.0f;           // sampled client frame time (ms)
+    f32 fps_accum_ = 0.0f;          // wall time accumulated in the current FPS sample window
+    int fps_frames_ = 0;            // frames counted in the current window
+    f32 server_tps_ = 0.0f;         // sampled server ticks/sec (from snapshot.tick deltas)
+    u32 tps_last_tick_ = 0;         // last snapshot tick seen
+    f32 tps_accum_ = 0.0f;          // wall time accumulated in the current TPS window
+    u32 tps_ticks_ = 0;             // server ticks counted in the current window
+    ui::Rect god_btn_{};            // clickable toggle rects in the overlay
+    ui::Rect noatk_btn_{};
+    ui::Rect npc_paths_btn_{};
     Vec3 aim_{0.0f};
     bool aim_valid_ = false;
 };

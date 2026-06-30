@@ -24,6 +24,7 @@ struct PipelineConfig {
     bool blend = false;       // alpha blending (transparent materials)
     bool additive = false;    // additive blending (light shafts / glows)
     bool depth_write = true;  // write depth (turn off for transparent passes)
+    bool depth_test = true;   // test depth (turn off for a background sky drawn first)
     bool vertexless = false;  // no vertex buffer (UI quads emit from gl_VertexIndex)
     bool depth_only = false;  // no fragment shader / colour attachment (shadow pass)
     bool depth_bias = false;  // slope-scaled depth bias (shadow pass, fights acne)

@@ -45,7 +45,7 @@ Vec3 pixel(const std::vector<u8>& px, u32 w, u32 x, u32 y) {
 void render_world(test::OffscreenRenderer& r, u32 seed, const Vec2& focus, f32 radius,
                   const std::string& out, f32 cam_height_mul = 1.95f, f32 cam_back_mul = 0.85f,
                   const Vec3* eye_rel = nullptr, const Vec3* target_rel = nullptr,
-                  bool with_wagon = false, f32 wagon_yaw = 0.0f) {
+                  bool with_wagon = false, f32 wagon_yaw = 0.0f, bool with_surf = false) {
     constexpr f32 voxel = 1.0f;
     constexpr int cv = 16;                 // voxels per chunk
     constexpr f32 cw = static_cast<f32>(cv) * voxel; // chunk world size (16 m)
@@ -139,6 +139,60 @@ void render_world(test::OffscreenRenderer& r, u32 seed, const Vec2& focus, f32 r
                     glm::scale(Mat4{1.0f}, Vec3{b.length, 1.0f, 1.0f}));
         }
     }
+    // Water + shore surf. For water scenes we lay the REAL reflective water plane (a wave grid at
+    // the waterline, drawn with the game's water.* shaders - depth-tested so land above the line
+    // hides it) and the client's draw_surf foam (thin alpha streaks ALONG the waterline) so the
+    // shot shows water + foam exactly as the game does.
+    std::vector<test::OffscreenRenderer::Draw> water_draws;
+    std::vector<test::OffscreenRenderer::Draw> trans_draws;
+    if (with_surf) {
+        const f32 wext = radius * 2.0f + 16.0f;
+        if (Mesh* wmesh = r.upload(primitives::grid(72, wext / 72.0f, Vec3{0.1f, 0.3f, 0.4f}))) {
+            water_draws.push_back(
+                {wmesh, glm::translate(Mat4{1.0f}, Vec3{0.0f, worldgen::water_level, 0.0f}),
+                 Vec4{1.0f}});
+        }
+        Mesh* foam = r.upload(primitives::grid(1, 1.0f, Vec3{0.96f, 0.99f, 1.0f})); // flat up-quad
+        const f32 t = 2.0f; // a fixed wave phase
+        constexpr f32 scell = 1.5f;
+        const int sx0 = static_cast<int>(std::floor((focus.x - radius) / scell));
+        const int sx1 = static_cast<int>(std::floor((focus.x + radius) / scell));
+        const int sz0 = static_cast<int>(std::floor((focus.y - radius) / scell));
+        const int sz1 = static_cast<int>(std::floor((focus.y + radius) / scell));
+        for (int gz = sz0; gz <= sz1; ++gz) {
+            for (int gx = sx0; gx <= sx1; ++gx) {
+                const f32 wx = static_cast<f32>(gx) * scell + scell * 0.5f;
+                const f32 wz = static_cast<f32>(gz) * scell + scell * 0.5f;
+                const f32 gh = worldgen::height(wx, wz, seed);
+                if (gh < worldgen::water_level - 0.22f || gh > worldgen::water_level + 0.2f) continue;
+                const f32 hl = worldgen::height(wx - scell, wz, seed);
+                const f32 hr = worldgen::height(wx + scell, wz, seed);
+                const f32 hu = worldgen::height(wx, wz - scell, seed);
+                const f32 hd = worldgen::height(wx, wz + scell, seed);
+                const f32 lo = std::min(std::min(hl, hr), std::min(hu, hd));
+                const f32 hi = std::max(std::max(hl, hr), std::max(hu, hd));
+                if (lo > worldgen::water_level - 0.18f || hi < worldgen::water_level + 0.04f) continue;
+                const Vec2 grad{hr - hl, hd - hu};
+                if (glm::length(grad) < 1e-3f) continue;
+                const Vec2 up_slope = glm::normalize(grad);
+                const Vec2 tangent{up_slope.y, -up_slope.x};
+                const f32 along = glm::dot(Vec2{wx, wz}, tangent);
+                const f32 wave = 0.5f + 0.5f * std::sin(t * 1.4f + along * 0.5f);
+                const f32 crest = glm::smoothstep(0.2f, 1.0f, wave);
+                const Vec2 p = Vec2{wx, wz} + up_slope * (crest * 0.4f - 0.1f);
+                const f32 ang = std::atan2(-tangent.y, tangent.x);
+                const f32 len = 1.5f, wid = 0.26f + crest * 0.18f;
+                const f32 a = 0.4f + 0.45f * crest;
+                if (foam != nullptr) {
+                    trans_draws.push_back({foam,
+                                           at(Vec3{p.x, worldgen::water_level + 0.05f, p.y}) *
+                                               glm::rotate(Mat4{1.0f}, ang, Vec3{0.0f, 1.0f, 0.0f}) *
+                                               glm::scale(Mat4{1.0f}, Vec3{len, 1.0f, wid}),
+                                           Vec4{0.96f, 0.99f, 1.0f, a}});
+                }
+            }
+        }
+    }
     REQUIRE_FALSE(draws.empty());
 
     const Vec3 target = target_rel ? *target_rel : Vec3{0.0f, 0.0f, 0.0f};
@@ -148,7 +202,8 @@ void render_world(test::OffscreenRenderer& r, u32 seed, const Vec2& focus, f32 r
     const Mat4 proj =
         perspective(radians(48.0f), static_cast<f32>(r.width()) / r.height(), 0.5f, 2000.0f);
     const Vec3 sky{0.46f, 0.62f, 0.82f};
-    r.render(draws, view, proj, sky, glm::normalize(Vec3{0.45f, 0.85f, 0.4f}), out);
+    r.render(draws, view, proj, sky, glm::normalize(Vec3{0.45f, 0.85f, 0.4f}), out, Vec4{1.0f},
+             water_draws, trans_draws);
     const std::string wrote = "Wrote " + out;
     MESSAGE(wrote);
 }
@@ -190,6 +245,16 @@ TEST_CASE("Scene shot: forest sampler (trees, logs, ferns, mushrooms) renders") 
     add(primitives::mushroom(Vec3{0.74f, 0.16f, 0.13f}, 1.6f, true), Vec3{1.8f, 0.0f, 1.6f});
     add(primitives::tall_grass(7, Vec3{0.32f, 0.52f, 0.26f}), Vec3{2.8f, 0.0f, 1.5f}, 1.4f);
     add(primitives::ground_leaf(0), Vec3{3.8f, 0.0f, 1.4f}, 1.6f);
+    // Long meadow grass: a fresh-green clump and a dried straw-yellow one.
+    add(primitives::meadow_grass(11, Vec3{0.30f, 0.55f, 0.24f}), Vec3{-3.6f, 0.0f, 2.4f}, 1.6f);
+    add(primitives::meadow_grass(11, Vec3{0.76f, 0.67f, 0.31f}), Vec3{4.3f, 0.0f, 2.4f}, 1.6f, 1.0f);
+    // A dense THICKET: a tight cluster of overlapping clumps that reads as thick grass.
+    const Vec3 thicket_off[] = {{0, 0, 0}, {0.3f, 0, 0.2f}, {-0.3f, 0, 0.15f}, {0.1f, 0, -0.25f},
+                                {-0.18f, 0, -0.18f}, {0.28f, 0, -0.05f}};
+    for (int k = 0; k < 6; ++k) {
+        add(primitives::meadow_grass(11, Vec3{0.31f, 0.54f, 0.23f}),
+            Vec3{0.2f, 0.0f, 2.7f} + thicket_off[k], 1.5f, static_cast<f32>(k) * 1.05f);
+    }
     REQUIRE_FALSE(draws.empty());
 
     const Vec3 target{0.0f, 1.5f, -1.0f};
@@ -469,6 +534,171 @@ TEST_CASE("Scene shot: the wagon on roads across biomes") {
         ++shot;
     }
     CHECK(shot > 0);
+}
+
+// The water's edge: a warm shoreline where the new shore stones, fringing reeds, floating lily
+// pads and submerged coral cluster around the waterline. (The OffscreenRenderer draws no water
+// plane, so the lily pads + reef sit "in the open" - which makes them easy to eyeball.)
+TEST_CASE("Scene shot: a shoreline (stones, reeds, lily pads, coral) renders") {
+    test::OffscreenRenderer renderer;
+    if (!renderer.init(960, 600)) {
+        MESSAGE("No Vulkan device/shaders - skipping shoreline shot");
+        return;
+    }
+    // Hunt a warm coastal spot: a waterline foot with both shallow water and dry land nearby (so a
+    // mix of stones/reeds on the bank and lily pads/coral out in the shallows can scatter), warmest
+    // first so the tropical coral shows. Scan a few seeds.
+    auto score_at = [](u32 seed, const Vec2& p) -> f32 {
+        const f32 h = worldgen::height(p.x, p.y, seed);
+        if (h < worldgen::water_level - 0.3f || h > worldgen::water_level + 1.0f) return -1.0f;
+        int water = 0, land = 0;
+        for (int a = 0; a < 8; ++a) {
+            const f32 ang = TwoPi * static_cast<f32>(a) / 8.0f;
+            const Vec2 q = p + Vec2{std::cos(ang), std::sin(ang)} * 9.0f;
+            const f32 hh = worldgen::height(q.x, q.y, seed);
+            if (hh < worldgen::water_level - 1.0f) ++water;
+            if (hh > worldgen::water_level + 0.5f) ++land;
+        }
+        if (water == 0 || land == 0) return -1.0f; // want a real shoreline, not open sea or dry
+        return worldgen::temperature(p.x, p.y, seed) * 3.0f +
+               static_cast<f32>(std::min(water, 3) + std::min(land, 3));
+    };
+    u32 best_seed = 1337u;
+    Vec2 best{0.0f};
+    f32 best_score = -1.0f;
+    for (const u32 seed : {1337u, 4242u, 99u, 777u, 51u}) {
+        for (int j = -70; j <= 70; ++j) {
+            for (int i = -70; i <= 70; ++i) {
+                const Vec2 p{static_cast<f32>(i) * 8.0f, static_cast<f32>(j) * 8.0f};
+                const f32 s = score_at(seed, p);
+                if (s > best_score) {
+                    best_score = s;
+                    best = p;
+                    best_seed = seed;
+                }
+            }
+        }
+        if (best_score > 6.0f) break; // good enough - a warm, well-mixed shore
+    }
+    REQUIRE(best_score > 0.0f);
+
+    // Look from the land down across the waterline (downhill = toward the water).
+    const f32 gy = worldgen::height(best.x, best.y, best_seed);
+    const Vec2 grad{worldgen::height(best.x + 2.0f, best.y, best_seed) -
+                        worldgen::height(best.x - 2.0f, best.y, best_seed),
+                    worldgen::height(best.x, best.y + 2.0f, best_seed) -
+                        worldgen::height(best.x, best.y - 2.0f, best_seed)};
+    const Vec2 down = glm::length(grad) > 1e-4f ? -glm::normalize(grad) : Vec2{1.0f, 0.0f};
+    const Vec3 d{down.x, 0.0f, down.y};
+    constexpr f32 span = 22.0f;
+    (void)gy;
+    // Frame it from the game's ISO camera angle (~50 deg down), sitting back over the land and
+    // looking out across the waterline - so the flat foam streaks show their bright tops + the
+    // water reflects, the way they do in-game (a low grazing angle hid both).
+    const f32 pitch = radians(50.0f);
+    const Vec3 eye = Vec3{0.0f, worldgen::water_level, 0.0f} +
+                     span * 1.7f * (-d * std::cos(pitch) + Vec3{0.0f, std::sin(pitch), 0.0f});
+    const Vec3 tgt = d * (span * 0.35f) + Vec3{0.0f, worldgen::water_level + 0.2f, 0.0f};
+    render_world(renderer, best_seed, best, span, (executable_dir() / "shore.ppm").string(), 1.0f,
+                 1.0f, &eye, &tgt, /*with_wagon=*/false, /*wagon_yaw=*/0.0f, /*with_surf=*/true);
+}
+
+// Environment showcase: a curated set of scene shots framed from the GAME's iso camera angle
+// (~50 deg down), each at a representative spot along the road network - open road in the wilds,
+// a town, and a shoreline (water + foam). These are the reference shots to eyeball the world's
+// look + feel and catch regressions (`make shots` -> env_*.png).
+TEST_CASE("Scene shot: environment showcase (road / town / shore, iso framed)") {
+    test::OffscreenRenderer renderer;
+    if (!renderer.init(960, 600)) {
+        MESSAGE("No Vulkan device/shaders - skipping environment showcase");
+        return;
+    }
+    const u32 seed = 1337u;
+
+    // The game's iso camera: ~50 deg downward, a fixed yaw, pulled back to frame `span` metres.
+    auto iso = [](f32 ground_y, f32 span, f32 yaw_deg, Vec3& eye, Vec3& tgt) {
+        const f32 pitch = radians(50.0f);
+        const f32 yaw = radians(yaw_deg);
+        const f32 dist = span * 1.8f;
+        eye = Vec3{0.0f, ground_y, 0.0f} +
+              dist * Vec3{std::cos(pitch) * std::cos(yaw), std::sin(pitch), std::cos(pitch) * std::sin(yaw)};
+        tgt = Vec3{0.0f, ground_y + 1.0f, 0.0f};
+    };
+
+    // ---- Open road in the wilderness: first wilderness road midpoint above water. ----
+    {
+        Vec2 spot{0.0f};
+        bool found = false;
+        for (const roads::Segment& s : roads::gather(Vec2{0.0f, 0.0f}, 1400.0f, seed)) {
+            const Vec2 mid = (s.a + s.b) * 0.5f;
+            if (worldgen::height(mid.x, mid.y, seed) < worldgen::water_level + 0.8f) continue;
+            if (worldgen::inside_village(mid.x, mid.y, seed, 14.0f)) continue;
+            spot = mid;
+            found = true;
+            break;
+        }
+        if (found) {
+            const f32 gy = worldgen::height(spot.x, spot.y, seed);
+            const Vec2 tan = roads::tangent(spot.x, spot.y, seed);
+            const f32 yaw = degrees(std::atan2(tan.y, tan.x)) + 28.0f; // look along the road, offset for depth
+            Vec3 eye, tgt;
+            iso(gy, 20.0f, yaw, eye, tgt);
+            render_world(renderer, seed, spot, 20.0f, (executable_dir() / "env_road.ppm").string(),
+                         1.0f, 1.0f, &eye, &tgt);
+        }
+    }
+
+    // ---- A town: the best-connected town within reach, framed from above. ----
+    {
+        std::optional<worldgen::Village> town;
+        int best_gates = -1;
+        for (int cz = -3; cz <= 3; ++cz) {
+            for (int cx = -3; cx <= 3; ++cx) {
+                if (const auto v = worldgen::village_at(cx, cz, seed)) {
+                    const int g = static_cast<int>(village_gates(*v, seed).size());
+                    if (g > best_gates) {
+                        best_gates = g;
+                        town = v;
+                    }
+                }
+            }
+        }
+        if (town) {
+            Vec3 eye, tgt;
+            iso(town->ground, town->half * 1.15f, 35.0f, eye, tgt);
+            render_world(renderer, seed, town->center, town->half * 1.15f,
+                         (executable_dir() / "env_town.ppm").string(), 1.0f, 1.0f, &eye, &tgt);
+        }
+    }
+
+    // ---- A shoreline: a road point near the water's edge (so it reads as a coastal road). ----
+    {
+        Vec2 spot{0.0f};
+        f32 best = 1e9f;
+        for (const roads::Segment& s : roads::gather(Vec2{0.0f, 0.0f}, 1400.0f, seed)) {
+            const Vec2 mid = (s.a + s.b) * 0.5f;
+            // look for a road point with water nearby (a coastal stretch)
+            f32 near_water = 1e9f;
+            for (int a = 0; a < 8; ++a) {
+                const f32 ang = TwoPi * static_cast<f32>(a) / 8.0f;
+                const Vec2 q = mid + Vec2{std::cos(ang), std::sin(ang)} * 12.0f;
+                if (worldgen::height(q.x, q.y, seed) < worldgen::water_level)
+                    near_water = std::min(near_water, glm::length(q - mid));
+            }
+            if (near_water < best && worldgen::height(mid.x, mid.y, seed) > worldgen::water_level) {
+                best = near_water;
+                spot = mid;
+            }
+        }
+        if (best < 1e8f) {
+            const f32 gy = worldgen::height(spot.x, spot.y, seed);
+            Vec3 eye, tgt;
+            iso(gy, 22.0f, 35.0f, eye, tgt);
+            render_world(renderer, seed, spot, 22.0f, (executable_dir() / "env_shore.ppm").string(),
+                         1.0f, 1.0f, &eye, &tgt, false, 0.0f, /*with_surf=*/true);
+        }
+    }
+    CHECK(true); // the shots double as smoke tests; render_world REQUIREs non-empty geometry
 }
 
 // A wagon crossing a plank bridge where a road spans a river - the new river + bridge feature.

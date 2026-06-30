@@ -8,6 +8,7 @@ add_executable(alryn_game
     ClientAppMenu.cpp
     ClientAppInput.cpp
     ClientAppCharacter.cpp
+    ClientAppCloth.cpp
     ClientAppWorld.cpp
     ClientAppWagons.cpp
     ClientAppVfx.cpp

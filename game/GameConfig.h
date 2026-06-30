@@ -36,11 +36,24 @@ inline u32 world_seed() {
 // Keyboard scancodes used by the client (GLFW GLFW_KEY_* values).
 namespace key {
 inline constexpr KeyCode W = 87, A = 65, S = 83, D = 68, E = 69, F = 70, H = 72, K = 75, M = 77,
-                         Space = 32, Escape = 256;
+                         U = 85, C = 67, Space = 32, Escape = 256;
 inline constexpr KeyCode Digit1 = 49, Digit2 = 50, Digit3 = 51, Digit4 = 52;
+inline constexpr KeyCode F1 = 290, F2 = 291, F3 = 292, F4 = 293; // debug overlay + its toggles
 inline constexpr KeyCode Ctrl = 341, CtrlR = 345; // GLFW left/right control - Mage cast modifier
 inline constexpr bool is_ctrl(KeyCode k) { return k == Ctrl || k == CtrlR; }
+inline constexpr KeyCode LeftShift = 340, RightShift = 344; // GLFW shift - dodge roll
+inline constexpr bool is_shift(KeyCode k) { return k == LeftShift || k == RightShift; }
 } // namespace key
+
+// Gamepad button indices (match GLFW_GAMEPAD_BUTTON_*), used with Input::pad_down / pad_pressed.
+namespace pad {
+inline constexpr int A = 0, B = 1, X = 2, Y = 3;          // south / east / west / north face buttons
+inline constexpr int LB = 4, RB = 5;                       // shoulder bumpers
+inline constexpr int Back = 6, Start = 7, Guide = 8;       // view / menu / home
+inline constexpr int L3 = 9, R3 = 10;                      // stick clicks
+inline constexpr int DUp = 11, DRight = 12, DDown = 13, DLeft = 14; // d-pad
+inline constexpr f32 trigger_threshold = 0.5f;             // a trigger past this counts as "pressed"
+} // namespace pad
 
 // Fixed isometric-style third-person camera angle (the world rotates under it).
 namespace iso {
@@ -59,6 +72,13 @@ inline constexpr f32 target_height = 0.7f;  // look-at lifted above the player's
 inline constexpr f32 near_plane = 0.5f;
 inline constexpr f32 far_plane = 400.0f;
 } // namespace cam
+
+namespace character {
+// Beyond this distance from the camera a character isn't CPU-skinned / uploaded / drawn (the renderer
+// would frustum-cull the draw anyway, but we'd still pay to skin it). Generous so anything that could
+// be on-screen even at max zoom-out always skins - this only spares a big town's far-flung NPCs.
+inline constexpr f32 skin_cull_dist = 100.0f;
+} // namespace character
 
 // Day/night cycle defaults (overridable via ALRYN_TIME / ALRYN_DAY_SECONDS).
 namespace daynight {
