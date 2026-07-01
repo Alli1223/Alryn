@@ -114,6 +114,8 @@ inline constexpr f32 kCargoVertGravity = 18.0f; // gravity pulling an airborne c
 inline constexpr f32 kCargoFloorBounce = 0.2f;  // how bouncily a crate lands back on the bed floor
 inline constexpr f32 kCargoMaxLift = 1.5f;      // cap on how high a bump can toss a crate (sanity)
 inline constexpr f32 kWagonDamage = 9.0f;      // an ambusher's hit on the wagon
+inline constexpr f32 kArrowWagonDamage = 6.0f; // a bandit archer's arrow striking the cargo wagon
+inline constexpr f32 kWagonHitRadius = 1.7f;   // how close a projectile must pass the cart centre to strike it
 inline constexpr u32 kMaxOffers = 4;           // wagons offered per town
 inline constexpr f32 kSettleSeconds = 6.0f;    // banner hold before re-offering
 

@@ -9,6 +9,7 @@ void write_appearance(ByteWriter& w, const CharacterAppearance& a) {
     w.write_u8(static_cast<u8>(a.eyes));
     w.write_u8(static_cast<u8>(a.ears));
     w.write_u8(static_cast<u8>(a.hair));
+    w.write_u8(static_cast<u8>(a.race));
 }
 void read_appearance(ByteReader& r, CharacterAppearance& a) {
     a.skin = r.read_u8();
@@ -16,6 +17,7 @@ void read_appearance(ByteReader& r, CharacterAppearance& a) {
     a.eyes = static_cast<EyeStyle>(r.read_u8());
     a.ears = static_cast<EarStyle>(r.read_u8());
     a.hair = static_cast<HairStyle>(r.read_u8());
+    a.race = static_cast<Race>(r.read_u8());
 }
 void write_equipment(ByteWriter& w, const Equipment& e) {
     w.write_u8(e.outfit_tier);
@@ -55,6 +57,9 @@ void write(ByteWriter& w, const PlayerInput& in) {
     write_equipment(w, in.equipment);
     w.write_u8(in.buy);
     w.write_u8(in.buy_rig);
+    w.write_u8(in.upgrade);
+    w.write_u8(in.toss ? 1 : 0);
+    w.write_u8(in.channel ? 1 : 0);
 }
 
 bool read(ByteReader& r, PlayerInput& in) {
@@ -85,6 +90,9 @@ bool read(ByteReader& r, PlayerInput& in) {
     read_equipment(r, in.equipment);
     in.buy = r.read_u8();
     in.buy_rig = r.read_u8();
+    in.upgrade = r.read_u8();
+    in.toss = r.read_u8() != 0;
+    in.channel = r.read_u8() != 0;
     return r.ok();
 }
 
@@ -122,6 +130,8 @@ void write(ByteWriter& w, const Snapshot& s) {
         write_appearance(w, p.appearance);
         write_equipment(w, p.equipment);
         w.write_u8(p.owned_tier);
+        w.write_u16(p.ability_ranks);
+        w.write_u32(p.link);
     }
     w.write_u16(static_cast<u16>(s.projectiles.size()));
     for (const ProjectileState& pr : s.projectiles) {
@@ -137,6 +147,7 @@ void write(ByteWriter& w, const Snapshot& s) {
         w.write_u8(en.kind);
         w.write_u8(en.health);
         w.write_u8(en.action);
+        w.write_u8(en.status);
     }
     w.write_u16(static_cast<u16>(s.villagers.size()));
     for (const VillagerState& vl : s.villagers) {
@@ -203,6 +214,12 @@ void write(ByteWriter& w, const Snapshot& s) {
         w.write_f32(wl.length);
         w.write_u8(wl.health);
     }
+    w.write_u16(static_cast<u16>(s.bubbles.size()));
+    for (const BubbleState& b : s.bubbles) {
+        w.write_vec3(b.position);
+        w.write_f32(b.radius);
+        w.write_u8(b.strength);
+    }
 }
 
 bool read(ByteReader& r, Snapshot& s) {
@@ -242,6 +259,8 @@ bool read(ByteReader& r, Snapshot& s) {
         read_appearance(r, p.appearance);
         read_equipment(r, p.equipment);
         p.owned_tier = r.read_u8();
+        p.ability_ranks = r.read_u16();
+        p.link = r.read_u32();
         s.players.push_back(p);
     }
     const u16 proj_count = r.read_u16();
@@ -265,6 +284,7 @@ bool read(ByteReader& r, Snapshot& s) {
         en.kind = r.read_u8();
         en.health = r.read_u8();
         en.action = r.read_u8();
+        en.status = r.read_u8();
         s.enemies.push_back(en);
     }
     const u16 vill_count = r.read_u16();
@@ -359,6 +379,16 @@ bool read(ByteReader& r, Snapshot& s) {
         wl.length = r.read_f32();
         wl.health = r.read_u8();
         s.walls.push_back(wl);
+    }
+    const u16 bubble_count = r.read_u16();
+    s.bubbles.clear();
+    s.bubbles.reserve(bubble_count);
+    for (u16 i = 0; i < bubble_count && r.ok(); ++i) {
+        BubbleState b;
+        b.position = r.read_vec3();
+        b.radius = r.read_f32();
+        b.strength = r.read_u8();
+        s.bubbles.push_back(b);
     }
     return r.ok();
 }

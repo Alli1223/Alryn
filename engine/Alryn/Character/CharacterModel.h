@@ -66,8 +66,9 @@ struct CharacterPalette {
 // their children, so a single forward pass computes all bone transforms.
 class CharacterModel {
 public:
-    // A random character from a seed (the 13-bone body only).
-    static CharacterModel generate(u32 seed);
+    // A random character from a seed (the 13-bone body only), proportioned for `race`
+    // (Men baseline / short-broad Dwarf / tall-slender Elf).
+    static CharacterModel generate(u32 seed, Race race = Race::Human);
     // A character with seed-derived proportions/clothes but the player's chosen
     // skin/eyes/ears/hair, adding face + hair feature bones on top of the body.
     static CharacterModel create(u32 seed, const CharacterAppearance& appearance);

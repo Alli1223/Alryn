@@ -236,6 +236,16 @@ void ClientApp::build_customise(f32 w, f32 h) {
               }),
           46.0f);
 
+    caption("RACE");
+    place(panel.add<ui::Stepper>(
+              "RACE", std::vector<std::string>{"MAN", "DWARF", "ELF"},
+              static_cast<usize>(appearance_.race),
+              [this](usize i) {
+                  appearance_.race = static_cast<Race>(i % kRaceCount);
+                  rebuild_preview(); // re-proportion the turntable avatar to the chosen race
+              }),
+          46.0f);
+
     caption("SKIN TONE");
     place(panel.add<ui::SwatchRow>(
               std::vector<Vec3>(skin_tones().begin(), skin_tones().end()), appearance_.skin,

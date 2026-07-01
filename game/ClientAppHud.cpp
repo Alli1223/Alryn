@@ -253,6 +253,10 @@ void ClientApp::draw_hud() {
     const f32 y = H - 24.0f - bh;        // health bar
     const f32 role_y = y - ts * 1.1f;    // role label, a clear line above the bar
     const f32 controls_y = role_y - ts * 1.1f; // controls hint, above the role label
+    // The Power Conduit hint only shows for a Cleric (V is a no-op for other roles).
+    const std::string combo_hint =
+        role_ == PlayerRole::Cleric ? "[G] TOSS ALLY   [V] CONDUIT" : "[G] TOSS ALLY";
+    draw.text(Vec2{x, controls_y - ts * 0.85f}, combo_hint, ts * 0.68f, Vec4{0.85f, 0.78f, 0.55f, 1.0f});
     draw.text(Vec2{x, controls_y}, "[M] MAP    [K] SKILLS    [U] GEAR", ts * 0.72f,
               Vec4{0.72f, 0.80f, 0.88f, 1.0f});
     draw.rect(Vec4{x - 3.0f, y - 3.0f, bw + 6.0f, bh + 6.0f}, Vec4{0.05f, 0.05f, 0.07f, 0.7f},
@@ -1185,7 +1189,11 @@ void ClientApp::draw_skills() {
 
     // One node per ability: icon slot + (when equipped) its hotkey badge, then name, cooldown,
     // description and an equip status. Equipped nodes glow; the whole row is the click target.
+    // Upgradeable abilities also show rank pips + a town/gold-gated UPGRADE button.
     const f32 row_right = panel.x + panel.z - 24.0f;
+    const Vec3 sk_feet = local_feet();
+    const bool sk_in_town =
+        world_seed_ != 0 && worldgen::inside_village(sk_feet.x, sk_feet.z, world_seed_, 6.0f);
     for (u8 i = 0; i < kAbilityCount; ++i) {
         const AbilityDef ab = ability_def(role_, i);
         const f32 ry = rows_top + static_cast<f32>(i) * row_h;
@@ -1235,9 +1243,56 @@ void ClientApp::draw_skills() {
         draw.text(Vec2{row_right - draw.text_width(status, stsz), ty + name_sz * 0.3f}, status, stsz,
                   equipped ? Vec4{0.6f, 0.9f, 0.6f, 0.95f} : Vec4{accent, 0.7f});
         ty += name_sz + 8.0f;
-        draw.text(Vec2{tx, ty}, ab.desc, std::min(row_h * 0.15f, 15.0f), th.text_muted);
+        const f32 desc_sz = std::min(row_h * 0.15f, 15.0f);
+        std::string desc = ab.name == std::string("AEGIS") && ability_rank_[i] < kMaxAbilityRank
+                               ? std::string(ab.desc) + "  (AT MAX: a dome that blocks ranged attacks)"
+                               : std::string(ab.desc);
+        draw.text(Vec2{tx, ty}, desc, desc_sz, th.text_muted);
+
+        // Upgrade controls for upgradeable abilities: rank pips + a town/gold-gated UPGRADE button.
+        skill_upgrade_rects_[i] = ui::Rect{};
+        const u8 maxr = ability_max_rank(role_, i);
+        if (maxr > 0) {
+            const u8 rank = ability_rank_[i];
+            const f32 pip = std::min(row_h * 0.16f, 14.0f);
+            const f32 py = ty - name_sz * 0.15f;
+            f32 px = row_right - static_cast<f32>(maxr) * (pip + 5.0f);
+            const f32 pips_left = px;
+            for (u8 k = 0; k < maxr; ++k) {
+                const bool filled = k < rank;
+                draw.rect(Vec4{px, py, pip, pip},
+                          filled ? Vec4{accent, 0.95f} : Vec4{0.16f, 0.17f, 0.20f, 0.95f},
+                          Vec4{accent, 0.7f}, 1.3f, pip * 0.3f);
+                px += pip + 5.0f;
+            }
+            if (rank < maxr) {
+                const u32 cost = ability_upgrade_price(static_cast<u8>(rank + 1));
+                const bool can = sk_in_town && snapshot_.money >= cost;
+                const std::string label = std::format("UPGRADE  ${}", cost);
+                const f32 bsz = std::min(row_h * 0.15f, 14.0f);
+                const f32 bw = draw.text_width(label, bsz) + 20.0f;
+                const f32 bh = bsz + 12.0f;
+                const f32 ubx = pips_left - bw - 12.0f;
+                const f32 uby = py - (bh - pip) * 0.5f;
+                draw.rect(Vec4{ubx, uby, bw, bh},
+                          can ? Vec4{accent.r * 0.42f, accent.g * 0.34f, accent.b * 0.18f, 0.96f}
+                              : Vec4{0.13f, 0.12f, 0.11f, 0.92f},
+                          Vec4{accent, can ? 0.95f : 0.4f}, 1.5f, bh * 0.24f);
+                draw.text(Vec2{ubx + 10.0f, uby + 6.0f}, label, bsz,
+                          can ? Vec4{1.0f, 0.95f, 0.8f, 1.0f} : th.text_muted);
+                skill_upgrade_rects_[i] = ui::Rect{ubx, uby, bw, bh};
+            } else {
+                const std::string mx = "MAX";
+                draw.text(Vec2{pips_left - draw.text_width(mx, pip) - 10.0f, py}, mx, pip,
+                          Vec4{accent, 0.95f});
+            }
+        }
     }
 
+    if (!sk_in_town) {
+        draw.text(Vec2{hx + 200.0f, panel.y + panel.w - 30.0f}, "VISIT A TOWN TO BUY UPGRADES", 14.0f,
+                  Vec4{accent, 0.7f});
+    }
     draw.text(Vec2{hx, panel.y + panel.w - 30.0f}, "K / ESC  CLOSE", 16.0f, th.text_muted);
 }
 

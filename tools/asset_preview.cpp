@@ -82,6 +82,8 @@ Vec3 tree_foliage_tint(int variant) {
 // How many variants a category has (for the "render all" mode).
 int variant_count(const std::string& cat) {
     if (cat == "character") return kRoleCount + 1; // one per role + a Peasant NPC (role index kRoleCount)
+    if (cat == "bandit") return 2;                 // 0 = melee Brigand, 1 = ranged Outlaw
+    if (cat == "carriage") return 1;               // the fancy covered coach (VehicleType carriage)
     if (cat == "house") return 8;
     if (cat == "tree") return 5;
     if (cat == "decor") return 8;
@@ -96,11 +98,15 @@ int variant_count(const std::string& cat) {
 }
 
 Asset build_character(int role); // defined below
+Asset build_bandit(int variant); // defined below
 
 Asset build_asset(const std::string& cat, int v) {
     Asset a;
     if (cat == "character") {
         return build_character(v); // v = role (0 Knight / 1 Hunter / 2 Cleric / 3 Mage)
+    }
+    if (cat == "bandit") {
+        return build_bandit(v); // v = 0 melee Brigand / 1 ranged Outlaw
     }
     if (cat == "house") {
         add_prop(a, PropLibrary::build_house(static_cast<u32>(v)));
@@ -164,6 +170,31 @@ Asset build_asset(const std::string& cat, int v) {
         add_prop(a, PropLibrary::build_monument(v));
     } else if (cat == "watchtower") {
         add_prop(a, PropLibrary::build_watchtower());
+    } else if (cat == "carriage") {
+        // The fancy covered coach (VehicleType carriage): its body mesh + wheels at their axle centres.
+        // ALRYN_YAW (degrees) spins it so the sides / rear can be inspected.
+        f32 yaw = 0.0f;
+        if (const char* yw = std::getenv("ALRYN_YAW")) {
+            yaw = radians(static_cast<f32>(std::atof(yw)));
+        }
+        const Mat4 rot = glm::rotate(Mat4{1.0f}, yaw, Vec3{0.0f, 1.0f, 0.0f});
+        auto spin = [&](MeshData md) {
+            for (Vertex& vx : md.vertices) {
+                vx.position = Vec3{rot * Vec4{vx.position, 1.0f}};
+                vx.normal = glm::normalize(Vec3{rot * Vec4{vx.normal, 0.0f}});
+            }
+            return md;
+        };
+        const VehicleType& vt = vehicle_type(2);
+        a.parts.push_back({spin(vt.body()), Vec4{1.0f}});
+        const MeshData wsrc = PropLibrary::build_wagon_wheel().parts[0].mesh;
+        for (const Vec3& wp : vt.wheels()) {
+            MeshData wm = wsrc;
+            for (Vertex& vx : wm.vertices) {
+                vx.position += wp;
+            }
+            a.parts.push_back({spin(std::move(wm)), Vec4{1.0f}});
+        }
     } else if (cat == "wagon") {
         add_prop(a, PropLibrary::build_wagon());
     } else if (cat == "wheel") {
@@ -241,6 +272,12 @@ Asset build_character(int role) {
     const MeshData rounded = primitives::rounded_box(0.32f, Vec3{1.0f});
 
     CharacterAppearance app; // a plain face/body; the role-themed outfit goes on top
+    if (const char* rc = std::getenv("ALRYN_RACE")) {
+        app.race = static_cast<Race>(glm::clamp(std::atoi(rc), 0, 2)); // 0 Man / 1 Dwarf / 2 Elf
+    }
+    if (const char* hr = std::getenv("ALRYN_HAIR")) {
+        app.hair = static_cast<HairStyle>(glm::clamp(std::atoi(hr), 0, 4)); // 0 bald .. 4 ponytail
+    }
     const u32 seed = 1000u + static_cast<u32>(role);
     CharacterModel model = CharacterModel::create(seed, app);
     // Equip a role-flavoured outfit so the preview matches the in-game render (skinned body + the
@@ -566,6 +603,101 @@ Asset build_character(int role) {
             MeshData sm;
             build_cloth_tube(skirt, true, pal.primary, sm);
             a.parts.push_back({std::move(sm), Vec4{1.0f}});
+        }
+    }
+    return a;
+}
+
+// A bandit preview mirroring the in-game enemy render: the skinned body + skinned bandit leather +
+// the hood/mask/quiver attachment primitives + a crude held weapon. variant 0 = melee Brigand (dagger),
+// 1 = ranged Outlaw (bow). `make asset CAT=bandit` (or CAT=bandit V=1). ALRYN_YAW spins it.
+Asset build_bandit(int variant) {
+    const MeshData box = primitives::cube(1.0f, Vec3{1.0f});
+    const MeshData sphere = primitives::sphere(18, 12, Vec3{1.0f});
+    const MeshData cylinder = primitives::cylinder(16, Vec3{1.0f});
+    const MeshData capsule = primitives::capsule(18, 6, Vec3{1.0f});
+    const MeshData rounded = primitives::rounded_box(0.32f, Vec3{1.0f});
+
+    const bool ranged = variant == 1;
+    CharacterAppearance app;
+    app.skin = 3;
+    app.hair_color = 1;
+    app.eyes = EyeStyle::Sharp;
+    app.ears = EarStyle::Round;
+    app.hair = HairStyle::Short;
+    CharacterModel model = CharacterModel::create(2200u + static_cast<u32>(variant), app);
+    const OutfitKind okind = ranged ? OutfitKind::Outlaw : OutfitKind::Brigand;
+    Equipment eq;
+    eq.outfit_tint = static_cast<u8>(variant);
+    apply_outfit(model, okind, eq);
+
+    // A mid-stride walk pose so the silhouette reads in motion (as it does closing on the wagon).
+    CharacterAnimator anim;
+    const Timestep dt{1.0f / 60.0f};
+    for (int k = 0; k < 40; ++k) {
+        anim.update(5.0f, dt);
+    }
+    std::vector<Quat> pose = anim.pose(model);
+    Mat4 root = anim.body_offset();
+    if (const char* yw = std::getenv("ALRYN_YAW")) {
+        root = glm::rotate(Mat4{1.0f}, radians(static_cast<f32>(std::atof(yw))), Vec3{0.0f, 1.0f, 0.0f}) * root;
+    }
+    const std::vector<Mat4> jmats = model.joint_matrices(root, pose);
+    const std::vector<Mat4> mats = model.bone_matrices(root, pose);
+    const CharacterPalette& pal = model.palette();
+    const std::vector<Bone>& bones = model.bones();
+
+    auto shape_for = [&](BoneShape s) -> const MeshData& {
+        return s == BoneShape::Sphere       ? sphere
+               : s == BoneShape::Cylinder   ? cylinder
+               : s == BoneShape::Capsule    ? capsule
+               : s == BoneShape::RoundedBox ? rounded
+                                            : box;
+    };
+    Asset a;
+    auto palette = [&](u8 mat) -> Vec3 { return body_material_color(pal, static_cast<BodyMaterial>(mat)); };
+    auto add_skinned = [&](const SkinnedMesh& src) {
+        if (src.vertices.empty()) {
+            return;
+        }
+        MeshData md;
+        skin(src, jmats, md.vertices, palette);
+        md.indices = src.indices;
+        a.parts.push_back({std::move(md), Vec4{1.0f}});
+    };
+    add_skinned(build_body_mesh(model));
+    add_skinned(build_outfit_mesh(model, okind, eq));
+
+    auto bone_color = [&](BoneColor c) -> Vec3 {
+        switch (c) {
+            case BoneColor::Skin: return pal.skin;
+            case BoneColor::Shirt: return pal.shirt;
+            case BoneColor::Pants: return pal.pants;
+            case BoneColor::Hair: return pal.hair;
+            case BoneColor::Eye: return pal.eye;
+            case BoneColor::Primary: return pal.primary;
+            case BoneColor::Accent: return pal.accent;
+            case BoneColor::Metal: return pal.metal;
+            case BoneColor::Dark: return pal.dark;
+            case BoneColor::Glow: return pal.glow * 1.7f;
+        }
+        return Vec3{1.0f};
+    };
+    for (usize i = 0; i < bones.size(); ++i) {
+        if (!bones[i].attachment) {
+            continue;
+        }
+        a.parts.push_back({bake(shape_for(bones[i].shape), mats[i], bone_color(bones[i].color)), Vec4{1.0f}});
+    }
+    // A crude weapon gripped in the weapon hand (the L-suffixed forearm).
+    if (const int bi = model.bone_index(BonePart::LowerArmL); bi >= 0) {
+        const f32 wrist = bones[static_cast<usize>(bi)].box_center.y * 2.0f;
+        const Mat4 hand = jmats[static_cast<usize>(bi)] * glm::translate(Mat4{1.0f}, Vec3{0.0f, wrist, 0.0f});
+        for (const WeaponPiece& wp : weapon_pieces(ranged ? WeaponType::Bow : WeaponType::Dagger,
+                                                   EquipmentTier::Worn, pal)) {
+            a.parts.push_back(
+                {bake(shape_for(wp.shape), hand * wp.local, wp.emissive ? wp.color * 1.7f : wp.color),
+                 Vec4{1.0f}});
         }
     }
     return a;

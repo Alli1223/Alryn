@@ -51,6 +51,10 @@ struct PlayerInput {
     u8 buy = 0;                     // shop: the gear tier the player is trying to OWN (0 = no request;
                                     // the server buys up to it one tier at a time in a town, if affordable)
     u8 buy_rig = 0;                 // 1 = buy the next wagon-rig upgrade level (in a town, if affordable)
+    u8 upgrade = 0;                 // shop: raise this ability's rank by one (ability index + 1; 0 = none).
+                                    // Held a few ticks; the server buys ONE rank on the rising edge, in a town.
+    bool toss = false;              // Ally Toss combo: hurl the nearest teammate toward `aim` (one-shot press)
+    bool channel = false;          // Cleric Power Conduit combo: channel a heal+damage beam to an ally (held)
 };
 
 struct PlayerState {
@@ -63,13 +67,16 @@ struct PlayerState {
     u8 carrying = 0;                // 1 = hauling a spilled good back to the cart
     u8 role = 0;                    // PlayerRole, so every client renders the right weapon
     u8 cast = 0;                    // ability fired this snapshot (0 = none, 1/2/3 = slot+1) -> VFX
-    u8 action = 0;                  // body action: 0 none, 1 swinging, 2 blocking (-> animation)
+    u8 action = 0;                  // body action: 0 none, 1 swinging, 2 blocking, 3 rolling, 4 tossed (-> animation)
     u8 shield = 0;                  // Aegis shield strength 0..255 (0 = none) -> shield sphere
     u8 buffs = 0;                   // co-op buff bitflags: bit0 = empowered, bit1 = hasted
     u8 hit_fx = 0;                  // monotonic counter: bumps when THIS player's attack lands a hit (-> hit marker)
     CharacterAppearance appearance; // so every client renders the right avatar
     Equipment equipment;            // the authoritative worn gear (drives the outfit + weapon + stats)
     u8 owned_tier = 0;              // highest gear tier this player has bought (for their wardrobe)
+    u16 ability_ranks = 0;          // packed 2-bit upgrade rank per ability of THIS player's current
+                                    // role (ability i in bits 2i..2i+1) -> the owner's skills tree + VFX
+    u32 link = 0;                   // Power Conduit: id of the ally this player is channelling to (0 = none)
 };
 
 // A live enemy, broadcast each tick so clients can render + animate it.
@@ -80,6 +87,7 @@ struct EnemyState {
     u8 kind = 0;
     u8 health = 0;  // 0..255 scaled from max, for a health bar / death fade
     u8 action = 0;  // 0 none, 1 swinging (-> attack animation)
+    u8 status = 0;  // status bitflags: bit0 = chilled (Frost Bolt) -> icy tint + shatter VFX
 };
 
 // A live villager or town guard, broadcast each tick. Appearance rides along so every
@@ -175,6 +183,14 @@ struct WallState {
     u8 health = 255;     // 0..255 of kRockWallHealth (enemies smash through)
 };
 
+// A Cleric's max-rank Aegis DOME: a large protective bubble (following its caster) that blocks
+// enemy ranged attacks for everyone inside. Broadcast so every client renders + reads it.
+struct BubbleState {
+    Vec3 position{0.0f}; // dome centre (the caster's feet)
+    f32 radius = 0.0f;   // dome radius
+    u8 strength = 255;   // 0..255 of its remaining health (fades/pops as arrows batter it)
+};
+
 struct Snapshot {
     u32 tick = 0;
     f32 time_of_day = 0.0f; // 0..1, server-authoritative day/night clock
@@ -201,6 +217,7 @@ struct Snapshot {
     std::vector<GoodState> goods;   // crates spilled from a flipped cart
     std::vector<AuraState> auras;   // ground effects (Cleric heal auras)
     std::vector<WallState> walls;   // raised rock walls (Mage); colliders NPCs route around
+    std::vector<BubbleState> bubbles; // Cleric max-Aegis domes that block enemy ranged attacks
 };
 
 struct Welcome {

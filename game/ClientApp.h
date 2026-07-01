@@ -206,8 +206,13 @@ protected:
     bool abilitybar_press(const Vec2& p);
     bool abilitybar_release(const Vec2& p);
 
-    // A click inside the open skills tree: hit-test the ability nodes and equip/unequip the one hit.
+    // A click inside the open skills tree: hit-test the UPGRADE buttons (buy a rank) then the ability
+    // nodes (equip/unequip the one hit).
     void skills_click(const Vec2& p);
+
+    // Request a town-shop ability upgrade (raise this ability's rank by one). The server gates it on
+    // being in a town + the party affording the cost; the request is held a few ticks for reliability.
+    void request_ability_upgrade(u8 ability);
 
     // A quick flourish at the hand for a Hunter/Cleric primary attack (the projectile itself is
     // server-spawned + networked; this is just the instant local muzzle/cast feedback).
@@ -290,16 +295,19 @@ private:
     void retire_mesh(Mesh&& m);
     void tick_mesh_graveyard();
 
-    // A networked enemy's renderable: one shared hostile model, animated from
-    // snapshot position deltas (no animation data on the wire).
+    // A networked enemy's renderable: a bandit model dressed per kind (melee Brigand / ranged
+    // Outlaw), animated from snapshot position deltas (no animation data on the wire).
     struct EnemyVisual {
         CharacterModel model = CharacterModel::create(0u, enemy_look());
         CharacterAnimator animator;
         Vec3 last_pos{0.0f};
         f32 speed = 0.0f;
         u8 last_action = 0;
-        SkinnedMesh body_skin; // continuous body, built on first sight; re-skinned each frame
-        Mesh body_mesh;        // dynamic GPU mesh
+        u8 last_status = 0;      // to detect a chill->shatter transition for the VFX
+        SkinnedMesh body_skin;   // continuous body, built on first sight; re-skinned each frame
+        Mesh body_mesh;          // dynamic GPU mesh (body)
+        SkinnedMesh outfit_skin; // worn bandit leather/cloth, skinned like the body
+        Mesh outfit_mesh;        // dynamic GPU mesh (outfit)
     };
 
     PlayerVisual& ensure_visual(net::PlayerId id, const CharacterAppearance& appearance, u8 role,
@@ -378,6 +386,10 @@ private:
     // shell + an additive glow, brighter while the shield is strong. (Shimmer motes orbit it from
     // update_particles.)
     void draw_shields();
+
+    // A Cleric's max-Aegis DOME (Snapshot.bubbles): a large translucent protective shell + additive
+    // glow + a rim of shimmer, brighter while intact - the ranged-blocking bubble the party shelters in.
+    void draw_bubbles();
 
     // Co-op buff auras under empowered (fiery ring) / hasted (green ring) players, so allies can
     // read who the Cleric/Hunter/Mage has buffed. Pulses; driven by PlayerState.buffs bitflags.
@@ -700,6 +712,10 @@ private:
     int drag_slot_ = -1;                             // bar slot being click-dragged (-1 = none)
     ui::Rect ability_slot_rects_[kAbilitySlots] = {}; // bar slot rects (from draw_ability_bar)
     ui::Rect skill_node_rects_[kAbilityCount] = {};  // tree node rects (from draw_skills)
+    ui::Rect skill_upgrade_rects_[kAbilityCount] = {}; // tree UPGRADE-button rects (from draw_skills)
+    u8 ability_rank_[kAbilityCount] = {};            // local player's current-role upgrade ranks (snapshot)
+    u8 pending_upgrade_ = 0;                          // ability index+1 to buy-upgrade (sent while held)
+    int upgrade_hold_ = 0;                            // ticks left to hold pending_upgrade_ (rising-edge buy)
 
     // Pending host/join intent recorded when the Class screen opens; START there enters the game.
     bool pending_host_local_ = true;
@@ -857,6 +873,8 @@ private:
     bool blocking_ = false;            // Knight holding the shield up (right mouse held)
     bool pending_rally_ = false;
     bool pending_grab_ = false; // one-shot hitch/unhitch the nearest wagon
+    bool pending_toss_ = false; // Ally Toss combo: one-shot hurl the nearest teammate (G)
+    bool conduit_held_ = false; // Power Conduit combo: Cleric channelling a beam to an ally (hold V)
     // Controller state. `using_gamepad_` is the active input device (auto-switched: any pad activity
     // selects it, any mouse motion selects KBM) and decides whether the aim follows the right stick
     // or the cursor. The trigger edges are tracked here because triggers are analog axes, not buttons.

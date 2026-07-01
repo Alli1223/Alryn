@@ -173,6 +173,41 @@ inline constexpr f32 kAegisAmount = 65.0f;      // damage the shield soaks befor
 inline constexpr f32 kAegisDuration = 12.0f;    // seconds before an unbroken shield fades
 inline constexpr f32 kAegisRange = 18.0f;       // how far an ally can be shielded
 
+// --- Ability upgrades (bought in a town, spent from the party wallet, surfaced in the skills tree) --
+// A curated set of abilities can be UPGRADED in rank (0 = base). Most gains are numeric (bigger
+// damage / heal), but the flagship is the Cleric's AEGIS: rank 1 is a stronger single-target ward,
+// and rank 2 (MAX) transforms it into a large protective BUBBLE DOME around the Cleric that blocks
+// enemy ranged attacks (arrows) for everyone - and the cargo - standing inside it.
+inline constexpr u8 kMaxAbilityRank = 2; // ranks per upgradeable ability (0 base, 1, 2 = max)
+
+// The max rank an ability can be raised to (0 = not upgradeable). Kept small + curated.
+inline u8 ability_max_rank(PlayerRole role, u8 ability) {
+    switch (role) {
+        case PlayerRole::Knight: return ability == 0 ? kMaxAbilityRank : 0u;                 // Shield Bash
+        case PlayerRole::Hunter: return ability == 0 ? kMaxAbilityRank : 0u;                 // Power Shot
+        case PlayerRole::Cleric: return (ability == 0 || ability == 3) ? kMaxAbilityRank : 0u; // Heal, Aegis
+        case PlayerRole::Mage: return 0u; // the Mage upgrades via elemental combos, not the hotbar
+    }
+    return 0u;
+}
+
+// Party-wallet cost to raise an ability to `next_rank` (1 or 2). Mid-range vs the gear/rig sinks.
+inline u32 ability_upgrade_price(u8 next_rank) {
+    return next_rank <= 1u ? 150u : 400u;
+}
+
+// Aegis rank scaling (rank 0/1 = single-target ward): rank 1 soaks + lasts more.
+inline f32 aegis_amount_for_rank(u8 rank) { return kAegisAmount * (rank >= 1u ? 1.6f : 1.0f); }
+inline f32 aegis_duration_for_rank(u8 rank) { return kAegisDuration * (rank >= 1u ? 1.3f : 1.0f); }
+
+// Aegis MAX (rank 2): a large ranged-blocking dome centred on (and following) the caster.
+inline constexpr f32 kAegisBubbleRadius = 4.6f;   // dome radius (allies + cargo inside are protected)
+inline constexpr f32 kAegisBubbleDuration = 8.0f; // seconds it holds if not battered down first
+inline constexpr f32 kAegisBubbleHealth = 220.0f; // ranged hits chip it; it pops early if fully spent
+
+// Generic +40% per rank for the simple numeric upgrades (Shield Bash / Power Shot / Heal).
+inline f32 ability_rank_mult(u8 rank) { return 1.0f + 0.4f * static_cast<f32>(rank); }
+
 // --- Expanded abilities (skills tree indices 4+) ----------------------------------------
 // Knight Whirlwind: a 360-degree cleave (no cone) around the knight, with a light shove.
 inline constexpr f32 kWhirlwindDamage = 38.0f;
@@ -298,6 +333,34 @@ inline constexpr f32 kHasteRadius = 12.0f;        // allies near the Hunter get 
 inline constexpr f32 kGuardLeapRange = 24.0f;     // Knight Guardian Leap: reach to an ally
 inline constexpr f32 kGuardShieldAmount = 45.0f;  // shield placed on the leapt-to ally
 inline constexpr f32 kGuardTauntRadius = 10.0f;   // enemies near the ally pulled onto the Knight
+
+// --- Gauntlet-style co-op COMBOS: players combine abilities for enhanced damage / power ---------
+// Ally Toss (Fastball Special): a player hurls a nearby teammate toward their aim. The tossed ally
+// flies with i-frames and CANNONBALLS into enemies on landing (a radial burst + knockback) - launch
+// the melee into a cluster of archers, or fling a low-HP ally clear of danger.
+inline constexpr f32 kTossGrabRange = 5.0f;     // how close an ally must be to grab + throw
+inline constexpr f32 kTossSpeed = 15.0f;        // horizontal launch speed toward the aim
+inline constexpr f32 kTossUp = 9.0f;            // vertical launch (the arc height)
+inline constexpr f32 kTossMaxAir = 1.6f;        // safety cap on airborne time before forcing a landing
+inline constexpr f32 kTossCooldown = 6.0f;      // thrower cooldown
+inline constexpr f32 kTossImpactRadius = 3.2f;  // landing cannonball AoE radius
+inline constexpr f32 kTossImpactDamage = 45.0f; // damage to each enemy caught in the landing
+inline constexpr f32 kTossImpactKnockback = 5.0f;
+
+// Elemental Shatter: a Mage Frost Bolt CHILLS a foe (see kChillDuration in Enemy.h); a heavy ally hit
+// SHATTERS the chill for bonus damage - a Mage->melee/Hunter timing combo.
+inline constexpr f32 kShatterThreshold = 24.0f; // a hit this heavy (ability / power shot / big swing) shatters
+inline constexpr f32 kShatterMult = 1.8f;       // x damage of the shattering hit (consumes the chill)
+
+// Power Conduit: a Cleric channels a beam into one ally, HEALING them and BUFFING their damage while
+// held (the buff reuses Empower's kDamageBoostMult / damage_boost_timer) - the Cleric commits, the
+// ally carries. A committed 2-player channel.
+inline constexpr f32 kConduitRange = 16.0f;     // how far the beam reaches an ally
+inline constexpr f32 kConduitHealRate = 20.0f;  // hp/sec funnelled to the linked ally
+
+// Focus Zone: enemies standing in a Knight Consecration / Hunter Caltrops aura take extra damage from
+// EVERY ally - drop the zone, then focus-fire it down together.
+inline constexpr f32 kFocusZoneMult = 1.4f;     // x ally damage to enemies inside a focus aura
 
 // Rock wall: a row of stone raised a few metres ahead of the caster; a collider NPCs route around.
 inline constexpr f32 kRockWallLength = 7.0f;   // total span (perpendicular to facing)

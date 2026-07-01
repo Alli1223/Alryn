@@ -187,30 +187,34 @@ void ClientApp::draw_wagons() {
             wheel_fx_.erase(wg.id);
         }
 
-        // The lamp: an emissive glow always, plus a warm light at night when near.
-        const Vec3 lampw = Vec3{m * Vec4{vt.lamp(), 1.0f}};
+        // Lamps: an emissive glow at each, plus a warm light at night when near. The carriage carries
+        // one at each end (fore + aft); the FIRST (front) lamp is the scene's KEY light.
         const f32 night = 1.0f - sun_intensity_;
         const f32 glow = glm::mix(1.0f, 0.5f, sun_intensity_);
-        renderer_->draw_emissive(shape_sphere_,
-                                 glm::translate(Mat4{1.0f}, lampw) *
-                                     glm::scale(Mat4{1.0f}, Vec3{0.16f}),
-                                 Vec4{glow, glow * 0.82f, glow * 0.5f, 1.0f});
         const bool is_active_cargo =
             snapshot_.contract_phase == static_cast<u8>(ContractPhase::Active);
-        if (night > 0.1f && glm::length(lampw - local_feet()) < light::wagon_lamp_cull_dist) {
-            Renderer::SpotLight sl;
-            sl.position = lampw + Vec3{0.0f, 0.6f, 0.0f}; // lift it so shadows rake outward
-            sl.direction = Vec3{0.0f, -1.0f, 0.0f};
-            sl.color = Vec3{1.0f, 0.82f, 0.5f} * (1.7f * night);
-            sl.range = 18.0f;
-            sl.cone_outer_cos = std::cos(glm::radians(74.0f));
-            sl.cone_inner_cos = std::cos(glm::radians(40.0f));
-            // The ACTIVE escorted cargo is the scene's KEY light: a top-priority real
-            // shadow-caster (the most expensive light), throwing crisp shadows of the player
-            // + nearby props/enemies as it rolls. Parked offers are cheap unshadowed lamps.
-            sl.cast_shadow = is_active_cargo;
-            sl.priority = is_active_cargo;
-            renderer_->add_light(sl);
+        const std::vector<Vec3> lamps = vt.lamps();
+        for (usize li = 0; li < lamps.size(); ++li) {
+            const Vec3 lampw = Vec3{m * Vec4{lamps[li], 1.0f}};
+            renderer_->draw_emissive(shape_sphere_,
+                                     glm::translate(Mat4{1.0f}, lampw) *
+                                         glm::scale(Mat4{1.0f}, Vec3{0.16f}),
+                                     Vec4{glow, glow * 0.82f, glow * 0.5f, 1.0f});
+            if (night > 0.1f && glm::length(lampw - local_feet()) < light::wagon_lamp_cull_dist) {
+                Renderer::SpotLight sl;
+                sl.position = lampw + Vec3{0.0f, 0.6f, 0.0f}; // lift it so shadows rake outward
+                sl.direction = Vec3{0.0f, -1.0f, 0.0f};
+                sl.color = Vec3{1.0f, 0.82f, 0.5f} * (1.7f * night);
+                sl.range = 18.0f;
+                sl.cone_outer_cos = std::cos(glm::radians(74.0f));
+                sl.cone_inner_cos = std::cos(glm::radians(40.0f));
+                // Both lamps on the ACTIVE escorted cargo (front AND rear) are top-priority real
+                // shadow-casters, throwing crisp shadows of the player + nearby props as it rolls -
+                // lit fore and aft. Parked offers stay cheap + unshadowed.
+                sl.cast_shadow = is_active_cargo;
+                sl.priority = is_active_cargo;
+                renderer_->add_light(sl);
+            }
         }
 
         // The draft oxen (a yoked pair) pulling the wagon, with a walking gait + harness ropes.

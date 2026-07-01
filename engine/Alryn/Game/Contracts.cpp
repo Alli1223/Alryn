@@ -1406,6 +1406,44 @@ void GameServer::carry_top_riders(const Vec2& delta, const VehicleType& vt) {
     }
 }
 
+// FOCUS ZONE: enemies standing in a Knight Consecration / Hunter Caltrops aura take extra ally damage.
+f32 GameServer::focus_zone_mult(const Vec3& enemy_pos) const {
+    for (const Aura& a : auras_) {
+        const auto kind = static_cast<AuraKind>(a.kind);
+        if ((kind == AuraKind::Consecration || kind == AuraKind::Hazard) &&
+            glm::length(enemy_pos - a.position) <= a.radius) {
+            return kFocusZoneMult;
+        }
+    }
+    return 1.0f;
+}
+
+f32 GameServer::combo_amp(Enemy& e, f32 base, bool allow_shatter) {
+    f32 dmg = base * focus_zone_mult(e.position);
+    if (allow_shatter && e.chill_timer > 0.0f && base >= kShatterThreshold) {
+        dmg *= kShatterMult;   // ELEMENTAL SHATTER: a heavy hit on a chilled foe detonates the chill
+        e.chill_timer = 0.0f;  // the chill is consumed
+    }
+    return dmg;
+}
+
+// ALLY TOSS landing: a radial cannonball burst on the enemies the tossed ally lands among.
+void GameServer::toss_impact(const Vec3& at) {
+    for (Enemy& e : ambush_) {
+        if (!e.alive) {
+            continue;
+        }
+        Vec3 d = e.position - at;
+        d.y = 0.0f;
+        const f32 dist = glm::length(d);
+        if (dist <= kTossImpactRadius) {
+            e.health -= kTossImpactDamage;
+            e.knockback = (dist > 1e-3f ? d / dist : Vec3{1.0f, 0.0f, 0.0f}) * kTossImpactKnockback;
+            e.stagger = std::max(e.stagger, kStaggerDuration); // the slam reels them (combo window)
+        }
+    }
+}
+
 void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
     Wagon& w = active_;
     // Debug: stop the wagon ambushes entirely - clear any raiders in progress and never spawn more.
@@ -1531,7 +1569,16 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
         }
 
         if (e.kind == 3u) { // archer: kite to range, AIM (telegraph), then loose a heavy arrow
-            const Vec3 target = victim != nullptr ? victim->controller.position() : w.position;
+            // Bandit archers primarily snipe the CARGO WAGON (they're after the goods); they only
+            // switch to a defender if one is markedly closer than the cart (a nearer threat).
+            Vec3 target = w.position;
+            if (victim != nullptr) {
+                const f32 dv = glm::length(victim->controller.position() - e.position);
+                const f32 dw = glm::length(w.position - e.position);
+                if (dv < dw * 0.8f) {
+                    target = victim->controller.position();
+                }
+            }
             const f32 td = glm::length(target - e.position);
             if (e.slam_windup > 0.0f) {
                 // Aiming: plant + wind up; loose a heavy, fast arrow when the telegraph elapses.
@@ -1669,12 +1716,26 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             continue;
         }
         if (pr.hostile) {
+            // A Cleric's max-Aegis dome swallows the enemy arrow before it reaches anyone - or the
+            // cargo - sheltering inside it (the headline "protect from ranged attacks" upgrade).
+            if (bubble_absorbs(pr.position, pr.damage > 0.0f ? pr.damage : kArrowDamage)) {
+                pr.alive = false;
+                continue;
+            }
             for (auto& [id, pl] : players_) {
                 const Vec3 chest = pl.controller.position() + Vec3{0.0f, 0.9f, 0.0f};
                 if (glm::length(chest - pr.position) < pr.radius + 0.55f) {
                     pl.take_damage(pr.damage > 0.0f ? pr.damage : kArrowDamage); // aimed shots hit heavy
                     pr.alive = false;
                 }
+            }
+            // A bandit arrow that reaches the cargo wagon thuds into it and chips its health, so
+            // ranged raiders actually threaten the goods (not just the escorts).
+            if (pr.alive && glm::length(w.position - pr.position) < pr.radius + kWagonHitRadius) {
+                if (!debug_god_) {
+                    w.health -= kArrowWagonDamage * rig_damage_mult(rig_level_);
+                }
+                pr.alive = false;
             }
         } else {
             // A friendly projectile's damage is amplified if its owner is Empowered (co-op buff).
@@ -1685,6 +1746,9 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                 if (glm::length(chest - pr.position) < pr.radius + kEnemyRadius + 0.3f) {
                     f32 dmg = (pr.damage > 0.0f ? pr.damage : kThrowDamage) * boost * last_stand;
                     const f32 raw = dmg; // pre-block magnitude, for the sunder check
+                    // COMBOS: focus-zone amp + elemental shatter (a Frost Bolt itself chills, below,
+                    // rather than shattering its own chill).
+                    dmg = combo_amp(e, dmg, pr.kind != 6);
                     // A shield-bearer soaks most of a shot that strikes its front (a point back
                     // along the projectile's path is where it came from).
                     if (enemy_blocks_hit(e, pr.position - pr.velocity * 0.1f)) {
@@ -1692,6 +1756,9 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                     }
                     const f32 e_before = e.health;
                     e.health -= dmg;
+                    if (pr.kind == 6) {
+                        e.chill_timer = kChillDuration; // a Mage Frost Bolt CHILLS the foe (shatter set-up)
+                    }
                     if (ownit != players_.end()) {
                         ++ownit->second.hit_fx; // confirmed hit -> the shooter's client pops a hit marker
                     }
@@ -1747,6 +1814,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             // weapon hits as hard as the role, amplified while Empowered (co-op buff)
             f32 dmg = role_stats(pl.role).melee_damage * pl.outgoing_mult() * last_stand;
             const f32 raw = dmg; // pre-block magnitude, for the sunder check
+            dmg = combo_amp(*hit, dmg); // COMBOS: focus-zone amp + elemental shatter
             // A shield-bearer blocks most of a frontal swing - so flank it (or knock it loose).
             if (enemy_blocks_hit(*hit, pl.controller.position())) {
                 dmg *= (1.0f - kShieldReduction);

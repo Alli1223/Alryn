@@ -45,6 +45,9 @@ public:
     virtual Vec3 driver_seat() const { return Vec3{0.0f}; }
     virtual bool has_driver_seat() const { return false; }
     virtual Vec3 lamp() const = 0;            // local lamp position (warm light + emissive glow)
+    // All lamp positions (warm light + emissive glow), FIRST = the key/front light (a real shadow
+    // caster on the active cargo; the rest are cheap unshadowed lights). Defaults to just lamp().
+    virtual std::vector<Vec3> lamps() const { return {lamp()}; }
     virtual f32 reach() const { return 1.1f; } // clearance half-size for the cart's own routing
     virtual u32 capacity() const { return 1; } // cargo units -> reward multiplier
     virtual CargoBed bed() const = 0;          // where the physical cargo crates ride + slide
@@ -91,12 +94,20 @@ public:
     bool horse_drawn() const override { return true; }
     Vec3 driver_seat() const override { return Vec3{1.0f, 1.75f, 0.0f}; }
     bool has_driver_seat() const override { return true; }
-    Vec3 lamp() const override { return Vec3{1.45f, 1.9f, 0.0f}; }
+    Vec3 lamp() const override { return Vec3{0.73f, 1.45f, 0.0f}; }
+    // A hanging lantern at BOTH ends: the front (key light) + a rear coach-lamp, so the fancy
+    // carriage is lit fore and aft.
+    std::vector<Vec3> lamps() const override {
+        return {Vec3{0.73f, 1.45f, 0.0f}, Vec3{-1.06f, 1.42f, 0.0f}};
+    }
     f32 reach() const override { return 1.5f; }
     u32 capacity() const override { return 3; }
     // Enclosed cabin: a very tall "wall" means crates can never be launched out (no spills).
     CargoBed bed() const override { return {{-0.95f, 0.8f, -0.6f}, {0.65f, 1.8f, 0.6f}, 5.0f}; }
     Vec2 footprint() const override { return Vec2{1.35f, 0.8f}; }
+    // A rider stands on the ROOF (the enclosed cabin is for the noble passenger), not inside - so the
+    // ride-along deck is the roof top, not the low default. Jump up onto it (or get an Ally Toss).
+    f32 deck_height() const override { return 1.93f; }
 };
 
 // The registry of one instance per type, indexed by Wagon::type.

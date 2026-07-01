@@ -251,6 +251,16 @@ void ClientApp::on_update(Timestep dt) {
                 case net::ClientEventType::SnapshotReceived:
                     snapshot_ = e.snapshot;
                     have_snapshot_ = true;
+                    // Adopt the local player's authoritative upgrade ranks (packed 2 bits/ability) for
+                    // the skills-tree UI + the max-Aegis cast behaviour + local cast VFX.
+                    for (const net::PlayerState& p : snapshot_.players) {
+                        if (p.id == my_id_) {
+                            for (u8 a = 0; a < kAbilityCount; ++a) {
+                                ability_rank_[a] = static_cast<u8>((p.ability_ranks >> (2 * a)) & 0x3u);
+                            }
+                            break;
+                        }
+                    }
                     break;
                 case net::ClientEventType::DeformReceived:
                     if (terrain_ != nullptr) {
@@ -383,6 +393,7 @@ void ClientApp::on_render() {
     draw_goods();
     draw_auras();
     draw_shields();
+    draw_bubbles();
     draw_buffs();
     draw_particles();
     draw_deer();         // ambient wildlife grazing in the meadows
@@ -780,6 +791,16 @@ void ClientApp::update_visuals(Timestep dt) {
         if (p.action == 3 && v.last_action != 3) {
             emit_burst(p.position + Vec3{0.0f, 0.12f, 0.0f}, Vec4{0.74f, 0.69f, 0.58f, 0.65f}, 12,
                        2.4f, 0.45f, 0.14f, 1, 0.5f, 3.5f);
+        }
+        // Ally Toss: a whoosh trail while flying, then a cannonball dust-ring + shockwave on landing.
+        if (p.action == 4) {
+            emit(p.position + Vec3{0.0f, 0.9f, 0.0f}, Vec3{0.0f}, Vec4{0.82f, 0.88f, 1.0f, 0.5f}, 0.28f,
+                 0.16f, 1);
+        } else if (v.last_action == 4) {
+            emit_ring(p.position + Vec3{0.0f, 0.1f, 0.0f}, Vec4{0.86f, 0.8f, 0.62f, 0.85f}, 28,
+                      kTossImpactRadius * 1.5f, 0.55f, 0.17f);
+            emit_burst(p.position + Vec3{0.0f, 0.3f, 0.0f}, Vec4{0.92f, 0.86f, 0.68f, 0.85f}, 22, 5.5f,
+                       0.5f, 0.15f, 1, 1.2f, 3.5f);
         }
         v.last_action = p.action;
         v.animator.update(v.speed, dt);

@@ -13,10 +13,15 @@ namespace alryn {
 enum class EyeStyle : u8 { Round, Wide, Sleepy, Sharp };
 enum class EarStyle : u8 { Round, Pointed, Small };
 enum class HairStyle : u8 { Bald, Short, Spiky, Mohawk, Ponytail };
+// The playable RACES. Men (Human) are the baseline; Dwarves are short + broad + bearded; Elves are
+// tall + slender with long pointed ears. Race drives the model proportions + characteristic features
+// (dwarf beard / elf ears), and rides in the networked appearance so everyone sees the right race.
+enum class Race : u8 { Human, Dwarf, Elf };
 
 constexpr u8 kEyeStyleCount = 4;
 constexpr u8 kEarStyleCount = 3;
 constexpr u8 kHairStyleCount = 5;
+constexpr u8 kRaceCount = 3;
 
 struct CharacterAppearance {
     u8 skin = 1;       // index into skin_tones()
@@ -24,9 +29,41 @@ struct CharacterAppearance {
     EyeStyle eyes = EyeStyle::Round;
     EarStyle ears = EarStyle::Round;
     HairStyle hair = HairStyle::Short;
+    Race race = Race::Human; // kept LAST so existing aggregate initialisers stay valid
 
     bool operator==(const CharacterAppearance&) const = default;
 };
+
+// Per-race body proportions (scales applied on top of the seed's own variation) + the characteristic
+// feature flags. Read by CharacterModel::generate/add_features, so changing these re-proportions the
+// whole figure (body + outfit are skinned from the same bone metrics).
+struct RaceTraits {
+    f32 height = 1.0f; // overall height scale
+    f32 build = 1.0f;  // width / bulk scale (broad dwarf, slim elf)
+    f32 legs = 1.0f;   // leg-length scale (dwarves have short legs)
+    f32 arms = 1.0f;   // arm-length scale
+    f32 head = 1.0f;   // head-size scale
+    bool long_ears = false; // long pointed elven ears
+    bool beard = false;     // a full dwarven beard
+};
+
+inline RaceTraits race_traits(Race r) {
+    switch (r) {
+        case Race::Dwarf: return {0.82f, 1.20f, 0.78f, 1.0f, 1.08f, false, true};
+        case Race::Elf: return {1.10f, 0.90f, 1.14f, 1.06f, 0.94f, true, false};
+        case Race::Human: break;
+    }
+    return {}; // Men - the baseline
+}
+
+inline const char* race_name(Race r) {
+    switch (r) {
+        case Race::Dwarf: return "DWARF";
+        case Race::Elf: return "ELF";
+        case Race::Human: break;
+    }
+    return "MAN";
+}
 
 // Selectable skin tones (light -> dark). Shared by the UI swatches and the model.
 inline const std::array<Vec3, 6>& skin_tones() {

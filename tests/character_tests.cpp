@@ -125,6 +125,55 @@ TEST_CASE("BodyMesh/OutfitMesh: skinned body + outfit are valid and deform with 
     }
 }
 
+TEST_CASE("Character: races reproportion the body and add signature features") {
+    auto make = [](Race race) {
+        CharacterAppearance a;
+        a.race = race;
+        a.hair = HairStyle::Bald; // uncover the head so the beard/ear features are countable
+        return CharacterModel::create(5u, a);
+    };
+    const CharacterModel man = make(Race::Human);
+    const CharacterModel dwarf = make(Race::Dwarf);
+    const CharacterModel elf = make(Race::Elf);
+
+    // Dwarves are shorter than men; elves are taller.
+    CHECK(dwarf.height() < man.height());
+    CHECK(elf.height() > man.height());
+
+    // Dwarves are broader, elves slimmer (the pelvis width scales with the race build).
+    auto pelvis_w = [](const CharacterModel& m) {
+        return m.bones()[static_cast<usize>(m.bone_index(BonePart::Pelvis))].box_size.x;
+    };
+    CHECK(pelvis_w(dwarf) > pelvis_w(man));
+    CHECK(pelvis_w(man) > pelvis_w(elf));
+
+    // A dwarf sprouts a hair-coloured beard (attachment bones the bald others lack).
+    auto beard_bones = [](const CharacterModel& m) {
+        int n = 0;
+        for (const Bone& b : m.bones()) {
+            if (b.attachment && b.color == BoneColor::Hair) {
+                ++n;
+            }
+        }
+        return n;
+    };
+    CHECK(beard_bones(dwarf) > 0);
+    CHECK(beard_bones(man) == 0);
+    CHECK(beard_bones(elf) == 0);
+
+    // An elf has long ears: its tallest skin-coloured face feature far exceeds a man's.
+    auto tallest_skin_feature = [](const CharacterModel& m) {
+        f32 t = 0.0f;
+        for (const Bone& b : m.bones()) {
+            if (b.attachment && b.color == BoneColor::Skin) {
+                t = std::max(t, b.box_size.y);
+            }
+        }
+        return t;
+    };
+    CHECK(tallest_skin_feature(elf) > tallest_skin_feature(man) * 1.5f);
+}
+
 TEST_CASE("Character: the cape collar anchors at the shoulders, not the waist") {
     // Cloaks (ClientAppCloth add_cape / setup_noble_cape) anchor to the HEAD joint + a small offset,
     // so the collar must sit high on the body and hang from the shoulders. The Torso joint sits at

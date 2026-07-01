@@ -71,6 +71,21 @@ void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
             rig_level_ = static_cast<u8>(rig_level_ + 1);
         }
         sync_player_role(pl);
+        // Town shop: buy an ability UPGRADE (input.upgrade = ability index + 1). The client holds the
+        // request a few ticks; buy exactly ONE rank on the RISING edge, in a town + if affordable.
+        if (pl.input.upgrade != 0 && pl.prev_upgrade == 0 && pl.input.upgrade <= kAbilityCount &&
+            worldgen::inside_village(pp.x, pp.z, seed, 6.0f)) {
+            const u8 ab = static_cast<u8>(pl.input.upgrade - 1);
+            u8& rk = pl.ability_rank[static_cast<u8>(pl.role) * kAbilityCount + ab];
+            if (rk < ability_max_rank(pl.role, ab)) {
+                const u32 price = ability_upgrade_price(static_cast<u8>(rk + 1));
+                if (money_ >= price) {
+                    money_ -= price;
+                    rk = static_cast<u8>(rk + 1);
+                }
+            }
+        }
+        pl.prev_upgrade = pl.input.upgrade;
         pl.cast_fx = 0; // cleared each tick; set below when an ability actually fires
         for (f32& cd : pl.ability_cd) {
             if (cd > 0.0f) {
@@ -115,12 +130,13 @@ void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
         switch (pl.role) {
             case PlayerRole::Knight:
                 if (slot == 0) { // Shield Bash: hit every enemy in a frontal cone, knock them back
+                    const f32 up = ability_rank_mult(pl.rank_of(0)); // upgrade scales damage + knockback
                     for (Enemy& e : ambush_) {
                         const Vec3 chest = e.position + Vec3{0.0f, 0.9f, 0.0f};
                         if (!in_attack_cone(origin, yaw, chest, kMeleeRange + 0.5f, kMeleeConeCos)) {
                             continue;
                         }
-                        e.health -= kBashDamage;
+                        e.health -= combo_amp(e, kBashDamage * up); // heavy hit -> shatters a chilled foe
                         Vec3 push = e.position - pl.controller.position();
                         push.y = 0.0f;
                         if (glm::length(push) > 1e-3f) {
@@ -128,7 +144,7 @@ void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
                         } else {
                             push = facing;
                         }
-                        e.position += push * kBashKnockback;
+                        e.position += push * kBashKnockback * up;
                     }
                 } else if (slot == 1) { // Bulwark: raise the shield for heavy mitigation
                     pl.bulwark_timer = kBulwarkDuration;
@@ -148,7 +164,7 @@ void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
                         if (glm::length(d) > kWhirlwindRadius) {
                             continue;
                         }
-                        e.health -= kWhirlwindDamage;
+                        e.health -= combo_amp(e, kWhirlwindDamage);
                         const Vec3 push = glm::length(d) > 1e-3f ? glm::normalize(d) : facing;
                         e.position += push * kWhirlwindKnockback;
                     }
@@ -206,8 +222,8 @@ void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
                 };
                 Vec3 dir = pl.input.aim - eye;
                 dir = glm::length(dir) > 0.2f ? glm::normalize(dir) : facing;
-                if (slot == 0) { // Power Shot: one heavy arrow
-                    loose_arrow(dir, stats.ranged_damage * kPowerShotMult);
+                if (slot == 0) { // Power Shot: one heavy arrow (upgrade scales the damage)
+                    loose_arrow(dir, stats.ranged_damage * kPowerShotMult * ability_rank_mult(pl.rank_of(0)));
                 } else if (slot == 1) { // Volley: a three-arrow spread
                     for (int k = -1; k <= 1; ++k) {
                         const f32 a = std::atan2(dir.z, dir.x) + static_cast<f32>(k) * 0.18f;
@@ -252,7 +268,8 @@ void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
                             target = &other;
                         }
                     }
-                    target->health = std::min(target->max_health, target->health + kHealAmount);
+                    target->health = std::min(target->max_health,
+                                              target->health + kHealAmount * ability_rank_mult(pl.rank_of(0)));
                 } else if (slot == 1) { // Sanctuary: heal everyone nearby
                     for (auto& [oid, other] : players_) {
                         if (glm::length(other.controller.position() - pl.controller.position()) <= kHealRadius) {
@@ -271,30 +288,40 @@ void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
                     pr.radius = 0.2f;
                     pr.life = 3.0f;
                     projectiles_.push_back(pr);
-                } else if (slot == 3) { // Aegis: shield the nearest friendly player/NPC (closest)
-                    ServerPlayer* tp = nullptr;
-                    f32 pbest = kAegisRange;
-                    for (auto& [oid, other] : players_) {
-                        const f32 d = glm::length(other.controller.position() - pl.controller.position());
-                        if (d < pbest) {
-                            pbest = d;
-                            tp = &other;
+                } else if (slot == 3) { // Aegis: a ward whose upgrade transforms it
+                    const u8 rk = pl.rank_of(3);
+                    if (rk >= kMaxAbilityRank) {
+                        // MAX: raise a large protective DOME around the Cleric that blocks enemy ranged
+                        // attacks for every ally - and the cargo - standing inside it (see spawn_bubble).
+                        spawn_bubble(id);
+                    } else {
+                        // Rank 0/1: shield the nearest friendly player/NPC (rank 1 = a stronger, longer ward).
+                        const f32 amount = aegis_amount_for_rank(rk);
+                        const f32 dur = aegis_duration_for_rank(rk);
+                        ServerPlayer* tp = nullptr;
+                        f32 pbest = kAegisRange;
+                        for (auto& [oid, other] : players_) {
+                            const f32 d = glm::length(other.controller.position() - pl.controller.position());
+                            if (d < pbest) {
+                                pbest = d;
+                                tp = &other;
+                            }
                         }
-                    }
-                    Villager* tv = nullptr;
-                    f32 vbest = kAegisRange;
-                    for (auto& [vid, vg] : villagers_) {
-                        const f32 d = glm::length(vg.position - pl.controller.position());
-                        if (d < vbest) {
-                            vbest = d;
-                            tv = &vg;
+                        Villager* tv = nullptr;
+                        f32 vbest = kAegisRange;
+                        for (auto& [vid, vg] : villagers_) {
+                            const f32 d = glm::length(vg.position - pl.controller.position());
+                            if (d < vbest) {
+                                vbest = d;
+                                tv = &vg;
+                            }
                         }
-                    }
-                    if (tv != nullptr && vbest < pbest) {
-                        tv->shield_timer = kAegisDuration; // NPCs take no damage here -> visual ward
-                    } else if (tp != nullptr) {
-                        tp->shield_hp = kAegisAmount; // players get a real damage-absorb pool
-                        tp->shield_timer = kAegisDuration;
+                        if (tv != nullptr && vbest < pbest) {
+                            tv->shield_timer = dur; // NPCs take no damage here -> visual ward
+                        } else if (tp != nullptr) {
+                            tp->shield_hp = amount; // players get a real damage-absorb pool
+                            tp->shield_timer = dur;
+                        }
                     }
                 } else if (slot == 4) { // Renew: lay a lingering heal aura at the caster's feet
                     spawn_aura(AuraKind::Heal, pl.controller.position(), id);
@@ -338,7 +365,127 @@ void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
     }
 
     update_auras(dt);
+    update_bubbles(dt); // Cleric max-Aegis domes follow their caster + age out
+    update_combos(dt);  // Gauntlet co-op combos: the Ally Toss launch + the Power Conduit channel
     (void)density;
+}
+
+// --- Gauntlet co-op combos --------------------------------------------------------------------
+// Runs BEFORE the per-player movement loop, so an Ally Toss launch arcs the tossed ally the same
+// tick. Ticks the combo cooldowns, fires a toss when a player presses it near a teammate, and runs
+// the Cleric's Power Conduit channel (heal + damage buff to the linked ally).
+void GameServer::update_combos(Timestep dt) {
+    const f32 dts = dt.seconds;
+    for (auto& [id, pl] : players_) {
+        if (pl.toss_cd > 0.0f) {
+            pl.toss_cd -= dts;
+        }
+        pl.conduit_target = 0; // recomputed below for a channelling Cleric
+    }
+    // ALLY TOSS: hurl the nearest teammate toward the thrower's aim (they fly with i-frames + land
+    // in a cannonball burst - see the movement loop's landing check + toss_impact).
+    for (auto& [id, pl] : players_) {
+        if (!pl.input.toss || pl.toss_cd > 0.0f || pl.toss_timer > 0.0f) {
+            continue;
+        }
+        ServerPlayer* ally = nullptr;
+        f32 best = kTossGrabRange;
+        for (auto& [oid, other] : players_) {
+            if (oid == id || other.toss_timer > 0.0f || riders_.count(oid) != 0u || oid == pilot_) {
+                continue;
+            }
+            const f32 d = glm::length(other.controller.position() - pl.controller.position());
+            if (d < best) {
+                best = d;
+                ally = &other;
+            }
+        }
+        if (ally == nullptr) {
+            continue; // no teammate in reach (a solo player has no-one to throw)
+        }
+        Vec3 dir = pl.input.aim - pl.controller.position();
+        dir.y = 0.0f;
+        dir = glm::length(dir) > 0.5f ? glm::normalize(dir)
+                                      : Vec3{std::cos(pl.input.yaw), 0.0f, std::sin(pl.input.yaw)};
+        ally->controller.launch(dir * kTossSpeed + Vec3{0.0f, kTossUp, 0.0f});
+        ally->toss_timer = kTossMaxAir;
+        pl.toss_cd = kTossCooldown;
+    }
+    // POWER CONDUIT: a channelling Cleric heals + damage-buffs the nearest ally, and links to them
+    // (the client draws the beam from PlayerState.link).
+    for (auto& [id, pl] : players_) {
+        if (pl.role != PlayerRole::Cleric || !pl.input.channel) {
+            continue;
+        }
+        net::PlayerId target_id = 0;
+        ServerPlayer* ally = nullptr;
+        f32 best = kConduitRange;
+        for (auto& [oid, other] : players_) {
+            if (oid == id) {
+                continue;
+            }
+            const f32 d = glm::length(other.controller.position() - pl.controller.position());
+            if (d < best) {
+                best = d;
+                ally = &other;
+                target_id = oid;
+            }
+        }
+        if (ally == nullptr) {
+            continue;
+        }
+        ally->heal(kConduitHealRate * dts);
+        // Keep the damage buff (reuses Empower) topped up while the beam is held; it fades on release.
+        ally->damage_boost_timer = std::max(ally->damage_boost_timer, 0.4f);
+        pl.conduit_target = target_id;
+    }
+}
+
+// --- Cleric max-Aegis protective dome ---------------------------------------------------------
+void GameServer::spawn_bubble(net::PlayerId owner) {
+    const auto it = players_.find(owner);
+    if (it == players_.end()) {
+        return;
+    }
+    // Refresh an existing dome from this caster rather than stacking a second one.
+    for (BubbleShield& b : bubbles_) {
+        if (b.owner == owner) {
+            b.health = kAegisBubbleHealth;
+            b.ttl = kAegisBubbleDuration;
+            b.position = it->second.controller.position();
+            return;
+        }
+    }
+    BubbleShield b;
+    b.owner = owner;
+    b.position = it->second.controller.position();
+    bubbles_.push_back(b);
+}
+
+void GameServer::update_bubbles(Timestep dt) {
+    for (BubbleShield& b : bubbles_) {
+        b.ttl -= dt.seconds;
+        const auto it = players_.find(b.owner);
+        if (it != players_.end()) {
+            b.position = it->second.controller.position(); // the dome follows its caster
+        } else {
+            b.ttl = 0.0f; // caster gone -> drop the dome
+        }
+    }
+    std::erase_if(bubbles_, [](const BubbleShield& b) { return b.ttl <= 0.0f || b.health <= 0.0f; });
+}
+
+bool GameServer::bubble_absorbs(const Vec3& pos, f32 damage) {
+    for (BubbleShield& b : bubbles_) {
+        if (b.health <= 0.0f) {
+            continue;
+        }
+        if (glm::length(pos - b.position) <= b.radius) {
+            b.health -= std::max(damage, 1.0f); // even a weak shot chips the dome a little
+            return true;
+        }
+    }
+    return false;
 }
 
 // Ground auras. A Cleric holds right mouse (input.block) to CHANNEL a heavy heal: the charge
@@ -452,7 +599,7 @@ void GameServer::cast_spell(ServerPlayer& pl, net::PlayerId id, SpellId spell) {
         case SpellId::Meteor: // an instant blast at the aim point
             for (Enemy& e : ambush_) {
                 if (e.alive && glm::length(e.position - pl.input.aim) <= kMeteorRadius) {
-                    e.health -= kMeteorDamage * pl.outgoing_mult();
+                    e.health -= combo_amp(e, kMeteorDamage * pl.outgoing_mult());
                 }
             }
             break;

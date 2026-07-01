@@ -36,6 +36,15 @@ public:
     Vec3 eye_position() const { return position_ + Vec3{0.0f, config_.eye_height, 0.0f}; }
     const Vec3& velocity() const { return velocity_; }
     bool on_ground() const { return on_ground_; }
+    // Launch the capsule ballistically (an Ally Toss / a knockback): `v.xz` is an UNCLAMPED horizontal
+    // velocity carried until landing (unlike walk input, which is clamped to walk_speed); `v.y` is the
+    // upward kick. The launch integrates + is wall-checked in update() and clears on landing.
+    void launch(const Vec3& v) {
+        launch_vel_ = Vec3{v.x, 0.0f, v.z};
+        velocity_.y = v.y;
+        on_ground_ = false;
+    }
+    bool airborne_launch() const { return glm::length(launch_vel_) > 0.05f; }
     const CharacterConfig& config() const { return config_; }
     void set_walk_speed(f32 s) { config_.walk_speed = s; }
 
@@ -55,6 +64,7 @@ private:
     CharacterConfig config_;
     Vec3 position_{0.0f};
     Vec3 velocity_{0.0f};
+    Vec3 launch_vel_{0.0f}; // ballistic horizontal velocity from a toss/knockback (decays; clears on land)
     bool on_ground_ = false;
 };
 

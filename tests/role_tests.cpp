@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include <Alryn/Combat/Enemy.h>
 #include <Alryn/Game/Roles.h>
 #include <Alryn/Physics/Collider.h>
 
@@ -55,6 +56,54 @@ TEST_CASE("every role now has four abilities, incl. the cleric Aegis shield") {
     CHECK(kAegisAmount > 0.0f);   // it absorbs damage
     CHECK(kAegisDuration > 0.0f); // and lasts a while
     CHECK(kAegisRange > 0.0f);
+}
+
+TEST_CASE("Gauntlet co-op combo tuning is sane") {
+    // Ally Toss: a real launch (up + forward), a landing burst, and a cooldown.
+    CHECK(kTossSpeed > 0.0f);
+    CHECK(kTossUp > 0.0f);
+    CHECK(kTossImpactDamage > 0.0f);
+    CHECK(kTossImpactRadius > 0.0f);
+    CHECK(kTossCooldown > 0.0f);
+    CHECK(kTossGrabRange > 0.0f);
+    // Elemental Shatter amplifies a heavy hit; a Chill slows the foe (the set-up).
+    CHECK(kShatterMult > 1.0f);
+    CHECK(kShatterThreshold > 0.0f);
+    CHECK(kChillSlow < 1.0f);
+    CHECK(kChillDuration > 0.0f);
+    // Focus Zone amplifies every ally's damage inside it.
+    CHECK(kFocusZoneMult > 1.0f);
+    // Power Conduit heals the linked ally over a real range.
+    CHECK(kConduitHealRate > 0.0f);
+    CHECK(kConduitRange > 0.0f);
+}
+
+TEST_CASE("a curated set of abilities is upgradeable, flagship = the Cleric Aegis dome") {
+    // Only the curated abilities are upgradeable; the rest report max rank 0.
+    CHECK(ability_max_rank(PlayerRole::Knight, 0) == kMaxAbilityRank); // Shield Bash
+    CHECK(ability_max_rank(PlayerRole::Hunter, 0) == kMaxAbilityRank); // Power Shot
+    CHECK(ability_max_rank(PlayerRole::Cleric, 0) == kMaxAbilityRank); // Heal
+    CHECK(ability_max_rank(PlayerRole::Cleric, 3) == kMaxAbilityRank); // Aegis (the flagship)
+    CHECK(ability_max_rank(PlayerRole::Knight, 1) == 0);               // Bulwark - not upgradeable
+    CHECK(ability_max_rank(PlayerRole::Mage, 0) == 0);                 // the Mage upgrades via combos
+
+    // Upgrade cost escalates and is a mid-range money sink.
+    CHECK(ability_upgrade_price(1) > 0u);
+    CHECK(ability_upgrade_price(2) > ability_upgrade_price(1));
+
+    // The generic numeric upgrade scales outputs up with rank (base rank 0 = no change).
+    CHECK(ability_rank_mult(0) == doctest::Approx(1.0f));
+    CHECK(ability_rank_mult(1) > 1.0f);
+    CHECK(ability_rank_mult(2) > ability_rank_mult(1));
+
+    // Aegis rank 1 is a stronger, longer single-target ward...
+    CHECK(aegis_amount_for_rank(1) > aegis_amount_for_rank(0));
+    CHECK(aegis_duration_for_rank(1) > aegis_duration_for_rank(0));
+    // ...and the MAX-rank dome has a real radius + lifetime + health (it blocks ranged attacks).
+    CHECK(kAegisBubbleRadius > kAegisRange * 0.0f);
+    CHECK(kAegisBubbleRadius > 2.0f);
+    CHECK(kAegisBubbleDuration > 0.0f);
+    CHECK(kAegisBubbleHealth > 0.0f);
 }
 
 TEST_CASE("aura props table drives radius/duration/colour/light for each kind") {

@@ -106,7 +106,13 @@ struct Enemy {
     f32 sunder_cd = 0.0f;   // shield-bearer: while > 0 its guard is broken (a heavy blow staggered it)
     f32 slam_windup = 0.0f; // brute slam / archer aim: while > 0 it is winding up a telegraphed attack
     f32 stagger = 0.0f;     // while > 0 it reels from a heavy hit: no move + no attack (combo window)
+    f32 chill_timer = 0.0f; // ELEMENTAL SHATTER: while > 0 it is chilled (slowed); a heavy hit shatters it
 };
+
+// Elemental Shatter combo: a Mage Frost Bolt CHILLS an enemy (slowing it) for kChillDuration; the next
+// heavy ally hit SHATTERS the chill for bonus damage (see kShatterMult in Roles.h). Pure tuning.
+inline constexpr f32 kChillDuration = 4.0f; // seconds an enemy stays chilled after a frost hit
+inline constexpr f32 kChillSlow = 0.55f;    // x march speed while chilled
 
 // Archer (kind 3) AIMED SHOT: instead of weak snap-arrows the archer now winds up (a telegraph the
 // party can read) and looses a HEAVY, fast arrow - so an archer is a sniper you watch + dodge (or
@@ -267,6 +273,10 @@ inline void step_enemy(Enemy& e, const DensitySampler& density,
     Vec3 to = goal - e.position;
     to.y = 0.0f;
     const f32 d = glm::length(to);
+    // Chilled (a Mage Frost Bolt) -> slowed march (the ELEMENTAL SHATTER set-up).
+    if (e.chill_timer > 0.0f) {
+        speed *= kChillSlow;
+    }
     // While reeling from a heavy hit (staggered) the enemy can't pursue its goal - but knockback below
     // still shoves it, so a solid blow visibly stops it in its tracks and opens a follow-up window.
     if (e.stagger <= 0.0f && d > 0.05f) {
@@ -316,6 +326,9 @@ inline void step_enemy(Enemy& e, const DensitySampler& density,
     }
     if (e.stagger > 0.0f) {
         e.stagger -= dts; // the brief reel from a heavy hit wears off
+    }
+    if (e.chill_timer > 0.0f) {
+        e.chill_timer -= dts; // the frost chill thaws over time
     }
 }
 

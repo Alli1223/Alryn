@@ -16,6 +16,18 @@ void ClientApp::cast_ability(u8 ability) {
         bulwark_fx_ = kBulwarkDuration; // Bulwark + Rally both raise the golden dome
     } else if (role_ == PlayerRole::Hunter && ability == 2) {
         dash_fx_ = kDashDuration;
+    } else if (role_ == PlayerRole::Cleric && ability == 3 && ability_rank_[3] >= kMaxAbilityRank) {
+        // Max-rank Aegis: a big protective DOME snaps up around the caster - a rising ring + a
+        // radiant column so the ranged-blocking bubble reads instantly (the dome itself is networked).
+        const Vec3 feet = local_feet();
+        emit_ring(feet, Vec4{0.55f, 0.8f, 1.0f, 0.95f}, 40, kAegisBubbleRadius * 1.5f, 0.7f, 0.2f);
+        emit_burst(feet + Vec3{0.0f, 1.0f, 0.0f}, Vec4{0.6f, 0.85f, 1.0f, 0.95f}, 30, 5.0f, 0.7f, 0.16f,
+                   1, 3.0f);
+        for (int i = 0; i < 22; ++i) {
+            const f32 ang = frand(0.0f, TwoPi);
+            emit(feet + Vec3{std::cos(ang), 0.1f, std::sin(ang)} * (kAegisBubbleRadius * 0.9f),
+                 Vec3{0.0f, frand(2.5f, 5.0f), 0.0f}, Vec4{0.7f, 0.9f, 1.0f, 0.9f}, 0.8f, 0.13f, 1, -1.0f);
+        }
     }
 }
 
@@ -89,7 +101,23 @@ void ClientApp::equip_ability(u8 ability) {
     bar_[kAbilitySlots - 1] = static_cast<int>(ability);
 }
 
+void ClientApp::request_ability_upgrade(u8 ability) {
+    if (ability >= kAbilityCount || ability_max_rank(role_, ability) == 0 ||
+        ability_rank_[ability] >= ability_max_rank(role_, ability)) {
+        return;
+    }
+    pending_upgrade_ = static_cast<u8>(ability + 1); // wire carries the ability index + 1
+    upgrade_hold_ = 8; // hold a few ticks so the server sees a rising edge even if a packet drops
+}
+
 void ClientApp::skills_click(const Vec2& p) {
+    // UPGRADE buttons take priority (they overlap the row's equip hit-box).
+    for (u8 a = 0; a < kAbilityCount; ++a) {
+        if (in_rect(p, skill_upgrade_rects_[a])) {
+            request_ability_upgrade(a);
+            return;
+        }
+    }
     for (u8 a = 0; a < kAbilityCount; ++a) {
         if (in_rect(p, skill_node_rects_[a])) {
             equip_ability(a);
@@ -342,6 +370,10 @@ void ClientApp::on_event(Event& event) {
             pending_dodge_ = true; // dodge roll (a quick burst + brief i-frames)
         } else if (e.key() == key::E) {
             pending_grab_ = true; // hitch / unhitch the nearest wagon (manual haul)
+        } else if (e.key() == key::G && !e.is_repeat()) {
+            pending_toss_ = true; // Ally Toss: hurl the nearest teammate toward the cursor
+        } else if (e.key() == key::V) {
+            conduit_held_ = true; // Power Conduit: Cleric channels a heal + damage beam to an ally
         } else if (e.key() == key::H) {
             vote_mode_ = vote_mode_ == 1 ? 2 : 1; // toggle hire driver / haul manually
         } else if (role_ != PlayerRole::Mage &&
@@ -358,6 +390,9 @@ void ClientApp::on_event(Event& event) {
             cast_mage_spell(static_cast<SpellId>(resolve_combo())); // cast the woven combo (0 = none)
             combo_n_ = 0;
             return true;
+        }
+        if (e.key() == key::V) {
+            conduit_held_ = false; // stop channelling the Power Conduit beam
         }
         return false;
     });
@@ -607,6 +642,16 @@ void ClientApp::send_input() {
         pending_buy_rig_ = 0;
     }
     packet.buy_rig = pending_buy_rig_;
+    packet.toss = pending_toss_;                    // Ally Toss (one-shot; server gates on cooldown + an ally)
+    packet.channel = conduit_held_;                 // Power Conduit (held; server gates to a Cleric near an ally)
+    // Ability upgrade: hold the request a few ticks so the server sees a rising edge even if a packet
+    // drops (the server buys exactly one rank per press). Clears itself as the hold window elapses.
+    if (upgrade_hold_ > 0) {
+        packet.upgrade = pending_upgrade_;
+        if (--upgrade_hold_ <= 0) {
+            pending_upgrade_ = 0;
+        }
+    }
     client_.send_input(packet);
     pending_ability_ = 0;
     pending_spell_ = 0;
@@ -617,6 +662,7 @@ void ClientApp::send_input() {
     pending_build_ = false;
     pending_rally_ = false;
     pending_grab_ = false;
+    pending_toss_ = false; // one-shot toss press consumed
 }
 
 void ClientApp::update_aim() {

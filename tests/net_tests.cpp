@@ -38,9 +38,12 @@ TEST_CASE("Net: message serialization round-trips") {
     input.block = true;
     input.dodge = true;
     input.appearance = CharacterAppearance{3, 5, EyeStyle::Sleepy, EarStyle::Pointed,
-                                           HairStyle::Ponytail};
+                                           HairStyle::Ponytail, Race::Elf};
     input.equipment = Equipment{2, 1, 4, 1}; // outfit tier 2, weapon tier 1, tint 4, weapon 1
     input.buy_rig = 2;                       // buying up to wagon-rig level 2
+    input.upgrade = 4;                       // requesting an upgrade of ability index 3 (Cleric Aegis)
+    input.toss = true;                       // Ally Toss combo input
+    input.channel = true;                    // Power Conduit combo input
 
     ByteWriter w;
     write(w, input);
@@ -67,9 +70,13 @@ TEST_CASE("Net: message serialization round-trips") {
     CHECK(out.spell == static_cast<u8>(SpellId::RockWall));
     CHECK(out.block);
     CHECK(out.dodge);
-    CHECK(out.appearance == input.appearance); // cosmetics survive the round-trip
+    CHECK(out.appearance == input.appearance);   // cosmetics survive the round-trip
+    CHECK(out.appearance.race == Race::Elf);      // the chosen race survives the round-trip
     CHECK(out.equipment == input.equipment);   // gear loadout survives the round-trip
     CHECK(out.buy_rig == 2);                   // wagon-rig purchase request survives
+    CHECK(out.upgrade == 4);                   // ability-upgrade request survives
+    CHECK(out.toss);                           // Ally Toss + Power Conduit combo inputs survive
+    CHECK(out.channel);
 
     Snapshot snapshot;
     snapshot.tick = 7;
@@ -88,8 +95,8 @@ TEST_CASE("Net: message serialization round-trips") {
         {2, Vec3{4.0f, 5.0f, 6.0f}, 1.5f, 73, 3, 1, 1, 2, 3, 0, 128,
          3, 17, // seated+carrying, Cleric, slot3, shielded, empowered+hasted, hit_fx=17
          CharacterAppearance{2, 0, EyeStyle::Sharp, EarStyle::Small, HairStyle::Spiky}});
-    snapshot.enemies.push_back({40u, Vec3{7.0f, 1.0f, -2.0f}, 0.8f, 1, 200, 1}); // swinging
-    snapshot.enemies.push_back({41u, Vec3{9.0f, 1.5f, -4.0f}, 2.0f, 0, 60, 0});
+    snapshot.enemies.push_back({40u, Vec3{7.0f, 1.0f, -2.0f}, 0.8f, 1, 200, 1, 1}); // swinging + chilled
+    snapshot.enemies.push_back({41u, Vec3{9.0f, 1.5f, -4.0f}, 2.0f, 0, 60, 0, 0});
     snapshot.villagers.push_back(
         {900u, Vec3{2.0f, 0.5f, 8.0f}, 1.1f, 40, 0, 0,
          CharacterAppearance{4, 1, EyeStyle::Round, EarStyle::Pointed, HairStyle::Ponytail}});
@@ -114,6 +121,9 @@ TEST_CASE("Net: message serialization round-trips") {
     snapshot.goods.push_back({78u, Vec3{0.2f, 0.55f, -0.1f}, 0}); // a crate in the bed (local pos)
     snapshot.auras.push_back({Vec3{3.0f, 1.0f, -5.0f}, 5.0f, 0}); // a Cleric heal aura
     snapshot.walls.push_back({Vec3{15.0f, 0.5f, 9.0f}, 0.7f, 7.0f, 200}); // a Mage rock wall
+    snapshot.bubbles.push_back({Vec3{20.0f, 0.5f, -3.0f}, 4.5f, 200}); // a Cleric max-Aegis dome
+    snapshot.players[1].ability_ranks = 0x0025u; // ability0 rank1, ability1 rank1, ability2 rank2
+    snapshot.players[1].link = 1u;               // Power Conduit: player 2 is channelling to player 1
     ByteWriter ws;
     write(ws, snapshot);
     ByteReader rs(ws.bytes(), ws.size());
@@ -143,6 +153,9 @@ TEST_CASE("Net: message serialization round-trips") {
     CHECK(decoded.players[1].hit_fx == 17); // hit-marker counter round-trips
     CHECK(decoded.enemies[0].action == 1); // swinging
     CHECK(decoded.enemies[1].action == 0);
+    CHECK(decoded.enemies[0].status == 1); // chilled status round-trips
+    CHECK(decoded.enemies[1].status == 0);
+    CHECK(decoded.players[1].link == 1u);  // Power Conduit beam target round-trips
     CHECK(decoded.time_of_day == doctest::Approx(0.625f));
     CHECK(decoded.weather == 180);
     CHECK(decoded.outcome == static_cast<u8>(MatchOutcome::Lost));
@@ -214,6 +227,11 @@ TEST_CASE("Net: message serialization round-trips") {
     CHECK(decoded.walls[0].yaw == doctest::Approx(0.7f));
     CHECK(decoded.walls[0].length == doctest::Approx(7.0f));
     CHECK(decoded.walls[0].health == 200);
+    REQUIRE(decoded.bubbles.size() == 1);
+    CHECK(decoded.bubbles[0].position.x == doctest::Approx(20.0f));
+    CHECK(decoded.bubbles[0].radius == doctest::Approx(4.5f));
+    CHECK(decoded.bubbles[0].strength == 200); // max-Aegis dome round-trips
+    CHECK(decoded.players[1].ability_ranks == 0x0025u); // packed upgrade ranks round-trip
 
     Welcome welcome{77, 0xABCDu};
     ByteWriter ww;
@@ -563,6 +581,136 @@ TEST_CASE("GameServer: a Mage's spell casts end-to-end (a rock wall is raised + 
 
     pump(6, nullptr); // and it reaches the client in the snapshot
     CHECK_FALSE(snap.walls.empty());
+}
+
+// The Cleric's AEGIS is upgradeable in a town shop; at MAX rank it becomes a large protective DOME
+// (networked) that blocks enemy ranged attacks for everyone - and the cargo - inside it.
+TEST_CASE("GameServer: a maxed Cleric Aegis raises a ranged-blocking dome") {
+    GameServer server;
+    if (!server.start(24697, 4242u)) {
+        MESSAGE("Could not bind game server - skipping");
+        return;
+    }
+    NetClient c;
+    REQUIRE(c.connect("127.0.0.1", 24697));
+    PlayerId id = 0;
+    PlayerInput intent;
+    intent.role = static_cast<u8>(PlayerRole::Cleric);
+    Snapshot snap{};
+    auto pump = [&](int n) {
+        for (int i = 0; i < n; ++i) {
+            c.send_input(intent);
+            server.tick(Timestep{1.0f / 60.0f});
+            for (const ClientEvent& e : c.poll(1)) {
+                if (e.type == ClientEventType::WelcomeReceived) {
+                    id = e.welcome.your_id;
+                } else if (e.type == ClientEventType::SnapshotReceived) {
+                    snap = e.snapshot;
+                }
+            }
+        }
+    };
+    pump(120);
+    REQUIRE(id != 0);
+    const Vec3 spawn = server.players().at(id).controller.position();
+    if (!worldgen::inside_village(spawn.x, spawn.z, 4242u, 6.0f)) {
+        MESSAGE("spawn not inside a town - skipping Aegis upgrade test");
+        return;
+    }
+    server.debug_add_money(2000); // plenty for the two Aegis ranks
+
+    // Buy Aegis (ability index 3) up to MAX rank, one rank per rising-edge press (release between).
+    const u8 aegis = 3;
+    for (int r = 0; r < kMaxAbilityRank; ++r) {
+        intent.upgrade = static_cast<u8>(aegis + 1);
+        pump(6);
+        intent.upgrade = 0;
+        pump(6);
+    }
+    CHECK(server.players().at(id).rank_of(aegis) == kMaxAbilityRank);
+    REQUIRE(snap.players.size() >= 1);
+    CHECK(((snap.players[0].ability_ranks >> (2 * aegis)) & 0x3u) == kMaxAbilityRank); // networked
+
+    // Cast Aegis at max rank -> the dome is raised (server-side + networked to the client).
+    CHECK(server.bubbles().empty());
+    intent.ability = static_cast<u8>(aegis + 1);
+    pump(4);
+    intent.ability = 0;
+    REQUIRE(server.bubbles().size() >= 1);
+    pump(4); // it reaches the client
+    CHECK_FALSE(snap.bubbles.empty());
+
+    // The dome blocks a ranged hit INSIDE it (chipping its health) but not one far OUTSIDE - so it
+    // protects everyone sheltering under it from enemy arrows.
+    const Vec3 center = server.bubbles()[0].position;
+    const f32 hp0 = server.bubbles()[0].health;
+    CHECK(server.bubble_absorbs(center + Vec3{0.5f, 1.0f, 0.5f}, 20.0f)); // an arrow inside is swallowed
+    CHECK(server.bubbles()[0].health < hp0);                              // ...chipping the dome
+    CHECK_FALSE(server.bubble_absorbs(center + Vec3{100.0f, 0.0f, 0.0f}, 20.0f)); // one far away passes
+}
+
+// Gauntlet co-op combos: one player HURLS a teammate (Ally Toss) - they fly off the ground toward the
+// aim - and a Cleric CHANNELS a Power Conduit beam to an ally, buffing them.
+TEST_CASE("GameServer: an Ally Toss hurls a teammate + a Cleric conduit buffs an ally") {
+    GameServer server;
+    if (!server.start(24699, 777u)) {
+        MESSAGE("Could not bind game server - skipping");
+        return;
+    }
+    NetClient a;
+    NetClient b;
+    REQUIRE(a.connect("127.0.0.1", 24699));
+    REQUIRE(b.connect("127.0.0.1", 24699));
+    PlayerId a_id = 0;
+    PlayerId b_id = 0;
+    PlayerInput ai; // player A's input
+    auto pump = [&](int n) {
+        for (int i = 0; i < n; ++i) {
+            if (a_id != 0) {
+                a.send_input(ai);
+            }
+            server.tick(Timestep{1.0f / 60.0f});
+            for (const ClientEvent& e : a.poll(1)) {
+                if (e.type == ClientEventType::WelcomeReceived) a_id = e.welcome.your_id;
+            }
+            for (const ClientEvent& e : b.poll(1)) {
+                if (e.type == ClientEventType::WelcomeReceived) b_id = e.welcome.your_id;
+            }
+        }
+    };
+    pump(150);
+    REQUIRE(a_id != 0);
+    REQUIRE(b_id != 0);
+
+    // ALLY TOSS: place B right beside A, then A hurls B toward +x.
+    const Vec3 apos = server.players().at(a_id).controller.position();
+    server.debug_place_player(b_id, apos + Vec3{1.5f, 0.0f, 0.0f});
+    pump(4);
+    const Vec3 b_start = server.players().at(b_id).controller.position();
+    ai.aim = apos + Vec3{20.0f, 0.0f, 0.0f};
+    ai.toss = true;
+    pump(1);
+    ai.toss = false;
+    bool airborne = false;
+    f32 max_dx = 0.0f;
+    for (int i = 0; i < 130; ++i) {
+        pump(1);
+        const Vec3 bp = server.players().at(b_id).controller.position();
+        if (bp.y > b_start.y + 0.4f) {
+            airborne = true;
+        }
+        max_dx = std::max(max_dx, bp.x - b_start.x);
+    }
+    CHECK(airborne);      // the toss launched B off the ground
+    CHECK(max_dx > 2.5f); // and flung B well forward toward the aim (the launch is unclamped)
+
+    // POWER CONDUIT: A (as a Cleric) channels a beam to a nearby B -> B gets the co-op damage buff.
+    ai.role = static_cast<u8>(PlayerRole::Cleric);
+    ai.channel = true;
+    server.debug_place_player(b_id, server.players().at(a_id).controller.position() + Vec3{2.0f, 0.0f, 0.0f});
+    pump(10);
+    CHECK(server.players().at(b_id).damage_boost_timer > 0.0f); // the conduit buffed the ally
+    CHECK(server.players().at(a_id).conduit_target == b_id);    // and links to them (the client draws a beam)
 }
 
 TEST_CASE("GameServer: two clients join and see each other move") {

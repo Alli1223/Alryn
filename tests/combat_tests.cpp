@@ -95,6 +95,21 @@ TEST_CASE("Combat: an enemy marches toward its goal and stays on the ground") {
     CHECK(glm::length(goal - e.position) < 0.2f);
 }
 
+TEST_CASE("Combat: a chilled enemy marches slower (Elemental Shatter set-up)") {
+    const DensitySampler density = flat_ground();
+    const std::span<const Collider> none{};
+    const Vec3 goal{20.0f, 0.0f, 0.0f};
+    Enemy normal, chilled;
+    normal.position = chilled.position = Vec3{0.0f, 0.0f, 0.0f};
+    chilled.chill_timer = kChillDuration; // frozen by a Mage Frost Bolt
+    for (int i = 0; i < 60; ++i) {
+        step_enemy(normal, density, none, goal, Timestep{1.0f / 60.0f});
+        step_enemy(chilled, density, none, goal, Timestep{1.0f / 60.0f});
+    }
+    CHECK(chilled.position.x < normal.position.x - 0.5f); // the chill visibly slowed its advance
+    CHECK(chilled.chill_timer < kChillDuration);          // and the chill is thawing over time
+}
+
 TEST_CASE("Combat: a hit knocks an enemy back, then it settles + presses on") {
     const DensitySampler density = flat_ground();
     const std::span<const Collider> none{};
