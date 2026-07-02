@@ -801,14 +801,41 @@ void ClientApp::update_visuals(Timestep dt) {
                       kTossImpactRadius * 1.5f, 0.55f, 0.17f);
             emit_burst(p.position + Vec3{0.0f, 0.3f, 0.0f}, Vec4{0.92f, 0.86f, 0.68f, 0.85f}, 22, 5.5f,
                        0.5f, 0.15f, 1, 1.2f, 3.5f);
+            combat_text(p.position, "CANNONBALL!", Vec4{1.0f, 0.88f, 0.55f, 1.0f});
         }
         v.last_action = p.action;
+        // Floating combat text on buff EDGES, over whoever the buff landed on - so the co-op plays
+        // (Empower / Conduit / War Horn / Aegis / a perfect dodge) read at a glance for everyone.
+        if ((p.buffs & 1u) != 0u && (v.last_buffs & 1u) == 0u) {
+            combat_text(p.position, "EMPOWERED!", Vec4{1.0f, 0.62f, 0.28f, 1.0f});
+        }
+        if ((p.buffs & 2u) != 0u && (v.last_buffs & 2u) == 0u) {
+            combat_text(p.position, "HASTED!", Vec4{0.5f, 1.0f, 0.55f, 1.0f});
+        }
+        if (p.shield > 0 && v.last_shield == 0) {
+            combat_text(p.position, "WARDED!", Vec4{0.6f, 0.82f, 1.0f, 1.0f});
+        }
+        v.last_buffs = p.buffs;
+        v.last_shield = p.shield;
         v.animator.update(v.speed, dt);
     }
     pending_local_swing_ = false;
 }
 
+void ClientApp::combat_text(const Vec3& world, std::string text, const Vec4& color, f32 size) {
+    if (float_texts_.size() >= 24) {
+        float_texts_.erase(float_texts_.begin()); // a busy fight can't stack labels forever
+    }
+    float_texts_.push_back({world + Vec3{0.0f, 2.1f, 0.0f}, std::move(text), color, 0.0f, 1.1f, size});
+}
+
 void ClientApp::update_feedback(Timestep dt) {
+    // Age out the floating combat labels (drawn in the HUD pass).
+    for (FloatText& ft : float_texts_) {
+        ft.age += dt.seconds;
+    }
+    std::erase_if(float_texts_, [](const FloatText& ft) { return ft.age >= ft.life; });
+
     const f32 hp = local_health();
     if (hp < last_health_ - 0.001f) {
         hit_flash_ = 1.0f;

@@ -55,6 +55,26 @@ bool ClientApp::world_to_screen(const Vec3& world, f32 W, f32 H, Vec2& out) cons
     return std::abs(ndc.x) < 1.3f && std::abs(ndc.y) < 1.3f;
 }
 
+// The floating combat labels ("SHATTER!" / "EMPOWERED!" / "CANNONBALL!"): each pops in over the
+// spot it happened, drifts upward and fades out - centred, so the eye reads it without hunting.
+void ClientApp::draw_combat_text(ui::DrawList& draw, f32 W, f32 H) {
+    for (const FloatText& ft : float_texts_) {
+        const f32 t = ft.age / ft.life; // 0 -> 1 over its life
+        Vec2 sp;
+        if (!world_to_screen(ft.world + Vec3{0.0f, t * 1.1f, 0.0f}, W, H, sp)) {
+            continue;
+        }
+        const f32 pop = t < 0.12f ? t / 0.12f : 1.0f;             // quick scale-in
+        const f32 alpha = t > 0.6f ? 1.0f - (t - 0.6f) / 0.4f : 1.0f; // hold, then fade
+        const f32 sz = ft.size * (0.7f + 0.3f * pop);
+        const std::string& s = ft.text;
+        draw.text(Vec2{sp.x - draw.text_width(s, sz) * 0.5f + 1.5f, sp.y + 1.5f}, s, sz,
+                  Vec4{0.0f, 0.0f, 0.0f, 0.55f * alpha}); // a soft drop shadow for contrast
+        draw.text(Vec2{sp.x - draw.text_width(s, sz) * 0.5f, sp.y}, s, sz,
+                  Vec4{Vec3{ft.color}, ft.color.a * alpha});
+    }
+}
+
 void ClientApp::draw_hud() {
     if (renderer_ == nullptr || !have_snapshot_) {
         return;
@@ -86,6 +106,7 @@ void ClientApp::draw_hud() {
                        22.0f + (1.0f - money_pulse_) * -14.0f + 4.0f},
                   gain, gs, Vec4{1.0f, 0.9f, 0.35f, money_pulse_});
     }
+    draw_combat_text(draw, W, H); // world-anchored "SHATTER!" / "EMPOWERED!" / "CANNONBALL!" labels
     // Clean-delivery streak (perfect full-cargo runs) + its stacking pay bonus, just under the wallet.
     if (snapshot_.delivery_streak > 0) {
         const u32 s = snapshot_.delivery_streak;
@@ -261,10 +282,35 @@ void ClientApp::draw_hud() {
     const f32 y = H - 24.0f - bh;        // health bar
     const f32 role_y = y - ts * 1.1f;    // role label, a clear line above the bar
     const f32 controls_y = role_y - ts * 1.1f; // controls hint, above the role label
-    // The Power Conduit hint only shows for a Cleric (V is a no-op for other roles).
-    const std::string combo_hint =
-        role_ == PlayerRole::Cleric ? "[G] TOSS ALLY   [V] CONDUIT" : "[G] TOSS ALLY";
-    draw.text(Vec2{x, controls_y - ts * 0.85f}, combo_hint, ts * 0.68f, Vec4{0.85f, 0.78f, 0.55f, 1.0f});
+    // CONTEXTUAL co-op prompts: when a teammate is actually in reach the hint NAMES them and
+    // brightens, so the combos advertise themselves at the moment they're possible.
+    const net::PlayerState* near_ally = nullptr;
+    f32 near_d = 1e9f;
+    for (const net::PlayerState& p : snapshot_.players) {
+        if (p.id == my_id_) {
+            continue;
+        }
+        const f32 d = glm::length(p.position - feet);
+        if (d < near_d) {
+            near_d = d;
+            near_ally = &p;
+        }
+    }
+    const auto ally_role = [&] {
+        return role_name(static_cast<PlayerRole>(near_ally->role % kRoleCount));
+    };
+    const bool can_toss = near_ally != nullptr && near_d <= kTossGrabRange;
+    std::string combo_hint = can_toss ? std::format("[G] TOSS THE {}", ally_role())
+                                      : "[G] TOSS ALLY (STAND CLOSE)";
+    bool can_combo = can_toss;
+    if (role_ == PlayerRole::Cleric) {
+        // The Power Conduit hint only shows for a Cleric (V is a no-op for other roles).
+        const bool can_beam = near_ally != nullptr && near_d <= kConduitRange;
+        combo_hint += can_beam ? std::format("   [V] CONDUIT > {}", ally_role()) : "   [V] CONDUIT";
+        can_combo = can_combo || can_beam;
+    }
+    draw.text(Vec2{x, controls_y - ts * 0.85f}, combo_hint, ts * 0.68f,
+              can_combo ? Vec4{1.0f, 0.9f, 0.5f, 1.0f} : Vec4{0.85f, 0.78f, 0.55f, 0.85f});
     draw.text(Vec2{x, controls_y}, "[M] MAP    [K] SKILLS    [U] GEAR", ts * 0.72f,
               Vec4{0.72f, 0.80f, 0.88f, 1.0f});
     draw.rect(Vec4{x - 3.0f, y - 3.0f, bw + 6.0f, bh + 6.0f}, Vec4{0.05f, 0.05f, 0.07f, 0.7f},

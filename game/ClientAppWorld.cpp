@@ -90,7 +90,8 @@ void ClientApp::update_enemy_visuals(Timestep dt) {
                  Vec3{0.0f, frand(-0.4f, 0.2f), 0.0f}, Vec4{0.7f, 0.88f, 1.0f, 0.8f}, 0.5f, 0.07f, 1);
         } else if (!chilled && (v.last_status & 1u) != 0u) {
             emit_burst(en.position + Vec3{0.0f, 0.9f, 0.0f}, Vec4{0.72f, 0.9f, 1.0f, 0.95f}, 20, 6.0f,
-                       0.45f, 0.12f, 1, 1.0f, 3.0f); // SHATTER!
+                       0.45f, 0.12f, 1, 1.0f, 3.0f);
+            combat_text(en.position, "SHATTER!", Vec4{0.75f, 0.92f, 1.0f, 1.0f}); // the combo landed
         }
         v.last_status = en.status;
         v.animator.update(v.speed, dt);

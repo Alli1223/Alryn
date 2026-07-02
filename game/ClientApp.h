@@ -264,6 +264,8 @@ private:
         bool has_last = false;
         u8 last_action = 0;     // to fire a swing once on the rising edge of a networked action
         u8 last_health = 255;   // previous snapshot health % (255 = unseen) - a drop can cut cloth
+        u8 last_buffs = 0;      // previous co-op buff bits - a rising edge pops floating combat text
+        u8 last_shield = 0;     // previous Aegis strength - a fresh ward pops "WARDED!"
         SkinnedMesh body_skin;  // continuous body geometry + bone weights (built with the model)
         Mesh body_mesh;         // dynamic GPU mesh, re-skinned from the posed joints every frame
         SkinnedMesh outfit_skin; // continuous worn equipment (armoured/clothed limbs, torso, skirt)
@@ -358,6 +360,21 @@ private:
     void draw_nav_paths(ui::DrawList& draw, f32 W, f32 H);          // NPC pathfinding routes as lines
     void apply_debug_flags();                                       // push god/no-ambush to the listen server
     bool debug_click(const Vec2& p);                                // hit-test the overlay's toggles
+
+    // ---- Floating combat text ------------------------------------------------------
+    // A short world-anchored label ("SHATTER!", "EMPOWERED!", "CANNONBALL!") that pops over the
+    // spot it happened, drifts up and fades - the Gauntlet-style readout that makes the co-op
+    // combos legible at a glance. Drawn in the HUD pass via world_to_screen.
+    struct FloatText {
+        Vec3 world{0.0f};
+        std::string text;
+        Vec4 color{1.0f};
+        f32 age = 0.0f;
+        f32 life = 1.1f;
+        f32 size = 22.0f; // px, before the pop-in ease
+    };
+    void combat_text(const Vec3& world, std::string text, const Vec4& color, f32 size = 22.0f);
+    void draw_combat_text(ui::DrawList& draw, f32 W, f32 H);
 
     // ---- Particle VFX ------------------------------------------------------------
     void emit(const Vec3& pos, const Vec3& vel, const Vec4& color, f32 life, f32 size,
@@ -741,6 +758,7 @@ private:
         u8 style = 0; // 0 = emissive, 1 = additive glow
     };
     std::vector<Particle> particles_;
+    std::vector<FloatText> float_texts_; // live floating combat labels (aged in update_feedback)
     u32 fx_rng_ = 0x9e3779b9u;
     f32 frand();
     f32 frand(f32 a, f32 b) { return a + (b - a) * frand(); }
