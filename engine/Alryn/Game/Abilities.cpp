@@ -33,7 +33,9 @@ void GameServer::sync_player_role(ServerPlayer& player) {
     }
     player.max_health = role_stats(player.role).max_health + hp_bonus;
     player.health = std::min(player.health, player.max_health);
-    f32 speed = role_stats(player.role).move_speed;
+    // Race passives layer on the role: an Elf strides + springs, a Dwarf is stocky.
+    const RaceCombat rc = race_combat(player.input.appearance.race);
+    f32 speed = role_stats(player.role).move_speed * rc.move_mult;
     if (player.dash_timer > 0.0f) {
         speed *= kDashSpeedMult; // Hunter Dash
     }
@@ -41,6 +43,7 @@ void GameServer::sync_player_role(ServerPlayer& player) {
         speed *= kHasteMult; // War Horn (co-op haste)
     }
     player.controller.set_walk_speed(speed);
+    player.controller.set_jump_speed(CharacterConfig{}.jump_speed * rc.jump_mult);
 }
 
 void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
@@ -360,7 +363,9 @@ void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
                 break; // the Mage casts via combos (input.spell -> update_spells), not the hotbar
         }
 
-        pl.ability_cd[slot] = ability_def(pl.role, slot).cooldown;
+        // Men's race passive: quicker cooldowns (the client mirrors this on the ability bar).
+        pl.ability_cd[slot] =
+            ability_def(pl.role, slot).cooldown * race_combat(pl.input.appearance.race).cooldown_mult;
         pl.cast_fx = ability_one; // echoed in the snapshot so every client plays the cast VFX
     }
 
@@ -407,7 +412,9 @@ void GameServer::update_combos(Timestep dt) {
         dir.y = 0.0f;
         dir = glm::length(dir) > 0.5f ? glm::normalize(dir)
                                       : Vec3{std::cos(pl.input.yaw), 0.0f, std::sin(pl.input.yaw)};
-        ally->controller.launch(dir * kTossSpeed + Vec3{0.0f, kTossUp, 0.0f});
+        // The THROWER's race arms the launch: an Elf hurls an ally the farthest.
+        const f32 arm = race_combat(pl.input.appearance.race).toss_power_mult;
+        ally->controller.launch(dir * kTossSpeed * arm + Vec3{0.0f, kTossUp, 0.0f});
         ally->toss_timer = kTossMaxAir;
         pl.toss_cd = kTossCooldown;
     }
@@ -566,7 +573,8 @@ void GameServer::update_spells(Timestep dt, const DensitySampler& density) {
             continue;
         }
         cast_spell(pl, id, sp);
-        pl.spell_cd = spell_cooldown(sp);
+        // Men's race passive shortens spell cooldowns too (a human Mage chains combos quicker).
+        pl.spell_cd = spell_cooldown(sp) * race_combat(pl.input.appearance.race).cooldown_mult;
         pl.cast_fx = pl.input.spell; // echoed in the snapshot so clients play the spell VFX
     }
     update_walls(dt);

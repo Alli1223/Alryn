@@ -47,6 +47,7 @@ public:
     bool airborne_launch() const { return glm::length(launch_vel_) > 0.05f; }
     const CharacterConfig& config() const { return config_; }
     void set_walk_speed(f32 s) { config_.walk_speed = s; }
+    void set_jump_speed(f32 s) { config_.jump_speed = s; } // race passives scale the spring
 
     // move_dir: desired world-space horizontal direction (xz; y ignored, length<=1).
     // `colliders` are static props (trees/walls) the capsule is pushed out of.

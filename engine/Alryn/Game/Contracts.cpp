@@ -1427,8 +1427,11 @@ f32 GameServer::combo_amp(Enemy& e, f32 base, bool allow_shatter) {
     return dmg;
 }
 
-// ALLY TOSS landing: a radial cannonball burst on the enemies the tossed ally lands among.
-void GameServer::toss_impact(const Vec3& at) {
+// ALLY TOSS landing: a radial cannonball burst on the enemies the tossed ally lands among,
+// scaled by the tossed ally's race - a Dwarf lands hardest (the classic "toss the dwarf").
+void GameServer::toss_impact(const Vec3& at, Race race) {
+    const f32 damage = toss_impact_damage(race);
+    const f32 radius = toss_impact_radius(race);
     for (Enemy& e : ambush_) {
         if (!e.alive) {
             continue;
@@ -1436,8 +1439,8 @@ void GameServer::toss_impact(const Vec3& at) {
         Vec3 d = e.position - at;
         d.y = 0.0f;
         const f32 dist = glm::length(d);
-        if (dist <= kTossImpactRadius) {
-            e.health -= kTossImpactDamage;
+        if (dist <= radius) {
+            e.health -= damage;
             e.knockback = (dist > 1e-3f ? d / dist : Vec3{1.0f, 0.0f, 0.0f}) * kTossImpactKnockback;
             e.stagger = std::max(e.stagger, kStaggerDuration); // the slam reels them (combo window)
         }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Alryn/Character/CharacterAppearance.h>
 #include <Alryn/Core/Math.h>
 #include <Alryn/Core/Types.h>
 
@@ -61,6 +62,43 @@ inline const char* role_desc(PlayerRole role) {
         case PlayerRole::Mage: return "MAGE - ELEMENTAL COMBO CASTER (HOLD CTRL)";
     }
     return "";
+}
+
+// --- Race passives (the RACES of CharacterAppearance.h made mechanical) ------------------------
+// Each race carries a small combat identity ON TOP of the chosen role, wired into the same
+// server-authoritative sites as the role stats - and, crucially, into the Gauntlet ALLY TOSS combo,
+// so the race fantasy pays off in co-op play: an ELF is the strongest THROWER (hurls an ally
+// farthest) and a DWARF is the best PROJECTILE (the heaviest cannonball landing) - the classic
+// "toss the dwarf" play. MEN are the adaptable baseline: quicker ability cooldowns.
+struct RaceCombat {
+    f32 move_mult = 1.0f;        // x walk speed (on top of the role's)
+    f32 jump_mult = 1.0f;        // x jump launch speed
+    f32 mitigation_add = 0.0f;   // flat extra damage reduction (stacks with the role's, capped)
+    f32 cooldown_mult = 1.0f;    // x ability/spell cooldowns (< 1 = faster)
+    f32 toss_power_mult = 1.0f;  // as the THROWER of an Ally Toss: x launch speed
+    f32 toss_impact_mult = 1.0f; // as the TOSSED ally: x cannonball landing damage (+ radius)
+};
+
+inline RaceCombat race_combat(Race race) {
+    switch (race) {
+        case Race::Dwarf: // stout: tough and dense - soaks blows, lands like a boulder
+            return {0.95f, 0.92f, 0.08f, 1.0f, 0.90f, 1.5f};
+        case Race::Elf: // swift: fleet-footed and springy - and hurls an ally the farthest
+            return {1.08f, 1.18f, 0.0f, 1.0f, 1.35f, 0.85f};
+        case Race::Human:
+            break;
+    }
+    return {1.0f, 1.0f, 0.0f, 0.88f, 1.0f, 1.0f}; // Men: adaptable - quicker cooldowns
+}
+
+// One-line perk blurb per race (the customise screen shows it under the RACE stepper).
+inline const char* race_perk_desc(Race race) {
+    switch (race) {
+        case Race::Dwarf: return "STOUT: TOUGHER, AND LANDS A MIGHTY TOSS CANNONBALL";
+        case Race::Elf: return "SWIFT: FASTER, SPRINGIER, AND THE STRONGEST THROWER";
+        case Race::Human: break;
+    }
+    return "ADAPTABLE: QUICKER ABILITY COOLDOWNS";
 }
 
 // A castable ability: a display name, its cooldown (seconds), and a one-line
@@ -346,6 +384,14 @@ inline constexpr f32 kTossCooldown = 6.0f;      // thrower cooldown
 inline constexpr f32 kTossImpactRadius = 3.2f;  // landing cannonball AoE radius
 inline constexpr f32 kTossImpactDamage = 45.0f; // damage to each enemy caught in the landing
 inline constexpr f32 kTossImpactKnockback = 5.0f;
+// The landing cannonball scales with the TOSSED ally's race (a Dwarf lands hardest - the classic
+// "toss the dwarf" play); the radius grows gentler than the damage so an Elf landing still matters.
+inline f32 toss_impact_damage(Race race) {
+    return kTossImpactDamage * race_combat(race).toss_impact_mult;
+}
+inline f32 toss_impact_radius(Race race) {
+    return kTossImpactRadius * (1.0f + 0.3f * (race_combat(race).toss_impact_mult - 1.0f));
+}
 
 // Elemental Shatter: a Mage Frost Bolt CHILLS a foe (see kChillDuration in Enemy.h); a heavy ally hit
 // SHATTERS the chill for bonus damage - a Mage->melee/Hunter timing combo.

@@ -243,8 +243,10 @@ void ClientApp::build_customise(f32 w, f32 h) {
               [this](usize i) {
                   appearance_.race = static_cast<Race>(i % kRaceCount);
                   rebuild_preview(); // re-proportion the turntable avatar to the chosen race
+                  rebuild_ui();      // and refresh the race-perk blurb below the stepper
               }),
           46.0f);
+    caption(race_perk_desc(appearance_.race)); // the race's combat passive, at a glance
 
     caption("SKIN TONE");
     place(panel.add<ui::SwatchRow>(

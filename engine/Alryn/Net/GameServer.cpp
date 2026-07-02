@@ -252,7 +252,8 @@ void GameServer::tick(Timestep dt) {
                                                      wagon_top_at(x, z));
                                  });
         if (tossed && player.controller.on_ground()) {
-            toss_impact(player.controller.position()); // landed -> radial burst on nearby enemies
+            // Landed -> radial burst on nearby enemies (a Dwarf cannonballs hardest).
+            toss_impact(player.controller.position(), player.input.appearance.race);
             player.toss_timer = 0.0f;
         }
     }

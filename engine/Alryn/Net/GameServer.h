@@ -107,10 +107,12 @@ public:
         i32 wood = 0;                         // barricades buildable today (dormant siege)
         bool carrying = false;                // hauling a spilled cargo crate back to the cart
 
-        // Incoming damage after role mitigation + the armour tier + a held shield block + bulwark.
+        // Incoming damage after role mitigation + the race passive + the armour tier + a held
+        // shield block + bulwark (a Dwarf's stoutness stacks with all of it, capped below 1).
         f32 mitigated(f32 raw) const {
             const bool guarding = input.block && role == PlayerRole::Knight; // Cleric block = channel
             f32 r = role_stats(role).damage_reduction + equipment_bonus(equipment).mitigation_add +
+                    race_combat(input.appearance.race).mitigation_add +
                     (guarding ? kBlockReduction : 0.0f) + (bulwark_timer > 0.0f ? kBulwarkReduction : 0.0f);
             return raw * (1.0f - glm::clamp(r, 0.0f, 0.9f));
         }
@@ -331,7 +333,9 @@ private:
     void update_bubbles(Timestep dt);       // re-centre on the caster, age out, drop dead ones
     // --- Gauntlet co-op combos (Game/Abilities.cpp) ---
     void update_combos(Timestep dt);        // ticks combo cooldowns; the toss trigger + conduit channel
-    void toss_impact(const Vec3& at);       // an Ally Toss landing: a radial burst on nearby enemies
+    // An Ally Toss landing: a radial burst on nearby enemies, scaled by the TOSSED ally's race
+    // (a Dwarf is the heaviest cannonball).
+    void toss_impact(const Vec3& at, Race race);
     // Damage multiplier applied to an ally's hit on an enemy standing in a FOCUS ZONE (a Knight
     // Consecration / Hunter Caltrops aura); 1.0 outside any zone.
     f32 focus_zone_mult(const Vec3& enemy_pos) const;

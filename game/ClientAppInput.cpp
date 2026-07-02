@@ -10,7 +10,9 @@ void ClientApp::cast_ability(u8 ability) {
         return;
     }
     pending_ability_ = static_cast<u8>(ability + 1); // the wire carries the ability index + 1
-    ability_cd_[ability] = ability_def(role_, ability).cooldown;
+    // Mirror the server's cooldown, including the race passive (Men cool down quicker).
+    ability_cd_[ability] =
+        ability_def(role_, ability).cooldown * race_combat(appearance_.race).cooldown_mult;
     spawn_ability_vfx(role_, ability, local_feet(), face_yaw_, aim_valid_ ? aim_ : local_feet());
     if (role_ == PlayerRole::Knight && (ability == 1 || ability == 5)) {
         bulwark_fx_ = kBulwarkDuration; // Bulwark + Rally both raise the golden dome
@@ -48,7 +50,8 @@ void ClientApp::cast_mage_spell(SpellId sp) {
         return; // nothing queued, or still cooling down
     }
     pending_spell_ = static_cast<u8>(sp);
-    mage_cd_ = spell_cooldown(sp); // mirror the server cooldown for the HUD + to gate spam
+    // Mirror the server cooldown (incl. the race passive) for the HUD + to gate spam.
+    mage_cd_ = spell_cooldown(sp) * race_combat(appearance_.race).cooldown_mult;
     spawn_primary_vfx();           // a cast flourish at the staff
     // Projectile spells (fireball/frost/boulder) are visible as the projectile; give the INSTANT
     // ones (meteor / heal bloom / empower) a burst so the cast reads.

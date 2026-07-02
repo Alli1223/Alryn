@@ -218,3 +218,50 @@ TEST_CASE("mitigation soaks damage by the role + block fraction") {
     CHECK(blocked < taken);
     CHECK(blocked > 0.0f);
 }
+
+TEST_CASE("races carry distinct combat passives (dwarf tough, elf swift, man adaptable)") {
+    const RaceCombat man = race_combat(Race::Human);
+    const RaceCombat dwarf = race_combat(Race::Dwarf);
+    const RaceCombat elf = race_combat(Race::Elf);
+    // Dwarf: stout - extra mitigation on top of any role, but stocky (never the fastest).
+    CHECK(dwarf.mitigation_add > 0.0f);
+    CHECK(dwarf.move_mult <= man.move_mult);
+    CHECK(dwarf.jump_mult < elf.jump_mult);
+    // Elf: swift - the fastest strider and the springiest jumper.
+    CHECK(elf.move_mult > man.move_mult);
+    CHECK(elf.jump_mult > man.jump_mult);
+    // Man: adaptable - the quickest ability cooldowns of the three.
+    CHECK(man.cooldown_mult < dwarf.cooldown_mult);
+    CHECK(man.cooldown_mult < elf.cooldown_mult);
+    CHECK(man.cooldown_mult < 1.0f);
+    // Every race has a perk blurb for the customise screen.
+    for (u8 r = 0; r < kRaceCount; ++r) {
+        CHECK(std::string_view{race_perk_desc(static_cast<Race>(r))}.size() > 4);
+    }
+}
+
+TEST_CASE("ally toss: the elf is the best thrower, the dwarf the heaviest cannonball") {
+    // The classic Gauntlet play - an ELF hurls a DWARF - beats every other pairing.
+    CHECK(race_combat(Race::Elf).toss_power_mult > race_combat(Race::Human).toss_power_mult);
+    CHECK(race_combat(Race::Elf).toss_power_mult > race_combat(Race::Dwarf).toss_power_mult);
+    CHECK(toss_impact_damage(Race::Dwarf) > toss_impact_damage(Race::Human));
+    CHECK(toss_impact_damage(Race::Dwarf) > toss_impact_damage(Race::Elf));
+    CHECK(toss_impact_radius(Race::Dwarf) > toss_impact_radius(Race::Elf));
+    // The baseline (Human) toss lands exactly the shared constants (no race = no change).
+    CHECK(toss_impact_damage(Race::Human) == doctest::Approx(kTossImpactDamage));
+    CHECK(toss_impact_radius(Race::Human) == doctest::Approx(kTossImpactRadius));
+}
+
+TEST_CASE("a dwarf's stoutness stacks into the mitigation formula (capped below 1)") {
+    // Pure-formula mirror of ServerPlayer::mitigated with the race passive folded in.
+    const f32 raw = 100.0f;
+    const RoleStats knight = role_stats(PlayerRole::Knight);
+    const f32 man_taken = raw * (1.0f - knight.damage_reduction);
+    const f32 dwarf_taken =
+        raw * (1.0f - (knight.damage_reduction + race_combat(Race::Dwarf).mitigation_add));
+    CHECK(dwarf_taken < man_taken); // a dwarf knight is the toughest thing on the road
+    // Even a fully-buffed dwarf never becomes immune (the server clamps at 0.9).
+    const f32 total = knight.damage_reduction + race_combat(Race::Dwarf).mitigation_add +
+                      kBlockReduction + kBulwarkReduction;
+    CHECK(raw * (1.0f - glm::clamp(total, 0.0f, 0.9f)) > 0.0f);
+}
