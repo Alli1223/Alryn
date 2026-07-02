@@ -265,3 +265,34 @@ TEST_CASE("a dwarf's stoutness stacks into the mitigation formula (capped below 
                       kBlockReduction + kBulwarkReduction;
     CHECK(raw * (1.0f - glm::clamp(total, 0.0f, 0.9f)) > 0.0f);
 }
+
+TEST_CASE("max-rank transformations: shockwave corridor, piercing bolt, chain heal") {
+    // The MAX-rank Shield Bash rolls a CORRIDOR (a line), not the little melee cone.
+    const Vec3 origin{0.0f};
+    const f32 yaw = 0.0f; // facing +x
+    CHECK(in_corridor(origin, yaw, Vec3{6.0f, 0.0f, 0.0f}, kShockwaveRange, kShockwaveWidth));
+    CHECK(in_corridor(origin, yaw, Vec3{8.5f, 0.0f, 1.2f}, kShockwaveRange, kShockwaveWidth));
+    CHECK_FALSE(in_corridor(origin, yaw, Vec3{6.0f, 0.0f, 3.0f}, kShockwaveRange, kShockwaveWidth));
+    CHECK_FALSE(in_corridor(origin, yaw, Vec3{-2.0f, 0.0f, 0.0f}, kShockwaveRange, kShockwaveWidth));
+    CHECK_FALSE(in_corridor(origin, yaw, Vec3{12.0f, 0.0f, 0.0f}, kShockwaveRange, kShockwaveWidth));
+    CHECK(kShockwaveRange > kMeleeRange * 2.0f); // the upgrade changes the ability's SHAPE
+    CHECK(kShockwaveStagger > kStaggerDuration); // and reels harder than a basic heavy hit
+
+    // The MAX-rank Power Shot punches through several bodies; the chain heal actually chains.
+    CHECK(kPowerShotPierce >= 2);
+    CHECK(kChainHealBounces >= 1);
+    CHECK(kChainHealRadius > 0.0f);
+    CHECK(kChainHealFalloff > 0.0f);
+    CHECK(kChainHealFalloff < 1.0f); // each hop mends less (no infinite free healing)
+
+    // The newly upgradeable numeric abilities joined the curated set...
+    CHECK(ability_max_rank(PlayerRole::Knight, 4) == kMaxAbilityRank); // Whirlwind
+    CHECK(ability_max_rank(PlayerRole::Hunter, 1) == kMaxAbilityRank); // Volley
+    CHECK(ability_max_rank(PlayerRole::Cleric, 2) == kMaxAbilityRank); // Smite
+    // ...and every TRANSFORMING upgrade has a tease line for the skills tree.
+    CHECK(std::string_view{ability_rank_desc(PlayerRole::Knight, 0)}.size() > 4);
+    CHECK(std::string_view{ability_rank_desc(PlayerRole::Hunter, 0)}.size() > 4);
+    CHECK(std::string_view{ability_rank_desc(PlayerRole::Cleric, 0)}.size() > 4);
+    CHECK(std::string_view{ability_rank_desc(PlayerRole::Cleric, 3)}.size() > 4);
+    CHECK(std::string_view{ability_rank_desc(PlayerRole::Knight, 1)}.empty()); // Bulwark: none
+}

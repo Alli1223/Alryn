@@ -259,6 +259,20 @@ inline bool in_attack_cone(const Vec3& origin, f32 yaw, const Vec3& target, f32 
     return glm::dot(to / d, facing) >= cone_cos;
 }
 
+// True if `target` lies within a forward CORRIDOR from `origin` along heading `yaw`: no farther
+// than `range` ahead and within half of `width` laterally (xz only, like in_attack_cone). Used for
+// line attacks - the max-rank Shield Bash SHOCKWAVE rolls down this corridor.
+inline bool in_corridor(const Vec3& origin, f32 yaw, const Vec3& target, f32 range, f32 width) {
+    const Vec2 to{target.x - origin.x, target.z - origin.z};
+    const Vec2 fwd{std::cos(yaw), std::sin(yaw)};
+    const f32 ahead = glm::dot(to, fwd);
+    if (ahead < -0.2f || ahead > range) {
+        return false; // behind the caster, or past the wave's reach
+    }
+    const f32 lateral = std::abs(to.x * fwd.y - to.y * fwd.x);
+    return lateral <= width * 0.5f;
+}
+
 // Integrates one enemy for `dt`: steers toward `goal` along the ground, pushing out
 // of props, and faces its heading. Attack cooldown ticks down. Does not itself deal
 // damage (the server decides that once it is in range) so the motion stays testable.

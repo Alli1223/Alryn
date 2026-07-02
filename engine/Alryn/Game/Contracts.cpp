@@ -1159,6 +1159,15 @@ void GameServer::debug_place_player(net::PlayerId id, const Vec3& pos) {
     }
 }
 
+void GameServer::debug_hurt_player(net::PlayerId id, f32 damage) {
+    const auto it = players_.find(id);
+    if (it != players_.end()) {
+        // Raw (no mitigation), floored just above 0 so the test subject doesn't respawn.
+        it->second.health = std::max(1.0f, it->second.health - damage);
+        it->second.since_hit = 0.0f; // in combat - no regen while the test observes
+    }
+}
+
 void GameServer::unlock_tier(net::PlayerId id, u8 tier) {
     const auto it = players_.find(id);
     if (it != players_.end()) {
@@ -1745,6 +1754,12 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             const auto ownit = players_.find(pr.owner);
             const f32 boost = ownit != players_.end() ? ownit->second.outgoing_mult() : 1.0f;
             for (Enemy& e : ambush_) {
+                if (!pr.alive) {
+                    break; // the shot stopped in a body this tick (no pierce left)
+                }
+                if (e.id == pr.last_hit) {
+                    continue; // a piercing bolt can't re-hit the body it's passing through
+                }
                 const Vec3 chest = e.position + Vec3{0.0f, 0.9f, 0.0f};
                 if (glm::length(chest - pr.position) < pr.radius + kEnemyRadius + 0.3f) {
                     f32 dmg = (pr.damage > 0.0f ? pr.damage : kThrowDamage) * boost * last_stand;
@@ -1785,7 +1800,14 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                         }
                         flinch_allies(e.position, std::span<Enemy>(ambush_)); // MORALE: rattle the pack
                     }
-                    pr.alive = false;
+                    // A max-rank Power Shot PIERCES: the bolt punches through this body and flies
+                    // on to the next; anything else stops in the first thing it strikes.
+                    if (pr.pierce > 0) {
+                        --pr.pierce;
+                        pr.last_hit = e.id;
+                    } else {
+                        pr.alive = false;
+                    }
                 }
             }
         }

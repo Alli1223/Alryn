@@ -133,21 +133,36 @@ void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
         switch (pl.role) {
             case PlayerRole::Knight:
                 if (slot == 0) { // Shield Bash: hit every enemy in a frontal cone, knock them back
-                    const f32 up = ability_rank_mult(pl.rank_of(0)); // upgrade scales damage + knockback
-                    for (Enemy& e : ambush_) {
-                        const Vec3 chest = e.position + Vec3{0.0f, 0.9f, 0.0f};
-                        if (!in_attack_cone(origin, yaw, chest, kMeleeRange + 0.5f, kMeleeConeCos)) {
-                            continue;
+                    const u8 rk = pl.rank_of(0);
+                    const f32 up = ability_rank_mult(rk); // upgrade scales damage + knockback
+                    if (rk >= kMaxAbilityRank) {
+                        // MAX: SHOCKWAVE - a ground wave rolls forward in a corridor, damaging +
+                        // STAGGERING everything in its path (a line, no longer just the melee cone).
+                        for (Enemy& e : ambush_) {
+                            if (!in_corridor(origin, yaw, e.position, kShockwaveRange,
+                                             kShockwaveWidth)) {
+                                continue;
+                            }
+                            e.health -= combo_amp(e, kBashDamage * up);
+                            e.stagger = std::max(e.stagger, kShockwaveStagger);
+                            e.knockback = facing * kTossImpactKnockback; // shoved along the wave
                         }
-                        e.health -= combo_amp(e, kBashDamage * up); // heavy hit -> shatters a chilled foe
-                        Vec3 push = e.position - pl.controller.position();
-                        push.y = 0.0f;
-                        if (glm::length(push) > 1e-3f) {
-                            push = glm::normalize(push);
-                        } else {
-                            push = facing;
+                    } else {
+                        for (Enemy& e : ambush_) {
+                            const Vec3 chest = e.position + Vec3{0.0f, 0.9f, 0.0f};
+                            if (!in_attack_cone(origin, yaw, chest, kMeleeRange + 0.5f, kMeleeConeCos)) {
+                                continue;
+                            }
+                            e.health -= combo_amp(e, kBashDamage * up); // heavy -> shatters a chilled foe
+                            Vec3 push = e.position - pl.controller.position();
+                            push.y = 0.0f;
+                            if (glm::length(push) > 1e-3f) {
+                                push = glm::normalize(push);
+                            } else {
+                                push = facing;
+                            }
+                            e.position += push * kBashKnockback * up;
                         }
-                        e.position += push * kBashKnockback * up;
                     }
                 } else if (slot == 1) { // Bulwark: raise the shield for heavy mitigation
                     pl.bulwark_timer = kBulwarkDuration;
@@ -161,13 +176,14 @@ void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
                         }
                     }
                 } else if (slot == 4) { // Whirlwind: a 360 cleave that hits everything around you
+                    const f32 wup = ability_rank_mult(pl.rank_of(4)); // numeric upgrade
                     for (Enemy& e : ambush_) {
                         Vec3 d = e.position - pl.controller.position();
                         d.y = 0.0f;
                         if (glm::length(d) > kWhirlwindRadius) {
                             continue;
                         }
-                        e.health -= combo_amp(e, kWhirlwindDamage);
+                        e.health -= combo_amp(e, kWhirlwindDamage * wup);
                         const Vec3 push = glm::length(d) > 1e-3f ? glm::normalize(d) : facing;
                         e.position += push * kWhirlwindKnockback;
                     }
@@ -226,11 +242,19 @@ void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
                 Vec3 dir = pl.input.aim - eye;
                 dir = glm::length(dir) > 0.2f ? glm::normalize(dir) : facing;
                 if (slot == 0) { // Power Shot: one heavy arrow (upgrade scales the damage)
-                    loose_arrow(dir, stats.ranged_damage * kPowerShotMult * ability_rank_mult(pl.rank_of(0)));
-                } else if (slot == 1) { // Volley: a three-arrow spread
+                    const u8 rk = pl.rank_of(0);
+                    loose_arrow(dir, stats.ranged_damage * kPowerShotMult * ability_rank_mult(rk));
+                    if (rk >= kMaxAbilityRank) {
+                        // MAX: the bolt PIERCES - it punches through bodies instead of stopping
+                        // in the first (the ambush hit loop honours the pierce count).
+                        projectiles_.back().pierce = kPowerShotPierce;
+                    }
+                } else if (slot == 1) { // Volley: a three-arrow spread (upgrade scales each arrow)
+                    const f32 vup = ability_rank_mult(pl.rank_of(1));
                     for (int k = -1; k <= 1; ++k) {
                         const f32 a = std::atan2(dir.z, dir.x) + static_cast<f32>(k) * 0.18f;
-                        loose_arrow(Vec3{std::cos(a), dir.y, std::sin(a)}, stats.ranged_damage * kVolleyMult);
+                        loose_arrow(Vec3{std::cos(a), dir.y, std::sin(a)},
+                                    stats.ranged_damage * kVolleyMult * vup);
                     }
                 } else if (slot == 2) { // Dash: a burst of speed
                     pl.dash_timer = kDashDuration;
@@ -271,22 +295,54 @@ void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
                             target = &other;
                         }
                     }
-                    target->health = std::min(target->max_health,
-                                              target->health + kHealAmount * ability_rank_mult(pl.rank_of(0)));
+                    const u8 rk = pl.rank_of(0);
+                    f32 amount = kHealAmount * ability_rank_mult(rk);
+                    target->health = std::min(target->max_health, target->health + amount);
+                    if (rk >= kMaxAbilityRank) {
+                        // MAX: CHAIN HEAL - the mend arcs on from the healed ally to the next
+                        // most-injured ally in reach, a falloff fraction weaker per hop.
+                        ServerPlayer* from = target;
+                        std::vector<const ServerPlayer*> healed{target}; // each ally mended once
+
+                        for (int hop = 0; hop < kChainHealBounces; ++hop) {
+                            amount *= kChainHealFalloff;
+                            ServerPlayer* next = nullptr;
+                            f32 hop_worst = 1.0f;
+                            for (auto& [oid, other] : players_) {
+                                if (std::find(healed.begin(), healed.end(), &other) != healed.end() ||
+                                    other.health >= other.max_health - 0.01f ||
+                                    glm::length(other.controller.position() -
+                                                from->controller.position()) > kChainHealRadius) {
+                                    continue;
+                                }
+                                const f32 frac = other.health / other.max_health;
+                                if (frac < hop_worst) {
+                                    hop_worst = frac;
+                                    next = &other;
+                                }
+                            }
+                            if (next == nullptr) {
+                                break; // no wounded ally left in reach - the chain fizzles
+                            }
+                            next->health = std::min(next->max_health, next->health + amount);
+                            healed.push_back(next);
+                            from = next;
+                        }
+                    }
                 } else if (slot == 1) { // Sanctuary: heal everyone nearby
                     for (auto& [oid, other] : players_) {
                         if (glm::length(other.controller.position() - pl.controller.position()) <= kHealRadius) {
                             other.health = std::min(other.max_health, other.health + kSanctuaryAmount);
                         }
                     }
-                } else if (slot == 2) { // Smite: a holy bolt toward the aim point
+                } else if (slot == 2) { // Smite: a holy bolt toward the aim point (numeric upgrade)
                     Vec3 dir = pl.input.aim - eye;
                     dir = glm::length(dir) > 0.2f ? glm::normalize(dir) : facing;
                     Projectile pr;
                     pr.position = eye + dir * 0.6f;
                     pr.velocity = dir * 28.0f;
                     pr.owner = id;
-                    pr.damage = kSmiteDamage;
+                    pr.damage = kSmiteDamage * ability_rank_mult(pl.rank_of(2));
                     pr.kind = 2; // holy bolt (rendered bright by the client)
                     pr.radius = 0.2f;
                     pr.life = 3.0f;

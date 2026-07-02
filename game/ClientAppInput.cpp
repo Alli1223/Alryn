@@ -14,6 +14,18 @@ void ClientApp::cast_ability(u8 ability) {
     ability_cd_[ability] =
         ability_def(role_, ability).cooldown * race_combat(appearance_.race).cooldown_mult;
     spawn_ability_vfx(role_, ability, local_feet(), face_yaw_, aim_valid_ ? aim_ : local_feet());
+    if (role_ == PlayerRole::Knight && ability == 0 && ability_rank_[0] >= kMaxAbilityRank) {
+        // Max-rank Shield Bash: the SHOCKWAVE - a line of ground bursts rolling down the corridor
+        // so the transformed line attack reads instantly (the damage itself is server-side).
+        const Vec3 feet = local_feet();
+        const Vec3 fwd{std::cos(face_yaw_), 0.0f, std::sin(face_yaw_)};
+        for (f32 d = 1.0f; d <= kShockwaveRange; d += 1.4f) {
+            const f32 t = d / kShockwaveRange; // bursts shrink as the wave spends itself
+            emit_burst(feet + fwd * d + Vec3{0.0f, 0.15f, 0.0f}, Vec4{1.0f, 0.9f, 0.6f, 0.9f},
+                       10 - static_cast<int>(t * 5.0f), 3.2f * (1.0f - 0.4f * t), 0.5f, 0.16f, 0,
+                       2.0f);
+        }
+    }
     if (role_ == PlayerRole::Knight && (ability == 1 || ability == 5)) {
         bulwark_fx_ = kBulwarkDuration; // Bulwark + Rally both raise the golden dome
     } else if (role_ == PlayerRole::Hunter && ability == 2) {

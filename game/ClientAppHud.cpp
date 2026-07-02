@@ -1244,9 +1244,12 @@ void ClientApp::draw_skills() {
                   equipped ? Vec4{0.6f, 0.9f, 0.6f, 0.95f} : Vec4{accent, 0.7f});
         ty += name_sz + 8.0f;
         const f32 desc_sz = std::min(row_h * 0.15f, 15.0f);
-        std::string desc = ab.name == std::string("AEGIS") && ability_rank_[i] < kMaxAbilityRank
-                               ? std::string(ab.desc) + "  (AT MAX: a dome that blocks ranged attacks)"
-                               : std::string(ab.desc);
+        // Upgradeable transformations tease what the final rank buys until it's bought.
+        std::string desc{ab.desc};
+        if (const char* mx = ability_rank_desc(role_, i);
+            mx[0] != '\0' && ability_rank_[i] < kMaxAbilityRank) {
+            desc += std::format("  ({})", mx);
+        }
         draw.text(Vec2{tx, ty}, desc, desc_sz, th.text_muted);
 
         // Upgrade controls for upgradeable abilities: rank pips + a town/gold-gated UPGRADE button.

@@ -266,6 +266,9 @@ public:
     f32 wheel_repair() const { return wheel_repair_; } // 0..1 re-attach progress
     void force_wheel_break();                        // trigger a break now (test / debug hook)
     void debug_place_player(net::PlayerId id, const Vec3& pos); // move a player (test / debug hook)
+    // Wound a player directly (raw, no mitigation; floored above 0 so they don't respawn) - a
+    // test hook for exercising heals/shields without simulating a whole ambush.
+    void debug_hurt_player(net::PlayerId id, f32 damage);
     // Unlock a gear tier for a player (raises owned_tier so they can equip up to it). The town shop
     // calls this on a purchase; also a test hook.
     void unlock_tier(net::PlayerId id, u8 tier);

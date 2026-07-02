@@ -221,9 +221,12 @@ inline constexpr u8 kMaxAbilityRank = 2; // ranks per upgradeable ability (0 bas
 // The max rank an ability can be raised to (0 = not upgradeable). Kept small + curated.
 inline u8 ability_max_rank(PlayerRole role, u8 ability) {
     switch (role) {
-        case PlayerRole::Knight: return ability == 0 ? kMaxAbilityRank : 0u;                 // Shield Bash
-        case PlayerRole::Hunter: return ability == 0 ? kMaxAbilityRank : 0u;                 // Power Shot
-        case PlayerRole::Cleric: return (ability == 0 || ability == 3) ? kMaxAbilityRank : 0u; // Heal, Aegis
+        case PlayerRole::Knight: // Shield Bash (transforms), Whirlwind (numeric)
+            return (ability == 0 || ability == 4) ? kMaxAbilityRank : 0u;
+        case PlayerRole::Hunter: // Power Shot (transforms), Volley (numeric)
+            return (ability == 0 || ability == 1) ? kMaxAbilityRank : 0u;
+        case PlayerRole::Cleric: // Heal + Aegis (transform), Smite (numeric)
+            return (ability == 0 || ability == 2 || ability == 3) ? kMaxAbilityRank : 0u;
         case PlayerRole::Mage: return 0u; // the Mage upgrades via elemental combos, not the hotbar
     }
     return 0u;
@@ -245,6 +248,41 @@ inline constexpr f32 kAegisBubbleHealth = 220.0f; // ranged hits chip it; it pop
 
 // Generic +40% per rank for the simple numeric upgrades (Shield Bash / Power Shot / Heal).
 inline f32 ability_rank_mult(u8 rank) { return 1.0f + 0.4f * static_cast<f32>(rank); }
+
+// --- Max-rank SIGNATURE TRANSFORMATIONS (the Aegis-dome pattern carried through the kit) --------
+// The flagship upgradeables don't just scale at MAX rank - they change SHAPE, so the final rank is
+// a new toy, not a bigger number. (Rank 1 stays the numeric step for all of them.)
+// Shield Bash MAX: the bash becomes a SHOCKWAVE - a ground wave rolling forward in a corridor that
+// damages + STAGGERS everything in its path (a line, no longer just the melee cone).
+inline constexpr f32 kShockwaveRange = 9.0f;   // how far the wave rolls
+inline constexpr f32 kShockwaveWidth = 3.2f;   // corridor width
+inline constexpr f32 kShockwaveStagger = 1.1f; // a longer reel than a basic heavy-hit stagger
+// Power Shot MAX: the bolt PIERCES - it punches through bodies instead of stopping in the first,
+// striking up to 1 + kPowerShotPierce enemies along its line.
+inline constexpr u8 kPowerShotPierce = 3;
+// Heal MAX: CHAIN HEAL - the mend arcs on from the healed ally to the next most-injured ally in
+// reach, up to kChainHealBounces hops, each hop mending a falloff fraction of the previous.
+inline constexpr int kChainHealBounces = 2;
+inline constexpr f32 kChainHealRadius = 12.0f;
+inline constexpr f32 kChainHealFalloff = 0.6f;
+
+// The MAX-rank transformation blurb per upgradeable ability ("" = the upgrade is purely numeric).
+// Shown in the skills tree, so the player knows what the final rank buys before spending.
+inline const char* ability_rank_desc(PlayerRole role, u8 ability) {
+    switch (role) {
+        case PlayerRole::Knight:
+            return ability == 0 ? "AT MAX: the bash becomes a staggering SHOCKWAVE line" : "";
+        case PlayerRole::Hunter:
+            return ability == 0 ? "AT MAX: the shot PIERCES through every body in its path" : "";
+        case PlayerRole::Cleric:
+            if (ability == 0) {
+                return "AT MAX: the mend CHAINS on to nearby wounded allies";
+            }
+            return ability == 3 ? "AT MAX: a dome that blocks ranged attacks" : "";
+        case PlayerRole::Mage: break;
+    }
+    return "";
+}
 
 // --- Expanded abilities (skills tree indices 4+) ----------------------------------------
 // Knight Whirlwind: a 360-degree cleave (no cone) around the knight, with a light shove.

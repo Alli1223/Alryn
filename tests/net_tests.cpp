@@ -713,6 +713,72 @@ TEST_CASE("GameServer: an Ally Toss hurls a teammate + a Cleric conduit buffs an
     CHECK(server.players().at(a_id).conduit_target == b_id);    // and links to them (the client draws a beam)
 }
 
+// Max-rank transformation: the Cleric's upgraded HEAL becomes a CHAIN HEAL - the mend arcs on from
+// the healed ally to the next wounded ally in reach, so one cast patches the whole huddle.
+TEST_CASE("GameServer: a maxed Cleric Heal chains on to a second wounded ally") {
+    GameServer server;
+    if (!server.start(24705, 4242u)) {
+        MESSAGE("Could not bind game server - skipping");
+        return;
+    }
+    NetClient a; // the Cleric
+    NetClient b; // a wounded ally standing beside them
+    REQUIRE(a.connect("127.0.0.1", 24705));
+    REQUIRE(b.connect("127.0.0.1", 24705));
+    PlayerId a_id = 0;
+    PlayerId b_id = 0;
+    PlayerInput ai;
+    ai.role = static_cast<u8>(PlayerRole::Cleric);
+    auto pump = [&](int n) {
+        for (int i = 0; i < n; ++i) {
+            if (a_id != 0) {
+                a.send_input(ai);
+            }
+            server.tick(Timestep{1.0f / 60.0f});
+            for (const ClientEvent& e : a.poll(1)) {
+                if (e.type == ClientEventType::WelcomeReceived) a_id = e.welcome.your_id;
+            }
+            for (const ClientEvent& e : b.poll(1)) {
+                if (e.type == ClientEventType::WelcomeReceived) b_id = e.welcome.your_id;
+            }
+        }
+    };
+    pump(150);
+    REQUIRE(a_id != 0);
+    REQUIRE(b_id != 0);
+    const Vec3 spawn = server.players().at(a_id).controller.position();
+    if (!worldgen::inside_village(spawn.x, spawn.z, 4242u, 6.0f)) {
+        MESSAGE("spawn not inside a town - skipping chain-heal upgrade test");
+        return;
+    }
+    server.debug_add_money(2000);
+
+    // Buy HEAL (ability index 0) to MAX rank, one rank per rising edge.
+    for (int r = 0; r < kMaxAbilityRank; ++r) {
+        ai.upgrade = 1; // ability index 0 + 1
+        pump(6);
+        ai.upgrade = 0;
+        pump(6);
+    }
+    REQUIRE(server.players().at(a_id).rank_of(0) == kMaxAbilityRank);
+
+    // Wound both, stand them together, and cast ONE heal.
+    server.debug_place_player(b_id, server.players().at(a_id).controller.position() +
+                                        Vec3{2.0f, 0.0f, 0.0f});
+    server.debug_hurt_player(a_id, 60.0f);
+    server.debug_hurt_player(b_id, 80.0f);
+    const f32 a_before = server.players().at(a_id).health;
+    const f32 b_before = server.players().at(b_id).health;
+    ai.ability = 1; // cast Heal (index 0 + 1)
+    pump(2);
+    ai.ability = 0;
+    // ONE cast mends BOTH: the primary lands on the most-injured of the pair and the chain
+    // arcs on to the other - at rank <2 only one of them would have been healed.
+    CHECK(server.players().at(a_id).health > a_before + 30.0f);
+    CHECK(server.players().at(b_id).health >
+          b_before + kHealAmount * ability_rank_mult(kMaxAbilityRank) * kChainHealFalloff * 0.8f);
+}
+
 TEST_CASE("GameServer: two clients join and see each other move") {
     GameServer server;
     if (!server.start(24656, 777u)) {
