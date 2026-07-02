@@ -1641,6 +1641,9 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             if (glm::length(w.position - e.position) < kSapperRange) {
                 if (!debug_god_) {
                     w.health -= kSapperDamage * rig_damage_mult(rig_level_);
+                    // SABOTAGE: the blast also SHEDS A WHEEL (no-op if one is already off), so a
+                    // sapper reaching the cart strands it - intercept it before it arrives!
+                    force_wheel_break();
                 }
                 for (auto& [pid, pl] : players_) {
                     if (glm::length(pl.controller.position() - e.position) < kSapperBlastRadius) {
@@ -1871,9 +1874,20 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
         }
     }
 
-    // Cull the dead; each one removed here was felled by the party -> tally it for the kill bounty.
-    contract_kills_ +=
-        static_cast<u32>(std::erase_if(ambush_, [](const Enemy& e) { return !e.alive || e.health <= 0.0f; }));
+    // Cull the dead: each removal tallies the delivery-time kill bounty, and a genuinely FELLED
+    // raider (health beaten to zero) also spills its purse straight into the shared wallet - a
+    // self-spent sapper (alive=false with health intact) pays nothing; its satchel went up with it.
+    u32 loot = 0;
+    contract_kills_ += static_cast<u32>(std::erase_if(ambush_, [&loot](const Enemy& e) {
+        if (e.alive && e.health > 0.0f) {
+            return false;
+        }
+        if (e.health <= 0.0f) {
+            loot += bandit_loot(e.kind);
+        }
+        return true;
+    }));
+    money_ += loot;
 
     // Player health: regen out of combat, respawn at the town on death.
     for (auto& [id, pl] : players_) {

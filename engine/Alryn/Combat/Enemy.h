@@ -192,6 +192,21 @@ inline constexpr f32 kHealerRange = 7.0f;     // mends allies within this radius
 inline constexpr f32 kHealerHealRate = 14.0f; // hp/sec funnelled to the most-wounded ally
 inline constexpr f32 kHealerKeepDist = 9.0f;  // hangs this far back from its target (kites to stay safe)
 
+// LOOT: a felled raider spills a purse of coins straight into the party wallet (on top of the
+// delivery-time kill bounty) - tougher bandits carry fatter purses, and the warlord the war chest.
+// Paid AT the kill, so standing and fighting always earns, even on a haul that later wrecks.
+inline u32 bandit_loot(u8 kind) {
+    switch (kind) {
+        case 2u: return 8u;             // brute
+        case 3u: return 4u;             // archer
+        case kEnemyShield: return 5u;   // shield-bearer
+        case kEnemyHealer: return 6u;   // the healer pays well - a reward for focusing it down
+        case kEnemySapper: return 4u;   // (a sapper that DETONATES itself pays nothing)
+        case kEnemyWarlord: return 15u; // the champion carries the war chest
+        default: return 3u;             // grunts + torch-bearers
+    }
+}
+
 // Index into `enemies` of the most-wounded living ally (below max health) within `range` of `healer`,
 // excluding the healer itself; -1 if none needs mending. Pure, so the healer AI is headless-testable.
 inline int most_wounded_ally(const Enemy& healer, std::span<const Enemy> enemies, f32 range) {

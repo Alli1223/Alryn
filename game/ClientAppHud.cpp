@@ -78,6 +78,14 @@ void ClientApp::draw_hud() {
     const std::string money = std::format("$ {}", snapshot_.money);
     draw.text(Vec2{W - draw.text_width(money, ts) - 24.0f, 22.0f}, money, ts,
               Vec4{0.96f, 0.86f, 0.4f, 1.0f});
+    // A fresh gain (a bandit's spilled purse, a delivery) pops a "+$n" that drifts up + fades.
+    if (money_pulse_ > 0.0f && money_gain_ > 0) {
+        const f32 gs = ts * 0.72f;
+        const std::string gain = std::format("+$ {}", money_gain_);
+        draw.text(Vec2{W - draw.text_width(gain, gs) - 60.0f - ts * 2.0f,
+                       22.0f + (1.0f - money_pulse_) * -14.0f + 4.0f},
+                  gain, gs, Vec4{1.0f, 0.9f, 0.35f, money_pulse_});
+    }
     // Clean-delivery streak (perfect full-cargo runs) + its stacking pay bonus, just under the wallet.
     if (snapshot_.delivery_streak > 0) {
         const u32 s = snapshot_.delivery_streak;

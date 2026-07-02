@@ -835,6 +835,20 @@ void ClientApp::update_feedback(Timestep dt) {
         }
     }
     hit_marker_ = std::max(0.0f, hit_marker_ - dt.seconds * 3.2f);
+
+    // Loot feedback: the shared wallet ticking UP (a bandit's purse, a delivery) pops a golden
+    // "+$n" beside the money counter, so earnings visibly land as they happen.
+    if (have_snapshot_) {
+        if (!money_init_) {
+            last_money_ = snapshot_.money; // adopt the first value: joining isn't a windfall
+            money_init_ = true;
+        } else if (snapshot_.money > last_money_) {
+            money_gain_ = snapshot_.money - last_money_;
+            money_pulse_ = 1.0f;
+        }
+        last_money_ = snapshot_.money;
+    }
+    money_pulse_ = std::max(0.0f, money_pulse_ - dt.seconds * 0.8f);
 }
 
 void ClientApp::update_debug(Timestep dt) {

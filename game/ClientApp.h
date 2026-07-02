@@ -302,6 +302,8 @@ private:
         CharacterAnimator animator;
         Vec3 last_pos{0.0f};
         f32 speed = 0.0f;
+        u8 kind = 0;             // bandit kind, kept for the death VFX after it leaves the snapshot
+        u8 last_health = 255;    // last networked health (0..255) - felled vs self-detonated sapper
         u8 last_action = 0;
         u8 last_status = 0;      // to detect a chill->shatter transition for the VFX
         SkinnedMesh body_skin;   // continuous body, built on first sight; re-skinned each frame
@@ -970,6 +972,10 @@ private:
     f32 hit_marker_ = 0.0f;  // hit-marker pop intensity when OUR attack lands (decays); drawn at screen centre
     u8 last_hit_fx_ = 0;     // last seen local hit_fx counter (server bumps it on a confirmed hit)
     bool hit_fx_init_ = false; // seen the first snapshot value yet (so a fresh join doesn't pop a marker)
+    u32 last_money_ = 0;     // last seen party wallet, to pop a "+$n" when loot/pay lands
+    bool money_init_ = false;
+    u32 money_gain_ = 0;     // size of the latest gain (shown while the pulse lasts)
+    f32 money_pulse_ = 0.0f; // "+$n" pop intensity beside the money counter (decays)
 
     // Debug / testing overlay (F1) state + sampled performance metrics.
     bool debug_open_ = false;       // the overlay is showing

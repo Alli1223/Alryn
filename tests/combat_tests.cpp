@@ -3,6 +3,7 @@
 #include <Alryn/Combat/Enemy.h>
 #include <Alryn/Combat/Villager.h>
 #include <Alryn/Core/Density.h>
+#include <Alryn/Game/Contract.h>
 #include <Alryn/Terrain/RoadNetwork.h>
 #include <Alryn/Terrain/WorldGen.h>
 
@@ -352,4 +353,18 @@ TEST_CASE("Combat: damage tuning kills an enemy in a few blows") {
     CHECK(e.health > 0.0f); // survives one hit
     e.health -= kMeleeDamage;
     CHECK(e.health <= 0.0f); // dies on the second
+}
+
+TEST_CASE("felled bandits spill purses scaled by their menace (warlord = the war chest)") {
+    // Every raider kind pays SOMETHING when felled...
+    for (u8 k : {0u, 1u, 2u, 3u, static_cast<unsigned>(kEnemyShield), static_cast<unsigned>(kEnemyHealer),
+                 static_cast<unsigned>(kEnemySapper), static_cast<unsigned>(kEnemyWarlord)}) {
+        CHECK(bandit_loot(k) > 0u);
+    }
+    // ...and the tougher/priority targets carry the fattest purses.
+    CHECK(bandit_loot(2) > bandit_loot(0));                    // a brute over a grunt
+    CHECK(bandit_loot(kEnemyHealer) > bandit_loot(0));         // focusing the healer pays
+    CHECK(bandit_loot(kEnemyWarlord) > bandit_loot(2));        // the champion pays most of all
+    // Sane vs the flat delivery bounty: the immediate purse is the smaller of the two streams.
+    CHECK(bandit_loot(0) < kBountyPerKill);
 }
