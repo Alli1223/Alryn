@@ -148,17 +148,27 @@ void ClientApp::draw_hud() {
         const VehicleType& vt = vehicle_type(wg.type);
         const f32 dist = glm::length(Vec2{wg.dest.x - feet.x, wg.dest.z - feet.z});
         const bool manual = wg.mode == static_cast<u8>(WagonMode::Manual);
+        // A tall-walled (enclosed) bed carries the noble - same rule generate_offers uses to
+        // assign Passengers cargo, so the client derives VIP without an extra wire field.
+        const bool vip = vt.bed().wall > 2.0f;
         std::string title = vt.name();
         for (char& c : title) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
         draw.text(Vec2{24.0f, 22.0f},
-                  std::format("DELIVER THE {}   $ {}{}   ~{}m", title, wg.reward,
-                              manual ? " (manual)" : "", static_cast<int>(dist)),
+                  std::format("{}   $ {}{}   ~{}m",
+                              vip ? std::string{"ESCORT THE NOBLE"}
+                                  : std::format("DELIVER THE {}", title),
+                              wg.reward, manual ? " (manual)" : "", static_cast<int>(dist)),
                   ts, Vec4{0.94f, 0.86f, 0.58f, 1.0f});
-        // Cargo load (pay scales with the share delivered).
-        const bool short_load = wg.goods_aboard < wg.goods_total;
-        draw.text(Vec2{24.0f, 22.0f + ts * 1.5f},
-                  std::format("GOODS {}/{}", wg.goods_aboard, wg.goods_total), ts * 0.72f,
-                  short_load ? Vec4{0.95f, 0.7f, 0.35f, 1.0f} : Vec4{0.66f, 0.78f, 0.7f, 1.0f});
+        // Cargo load (pay scales with the share delivered); a VIP haul has no crates to spill.
+        const bool short_load = !vip && wg.goods_aboard < wg.goods_total;
+        if (vip) {
+            draw.text(Vec2{24.0f, 22.0f + ts * 1.5f}, "VIP - RAIDERS TARGET THE CARRIAGE",
+                      ts * 0.72f, Vec4{1.0f, 0.72f, 0.4f, 1.0f});
+        } else {
+            draw.text(Vec2{24.0f, 22.0f + ts * 1.5f},
+                      std::format("GOODS {}/{}", wg.goods_aboard, wg.goods_total), ts * 0.72f,
+                      short_load ? Vec4{0.95f, 0.7f, 0.35f, 1.0f} : Vec4{0.66f, 0.78f, 0.7f, 1.0f});
+        }
         // Wagon health bar.
         const f32 wf = static_cast<f32>(wg.health) / 255.0f;
         draw.rect(Vec4{24.0f, 22.0f + ts * 2.6f, 220.0f, 12.0f}, Vec4{0.05f, 0.05f, 0.07f, 0.7f},
@@ -523,8 +533,11 @@ void ClientApp::draw_contract_panel(ui::DrawList& draw, const net::WagonState& w
     const f32 ix = px + 18.0f;
     f32 iy = py + 16.0f;
 
-    // Heading: bound-for town name.
-    draw.text(Vec2{ix, iy}, "CARGO CONTRACT", ts * 0.62f, Vec4{0.7f, 0.75f, 0.82f, 1.0f});
+    // Heading: bound-for town name. An enclosed (tall-walled) bed carries the NOBLE - the same
+    // rule generate_offers uses for Passengers cargo - and reads as a premium VIP escort.
+    const bool vip = vehicle_type(wg.type).bed().wall > 2.0f;
+    draw.text(Vec2{ix, iy}, vip ? "VIP ESCORT - THE NOBLE'S CARRIAGE" : "CARGO CONTRACT",
+              ts * 0.62f, vip ? Vec4{1.0f, 0.78f, 0.4f, 1.0f} : Vec4{0.7f, 0.75f, 0.82f, 1.0f});
     iy += ts * 1.2f;
     draw.text(Vec2{ix, iy}, std::format("TO {}", town_name(Vec3{wg.dest.x, 0.0f, wg.dest.z})),
               ts * 1.05f, Vec4{0.98f, 0.92f, 0.7f, 1.0f});

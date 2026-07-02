@@ -299,3 +299,12 @@ TEST_CASE("VehicleTypes: registry exposes distinct cart/wagon/carriage layouts")
     // Out-of-range type indices wrap rather than crash (the type rides as a u8 on the wire).
     CHECK(&vehicle_type(vehicle_type_count()) == &vehicle_type(0));
 }
+
+TEST_CASE("a VIP (passenger) escort pays a premium over the same goods route") {
+    // The noble's carriage prices in the pressure: raiders press the coach itself, so the
+    // escort premium must be a real markup (applied in generate_offers on Passengers cargo).
+    CHECK(kVipRewardMult > 1.0f);
+    const u32 base = contract_reward(300.0f, 2, false);
+    const u32 vip = static_cast<u32>(std::lround(static_cast<f32>(base) * kVipRewardMult));
+    CHECK(vip > base);
+}

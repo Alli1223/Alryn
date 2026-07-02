@@ -433,6 +433,10 @@ void GameServer::generate_offers() {
             std::lround(contract_reward(dist, difficulty, false) *
                         capacity_reward_mult(vehicle_type(type).capacity()) *
                         modifier_effect(contract_modifier(wg.id)).pay_mult));
+        if (static_cast<CargoKind>(wg.cargo_kind) == CargoKind::Passengers) {
+            // The noble pays a PREMIUM for the escort - and the raiders press the coach for it.
+            wg.reward = static_cast<u32>(std::lround(static_cast<f32>(wg.reward) * kVipRewardMult));
+        }
         // Face along the first leg of the route (the way it leaves town through its gate).
         Vec2 dir = dest.center - origin->center;
         if (route.size() >= 2) {
@@ -1555,6 +1559,18 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                 best = d;
                 victim = &pl;
                 goal = pl.controller.position();
+            }
+        }
+        // VIP ESCORT: on a Passengers haul the raiders press the COACH itself (the noble is the
+        // prize) unless a defender stands markedly nearer - so the party must bodyguard the
+        // carriage, not just kite. A Knight's taunt still overrides (the tank can peel them off).
+        if (static_cast<CargoKind>(w.cargo_kind) == CargoKind::Passengers && e.taunt_cd <= 0.0f &&
+            victim != nullptr) {
+            const f32 dw = glm::length(w.position - e.position);
+            if (best >= dw * 0.8f) {
+                victim = nullptr;
+                goal = w.position;
+                best = kAggroRadius;
             }
         }
 

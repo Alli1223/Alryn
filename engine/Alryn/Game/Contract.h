@@ -46,6 +46,12 @@ inline constexpr f32 kMarketKeepout = 7.0f;    // the hired driver routes AROUND
 inline constexpr f32 kCarriageSpeed = 5.0f;    // player-driven carriage top speed (m/s)
 inline constexpr f32 kCarriageTurnRate = 1.6f; // rein steering rate (rad/s)
 
+// VIP ESCORT: a Passengers contract (the noble's carriage) pays a premium over goods of the same
+// route - and the raiders KNOW who rides inside: ambushers press the COACH itself unless a defender
+// stands markedly nearer (see update_ambush), so the party must bodyguard the carriage, not just
+// themselves. The premium prices that pressure in.
+inline constexpr f32 kVipRewardMult = 1.5f;
+
 // A covered-wagon noble (Passengers cargo) walks on/off the cart at the towns. Boarding: the noble
 // walks from a source-town house to the parked wagon and the cart waits until aboard. Disembark: on
 // delivery the noble hops off and walks to a destination-town house, then vanishes. The timeouts
