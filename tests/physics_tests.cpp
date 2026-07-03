@@ -146,7 +146,7 @@ TEST_CASE("Collision: box push-out + deterministic world colliders") {
     const Vec2 out = resolve_collider(box, Vec2{0.0f, 0.1f}, 0.4f, 1.0f, 1.8f);
     CHECK(glm::length(out) > 0.4f);
 
-    PropLibrary lib;
+    PropLibrary lib{false}; // colliders/placement only - skip the vertex-AO bake
     CollisionWorld world(1337u, lib);
     std::vector<Collider> a;
     std::vector<Collider> b;
@@ -198,7 +198,7 @@ TEST_CASE("place_box: a rotated box keeps its orientation (long axis stays long)
 }
 
 TEST_CASE("Forest props: a fallen log has a collider that blocks along its length") {
-    PropLibrary lib;
+    PropLibrary lib{false}; // colliders/placement only - skip the vertex-AO bake
     REQUIRE_FALSE(lib.logs().empty());
     const PropDef& log = lib.logs()[0];
     REQUIRE_FALSE(log.colliders.empty()); // logs are solid (bushes are decorative)

@@ -43,6 +43,37 @@ TEST_CASE("Primitives: recompute_flat_normals matches authored cube normals") {
     }
 }
 
+TEST_CASE("MeshData: bake_vertex_ao darkens covered vertices, leaves open ones bright") {
+    // A ground slab with a lid hovering just above its middle: the slab's top verts under
+    // the lid look straight up into geometry and must darken; a control slab far away
+    // from anything must be untouched.
+    MeshData slab = primitives::box(Vec3{-1.0f, -0.1f, -1.0f}, Vec3{1.0f, 0.0f, 1.0f}, Vec3{1.0f});
+    // The lid overhangs the slab generously, so every slab-top vertex (they sit at the
+    // corners) has its whole ray hemisphere capped, not just the straight-up samples.
+    const MeshData lid =
+        primitives::box(Vec3{-3.0f, 0.4f, -3.0f}, Vec3{3.0f, 0.5f, 3.0f}, Vec3{1.0f});
+    MeshData open = slab; // identical slab with no lid anywhere near it
+
+    slab.bake_vertex_ao({&slab, &lid});
+    open.bake_vertex_ao({&open});
+
+    // Average brightness of upward-facing verts: covered slab darker than the open one.
+    auto top_avg = [](const MeshData& m) {
+        f32 sum = 0.0f;
+        int n = 0;
+        for (const Vertex& v : m.vertices) {
+            if (v.normal.y > 0.9f) {
+                sum += v.color.r;
+                ++n;
+            }
+        }
+        REQUIRE(n > 0);
+        return sum / static_cast<f32>(n);
+    };
+    CHECK(top_avg(slab) < 0.85f);                       // clearly darkened under the lid
+    CHECK(top_avg(open) == doctest::Approx(1.0f).epsilon(0.02)); // nothing above -> unchanged
+}
+
 TEST_CASE("Primitives: grid produces a quad per cell") {
     const u32 cells = 4;
     const MeshData data = primitives::grid(cells, 1.0f);

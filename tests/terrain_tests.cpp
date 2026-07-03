@@ -605,7 +605,7 @@ TEST_CASE("Vegetation: grass + flowers bake deterministically onto land") {
 }
 
 TEST_CASE("Props: library builds geometry, scatter is deterministic & on land") {
-    PropLibrary lib;
+    PropLibrary lib{false}; // colliders/placement only - skip the vertex-AO bake
     REQUIRE(lib.bushes().size() >= 1);
     REQUIRE(lib.rocks().size() >= 1);
     REQUIRE(lib.logs().size() >= 1);
@@ -767,7 +767,7 @@ TEST_CASE("Terrain: mountain height stays within the meshed band (no invisible f
 }
 
 TEST_CASE("Paths: fences + lanterns line the trail edges; lanterns glow + light") {
-    PropLibrary lib;
+    PropLibrary lib{false}; // colliders/placement only - skip the vertex-AO bake
     REQUIRE_FALSE(lib.fences().empty());
     REQUIRE_FALSE(lib.lanterns().empty());
     CHECK_FALSE(lib.fences()[0].colliders.empty()); // fences block you
@@ -873,7 +873,7 @@ TEST_CASE("Paths: fences + lanterns line the trail edges; lanterns glow + light"
 }
 
 TEST_CASE("Village: medieval cottage / wall / gate building blocks") {
-    PropLibrary lib;
+    PropLibrary lib{false}; // colliders/placement only - skip the vertex-AO bake
     REQUIRE_FALSE(lib.houses().empty());
     REQUIRE_FALSE(lib.walls().empty());
     REQUIRE_FALSE(lib.gates().empty());

@@ -2971,7 +2971,33 @@ PropDef PropLibrary::build_stone_bridge() {
     return def;
 }
 
-PropLibrary::PropLibrary() {
+namespace {
+
+// Bake per-def vertex AO: every Opaque/Roof part is darkened by hemisphere rays cast
+// against all Opaque/Roof parts of the same def, so eaves shade walls, doorways fall
+// dark and clutter sits INTO its surroundings instead of floating on them. Emissive/
+// Glow parts (lit windows, lantern glass) neither receive nor occlude, and Foliage
+// keeps its airy alpha-blended look.
+void bake_def_ao(PropDef& def) {
+    std::vector<const MeshData*> occluders;
+    for (const PropPart& p : def.parts) {
+        if (p.layer == PropLayer::Opaque || p.layer == PropLayer::Roof) {
+            occluders.push_back(&p.mesh);
+        }
+    }
+    if (occluders.empty()) {
+        return;
+    }
+    for (PropPart& p : def.parts) {
+        if (p.layer == PropLayer::Opaque || p.layer == PropLayer::Roof) {
+            p.mesh.bake_vertex_ao(occluders);
+        }
+    }
+}
+
+} // namespace
+
+PropLibrary::PropLibrary(bool bake_ao) {
     for (int i = 0; i < 3; ++i) {
         bushes_.push_back(build_bush(i));
     }
@@ -3016,6 +3042,22 @@ PropLibrary::PropLibrary() {
         monuments_.push_back(build_monument(static_cast<int>(i)));
     }
     watchtowers_.push_back(build_watchtower());
+
+    // One-time vertex-AO bake over the whole catalogue (see bake_def_ao above). Skipped
+    // for never-rendered copies (the server's collider-only library). Defs run
+    // sequentially; the bake itself threads across each mesh's vertices, which keeps
+    // the few HEAVY defs (houses) on all cores instead of serialised on one.
+    if (bake_ao) {
+        for (auto* catalogue :
+             {&bushes_, &rocks_, &logs_, &fences_, &fence_rails_, &lanterns_, &houses_,
+              &walls_, &gates_, &wells_, &bridges_, &markets_, &paths_, &planters_,
+              &fountains_, &decor_, &rivers_, &crystals_, &glow_shrooms_, &campfires_,
+              &monuments_, &watchtowers_}) {
+            for (PropDef& def : *catalogue) {
+                bake_def_ao(def);
+            }
+        }
+    }
 }
 
 const PropDef& PropLibrary::resolve(const PropInstance& inst) const {

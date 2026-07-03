@@ -368,7 +368,7 @@ private:
     net::NetServer server_;
     GameManager manager_;                     // day/night clock + game-mode orchestration
     WorldSampler sampler_;
-    PropLibrary prop_lib_;                    // house wall colliders come from here
+    PropLibrary prop_lib_{false};             // colliders only - skip the vertex-AO bake
     std::optional<CollisionWorld> collision_; // built in start() once the seed is known
     std::vector<Collider> collider_scratch_;  // reused per player each tick
     std::unordered_map<net::PlayerId, ServerPlayer> players_;
