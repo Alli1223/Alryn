@@ -784,6 +784,7 @@ private:
         std::vector<PropLight> lights; // lantern / hearth / brazier spot lights
         Vec2 footprint{0.0f};          // house interior half-extents (0 = not a house)
         f32 wall_height = 0.0f;
+        Vec3 chimney_spot{0.0f};       // local chimney-pot top (zero = no hearth smoke)
     };
 
     std::unordered_map<net::PlayerId, PlayerVisual> visuals_;

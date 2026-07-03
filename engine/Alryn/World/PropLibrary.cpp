@@ -1072,6 +1072,7 @@ PropDef PropLibrary::build_house(u32 variant) {
             chim_stone * 0.82f); // corbelled cap
     add_box(op, {ccx - 0.2f, ctop + 0.16f, ccz - 0.2f}, {ccx + 0.2f, ctop + 0.44f, ccz + 0.2f},
             Vec3{0.55f, 0.28f, 0.2f}); // clay pot
+    def.chimney_spot = Vec3{ccx, ctop + 0.5f, ccz}; // hearth smoke rises from the pot
     add_box(em, {-w + t + 0.15f, 0.08f, -d + t + 0.1f}, {-w + t + 1.0f, 0.5f, -d + t + 0.5f}, fire);
     furn({-0.55f, 0.0f, -0.3f}, {0.55f, 0.74f, 0.6f}, wood); // table
 
@@ -1294,6 +1295,7 @@ PropDef PropLibrary::build_pub() {
     // chimney
     add_box(op, {-w + 0.3f, wallTop - 0.4f, -d + 0.25f}, {-w + 0.95f, apex + 0.55f, -d + 0.85f}, kStone * 0.88f);
     add_box(op, {-w + 0.22f, apex + 0.55f, -d + 0.17f}, {-w + 1.03f, apex + 0.72f, -d + 0.93f}, kStone * 0.76f);
+    def.chimney_spot = Vec3{-w + 0.625f, apex + 0.75f, -d + 0.55f}; // pub hearth smoke
 
     // hanging tavern sign: a bracket arm off the upper front-left, two chains + a board
     {
@@ -1438,6 +1440,7 @@ PropDef PropLibrary::build_blacksmith() {
         add_box(op, {cx - chw, cTop, bz}, {cx - chw + 0.22f, cTop + 0.4f, bz + sgd - 0.1f}, brick * 0.92f);
         add_box(op, {cx + chw - 0.22f, cTop, bz}, {cx + chw, cTop + 0.4f, bz + sgd - 0.1f}, brick * 0.92f);
     }
+    def.chimney_spot = Vec3{cx, cTop + 0.45f, cz}; // forge smoke billows from the tower
 
     // ---- Stone forge hearth at the tower base, opening toward the bay (+z), with a roaring fire.
     const f32 hfz = cz + chd + 0.5f; // hearth front face (projects into the bay)

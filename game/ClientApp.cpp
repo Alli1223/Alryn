@@ -140,6 +140,7 @@ void ClientApp::on_init() {
             gp.lights = def.lights;
             gp.footprint = def.footprint;
             gp.wall_height = def.wall_height;
+            gp.chimney_spot = def.chimney_spot;
             out.push_back(std::move(gp));
         }
     };

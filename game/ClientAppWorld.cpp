@@ -634,6 +634,29 @@ void ClientApp::draw_prop(const PropInstance& p) {
             renderer_->add_light(sl);
         }
     }
+
+    // Chimney smoke: soft grey puffs rising from the chimney pot on a deterministic loop
+    // (pure function of time - nothing to simulate, spawn or cull), swaying as they climb
+    // and leaning with the storm wind. Intact houses near the player only.
+    if (gp.chimney_spot.y > 0.01f && cozy > 0.5f && near_player) {
+        const Vec3 stack = Vec3{m * Vec4{gp.chimney_spot, 1.0f}};
+        const f32 lean = 0.3f + weather_amt_ * 1.6f; // wind pushes the column over
+        for (int i = 0; i < 4; ++i) {
+            const f32 ph = glm::fract(elapsed_ * 0.10f + flick_phase * 0.159f +
+                                      static_cast<f32>(i) * 0.25f); // 0 at the pot, 1 dispersed
+            const f32 rise = ph * 3.4f;
+            const f32 sway = std::sin(elapsed_ * 0.8f + flick_phase + static_cast<f32>(i) * 2.1f) *
+                             (0.08f + 0.3f * ph);
+            const Vec3 at = stack + Vec3{sway + lean * rise * 0.35f, rise, sway * 0.7f};
+            const f32 size = 0.16f + ph * 0.6f;                     // puffs grow as they thin
+            const f32 alpha =
+                0.32f * (1.0f - ph) * glm::smoothstep(0.0f, 0.1f, ph); // fade in at the pot, out on top
+            renderer_->draw_transparent(shape_sphere_,
+                                        glm::translate(Mat4{1.0f}, at) *
+                                            glm::scale(Mat4{1.0f}, Vec3{size}),
+                                        Vec4{0.60f, 0.59f, 0.58f, alpha});
+        }
+    }
 }
 
 void ClientApp::update_villager_visuals(Timestep dt) {

@@ -56,6 +56,9 @@ struct PropDef {
     // the house's local space. Vary per house variant so any shape places NPCs right.
     Vec3 bed_spot{0.0f};
     Vec3 door_spot{0.0f, 0.0f, 3.5f};
+    // Top of the chimney pot in local space; the client anchors drifting hearth
+    // smoke here. Zero = no chimney (no smoke).
+    Vec3 chimney_spot{0.0f};
 };
 
 // Categories the world scatter can place. Trees and ground vegetation keep their
