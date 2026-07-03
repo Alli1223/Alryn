@@ -25,4 +25,6 @@ target_link_libraries(alryn_tests PRIVATE
     alryn
     doctest::doctest)
 
+alryn_stage_shaders_next_to(alryn_tests)
+
 add_test(NAME alryn_tests COMMAND alryn_tests)

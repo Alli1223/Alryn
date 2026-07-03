@@ -160,6 +160,11 @@ bool Device::create(VkInstance instance, const DeviceConfig& config) {
     enable13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
     enable13.dynamicRendering = supported13.dynamicRendering;
     enable13.synchronization2 = supported13.synchronization2;
+    // Our optimised fragment shaders (foliage/water peek-through) declare the
+    // DemoteToHelperInvocation SPIR-V capability - spirv-opt lowers `discard` to
+    // `demote` under -O. Enable the matching feature so vkCreateShaderModule
+    // accepts them; without it those pipelines fail to create.
+    enable13.shaderDemoteToHelperInvocation = supported13.shaderDemoteToHelperInvocation;
 
     VkPhysicalDeviceFeatures2 enable2{};
     enable2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;

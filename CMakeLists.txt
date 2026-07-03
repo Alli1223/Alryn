@@ -135,7 +135,10 @@ endif()
 list(TRANSFORM alryn_enet_sources PREPEND ${enet_SOURCE_DIR}/)
 add_library(enet STATIC ${alryn_enet_sources})
 target_include_directories(enet PUBLIC ${enet_SOURCE_DIR}/include)
-if(NOT WIN32)
+if(WIN32)
+    # win32.c uses Winsock (WSAStartup/socket/...) and timeGetTime (winmm).
+    target_link_libraries(enet PUBLIC ws2_32 winmm)
+else()
     target_compile_definitions(enet PRIVATE
         HAS_SOCKLEN_T=1 HAS_FCNTL=1 HAS_POLL=1 HAS_GETADDRINFO=1 HAS_GETNAMEINFO=1
         HAS_GETHOSTBYNAME_R=1 HAS_GETHOSTBYADDR_R=1 HAS_INET_PTON=1 HAS_INET_NTOP=1
