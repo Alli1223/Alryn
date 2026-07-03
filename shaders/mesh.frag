@@ -9,6 +9,7 @@ layout(location = 0) out vec4 outColor;
 
 layout(set = 0, binding = 0) uniform sampler2D shadowMap;   // sun
 layout(set = 0, binding = 1) uniform sampler2D lightAtlas;  // spot lights (tiled)
+layout(set = 0, binding = 3) uniform sampler2D ssaoMap;     // screen-space AO (1 = open)
 
 struct Spot {
     vec4 posRange;      // xyz position, w range
@@ -254,8 +255,15 @@ void main() {
     float night = 1.0 - intensity;
     float moon = max(N.y, 0.0) * 0.24 * night;
 
+    // Screen-space AO: fully scales the ambient (occluded creases lose their fill light)
+    // and partially scales the sun (a corner under the eaves still darkens at noon).
+    float ssao = lights.screen.x > 1.0
+                     ? texture(ssaoMap, gl_FragCoord.xy / lights.screen.xy).r
+                     : 1.0; // screen size unset (headless tests) -> AO off
+
     vec3 base = vColor * pc.tint.rgb;
-    vec3 illum = ambient + sunCol * diffuse * 1.35 + vec3(0.55, 0.65, 0.9) * moon +
+    vec3 illum = ambient * ssao + sunCol * diffuse * mix(1.0, ssao, 0.35) * 1.35 +
+                 vec3(0.55, 0.65, 0.9) * moon +
                  spotLighting(N, vWorldPos) + pointLighting(N, vWorldPos);
 
     vec3 col = base * illum;

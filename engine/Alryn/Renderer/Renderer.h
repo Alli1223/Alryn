@@ -178,6 +178,7 @@ private:
 
     static constexpr u32 kFramesInFlight = 2;
     static constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
+    static constexpr u32 kSsaoDivisor = 2; // SSAO renders at half resolution
     static constexpr u32 kShadowSize = 2048;
     static constexpr u32 kMaxLights = 4;       // shadow-casting spot lights (atlas tiles)
     static constexpr u32 kMaxPointLights = 48; // extra lights that illuminate without shadows
@@ -185,6 +186,8 @@ private:
     static constexpr u32 kAtlasTiles = 2;      // per axis
 
     bool create_depth();
+    bool create_ssao_targets();     // prepass depth + AO images (recreated on resize)
+    void write_ssao_descriptors();  // repoint binding 3 + the AO pass inputs after resize
     bool create_pipelines();
     bool create_shadow_resources();
     bool create_sync_and_commands();
@@ -198,6 +201,7 @@ private:
     void push_constants(const Mat4& model, const Vec4& tint, bool vegetation = false);
     void record_shadow_pass(VkCommandBuffer cmd);
     void record_light_atlas_pass(VkCommandBuffer cmd);
+    void record_ssao_pass(VkCommandBuffer cmd); // depth prepass -> raw AO -> blurred AO
     void record_main_pass(VkCommandBuffer cmd);
     void record_ui_pass(VkCommandBuffer cmd);
 
@@ -209,6 +213,11 @@ private:
     vk::Device device_;
     vk::Swapchain swapchain_;
     vk::Image depth_;
+    // SSAO chain: camera-depth prepass (full res) -> raw AO -> blurred AO (half res),
+    // sampled by the main pass at set 0 binding 3.
+    vk::Image prepass_depth_;
+    vk::Image ssao_raw_;
+    vk::Image ssao_blur_;
     vk::Pipeline pipeline_opaque_;
     vk::Pipeline pipeline_cutout_; // opaque + peek-through dissolve (tree trunks)
     vk::Pipeline pipeline_foliage_;
@@ -217,6 +226,9 @@ private:
     vk::Pipeline pipeline_glow_;
     vk::Pipeline pipeline_vegetation_;
     vk::Pipeline pipeline_shadow_;
+    vk::Pipeline pipeline_prepass_;   // camera depth prepass (feeds SSAO)
+    vk::Pipeline pipeline_ssao_;      // fullscreen AO generation
+    vk::Pipeline pipeline_ssao_blur_; // fullscreen AO blur
     vk::Pipeline pipeline_ui_;
     vk::Pipeline pipeline_sky_; // gradient sky + sun disc (drawn first in the main pass)
     VkPipeline current_pipeline_ = VK_NULL_HANDLE; // avoids redundant binds within a frame
@@ -225,6 +237,11 @@ private:
     VkDescriptorSetLayout shadow_set_layout_ = VK_NULL_HANDLE;
     VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
     VkSampler shadow_sampler_ = VK_NULL_HANDLE;
+    // SSAO pass inputs: one-sampler sets for depth -> raw AO and raw -> blurred AO.
+    VkDescriptorSetLayout ssao_set_layout_ = VK_NULL_HANDLE;
+    VkDescriptorSet ssao_gen_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet ssao_blur_set_ = VK_NULL_HANDLE;
+    VkSampler ssao_sampler_ = VK_NULL_HANDLE; // linear, clamp-to-edge
 
     VkCommandPool command_pool_ = VK_NULL_HANDLE;
     std::vector<FrameSync> frames_;

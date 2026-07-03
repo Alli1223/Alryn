@@ -70,6 +70,7 @@ private:
     vk::Image color_;
     vk::Image depth_;
     vk::Image shadow_dummy_;
+    vk::Image ao_dummy_; // 1x1 white: mesh.frag's SSAO binding reads "fully open"
     vk::Buffer light_ubo_;
     vk::Buffer readback_;
     vk::Pipeline pipeline_;
