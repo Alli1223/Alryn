@@ -75,11 +75,13 @@ struct SsaoBlurPush {
 
 // Must match the push_constant block in sky.frag.
 struct SkyPush {
-    Vec4 zenith;     // rgb
-    Vec4 horizon;    // rgb
-    Vec4 sun_color;  // rgb, w = intensity
-    Vec4 sun_screen; // xy = sun pixel position, z = 1 if in front of the camera
-    Vec4 screen;     // xy = viewport pixels
+    Vec4 zenith;      // rgb
+    Vec4 horizon;     // rgb
+    Vec4 sun_color;   // rgb, w = intensity
+    Vec4 sun_screen;  // xy = sun pixel position, z = 1 if in front of the camera
+    Vec4 moon_screen; // xy = moon pixel position, z = 1 if in front of the camera
+    Vec4 params;      // x = time (s), y = cloud cover 0..1, z = night amount 0..1
+    Vec4 screen;      // xy = viewport pixels
 };
 
 // A view-frustum extracted from a view-projection matrix (Gribb-Hartmann), used to cull
@@ -1014,15 +1016,20 @@ void Renderer::record_main_pass(VkCommandBuffer cmd) {
         sp.horizon = Vec4{fog_color_, 1.0f};
         sp.sun_color = Vec4{sun_color_, sun_intensity_};
         sp.screen = Vec4{static_cast<f32>(extent.width), static_cast<f32>(extent.height), 0.0f, 0.0f};
-        // Project the sun onto the screen for its glow (visible at dawn/dusk near the top of the frame).
+        sp.params = Vec4{time_, cloud_cover_, 1.0f - glm::clamp(sun_intensity_, 0.0f, 1.0f), 0.0f};
+        // Project the sun (and the moon, opposite it) onto the screen for their discs.
         const Vec3 cam_pos = Vec3{glm::inverse(view_)[3]};
-        const Vec4 clip = projection_ * view_ * Vec4{cam_pos + sun_direction_ * 1000.0f, 1.0f};
-        sp.sun_screen = Vec4{-1.0f, -1.0f, 0.0f, 0.0f};
-        if (clip.w > 0.0f) {
+        auto project = [&](const Vec3& dir) {
+            const Vec4 clip = projection_ * view_ * Vec4{cam_pos + dir * 1000.0f, 1.0f};
+            if (clip.w <= 0.0f) {
+                return Vec4{-1.0f, -1.0f, 0.0f, 0.0f};
+            }
             const f32 nx = clip.x / clip.w, ny = clip.y / clip.w;
-            sp.sun_screen = Vec4{(nx * 0.5f + 0.5f) * static_cast<f32>(extent.width),
-                                 (ny * 0.5f + 0.5f) * static_cast<f32>(extent.height), 1.0f, 0.0f};
-        }
+            return Vec4{(nx * 0.5f + 0.5f) * static_cast<f32>(extent.width),
+                        (ny * 0.5f + 0.5f) * static_cast<f32>(extent.height), 1.0f, 0.0f};
+        };
+        sp.sun_screen = project(sun_direction_);
+        sp.moon_screen = project(-sun_direction_);
         vkCmdPushConstants(cmd, pipeline_sky_.layout(),
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(SkyPush),
                            &sp);
