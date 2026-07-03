@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include <Alryn/Combat/Enemy.h>
 #include <Alryn/Game/Roles.h>
 #include <Alryn/Physics/Collider.h>
 
@@ -55,6 +56,54 @@ TEST_CASE("every role now has four abilities, incl. the cleric Aegis shield") {
     CHECK(kAegisAmount > 0.0f);   // it absorbs damage
     CHECK(kAegisDuration > 0.0f); // and lasts a while
     CHECK(kAegisRange > 0.0f);
+}
+
+TEST_CASE("Gauntlet co-op combo tuning is sane") {
+    // Ally Toss: a real launch (up + forward), a landing burst, and a cooldown.
+    CHECK(kTossSpeed > 0.0f);
+    CHECK(kTossUp > 0.0f);
+    CHECK(kTossImpactDamage > 0.0f);
+    CHECK(kTossImpactRadius > 0.0f);
+    CHECK(kTossCooldown > 0.0f);
+    CHECK(kTossGrabRange > 0.0f);
+    // Elemental Shatter amplifies a heavy hit; a Chill slows the foe (the set-up).
+    CHECK(kShatterMult > 1.0f);
+    CHECK(kShatterThreshold > 0.0f);
+    CHECK(kChillSlow < 1.0f);
+    CHECK(kChillDuration > 0.0f);
+    // Focus Zone amplifies every ally's damage inside it.
+    CHECK(kFocusZoneMult > 1.0f);
+    // Power Conduit heals the linked ally over a real range.
+    CHECK(kConduitHealRate > 0.0f);
+    CHECK(kConduitRange > 0.0f);
+}
+
+TEST_CASE("a curated set of abilities is upgradeable, flagship = the Cleric Aegis dome") {
+    // Only the curated abilities are upgradeable; the rest report max rank 0.
+    CHECK(ability_max_rank(PlayerRole::Knight, 0) == kMaxAbilityRank); // Shield Bash
+    CHECK(ability_max_rank(PlayerRole::Hunter, 0) == kMaxAbilityRank); // Power Shot
+    CHECK(ability_max_rank(PlayerRole::Cleric, 0) == kMaxAbilityRank); // Heal
+    CHECK(ability_max_rank(PlayerRole::Cleric, 3) == kMaxAbilityRank); // Aegis (the flagship)
+    CHECK(ability_max_rank(PlayerRole::Knight, 1) == 0);               // Bulwark - not upgradeable
+    CHECK(ability_max_rank(PlayerRole::Mage, 0) == 0);                 // the Mage upgrades via combos
+
+    // Upgrade cost escalates and is a mid-range money sink.
+    CHECK(ability_upgrade_price(1) > 0u);
+    CHECK(ability_upgrade_price(2) > ability_upgrade_price(1));
+
+    // The generic numeric upgrade scales outputs up with rank (base rank 0 = no change).
+    CHECK(ability_rank_mult(0) == doctest::Approx(1.0f));
+    CHECK(ability_rank_mult(1) > 1.0f);
+    CHECK(ability_rank_mult(2) > ability_rank_mult(1));
+
+    // Aegis rank 1 is a stronger, longer single-target ward...
+    CHECK(aegis_amount_for_rank(1) > aegis_amount_for_rank(0));
+    CHECK(aegis_duration_for_rank(1) > aegis_duration_for_rank(0));
+    // ...and the MAX-rank dome has a real radius + lifetime + health (it blocks ranged attacks).
+    CHECK(kAegisBubbleRadius > kAegisRange * 0.0f);
+    CHECK(kAegisBubbleRadius > 2.0f);
+    CHECK(kAegisBubbleDuration > 0.0f);
+    CHECK(kAegisBubbleHealth > 0.0f);
 }
 
 TEST_CASE("aura props table drives radius/duration/colour/light for each kind") {
@@ -168,4 +217,82 @@ TEST_CASE("mitigation soaks damage by the role + block fraction") {
     const f32 blocked = raw * (1.0f - (knight.damage_reduction + kBulwarkReduction));
     CHECK(blocked < taken);
     CHECK(blocked > 0.0f);
+}
+
+TEST_CASE("races carry distinct combat passives (dwarf tough, elf swift, man adaptable)") {
+    const RaceCombat man = race_combat(Race::Human);
+    const RaceCombat dwarf = race_combat(Race::Dwarf);
+    const RaceCombat elf = race_combat(Race::Elf);
+    // Dwarf: stout - extra mitigation on top of any role, but stocky (never the fastest).
+    CHECK(dwarf.mitigation_add > 0.0f);
+    CHECK(dwarf.move_mult <= man.move_mult);
+    CHECK(dwarf.jump_mult < elf.jump_mult);
+    // Elf: swift - the fastest strider and the springiest jumper.
+    CHECK(elf.move_mult > man.move_mult);
+    CHECK(elf.jump_mult > man.jump_mult);
+    // Man: adaptable - the quickest ability cooldowns of the three.
+    CHECK(man.cooldown_mult < dwarf.cooldown_mult);
+    CHECK(man.cooldown_mult < elf.cooldown_mult);
+    CHECK(man.cooldown_mult < 1.0f);
+    // Every race has a perk blurb for the customise screen.
+    for (u8 r = 0; r < kRaceCount; ++r) {
+        CHECK(std::string_view{race_perk_desc(static_cast<Race>(r))}.size() > 4);
+    }
+}
+
+TEST_CASE("ally toss: the elf is the best thrower, the dwarf the heaviest cannonball") {
+    // The classic Gauntlet play - an ELF hurls a DWARF - beats every other pairing.
+    CHECK(race_combat(Race::Elf).toss_power_mult > race_combat(Race::Human).toss_power_mult);
+    CHECK(race_combat(Race::Elf).toss_power_mult > race_combat(Race::Dwarf).toss_power_mult);
+    CHECK(toss_impact_damage(Race::Dwarf) > toss_impact_damage(Race::Human));
+    CHECK(toss_impact_damage(Race::Dwarf) > toss_impact_damage(Race::Elf));
+    CHECK(toss_impact_radius(Race::Dwarf) > toss_impact_radius(Race::Elf));
+    // The baseline (Human) toss lands exactly the shared constants (no race = no change).
+    CHECK(toss_impact_damage(Race::Human) == doctest::Approx(kTossImpactDamage));
+    CHECK(toss_impact_radius(Race::Human) == doctest::Approx(kTossImpactRadius));
+}
+
+TEST_CASE("a dwarf's stoutness stacks into the mitigation formula (capped below 1)") {
+    // Pure-formula mirror of ServerPlayer::mitigated with the race passive folded in.
+    const f32 raw = 100.0f;
+    const RoleStats knight = role_stats(PlayerRole::Knight);
+    const f32 man_taken = raw * (1.0f - knight.damage_reduction);
+    const f32 dwarf_taken =
+        raw * (1.0f - (knight.damage_reduction + race_combat(Race::Dwarf).mitigation_add));
+    CHECK(dwarf_taken < man_taken); // a dwarf knight is the toughest thing on the road
+    // Even a fully-buffed dwarf never becomes immune (the server clamps at 0.9).
+    const f32 total = knight.damage_reduction + race_combat(Race::Dwarf).mitigation_add +
+                      kBlockReduction + kBulwarkReduction;
+    CHECK(raw * (1.0f - glm::clamp(total, 0.0f, 0.9f)) > 0.0f);
+}
+
+TEST_CASE("max-rank transformations: shockwave corridor, piercing bolt, chain heal") {
+    // The MAX-rank Shield Bash rolls a CORRIDOR (a line), not the little melee cone.
+    const Vec3 origin{0.0f};
+    const f32 yaw = 0.0f; // facing +x
+    CHECK(in_corridor(origin, yaw, Vec3{6.0f, 0.0f, 0.0f}, kShockwaveRange, kShockwaveWidth));
+    CHECK(in_corridor(origin, yaw, Vec3{8.5f, 0.0f, 1.2f}, kShockwaveRange, kShockwaveWidth));
+    CHECK_FALSE(in_corridor(origin, yaw, Vec3{6.0f, 0.0f, 3.0f}, kShockwaveRange, kShockwaveWidth));
+    CHECK_FALSE(in_corridor(origin, yaw, Vec3{-2.0f, 0.0f, 0.0f}, kShockwaveRange, kShockwaveWidth));
+    CHECK_FALSE(in_corridor(origin, yaw, Vec3{12.0f, 0.0f, 0.0f}, kShockwaveRange, kShockwaveWidth));
+    CHECK(kShockwaveRange > kMeleeRange * 2.0f); // the upgrade changes the ability's SHAPE
+    CHECK(kShockwaveStagger > kStaggerDuration); // and reels harder than a basic heavy hit
+
+    // The MAX-rank Power Shot punches through several bodies; the chain heal actually chains.
+    CHECK(kPowerShotPierce >= 2);
+    CHECK(kChainHealBounces >= 1);
+    CHECK(kChainHealRadius > 0.0f);
+    CHECK(kChainHealFalloff > 0.0f);
+    CHECK(kChainHealFalloff < 1.0f); // each hop mends less (no infinite free healing)
+
+    // The newly upgradeable numeric abilities joined the curated set...
+    CHECK(ability_max_rank(PlayerRole::Knight, 4) == kMaxAbilityRank); // Whirlwind
+    CHECK(ability_max_rank(PlayerRole::Hunter, 1) == kMaxAbilityRank); // Volley
+    CHECK(ability_max_rank(PlayerRole::Cleric, 2) == kMaxAbilityRank); // Smite
+    // ...and every TRANSFORMING upgrade has a tease line for the skills tree.
+    CHECK(std::string_view{ability_rank_desc(PlayerRole::Knight, 0)}.size() > 4);
+    CHECK(std::string_view{ability_rank_desc(PlayerRole::Hunter, 0)}.size() > 4);
+    CHECK(std::string_view{ability_rank_desc(PlayerRole::Cleric, 0)}.size() > 4);
+    CHECK(std::string_view{ability_rank_desc(PlayerRole::Cleric, 3)}.size() > 4);
+    CHECK(std::string_view{ability_rank_desc(PlayerRole::Knight, 1)}.empty()); // Bulwark: none
 }

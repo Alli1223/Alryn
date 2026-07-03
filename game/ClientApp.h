@@ -8,6 +8,7 @@
 
 #include <Alryn/Alryn.h>
 
+#include <Alryn/Audio/Audio.h>
 #include <Alryn/Character/BodyMesh.h>
 #include <Alryn/Character/CharacterAnimator.h>
 #include <Alryn/Character/CharacterModel.h>
@@ -206,8 +207,13 @@ protected:
     bool abilitybar_press(const Vec2& p);
     bool abilitybar_release(const Vec2& p);
 
-    // A click inside the open skills tree: hit-test the ability nodes and equip/unequip the one hit.
+    // A click inside the open skills tree: hit-test the UPGRADE buttons (buy a rank) then the ability
+    // nodes (equip/unequip the one hit).
     void skills_click(const Vec2& p);
+
+    // Request a town-shop ability upgrade (raise this ability's rank by one). The server gates it on
+    // being in a town + the party affording the cost; the request is held a few ticks for reliability.
+    void request_ability_upgrade(u8 ability);
 
     // A quick flourish at the hand for a Hunter/Cleric primary attack (the projectile itself is
     // server-spawned + networked; this is just the instant local muzzle/cast feedback).
@@ -259,6 +265,8 @@ private:
         bool has_last = false;
         u8 last_action = 0;     // to fire a swing once on the rising edge of a networked action
         u8 last_health = 255;   // previous snapshot health % (255 = unseen) - a drop can cut cloth
+        u8 last_buffs = 0;      // previous co-op buff bits - a rising edge pops floating combat text
+        u8 last_shield = 0;     // previous Aegis strength - a fresh ward pops "WARDED!"
         SkinnedMesh body_skin;  // continuous body geometry + bone weights (built with the model)
         Mesh body_mesh;         // dynamic GPU mesh, re-skinned from the posed joints every frame
         SkinnedMesh outfit_skin; // continuous worn equipment (armoured/clothed limbs, torso, skirt)
@@ -290,16 +298,21 @@ private:
     void retire_mesh(Mesh&& m);
     void tick_mesh_graveyard();
 
-    // A networked enemy's renderable: one shared hostile model, animated from
-    // snapshot position deltas (no animation data on the wire).
+    // A networked enemy's renderable: a bandit model dressed per kind (melee Brigand / ranged
+    // Outlaw), animated from snapshot position deltas (no animation data on the wire).
     struct EnemyVisual {
         CharacterModel model = CharacterModel::create(0u, enemy_look());
         CharacterAnimator animator;
         Vec3 last_pos{0.0f};
         f32 speed = 0.0f;
+        u8 kind = 0;             // bandit kind, kept for the death VFX after it leaves the snapshot
+        u8 last_health = 255;    // last networked health (0..255) - felled vs self-detonated sapper
         u8 last_action = 0;
-        SkinnedMesh body_skin; // continuous body, built on first sight; re-skinned each frame
-        Mesh body_mesh;        // dynamic GPU mesh
+        u8 last_status = 0;      // to detect a chill->shatter transition for the VFX
+        SkinnedMesh body_skin;   // continuous body, built on first sight; re-skinned each frame
+        Mesh body_mesh;          // dynamic GPU mesh (body)
+        SkinnedMesh outfit_skin; // worn bandit leather/cloth, skinned like the body
+        Mesh outfit_mesh;        // dynamic GPU mesh (outfit)
     };
 
     PlayerVisual& ensure_visual(net::PlayerId id, const CharacterAppearance& appearance, u8 role,
@@ -349,6 +362,21 @@ private:
     void apply_debug_flags();                                       // push god/no-ambush to the listen server
     bool debug_click(const Vec2& p);                                // hit-test the overlay's toggles
 
+    // ---- Floating combat text ------------------------------------------------------
+    // A short world-anchored label ("SHATTER!", "EMPOWERED!", "CANNONBALL!") that pops over the
+    // spot it happened, drifts up and fades - the Gauntlet-style readout that makes the co-op
+    // combos legible at a glance. Drawn in the HUD pass via world_to_screen.
+    struct FloatText {
+        Vec3 world{0.0f};
+        std::string text;
+        Vec4 color{1.0f};
+        f32 age = 0.0f;
+        f32 life = 1.1f;
+        f32 size = 22.0f; // px, before the pop-in ease
+    };
+    void combat_text(const Vec3& world, std::string text, const Vec4& color, f32 size = 22.0f);
+    void draw_combat_text(ui::DrawList& draw, f32 W, f32 H);
+
     // ---- Particle VFX ------------------------------------------------------------
     void emit(const Vec3& pos, const Vec3& vel, const Vec4& color, f32 life, f32 size,
               u8 style = 0, f32 gravity = 0.0f, f32 drag = 1.6f);
@@ -378,6 +406,10 @@ private:
     // shell + an additive glow, brighter while the shield is strong. (Shimmer motes orbit it from
     // update_particles.)
     void draw_shields();
+
+    // A Cleric's max-Aegis DOME (Snapshot.bubbles): a large translucent protective shell + additive
+    // glow + a rim of shimmer, brighter while intact - the ranged-blocking bubble the party shelters in.
+    void draw_bubbles();
 
     // Co-op buff auras under empowered (fiery ring) / hasted (green ring) players, so allies can
     // read who the Cleric/Hunter/Mage has buffed. Pulses; driven by PlayerState.buffs bitflags.
@@ -700,6 +732,10 @@ private:
     int drag_slot_ = -1;                             // bar slot being click-dragged (-1 = none)
     ui::Rect ability_slot_rects_[kAbilitySlots] = {}; // bar slot rects (from draw_ability_bar)
     ui::Rect skill_node_rects_[kAbilityCount] = {};  // tree node rects (from draw_skills)
+    ui::Rect skill_upgrade_rects_[kAbilityCount] = {}; // tree UPGRADE-button rects (from draw_skills)
+    u8 ability_rank_[kAbilityCount] = {};            // local player's current-role upgrade ranks (snapshot)
+    u8 pending_upgrade_ = 0;                          // ability index+1 to buy-upgrade (sent while held)
+    int upgrade_hold_ = 0;                            // ticks left to hold pending_upgrade_ (rising-edge buy)
 
     // Pending host/join intent recorded when the Class screen opens; START there enters the game.
     bool pending_host_local_ = true;
@@ -723,6 +759,7 @@ private:
         u8 style = 0; // 0 = emissive, 1 = additive glow
     };
     std::vector<Particle> particles_;
+    std::vector<FloatText> float_texts_; // live floating combat labels (aged in update_feedback)
     u32 fx_rng_ = 0x9e3779b9u;
     f32 frand();
     f32 frand(f32 a, f32 b) { return a + (b - a) * frand(); }
@@ -857,6 +894,8 @@ private:
     bool blocking_ = false;            // Knight holding the shield up (right mouse held)
     bool pending_rally_ = false;
     bool pending_grab_ = false; // one-shot hitch/unhitch the nearest wagon
+    bool pending_toss_ = false; // Ally Toss combo: one-shot hurl the nearest teammate (G)
+    bool conduit_held_ = false; // Power Conduit combo: Cleric channelling a beam to an ally (hold V)
     // Controller state. `using_gamepad_` is the active input device (auto-switched: any pad activity
     // selects it, any mouse motion selects KBM) and decides whether the aim follows the right stick
     // or the cursor. The trigger edges are tracked here because triggers are analog axes, not buttons.
@@ -952,6 +991,12 @@ private:
     f32 hit_marker_ = 0.0f;  // hit-marker pop intensity when OUR attack lands (decays); drawn at screen centre
     u8 last_hit_fx_ = 0;     // last seen local hit_fx counter (server bumps it on a confirmed hit)
     bool hit_fx_init_ = false; // seen the first snapshot value yet (so a fresh join doesn't pop a marker)
+    u32 last_money_ = 0;     // last seen party wallet, to pop a "+$n" when loot/pay lands
+    bool money_init_ = false;
+    u32 money_gain_ = 0;     // size of the latest gain (shown while the pulse lasts)
+    f32 money_pulse_ = 0.0f; // "+$n" pop intensity beside the money counter (decays)
+    u8 last_wheel_off_ = 0;  // previous wagon wheel_off flag - the rising edge plays the crack
+    u8 last_outcome_ = 0;    // previous contract outcome - an edge plays the fanfare / wreck boom
 
     // Debug / testing overlay (F1) state + sampled performance metrics.
     bool debug_open_ = false;       // the overlay is showing

@@ -165,8 +165,8 @@ void ClientApp::build_join(f32 w, f32 h) {
 void ClientApp::build_settings(f32 w, f32 h) {
     add_title(w, h, "SETTINGS", nullptr);
     constexpr f32 cw = 460.0f, pad = 28.0f, rh = 54.0f, gap = 18.0f;
-    const f32 ch = pad * 2.0f + 4.0f * rh + 3.0f * gap;
-    const ui::Rect card{(w - cw) * 0.5f, h * 0.38f, cw, ch};
+    const f32 ch = pad * 2.0f + 5.0f * rh + 4.0f * gap;
+    const ui::Rect card{(w - cw) * 0.5f, h * 0.36f, cw, ch};
     auto& panel = ui_.root().add<ui::Panel>();
     panel.bounds = card;
     auto row = [&](int i) {
@@ -193,7 +193,18 @@ void ClientApp::build_settings(f32 w, f32 h) {
     rd.integer = true;
     rd.bounds = row(2);
 
-    panel.add<ui::Button>("BACK", [this] { settings_back(); }).bounds = row(3);
+    // Master volume for the synthesized SFX bank; a click previews the level as you let go.
+    panel.add<ui::Slider>("VOLUME", audio() != nullptr ? audio()->master_volume() : 0.8f, 0.0f,
+                          1.0f,
+                          [this](f32 v) {
+                              if (Audio* a = audio()) {
+                                  a->set_master_volume(v);
+                                  a->play(SfxId::UiClick);
+                              }
+                          })
+        .bounds = row(3);
+
+    panel.add<ui::Button>("BACK", [this] { settings_back(); }).bounds = row(4);
 }
 
 void ClientApp::build_customise(f32 w, f32 h) {
@@ -235,6 +246,18 @@ void ClientApp::build_customise(f32 w, f32 h) {
                   rebuild_ui(); // re-lay so the outfit-colour swatch reflects the new role
               }),
           46.0f);
+
+    caption("RACE");
+    place(panel.add<ui::Stepper>(
+              "RACE", std::vector<std::string>{"MAN", "DWARF", "ELF"},
+              static_cast<usize>(appearance_.race),
+              [this](usize i) {
+                  appearance_.race = static_cast<Race>(i % kRaceCount);
+                  rebuild_preview(); // re-proportion the turntable avatar to the chosen race
+                  rebuild_ui();      // and refresh the race-perk blurb below the stepper
+              }),
+          46.0f);
+    caption(race_perk_desc(appearance_.race)); // the race's combat passive, at a glance
 
     caption("SKIN TONE");
     place(panel.add<ui::SwatchRow>(

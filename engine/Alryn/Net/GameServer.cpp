@@ -198,7 +198,7 @@ void GameServer::tick(Timestep dt) {
         if (player.roll_timer > 0.0f) {
             player.roll_timer -= dt.seconds;
             rolling = true;
-        } else if (player.input.dodge && player.roll_cd <= 0.0f) {
+        } else if (player.input.dodge && player.roll_cd <= 0.0f && player.toss_timer <= 0.0f) {
             Vec3 d{player.input.move.x, 0.0f, player.input.move.z};
             if (glm::length(d) < 0.1f) {
                 d = Vec3{std::cos(player.input.yaw), 0.0f, std::sin(player.input.yaw)}; // roll where you face
@@ -237,14 +237,25 @@ void GameServer::tick(Timestep dt) {
             collider_scratch_.clear();
         }
         append_wagon_colliders(collider_scratch_); // can't walk through parked / hauled carts
+        // Airborne from an Ally Toss: ballistic flight (no walk / jump input - the launch carries
+        // them, with i-frames), then a cannonball burst on whichever enemies they land among.
+        const bool tossed = player.toss_timer > 0.0f;
+        if (tossed) {
+            move = Vec3{0.0f};
+        }
         // A bridge deck is walkable ground over the river it spans; the active cart's bed is a
         // moving platform you can jump on top of and ride.
         const u32 seed = sampler_.seed();
-        player.controller.update(density, move, player.input.jump, dt, collider_scratch_,
-                                 [this, seed](f32 x, f32 z) {
+        player.controller.update(density, move, tossed ? false : player.input.jump, dt,
+                                 collider_scratch_, [this, seed](f32 x, f32 z) {
                                      return std::max(roads::bridge_height(x, z, seed),
                                                      wagon_top_at(x, z));
                                  });
+        if (tossed && player.controller.on_ground()) {
+            // Landed -> radial burst on nearby enemies (a Dwarf cannonballs hardest).
+            toss_impact(player.controller.position(), player.input.appearance.race);
+            player.toss_timer = 0.0f;
+        }
     }
 
     // Step thrown rocks: gravity + bounce off terrain/props. With combat dormant they
@@ -282,20 +293,28 @@ void GameServer::tick(Timestep dt) {
         const f32 yaw = seated ? active_.yaw : player.input.yaw; // seated -> face the vehicle
         // Body action for the animation layer: blocking (held) wins, else a swing while the
         // attack input is held (the client sends it for one frame per click).
-        const u8 action = player.roll_timer > 0.0f ? 3u // dodge roll -> client plays it + a dust puff
-                          : player.input.block      ? 2u
-                          : player.input.attack     ? 1u
-                                                    : 0u;
+        const u8 action = player.toss_timer > 0.0f ? 4u // Ally Toss -> client plays a tumble + trail
+                          : player.roll_timer > 0.0f ? 3u // dodge roll -> client plays it + a dust puff
+                          : player.input.block         ? 2u
+                          : player.input.attack        ? 1u
+                                                       : 0u;
         const u8 shield = static_cast<u8>(
             glm::clamp(player.shield_hp / kAegisAmount, 0.0f, 1.0f) * 255.0f);
         const u8 buffs = static_cast<u8>((player.damage_boost_timer > 0.0f ? 1u : 0u) |
                                          (player.haste_timer > 0.0f ? 2u : 0u));
+        // Pack this player's current-role upgrade ranks (2 bits each) so their client can drive the
+        // skills-tree UI + the max-Aegis cast behaviour without a separate message.
+        u16 ranks = 0;
+        for (u8 a = 0; a < kAbilityCount; ++a) {
+            const u8 rk = player.ability_rank[static_cast<u8>(player.role) * kAbilityCount + a] & 0x3u;
+            ranks = static_cast<u16>(ranks | (static_cast<u16>(rk) << (2 * a)));
+        }
         snapshot.players.push_back({id, player.controller.position(), yaw, hp, 0,
                                     static_cast<u8>(seated ? 1 : 0),
                                     static_cast<u8>(player.carrying ? 1 : 0),
                                     static_cast<u8>(player.role), player.cast_fx, action, shield,
                                     buffs, player.hit_fx, player.input.appearance, player.equipment,
-                                    player.owned_tier});
+                                    player.owned_tier, ranks, player.conduit_target});
     }
     snapshot.projectiles.reserve(projectiles_.size());
     for (const Projectile& pr : projectiles_) {
@@ -339,7 +358,8 @@ void GameServer::tick(Timestep dt) {
         } else if (en.attack_cd > kEnemyAttackInterval - 0.18f) {
             action = 1u; // melee swing in sync with the hit
         }
-        snapshot.enemies.push_back({en.id, en.position, en.yaw, en.kind, hp, action});
+        const u8 status = static_cast<u8>(en.chill_timer > 0.0f ? 1u : 0u); // bit0 = chilled
+        snapshot.enemies.push_back({en.id, en.position, en.yaw, en.kind, hp, action, status});
     }
     // Wagons: the parked offers while choosing, or the single active cargo en route.
     auto vote_count = [&](u32 wagon_id) {
@@ -412,6 +432,12 @@ void GameServer::tick(Timestep dt) {
         snapshot.walls.push_back(
             {w.position, w.yaw, w.length,
              static_cast<u8>(glm::clamp(w.health / kRockWallHealth, 0.0f, 1.0f) * 255.0f)});
+    }
+    snapshot.bubbles.reserve(bubbles_.size());
+    for (const BubbleShield& b : bubbles_) {
+        snapshot.bubbles.push_back(
+            {b.position, b.radius,
+             static_cast<u8>(glm::clamp(b.health / kAegisBubbleHealth, 0.0f, 1.0f) * 255.0f)});
     }
     // fires / barricades stay empty (siege dormant); outcome/phase/wave keep defaults.
     server_.broadcast_snapshot(snapshot);

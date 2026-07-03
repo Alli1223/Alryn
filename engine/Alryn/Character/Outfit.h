@@ -14,6 +14,10 @@ enum class OutfitKind : u8 {
     Holy = 2,    // Cleric  - monk robe -> priest -> high prophet
     Robe = 3,    // Mage    - patched robe -> elementalist -> archmage
     Peasant = 4, // NPC townsfolk - a plain tunic + trousers, no tiers
+    Brigand = 5, // MELEE bandit - hood + cloth face-mask, sleeveless studded jerkin, one scavenged
+                 // iron pauldron, arm wraps, a heavy belt with tattered kilt-strips (a scruffy cutthroat)
+    Outlaw = 6,  // RANGED bandit - deep hood + face scarf, light leather with half-sleeves, a bracer,
+                 // and a QUIVER of arrows across the back (a woodland poacher, distinct from the melee kind)
 };
 
 // Maps a role index (PlayerRole value) to its outfit theme.

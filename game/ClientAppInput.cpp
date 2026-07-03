@@ -10,12 +10,52 @@ void ClientApp::cast_ability(u8 ability) {
         return;
     }
     pending_ability_ = static_cast<u8>(ability + 1); // the wire carries the ability index + 1
-    ability_cd_[ability] = ability_def(role_, ability).cooldown;
+    // Mirror the server's cooldown, including the race passive (Men cool down quicker).
+    ability_cd_[ability] =
+        ability_def(role_, ability).cooldown * race_combat(appearance_.race).cooldown_mult;
     spawn_ability_vfx(role_, ability, local_feet(), face_yaw_, aim_valid_ ? aim_ : local_feet());
+    if (Audio* a = audio()) {
+        // A role-flavoured cast: mends chime, the War Horn blows, arrows twang, the rest shimmer
+        // (pitch varies by slot so each ability has its own voice).
+        const f32 pitch = 0.9f + 0.06f * static_cast<f32>(ability);
+        if (role_ == PlayerRole::Cleric && (ability == 0 || ability == 1 || ability == 4)) {
+            a->play(SfxId::Heal, 0.8f, pitch);
+        } else if (role_ == PlayerRole::Hunter && ability == 6) {
+            a->play(SfxId::Horn, 0.9f);
+        } else if (role_ == PlayerRole::Hunter && (ability <= 1 || ability == 3 || ability == 4)) {
+            a->play(SfxId::BowShot, 0.8f, pitch);
+        } else {
+            a->play(SfxId::CastMagic, 0.8f, pitch);
+        }
+    }
+    if (role_ == PlayerRole::Knight && ability == 0 && ability_rank_[0] >= kMaxAbilityRank) {
+        // Max-rank Shield Bash: the SHOCKWAVE - a line of ground bursts rolling down the corridor
+        // so the transformed line attack reads instantly (the damage itself is server-side).
+        const Vec3 feet = local_feet();
+        const Vec3 fwd{std::cos(face_yaw_), 0.0f, std::sin(face_yaw_)};
+        for (f32 d = 1.0f; d <= kShockwaveRange; d += 1.4f) {
+            const f32 t = d / kShockwaveRange; // bursts shrink as the wave spends itself
+            emit_burst(feet + fwd * d + Vec3{0.0f, 0.15f, 0.0f}, Vec4{1.0f, 0.9f, 0.6f, 0.9f},
+                       10 - static_cast<int>(t * 5.0f), 3.2f * (1.0f - 0.4f * t), 0.5f, 0.16f, 0,
+                       2.0f);
+        }
+    }
     if (role_ == PlayerRole::Knight && (ability == 1 || ability == 5)) {
         bulwark_fx_ = kBulwarkDuration; // Bulwark + Rally both raise the golden dome
     } else if (role_ == PlayerRole::Hunter && ability == 2) {
         dash_fx_ = kDashDuration;
+    } else if (role_ == PlayerRole::Cleric && ability == 3 && ability_rank_[3] >= kMaxAbilityRank) {
+        // Max-rank Aegis: a big protective DOME snaps up around the caster - a rising ring + a
+        // radiant column so the ranged-blocking bubble reads instantly (the dome itself is networked).
+        const Vec3 feet = local_feet();
+        emit_ring(feet, Vec4{0.55f, 0.8f, 1.0f, 0.95f}, 40, kAegisBubbleRadius * 1.5f, 0.7f, 0.2f);
+        emit_burst(feet + Vec3{0.0f, 1.0f, 0.0f}, Vec4{0.6f, 0.85f, 1.0f, 0.95f}, 30, 5.0f, 0.7f, 0.16f,
+                   1, 3.0f);
+        for (int i = 0; i < 22; ++i) {
+            const f32 ang = frand(0.0f, TwoPi);
+            emit(feet + Vec3{std::cos(ang), 0.1f, std::sin(ang)} * (kAegisBubbleRadius * 0.9f),
+                 Vec3{0.0f, frand(2.5f, 5.0f), 0.0f}, Vec4{0.7f, 0.9f, 1.0f, 0.9f}, 0.8f, 0.13f, 1, -1.0f);
+        }
     }
 }
 
@@ -36,8 +76,12 @@ void ClientApp::cast_mage_spell(SpellId sp) {
         return; // nothing queued, or still cooling down
     }
     pending_spell_ = static_cast<u8>(sp);
-    mage_cd_ = spell_cooldown(sp); // mirror the server cooldown for the HUD + to gate spam
+    // Mirror the server cooldown (incl. the race passive) for the HUD + to gate spam.
+    mage_cd_ = spell_cooldown(sp) * race_combat(appearance_.race).cooldown_mult;
     spawn_primary_vfx();           // a cast flourish at the staff
+    if (Audio* a = audio()) {      // each spell speaks at its own pitch
+        a->play(SfxId::CastMagic, 0.85f, 0.8f + 0.07f * static_cast<f32>(sp));
+    }
     // Projectile spells (fireball/frost/boulder) are visible as the projectile; give the INSTANT
     // ones (meteor / heal bloom / empower) a burst so the cast reads.
     const Vec3 feet = local_feet();
@@ -89,7 +133,23 @@ void ClientApp::equip_ability(u8 ability) {
     bar_[kAbilitySlots - 1] = static_cast<int>(ability);
 }
 
+void ClientApp::request_ability_upgrade(u8 ability) {
+    if (ability >= kAbilityCount || ability_max_rank(role_, ability) == 0 ||
+        ability_rank_[ability] >= ability_max_rank(role_, ability)) {
+        return;
+    }
+    pending_upgrade_ = static_cast<u8>(ability + 1); // wire carries the ability index + 1
+    upgrade_hold_ = 8; // hold a few ticks so the server sees a rising edge even if a packet drops
+}
+
 void ClientApp::skills_click(const Vec2& p) {
+    // UPGRADE buttons take priority (they overlap the row's equip hit-box).
+    for (u8 a = 0; a < kAbilityCount; ++a) {
+        if (in_rect(p, skill_upgrade_rects_[a])) {
+            request_ability_upgrade(a);
+            return;
+        }
+    }
     for (u8 a = 0; a < kAbilityCount; ++a) {
         if (in_rect(p, skill_node_rects_[a])) {
             equip_ability(a);
@@ -342,6 +402,10 @@ void ClientApp::on_event(Event& event) {
             pending_dodge_ = true; // dodge roll (a quick burst + brief i-frames)
         } else if (e.key() == key::E) {
             pending_grab_ = true; // hitch / unhitch the nearest wagon (manual haul)
+        } else if (e.key() == key::G && !e.is_repeat()) {
+            pending_toss_ = true; // Ally Toss: hurl the nearest teammate toward the cursor
+        } else if (e.key() == key::V) {
+            conduit_held_ = true; // Power Conduit: Cleric channels a heal + damage beam to an ally
         } else if (e.key() == key::H) {
             vote_mode_ = vote_mode_ == 1 ? 2 : 1; // toggle hire driver / haul manually
         } else if (role_ != PlayerRole::Mage &&
@@ -359,6 +423,9 @@ void ClientApp::on_event(Event& event) {
             combo_n_ = 0;
             return true;
         }
+        if (e.key() == key::V) {
+            conduit_held_ = false; // stop channelling the Power Conduit beam
+        }
         return false;
     });
 }
@@ -367,14 +434,22 @@ void ClientApp::primary_action() {
     // The left-click / right-trigger primary attack is role-specific: the Knight swings the held
     // sword, the Hunter looses an arrow, the Cleric casts a damage spell (both fire a role projectile
     // the server picks), the Mage throws a basic fireball. Only the Knight melees + plays the swing.
+    Audio* a = audio();
     if (role_ == PlayerRole::Knight) {
         pending_attack_ = true;      // melee swing (carves terrain if nothing to hit)
         pending_local_swing_ = true; // swing the actual held sword on our own model
+        if (a != nullptr) {
+            a->play(SfxId::SwordSwing, 0.8f, frand(0.92f, 1.1f));
+        }
     } else if (role_ == PlayerRole::Mage) {
         cast_mage_spell(SpellId::Fireball); // basic bolt (1-4 = elements, CTRL = combos)
     } else {
         pending_fire_ = true; // Hunter arrow / Cleric arcane bolt
         spawn_primary_vfx();  // muzzle / cast flourish at the hand
+        if (a != nullptr) {
+            a->play(role_ == PlayerRole::Hunter ? SfxId::BowShot : SfxId::CastMagic, 0.75f,
+                    frand(0.95f, 1.08f));
+        }
     }
 }
 
@@ -607,6 +682,16 @@ void ClientApp::send_input() {
         pending_buy_rig_ = 0;
     }
     packet.buy_rig = pending_buy_rig_;
+    packet.toss = pending_toss_;                    // Ally Toss (one-shot; server gates on cooldown + an ally)
+    packet.channel = conduit_held_;                 // Power Conduit (held; server gates to a Cleric near an ally)
+    // Ability upgrade: hold the request a few ticks so the server sees a rising edge even if a packet
+    // drops (the server buys exactly one rank per press). Clears itself as the hold window elapses.
+    if (upgrade_hold_ > 0) {
+        packet.upgrade = pending_upgrade_;
+        if (--upgrade_hold_ <= 0) {
+            pending_upgrade_ = 0;
+        }
+    }
     client_.send_input(packet);
     pending_ability_ = 0;
     pending_spell_ = 0;
@@ -617,6 +702,7 @@ void ClientApp::send_input() {
     pending_build_ = false;
     pending_rally_ = false;
     pending_grab_ = false;
+    pending_toss_ = false; // one-shot toss press consumed
 }
 
 void ClientApp::update_aim() {

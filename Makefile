@@ -92,6 +92,7 @@ test-net:       build ; @$(TESTBIN) "--source-file=*net_tests*"
 test-combat:    build ; @$(TESTBIN) "--source-file=*combat_tests*"
 test-character: build ; @$(TESTBIN) "--source-file=*character_tests*"
 test-ui:        build ; @$(TESTBIN) "--source-file=*ui_tests*"
+test-audio:     build ; @$(TESTBIN) "--source-file=*audio_tests*"
 
 ## test-filter: run a subset by test-case name glob, e.g. make test-filter FILTER="*collision*"
 test-filter: build

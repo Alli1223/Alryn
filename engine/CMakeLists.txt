@@ -20,6 +20,9 @@ add_library(alryn STATIC
     # ---- Platform ----------------------------------------------------------
     Alryn/Platform/Window.cpp
     Alryn/Platform/Input.cpp
+    # ---- Audio ---------------------------------------------------------------
+    Alryn/Audio/Sfx.cpp
+    Alryn/Audio/Audio.cpp
     # ---- Physics -----------------------------------------------------------
     Alryn/Physics/CharacterController.cpp
     Alryn/Physics/CollisionWorld.cpp
@@ -93,6 +96,7 @@ target_link_libraries(alryn
         Vulkan::Vulkan
     PRIVATE
         glfw
-        enet)
+        enet
+        miniaudio_impl)
 
 alryn_set_warnings(alryn)

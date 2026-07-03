@@ -3,6 +3,7 @@
 #include <Alryn/Combat/Enemy.h>
 #include <Alryn/Combat/Villager.h>
 #include <Alryn/Core/Density.h>
+#include <Alryn/Game/Contract.h>
 #include <Alryn/Terrain/RoadNetwork.h>
 #include <Alryn/Terrain/WorldGen.h>
 
@@ -93,6 +94,21 @@ TEST_CASE("Combat: an enemy marches toward its goal and stays on the ground") {
         step_enemy(e, density, none, goal, Timestep{1.0f / 60.0f});
     }
     CHECK(glm::length(goal - e.position) < 0.2f);
+}
+
+TEST_CASE("Combat: a chilled enemy marches slower (Elemental Shatter set-up)") {
+    const DensitySampler density = flat_ground();
+    const std::span<const Collider> none{};
+    const Vec3 goal{20.0f, 0.0f, 0.0f};
+    Enemy normal, chilled;
+    normal.position = chilled.position = Vec3{0.0f, 0.0f, 0.0f};
+    chilled.chill_timer = kChillDuration; // frozen by a Mage Frost Bolt
+    for (int i = 0; i < 60; ++i) {
+        step_enemy(normal, density, none, goal, Timestep{1.0f / 60.0f});
+        step_enemy(chilled, density, none, goal, Timestep{1.0f / 60.0f});
+    }
+    CHECK(chilled.position.x < normal.position.x - 0.5f); // the chill visibly slowed its advance
+    CHECK(chilled.chill_timer < kChillDuration);          // and the chill is thawing over time
 }
 
 TEST_CASE("Combat: a hit knocks an enemy back, then it settles + presses on") {
@@ -337,4 +353,18 @@ TEST_CASE("Combat: damage tuning kills an enemy in a few blows") {
     CHECK(e.health > 0.0f); // survives one hit
     e.health -= kMeleeDamage;
     CHECK(e.health <= 0.0f); // dies on the second
+}
+
+TEST_CASE("felled bandits spill purses scaled by their menace (warlord = the war chest)") {
+    // Every raider kind pays SOMETHING when felled...
+    for (u8 k : {0u, 1u, 2u, 3u, static_cast<unsigned>(kEnemyShield), static_cast<unsigned>(kEnemyHealer),
+                 static_cast<unsigned>(kEnemySapper), static_cast<unsigned>(kEnemyWarlord)}) {
+        CHECK(bandit_loot(k) > 0u);
+    }
+    // ...and the tougher/priority targets carry the fattest purses.
+    CHECK(bandit_loot(2) > bandit_loot(0));                    // a brute over a grunt
+    CHECK(bandit_loot(kEnemyHealer) > bandit_loot(0));         // focusing the healer pays
+    CHECK(bandit_loot(kEnemyWarlord) > bandit_loot(2));        // the champion pays most of all
+    // Sane vs the flat delivery bounty: the immediate purse is the smaller of the two streams.
+    CHECK(bandit_loot(0) < kBountyPerKill);
 }

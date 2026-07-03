@@ -155,6 +155,24 @@ SkinnedMesh build_outfit_mesh(const CharacterModel& model, OutfitKind kind, cons
             }
             break;
         }
+        case OutfitKind::Brigand: {
+            // A sleeveless studded-leather jerkin over the torso + cloth trousers; bare (wrapped) arms
+            // + a short ragged leather hem. The bare arms read as a rough melee bruiser.
+            clad_torso(sm, r, 1.13f, 0.9f, BodyMaterial::Dark);
+            clad_limb(sm, r, BonePart::UpperLegL, BonePart::LowerLegL, 1.1f, 0.92f, BodyMaterial::Pants, false);
+            clad_limb(sm, r, BonePart::UpperLegR, BonePart::LowerLegR, 1.1f, 0.92f, BodyMaterial::Pants, false);
+            skirt(sm, r, 0.1f, 0.32f, BodyMaterial::Dark); // a short ragged leather hem over the hips
+            break;
+        }
+        case OutfitKind::Outlaw: {
+            // A light leather jerkin with half-sleeves + cloth trousers (a woodland poacher/archer).
+            clad_torso(sm, r, 1.12f, 0.88f, BodyMaterial::Dark);
+            clad_limb(sm, r, BonePart::UpperArmL, BonePart::LowerArmL, 1.1f, 0.55f, BodyMaterial::Dark, true);
+            clad_limb(sm, r, BonePart::UpperArmR, BonePart::LowerArmR, 1.1f, 0.55f, BodyMaterial::Dark, true);
+            clad_limb(sm, r, BonePart::UpperLegL, BonePart::LowerLegL, 1.1f, 0.95f, BodyMaterial::Pants, false);
+            clad_limb(sm, r, BonePart::UpperLegR, BonePart::LowerLegR, 1.1f, 0.95f, BodyMaterial::Pants, false);
+            break;
+        }
     }
 
     smooth_normals(sm);

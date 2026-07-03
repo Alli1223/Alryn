@@ -11,6 +11,7 @@ CharacterController::CharacterController(CharacterConfig config) : config_(confi
 void CharacterController::set_position(const Vec3& feet) {
     position_ = feet;
     velocity_ = Vec3{0.0f};
+    launch_vel_ = Vec3{0.0f};
     on_ground_ = false;
 }
 
@@ -54,22 +55,30 @@ void CharacterController::update(const DensitySampler& density, const Vec3& move
     if (len > 1.0f) {
         horizontal /= len;
     }
+    // Horizontal velocity = walk input (clamped to walk_speed) + an UNCLAMPED ballistic launch
+    // (an Ally Toss / knockback carried until landing).
+    const f32 vx = horizontal.x * config_.walk_speed + launch_vel_.x;
+    const f32 vz = horizontal.z * config_.walk_speed + launch_vel_.z;
 
     Vec3 p = position_;
 
-    // Horizontal movement, resolved per axis and blocked by walls.
+    // Horizontal movement, resolved per axis and blocked by walls (a toss that hits a wall stops).
     {
         Vec3 candidate = p;
-        candidate.x += horizontal.x * config_.walk_speed * dts;
+        candidate.x += vx * dts;
         if (!wall_at(density, candidate)) {
             p.x = candidate.x;
+        } else {
+            launch_vel_.x = 0.0f;
         }
     }
     {
         Vec3 candidate = p;
-        candidate.z += horizontal.z * config_.walk_speed * dts;
+        candidate.z += vz * dts;
         if (!wall_at(density, candidate)) {
             p.z = candidate.z;
+        } else {
+            launch_vel_.z = 0.0f;
         }
     }
 
@@ -126,8 +135,14 @@ void CharacterController::update(const DensitySampler& density, const Vec3& move
         velocity_.y = 0.0f;
     }
 
-    velocity_.x = horizontal.x * config_.walk_speed;
-    velocity_.z = horizontal.z * config_.walk_speed;
+    // A ballistic launch is spent on landing; otherwise it eases off with a little air drag.
+    if (on_ground_) {
+        launch_vel_ = Vec3{0.0f};
+    } else {
+        launch_vel_ *= std::exp(-1.8f * dts);
+    }
+    velocity_.x = vx;
+    velocity_.z = vz;
     position_ = p;
 }
 

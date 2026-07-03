@@ -106,7 +106,13 @@ struct Enemy {
     f32 sunder_cd = 0.0f;   // shield-bearer: while > 0 its guard is broken (a heavy blow staggered it)
     f32 slam_windup = 0.0f; // brute slam / archer aim: while > 0 it is winding up a telegraphed attack
     f32 stagger = 0.0f;     // while > 0 it reels from a heavy hit: no move + no attack (combo window)
+    f32 chill_timer = 0.0f; // ELEMENTAL SHATTER: while > 0 it is chilled (slowed); a heavy hit shatters it
 };
+
+// Elemental Shatter combo: a Mage Frost Bolt CHILLS an enemy (slowing it) for kChillDuration; the next
+// heavy ally hit SHATTERS the chill for bonus damage (see kShatterMult in Roles.h). Pure tuning.
+inline constexpr f32 kChillDuration = 4.0f; // seconds an enemy stays chilled after a frost hit
+inline constexpr f32 kChillSlow = 0.55f;    // x march speed while chilled
 
 // Archer (kind 3) AIMED SHOT: instead of weak snap-arrows the archer now winds up (a telegraph the
 // party can read) and looses a HEAVY, fast arrow - so an archer is a sniper you watch + dodge (or
@@ -186,6 +192,21 @@ inline constexpr f32 kHealerRange = 7.0f;     // mends allies within this radius
 inline constexpr f32 kHealerHealRate = 14.0f; // hp/sec funnelled to the most-wounded ally
 inline constexpr f32 kHealerKeepDist = 9.0f;  // hangs this far back from its target (kites to stay safe)
 
+// LOOT: a felled raider spills a purse of coins straight into the party wallet (on top of the
+// delivery-time kill bounty) - tougher bandits carry fatter purses, and the warlord the war chest.
+// Paid AT the kill, so standing and fighting always earns, even on a haul that later wrecks.
+inline u32 bandit_loot(u8 kind) {
+    switch (kind) {
+        case 2u: return 8u;             // brute
+        case 3u: return 4u;             // archer
+        case kEnemyShield: return 5u;   // shield-bearer
+        case kEnemyHealer: return 6u;   // the healer pays well - a reward for focusing it down
+        case kEnemySapper: return 4u;   // (a sapper that DETONATES itself pays nothing)
+        case kEnemyWarlord: return 15u; // the champion carries the war chest
+        default: return 3u;             // grunts + torch-bearers
+    }
+}
+
 // Index into `enemies` of the most-wounded living ally (below max health) within `range` of `healer`,
 // excluding the healer itself; -1 if none needs mending. Pure, so the healer AI is headless-testable.
 inline int most_wounded_ally(const Enemy& healer, std::span<const Enemy> enemies, f32 range) {
@@ -253,6 +274,20 @@ inline bool in_attack_cone(const Vec3& origin, f32 yaw, const Vec3& target, f32 
     return glm::dot(to / d, facing) >= cone_cos;
 }
 
+// True if `target` lies within a forward CORRIDOR from `origin` along heading `yaw`: no farther
+// than `range` ahead and within half of `width` laterally (xz only, like in_attack_cone). Used for
+// line attacks - the max-rank Shield Bash SHOCKWAVE rolls down this corridor.
+inline bool in_corridor(const Vec3& origin, f32 yaw, const Vec3& target, f32 range, f32 width) {
+    const Vec2 to{target.x - origin.x, target.z - origin.z};
+    const Vec2 fwd{std::cos(yaw), std::sin(yaw)};
+    const f32 ahead = glm::dot(to, fwd);
+    if (ahead < -0.2f || ahead > range) {
+        return false; // behind the caster, or past the wave's reach
+    }
+    const f32 lateral = std::abs(to.x * fwd.y - to.y * fwd.x);
+    return lateral <= width * 0.5f;
+}
+
 // Integrates one enemy for `dt`: steers toward `goal` along the ground, pushing out
 // of props, and faces its heading. Attack cooldown ticks down. Does not itself deal
 // damage (the server decides that once it is in range) so the motion stays testable.
@@ -267,6 +302,10 @@ inline void step_enemy(Enemy& e, const DensitySampler& density,
     Vec3 to = goal - e.position;
     to.y = 0.0f;
     const f32 d = glm::length(to);
+    // Chilled (a Mage Frost Bolt) -> slowed march (the ELEMENTAL SHATTER set-up).
+    if (e.chill_timer > 0.0f) {
+        speed *= kChillSlow;
+    }
     // While reeling from a heavy hit (staggered) the enemy can't pursue its goal - but knockback below
     // still shoves it, so a solid blow visibly stops it in its tracks and opens a follow-up window.
     if (e.stagger <= 0.0f && d > 0.05f) {
@@ -316,6 +355,9 @@ inline void step_enemy(Enemy& e, const DensitySampler& density,
     }
     if (e.stagger > 0.0f) {
         e.stagger -= dts; // the brief reel from a heavy hit wears off
+    }
+    if (e.chill_timer > 0.0f) {
+        e.chill_timer -= dts; // the frost chill thaws over time
     }
 }
 

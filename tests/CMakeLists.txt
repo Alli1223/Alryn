@@ -14,6 +14,7 @@ add_executable(alryn_tests
     role_tests.cpp
     character_tests.cpp
     ui_tests.cpp
+    audio_tests.cpp
     scene_shot_tests.cpp
     support/OffscreenRenderer.cpp
 )

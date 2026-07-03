@@ -47,11 +47,18 @@ void CharacterModel::add_features(CharacterModel& m, const CharacterAppearance& 
     const f32 hs = head.box_size.x; // head extent (≈ width/height)
     const f32 r = hs * 0.5f;        // head half-extent
     const Vec3 c = head.box_center; // head centre in the head-joint frame
+    const RaceTraits rt = race_traits(app.race);
 
     // A feature bone: joint at the head joint, geometry offset via box_center. Marked an attachment
     // so it rides ON TOP of the skinned body (the continuous body mesh has no face/hair yet).
     auto add = [&](Vec3 center, Vec3 size, BoneColor color, BoneShape shape) {
         Bone b{BonePart::None, kHeadIndex, Vec3{0.0f}, size, center, color, shape};
+        b.attachment = true;
+        m.bones_.push_back(b);
+    };
+    // Same, but with a bind-pose orientation (used for swept-back elven ears).
+    auto add_rot = [&](Vec3 center, Vec3 size, BoneColor color, BoneShape shape, const Quat& rot) {
+        Bone b{BonePart::None, kHeadIndex, Vec3{0.0f}, size, center, color, shape, rot};
         b.attachment = true;
         m.bones_.push_back(b);
     };
@@ -92,21 +99,33 @@ void CharacterModel::add_features(CharacterModel& m, const CharacterAppearance& 
     // ---- Ears (on the sides, ±X) ----
     {
         const f32 sx = r * 0.96f;
-        switch (app.ears) {
-            case EarStyle::Round:
-                add(Vec3{-sx, c.y, c.z}, Vec3{hs * 0.16f}, BoneColor::Skin, BoneShape::Sphere);
-                add(Vec3{sx, c.y, c.z}, Vec3{hs * 0.16f}, BoneColor::Skin, BoneShape::Sphere);
-                break;
-            case EarStyle::Pointed: {
-                const Vec3 size{hs * 0.11f, hs * 0.30f, hs * 0.12f};
-                add(Vec3{-sx, c.y + r * 0.22f, c.z}, size, BoneColor::Skin, BoneShape::Box);
-                add(Vec3{sx, c.y + r * 0.22f, c.z}, size, BoneColor::Skin, BoneShape::Box);
-                break;
+        if (rt.long_ears) {
+            // Long ELVEN ears anchored at ear level and swept up-and-out well past the head, so the
+            // pointed tips read even under most hair (the elf's signature, regardless of the ear stepper).
+            const Vec3 size{hs * 0.11f, hs * 0.6f, hs * 0.14f};
+            for (f32 s : {-1.0f, 1.0f}) {
+                add_rot(Vec3{s * r * 1.02f, c.y + r * 0.12f, c.z - r * 0.12f}, size, BoneColor::Skin,
+                        BoneShape::Box,
+                        glm::angleAxis(s * 0.58f, Vec3{0.0f, 0.0f, 1.0f}) *
+                            glm::angleAxis(-0.32f, Vec3{1.0f, 0.0f, 0.0f}));
             }
-            case EarStyle::Small:
-                add(Vec3{-sx, c.y, c.z}, Vec3{hs * 0.10f}, BoneColor::Skin, BoneShape::Sphere);
-                add(Vec3{sx, c.y, c.z}, Vec3{hs * 0.10f}, BoneColor::Skin, BoneShape::Sphere);
-                break;
+        } else {
+            switch (app.ears) {
+                case EarStyle::Round:
+                    add(Vec3{-sx, c.y, c.z}, Vec3{hs * 0.16f}, BoneColor::Skin, BoneShape::Sphere);
+                    add(Vec3{sx, c.y, c.z}, Vec3{hs * 0.16f}, BoneColor::Skin, BoneShape::Sphere);
+                    break;
+                case EarStyle::Pointed: {
+                    const Vec3 size{hs * 0.11f, hs * 0.30f, hs * 0.12f};
+                    add(Vec3{-sx, c.y + r * 0.22f, c.z}, size, BoneColor::Skin, BoneShape::Box);
+                    add(Vec3{sx, c.y + r * 0.22f, c.z}, size, BoneColor::Skin, BoneShape::Box);
+                    break;
+                }
+                case EarStyle::Small:
+                    add(Vec3{-sx, c.y, c.z}, Vec3{hs * 0.10f}, BoneColor::Skin, BoneShape::Sphere);
+                    add(Vec3{sx, c.y, c.z}, Vec3{hs * 0.10f}, BoneColor::Skin, BoneShape::Sphere);
+                    break;
+            }
         }
     }
 
@@ -143,10 +162,26 @@ void CharacterModel::add_features(CharacterModel& m, const CharacterAppearance& 
                 BoneColor::Hair, BoneShape::Cylinder); // tail
             break;
     }
+
+    // ---- Dwarven beard (a broad, hair-coloured beard over the jaw, hanging below the chin) ----
+    if (rt.beard) {
+        // A bushy moustache across the upper lip.
+        add(Vec3{0.0f, c.y - r * 0.34f, c.z + r * 0.86f}, Vec3{hs * 0.6f, hs * 0.2f, hs * 0.18f},
+            BoneColor::Hair, BoneShape::RoundedBox);
+        // Cheek/jaw mass wrapping the lower face (sits proud around the chin).
+        add(Vec3{0.0f, c.y - r * 0.6f, c.z + r * 0.34f}, Vec3{hs * 1.0f, hs * 0.66f, hs * 0.94f},
+            BoneColor::Hair, BoneShape::RoundedBox);
+        // The main beard hanging below the chin.
+        add(Vec3{0.0f, c.y - r * 1.16f, c.z + r * 0.28f}, Vec3{hs * 0.68f, hs * 0.72f, hs * 0.52f},
+            BoneColor::Hair, BoneShape::RoundedBox);
+        // A tapering, braided-looking tip.
+        add(Vec3{0.0f, c.y - r * 1.62f, c.z + r * 0.2f}, Vec3{hs * 0.36f, hs * 0.44f, hs * 0.34f},
+            BoneColor::Hair, BoneShape::RoundedBox);
+    }
 }
 
 CharacterModel CharacterModel::create(u32 seed, const CharacterAppearance& appearance) {
-    CharacterModel m = generate(seed);
+    CharacterModel m = generate(seed, appearance.race);
     m.palette_.skin = skin_color(appearance.skin);
     m.palette_.hair = hair_color_of(appearance.hair_color);
     m.palette_.eye = Vec3{0.09f, 0.08f, 0.10f};
@@ -154,26 +189,30 @@ CharacterModel CharacterModel::create(u32 seed, const CharacterAppearance& appea
     return m;
 }
 
-CharacterModel CharacterModel::generate(u32 seed) {
+CharacterModel CharacterModel::generate(u32 seed, Race race) {
     Rng rng(seed);
     CharacterModel m;
 
-    const f32 hscale = rng.range(0.97f, 1.06f); // overall height
-    const f32 build = rng.range(0.94f, 1.12f);  // width / bulk
+    // Race scales the seed's own variation: Men baseline, Dwarves short + broad (short legs),
+    // Elves tall + slender (long legs). The skinned body + outfit read these segment lengths, so
+    // this re-proportions the whole figure.
+    const RaceTraits rt = race_traits(race);
+    const f32 hscale = rng.range(0.97f, 1.06f) * rt.height; // overall height
+    const f32 build = rng.range(0.94f, 1.12f) * rt.build;   // width / bulk
 
     // Cute, stylised "chibi" proportions (~4.8 heads, total ~1.45 m): a big head over a compact torso
     // with SHORT, chunky limbs - the look of the reference art, not a realistic 7.5-head adult. The
     // body masses are faceted rounded boxes; the limbs are capsules; the feet are boot boxes. The
     // skinned body + outfits read these segment lengths, so changing them re-proportions everything.
-    const f32 leg_upper = 0.31f * hscale; // short stubby legs
-    const f32 leg_lower = 0.29f * hscale;
+    const f32 leg_upper = 0.31f * hscale * rt.legs; // short stubby legs (shorter still for dwarves)
+    const f32 leg_lower = 0.29f * hscale * rt.legs;
     const f32 leg_len = leg_upper + leg_lower;
     const f32 torso = 0.52f * hscale;
-    const f32 head_h = 0.30f * hscale; // a big cute head
-    const f32 head_w = 0.25f * hscale;
-    const f32 neck = 0.045f * hscale;     // short neck
-    const f32 arm_upper = 0.23f * hscale; // short arms
-    const f32 arm_lower = 0.21f * hscale;
+    const f32 head_h = 0.30f * hscale * rt.head; // a big cute head
+    const f32 head_w = 0.25f * hscale * rt.head;
+    const f32 neck = 0.045f * hscale;                // short neck
+    const f32 arm_upper = 0.23f * hscale * rt.arms;  // short arms
+    const f32 arm_lower = 0.21f * hscale * rt.arms;
 
     // Palette (base skin + drab starting clothes; outfits recolour on top).
     static const Vec3 skin_tones[] = {{0.86f, 0.66f, 0.52f}, {0.80f, 0.58f, 0.45f},

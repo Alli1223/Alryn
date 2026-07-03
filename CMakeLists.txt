@@ -107,6 +107,25 @@ FetchContent_Declare(enet
     SOURCE_SUBDIR include)
 FetchContent_MakeAvailable(enet)
 
+# miniaudio (single-header audio playback; public domain). We fetch JUST the header
+# (no repo clone, no CMake project) and compile the implementation ourselves as one
+# tiny C translation unit, so the engine's strict C++ warning set never sees it. It
+# dlopen()s the platform backend (ALSA/PulseAudio/...) at runtime, so there is no
+# link-time audio dependency - on a machine with no sound server the Audio subsystem
+# just runs silent (mirroring how GPU/display tests degrade gracefully).
+FetchContent_Declare(miniaudio
+    URL https://raw.githubusercontent.com/mackron/miniaudio/0.11.21/miniaudio.h
+    DOWNLOAD_NO_EXTRACT TRUE)
+FetchContent_MakeAvailable(miniaudio)
+file(WRITE ${CMAKE_BINARY_DIR}/miniaudio_impl.c
+    "#define MINIAUDIO_IMPLEMENTATION\n#include \"miniaudio.h\"\n")
+add_library(miniaudio_impl STATIC ${CMAKE_BINARY_DIR}/miniaudio_impl.c)
+target_include_directories(miniaudio_impl PUBLIC ${miniaudio_SOURCE_DIR})
+target_link_libraries(miniaudio_impl PUBLIC ${CMAKE_DL_LIBS})
+if(UNIX AND NOT APPLE)
+    target_link_libraries(miniaudio_impl PUBLIC m pthread)
+endif()
+
 set(alryn_enet_sources callbacks.c compress.c host.c list.c packet.c peer.c protocol.c)
 if(WIN32)
     list(APPEND alryn_enet_sources win32.c)

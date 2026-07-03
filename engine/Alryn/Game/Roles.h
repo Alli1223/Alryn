@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Alryn/Character/CharacterAppearance.h>
 #include <Alryn/Core/Math.h>
 #include <Alryn/Core/Types.h>
 
@@ -61,6 +62,43 @@ inline const char* role_desc(PlayerRole role) {
         case PlayerRole::Mage: return "MAGE - ELEMENTAL COMBO CASTER (HOLD CTRL)";
     }
     return "";
+}
+
+// --- Race passives (the RACES of CharacterAppearance.h made mechanical) ------------------------
+// Each race carries a small combat identity ON TOP of the chosen role, wired into the same
+// server-authoritative sites as the role stats - and, crucially, into the Gauntlet ALLY TOSS combo,
+// so the race fantasy pays off in co-op play: an ELF is the strongest THROWER (hurls an ally
+// farthest) and a DWARF is the best PROJECTILE (the heaviest cannonball landing) - the classic
+// "toss the dwarf" play. MEN are the adaptable baseline: quicker ability cooldowns.
+struct RaceCombat {
+    f32 move_mult = 1.0f;        // x walk speed (on top of the role's)
+    f32 jump_mult = 1.0f;        // x jump launch speed
+    f32 mitigation_add = 0.0f;   // flat extra damage reduction (stacks with the role's, capped)
+    f32 cooldown_mult = 1.0f;    // x ability/spell cooldowns (< 1 = faster)
+    f32 toss_power_mult = 1.0f;  // as the THROWER of an Ally Toss: x launch speed
+    f32 toss_impact_mult = 1.0f; // as the TOSSED ally: x cannonball landing damage (+ radius)
+};
+
+inline RaceCombat race_combat(Race race) {
+    switch (race) {
+        case Race::Dwarf: // stout: tough and dense - soaks blows, lands like a boulder
+            return {0.95f, 0.92f, 0.08f, 1.0f, 0.90f, 1.5f};
+        case Race::Elf: // swift: fleet-footed and springy - and hurls an ally the farthest
+            return {1.08f, 1.18f, 0.0f, 1.0f, 1.35f, 0.85f};
+        case Race::Human:
+            break;
+    }
+    return {1.0f, 1.0f, 0.0f, 0.88f, 1.0f, 1.0f}; // Men: adaptable - quicker cooldowns
+}
+
+// One-line perk blurb per race (the customise screen shows it under the RACE stepper).
+inline const char* race_perk_desc(Race race) {
+    switch (race) {
+        case Race::Dwarf: return "STOUT: TOUGHER, AND LANDS A MIGHTY TOSS CANNONBALL";
+        case Race::Elf: return "SWIFT: FASTER, SPRINGIER, AND THE STRONGEST THROWER";
+        case Race::Human: break;
+    }
+    return "ADAPTABLE: QUICKER ABILITY COOLDOWNS";
 }
 
 // A castable ability: a display name, its cooldown (seconds), and a one-line
@@ -172,6 +210,79 @@ inline constexpr f32 kHealAuraRate = 16.0f;     // hp/sec restored to allies sta
 inline constexpr f32 kAegisAmount = 65.0f;      // damage the shield soaks before breaking
 inline constexpr f32 kAegisDuration = 12.0f;    // seconds before an unbroken shield fades
 inline constexpr f32 kAegisRange = 18.0f;       // how far an ally can be shielded
+
+// --- Ability upgrades (bought in a town, spent from the party wallet, surfaced in the skills tree) --
+// A curated set of abilities can be UPGRADED in rank (0 = base). Most gains are numeric (bigger
+// damage / heal), but the flagship is the Cleric's AEGIS: rank 1 is a stronger single-target ward,
+// and rank 2 (MAX) transforms it into a large protective BUBBLE DOME around the Cleric that blocks
+// enemy ranged attacks (arrows) for everyone - and the cargo - standing inside it.
+inline constexpr u8 kMaxAbilityRank = 2; // ranks per upgradeable ability (0 base, 1, 2 = max)
+
+// The max rank an ability can be raised to (0 = not upgradeable). Kept small + curated.
+inline u8 ability_max_rank(PlayerRole role, u8 ability) {
+    switch (role) {
+        case PlayerRole::Knight: // Shield Bash (transforms), Whirlwind (numeric)
+            return (ability == 0 || ability == 4) ? kMaxAbilityRank : 0u;
+        case PlayerRole::Hunter: // Power Shot (transforms), Volley (numeric)
+            return (ability == 0 || ability == 1) ? kMaxAbilityRank : 0u;
+        case PlayerRole::Cleric: // Heal + Aegis (transform), Smite (numeric)
+            return (ability == 0 || ability == 2 || ability == 3) ? kMaxAbilityRank : 0u;
+        case PlayerRole::Mage: return 0u; // the Mage upgrades via elemental combos, not the hotbar
+    }
+    return 0u;
+}
+
+// Party-wallet cost to raise an ability to `next_rank` (1 or 2). Mid-range vs the gear/rig sinks.
+inline u32 ability_upgrade_price(u8 next_rank) {
+    return next_rank <= 1u ? 150u : 400u;
+}
+
+// Aegis rank scaling (rank 0/1 = single-target ward): rank 1 soaks + lasts more.
+inline f32 aegis_amount_for_rank(u8 rank) { return kAegisAmount * (rank >= 1u ? 1.6f : 1.0f); }
+inline f32 aegis_duration_for_rank(u8 rank) { return kAegisDuration * (rank >= 1u ? 1.3f : 1.0f); }
+
+// Aegis MAX (rank 2): a large ranged-blocking dome centred on (and following) the caster.
+inline constexpr f32 kAegisBubbleRadius = 4.6f;   // dome radius (allies + cargo inside are protected)
+inline constexpr f32 kAegisBubbleDuration = 8.0f; // seconds it holds if not battered down first
+inline constexpr f32 kAegisBubbleHealth = 220.0f; // ranged hits chip it; it pops early if fully spent
+
+// Generic +40% per rank for the simple numeric upgrades (Shield Bash / Power Shot / Heal).
+inline f32 ability_rank_mult(u8 rank) { return 1.0f + 0.4f * static_cast<f32>(rank); }
+
+// --- Max-rank SIGNATURE TRANSFORMATIONS (the Aegis-dome pattern carried through the kit) --------
+// The flagship upgradeables don't just scale at MAX rank - they change SHAPE, so the final rank is
+// a new toy, not a bigger number. (Rank 1 stays the numeric step for all of them.)
+// Shield Bash MAX: the bash becomes a SHOCKWAVE - a ground wave rolling forward in a corridor that
+// damages + STAGGERS everything in its path (a line, no longer just the melee cone).
+inline constexpr f32 kShockwaveRange = 9.0f;   // how far the wave rolls
+inline constexpr f32 kShockwaveWidth = 3.2f;   // corridor width
+inline constexpr f32 kShockwaveStagger = 1.1f; // a longer reel than a basic heavy-hit stagger
+// Power Shot MAX: the bolt PIERCES - it punches through bodies instead of stopping in the first,
+// striking up to 1 + kPowerShotPierce enemies along its line.
+inline constexpr u8 kPowerShotPierce = 3;
+// Heal MAX: CHAIN HEAL - the mend arcs on from the healed ally to the next most-injured ally in
+// reach, up to kChainHealBounces hops, each hop mending a falloff fraction of the previous.
+inline constexpr int kChainHealBounces = 2;
+inline constexpr f32 kChainHealRadius = 12.0f;
+inline constexpr f32 kChainHealFalloff = 0.6f;
+
+// The MAX-rank transformation blurb per upgradeable ability ("" = the upgrade is purely numeric).
+// Shown in the skills tree, so the player knows what the final rank buys before spending.
+inline const char* ability_rank_desc(PlayerRole role, u8 ability) {
+    switch (role) {
+        case PlayerRole::Knight:
+            return ability == 0 ? "AT MAX: the bash becomes a staggering SHOCKWAVE line" : "";
+        case PlayerRole::Hunter:
+            return ability == 0 ? "AT MAX: the shot PIERCES through every body in its path" : "";
+        case PlayerRole::Cleric:
+            if (ability == 0) {
+                return "AT MAX: the mend CHAINS on to nearby wounded allies";
+            }
+            return ability == 3 ? "AT MAX: a dome that blocks ranged attacks" : "";
+        case PlayerRole::Mage: break;
+    }
+    return "";
+}
 
 // --- Expanded abilities (skills tree indices 4+) ----------------------------------------
 // Knight Whirlwind: a 360-degree cleave (no cone) around the knight, with a light shove.
@@ -298,6 +409,42 @@ inline constexpr f32 kHasteRadius = 12.0f;        // allies near the Hunter get 
 inline constexpr f32 kGuardLeapRange = 24.0f;     // Knight Guardian Leap: reach to an ally
 inline constexpr f32 kGuardShieldAmount = 45.0f;  // shield placed on the leapt-to ally
 inline constexpr f32 kGuardTauntRadius = 10.0f;   // enemies near the ally pulled onto the Knight
+
+// --- Gauntlet-style co-op COMBOS: players combine abilities for enhanced damage / power ---------
+// Ally Toss (Fastball Special): a player hurls a nearby teammate toward their aim. The tossed ally
+// flies with i-frames and CANNONBALLS into enemies on landing (a radial burst + knockback) - launch
+// the melee into a cluster of archers, or fling a low-HP ally clear of danger.
+inline constexpr f32 kTossGrabRange = 5.0f;     // how close an ally must be to grab + throw
+inline constexpr f32 kTossSpeed = 15.0f;        // horizontal launch speed toward the aim
+inline constexpr f32 kTossUp = 9.0f;            // vertical launch (the arc height)
+inline constexpr f32 kTossMaxAir = 1.6f;        // safety cap on airborne time before forcing a landing
+inline constexpr f32 kTossCooldown = 6.0f;      // thrower cooldown
+inline constexpr f32 kTossImpactRadius = 3.2f;  // landing cannonball AoE radius
+inline constexpr f32 kTossImpactDamage = 45.0f; // damage to each enemy caught in the landing
+inline constexpr f32 kTossImpactKnockback = 5.0f;
+// The landing cannonball scales with the TOSSED ally's race (a Dwarf lands hardest - the classic
+// "toss the dwarf" play); the radius grows gentler than the damage so an Elf landing still matters.
+inline f32 toss_impact_damage(Race race) {
+    return kTossImpactDamage * race_combat(race).toss_impact_mult;
+}
+inline f32 toss_impact_radius(Race race) {
+    return kTossImpactRadius * (1.0f + 0.3f * (race_combat(race).toss_impact_mult - 1.0f));
+}
+
+// Elemental Shatter: a Mage Frost Bolt CHILLS a foe (see kChillDuration in Enemy.h); a heavy ally hit
+// SHATTERS the chill for bonus damage - a Mage->melee/Hunter timing combo.
+inline constexpr f32 kShatterThreshold = 24.0f; // a hit this heavy (ability / power shot / big swing) shatters
+inline constexpr f32 kShatterMult = 1.8f;       // x damage of the shattering hit (consumes the chill)
+
+// Power Conduit: a Cleric channels a beam into one ally, HEALING them and BUFFING their damage while
+// held (the buff reuses Empower's kDamageBoostMult / damage_boost_timer) - the Cleric commits, the
+// ally carries. A committed 2-player channel.
+inline constexpr f32 kConduitRange = 16.0f;     // how far the beam reaches an ally
+inline constexpr f32 kConduitHealRate = 20.0f;  // hp/sec funnelled to the linked ally
+
+// Focus Zone: enemies standing in a Knight Consecration / Hunter Caltrops aura take extra damage from
+// EVERY ally - drop the zone, then focus-fire it down together.
+inline constexpr f32 kFocusZoneMult = 1.4f;     // x ally damage to enemies inside a focus aura
 
 // Rock wall: a row of stone raised a few metres ahead of the caster; a collider NPCs route around.
 inline constexpr f32 kRockWallLength = 7.0f;   // total span (perpendicular to facing)

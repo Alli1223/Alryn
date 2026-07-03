@@ -190,6 +190,41 @@ void ClientApp::draw_shields() {
     }
 }
 
+void ClientApp::draw_bubbles() {
+    if (renderer_ == nullptr || !have_snapshot_) {
+        return;
+    }
+    for (const net::BubbleState& b : snapshot_.bubbles) {
+        const f32 strength = static_cast<f32>(b.strength) / 255.0f;
+        const Vec3 c = b.position + Vec3{0.0f, 1.0f, 0.0f};
+        const f32 r = b.radius * (1.0f + 0.03f * std::sin(elapsed_ * 4.0f));
+        // A large translucent protective shell + a soft additive inner glow (brighter while intact),
+        // then a bright ground ring marking its footprint. The dome tests depth but doesn't occlude.
+        renderer_->draw_transparent(shape_sphere_,
+                                    glm::translate(Mat4{1.0f}, c) * glm::scale(Mat4{1.0f}, Vec3{r}),
+                                    Vec4{0.45f, 0.72f, 1.0f, 0.09f + 0.10f * strength});
+        renderer_->draw_glow(shape_sphere_,
+                             glm::translate(Mat4{1.0f}, c) * glm::scale(Mat4{1.0f}, Vec3{r * 0.99f}),
+                             Vec4{0.5f, 0.8f, 1.0f, 0.07f + 0.06f * strength});
+        renderer_->draw_glow(shape_sphere_,
+                             glm::translate(Mat4{1.0f}, b.position + Vec3{0.0f, 0.05f, 0.0f}) *
+                                 glm::scale(Mat4{1.0f}, Vec3{r, 0.05f, r}),
+                             Vec4{0.6f, 0.85f, 1.0f, 0.26f * strength});
+        // Shimmer sparkles orbiting the dome's equator - a faceted, energised read.
+        const f32 a = elapsed_ * 1.3f;
+        for (int i = 0; i < 6; ++i) {
+            const f32 ang = a + TwoPi * static_cast<f32>(i) / 6.0f;
+            const f32 yy = 1.0f + (r * 0.55f) * std::sin(ang * 1.7f + b.position.x);
+            const Vec3 p =
+                b.position + Vec3{std::cos(ang) * r * 0.95f, glm::clamp(yy, 0.2f, r * 1.4f),
+                                  std::sin(ang) * r * 0.95f};
+            renderer_->draw_emissive(shape_sphere_,
+                                     glm::translate(Mat4{1.0f}, p) * glm::scale(Mat4{1.0f}, Vec3{0.06f}),
+                                     Vec4{0.7f, 0.92f, 1.0f, 1.0f});
+        }
+    }
+}
+
 void ClientApp::draw_particles() {
     if (renderer_ == nullptr) {
         return;
@@ -606,81 +641,113 @@ void ClientApp::spawn_ability_vfx(PlayerRole role, u8 slot, const Vec3& feet, f3
     Vec3 to_aim = aim - chest;
     to_aim.y = 0.0f;
     const Vec3 fwd = glm::length(to_aim) > 0.3f ? glm::normalize(to_aim) : facing;
+    // A rising column of `n` motes from a disc of radius `rad` at the feet (a beam of light shooting up).
+    auto pillar = [&](const Vec4& col, int n, f32 rad, f32 speed) {
+        for (int i = 0; i < n; ++i) {
+            const f32 a = frand(0.0f, TwoPi), rr = frand(0.0f, rad);
+            emit(feet + Vec3{std::cos(a) * rr, frand(0.0f, 0.3f), std::sin(a) * rr},
+                 Vec3{0.0f, frand(speed * 0.6f, speed), 0.0f}, col, 0.9f, 0.14f, 1, -1.0f);
+        }
+    };
+    // A spinning ring of motes launched tangentially (a swirling disc), radius `rad` around the feet.
+    auto swirl = [&](const Vec4& col, int n, f32 rad, f32 height, f32 tang) {
+        for (int i = 0; i < n; ++i) {
+            const f32 a = TwoPi * static_cast<f32>(i) / static_cast<f32>(n);
+            const Vec3 p = feet + Vec3{std::cos(a) * rad, height, std::sin(a) * rad};
+            emit(p, Vec3{-std::sin(a), 0.15f, std::cos(a)} * tang, col, 0.5f, 0.14f, 1);
+        }
+    };
     switch (role) {
         case PlayerRole::Knight:
-            if (slot == 0) { // Shield Bash: a steel shockwave punched forward
+            if (slot == 0) { // Shield Bash: a steel shockwave punched forward + a ground impact ring
                 const Vec3 c = chest + fwd * 1.2f;
-                emit(c, Vec3{0.0f}, Vec4{0.9f, 0.95f, 1.0f, 1.0f}, 0.18f, 0.7f, 1);
-                for (int i = 0; i < 26; ++i) {
+                emit(c, Vec3{0.0f}, Vec4{0.95f, 0.98f, 1.0f, 1.0f}, 0.2f, 0.85f, 1);
+                emit_ring(c - Vec3{0.0f, 0.9f, 0.0f}, Vec4{0.8f, 0.88f, 1.0f, 0.9f}, 20, 5.0f, 0.4f, 0.15f);
+                for (int i = 0; i < 32; ++i) {
                     const f32 a = yaw + frand(-0.7f, 0.7f);
-                    const Vec3 d{std::cos(a), frand(0.0f, 0.5f), std::sin(a)};
-                    emit(c, d * frand(6.0f, 12.0f), Vec4{0.8f, 0.88f, 1.0f, 0.95f}, 0.4f, 0.16f, 1,
-                         6.0f);
+                    const Vec3 d{std::cos(a), frand(0.0f, 0.6f), std::sin(a)};
+                    emit(c, d * frand(7.0f, 14.0f), Vec4{0.82f, 0.9f, 1.0f, 0.95f}, 0.42f, 0.17f, 1, 6.0f);
                 }
-            } else if (slot == 1 || slot == 5) { // Bulwark / Rally: a golden dome flares up
-                emit_ring(feet, Vec4{1.0f, 0.85f, 0.4f, 0.95f}, 22, 3.0f, 0.6f, 0.16f);
-                emit_burst(chest, Vec4{1.0f, 0.82f, 0.35f, 0.9f}, 14, 2.5f, 0.7f, 0.14f, 1, 1.5f);
-            } else if (slot == 2) { // Consecration: a holy-fire ring erupts from the ground
-                emit_ring(feet, Vec4{1.0f, 0.72f, 0.28f, 0.95f}, 30, kConsecrationRadius * 1.6f,
-                          0.6f, 0.2f);
-                emit_burst(feet + Vec3{0.0f, 0.2f, 0.0f}, Vec4{1.0f, 0.6f, 0.2f, 0.9f}, 22, 2.5f,
-                           0.7f, 0.16f, 1, 3.0f);
-            } else if (slot == 4) { // Whirlwind: a steel ring sweeps around the knight
-                emit_ring(feet + Vec3{0.0f, 0.6f, 0.0f}, Vec4{0.85f, 0.9f, 1.0f, 0.95f}, 30,
-                          kWhirlwindRadius * 1.4f, 0.45f, 0.16f);
-                emit_burst(chest, Vec4{0.8f, 0.88f, 1.0f, 0.9f}, 16, 5.0f, 0.4f, 0.13f, 1, 1.0f);
-            } else { // Taunt: a red warcry pulse + upward embers
-                emit_ring(feet, Vec4{1.0f, 0.3f, 0.25f, 0.95f}, 24, 7.0f, 0.5f, 0.18f);
-                emit_burst(chest, Vec4{1.0f, 0.4f, 0.3f, 0.9f}, 14, 3.0f, 0.55f, 0.15f, 1, 3.0f);
+            } else if (slot == 1 || slot == 5) { // Bulwark / Rally: a golden dome + a rising light column
+                emit_ring(feet, Vec4{1.0f, 0.85f, 0.4f, 0.95f}, 26, 3.2f, 0.6f, 0.17f);
+                pillar(Vec4{1.0f, 0.82f, 0.32f, 0.9f}, 20, 0.7f, 4.5f);
+                emit(chest, Vec3{0.0f}, Vec4{1.0f, 0.9f, 0.5f, 1.0f}, 0.22f, 0.7f, 1);
+            } else if (slot == 2) { // Consecration: a holy-fire ring + flame columns erupt from the ground
+                emit_ring(feet, Vec4{1.0f, 0.72f, 0.28f, 0.95f}, 34, kConsecrationRadius * 1.6f, 0.6f, 0.2f);
+                for (int k = 0; k < 8; ++k) {
+                    const f32 a = TwoPi * static_cast<f32>(k) / 8.0f;
+                    const Vec3 base = feet + Vec3{std::cos(a), 0.0f, std::sin(a)} * (kConsecrationRadius * 0.8f);
+                    emit(base, Vec3{0.0f, frand(3.0f, 5.0f), 0.0f}, Vec4{1.0f, 0.55f, 0.18f, 0.95f}, 0.6f, 0.2f, 1, -1.5f);
+                }
+                pillar(Vec4{1.0f, 0.6f, 0.2f, 0.9f}, 16, kConsecrationRadius * 0.7f, 3.0f);
+            } else if (slot == 4) { // Whirlwind: two counter-swirling steel rings sweep around the knight
+                swirl(Vec4{0.88f, 0.92f, 1.0f, 0.95f}, 18, kWhirlwindRadius * 1.1f, 0.7f, 7.0f);
+                swirl(Vec4{0.8f, 0.86f, 1.0f, 0.9f}, 14, kWhirlwindRadius * 0.7f, 1.2f, -6.0f);
+                emit(chest, Vec3{0.0f}, Vec4{0.9f, 0.95f, 1.0f, 1.0f}, 0.16f, 0.5f, 1);
+            } else if (slot == 3) { // Taunt: a red warcry shockwave + upward embers + a ground glyph
+                emit(chest, Vec3{0.0f}, Vec4{1.0f, 0.35f, 0.25f, 1.0f}, 0.2f, 0.8f, 1);
+                emit_ring(feet, Vec4{1.0f, 0.3f, 0.25f, 0.95f}, 28, 8.0f, 0.55f, 0.19f);
+                pillar(Vec4{1.0f, 0.4f, 0.28f, 0.9f}, 16, 0.8f, 3.5f);
+            } else { // Guardian Leap: a golden launch burst + a shield flare
+                emit_ring(feet, Vec4{1.0f, 0.86f, 0.42f, 0.95f}, 24, 4.0f, 0.5f, 0.16f);
+                emit_burst(chest, Vec4{1.0f, 0.9f, 0.5f, 0.95f}, 22, 6.0f, 0.5f, 0.15f, 1, 4.0f);
             }
             break;
         case PlayerRole::Hunter:
-            if (slot == 2) { // Dash: a green backward kick of speed-motes
-                emit_burst(feet + Vec3{0.0f, 0.4f, 0.0f}, Vec4{0.6f, 1.0f, 0.6f, 0.9f}, 18,
-                           -4.0f, 0.5f, 0.13f, 1);
-                for (int i = 0; i < 12; ++i) {
-                    emit(chest - facing * frand(0.0f, 0.8f), -facing * frand(2.0f, 5.0f),
+            if (slot == 2) { // Dash: a green speed-burst behind + a forward launch streak
+                emit_burst(feet + Vec3{0.0f, 0.4f, 0.0f}, Vec4{0.6f, 1.0f, 0.6f, 0.9f}, 22, -4.5f, 0.5f, 0.13f, 1);
+                for (int i = 0; i < 16; ++i) {
+                    emit(chest - facing * frand(0.0f, 1.0f), -facing * frand(2.0f, 6.0f),
                          Vec4{0.7f, 1.0f, 0.7f, 0.8f}, 0.4f, 0.12f, 1);
                 }
-            } else if (slot == 5) { // Caltrops: a low scatter ring on the ground at the aim
-                emit_ring(aim, Vec4{0.9f, 0.82f, 0.3f, 0.9f}, 20, kHazardRadius * 1.3f, 0.5f, 0.13f);
-                emit_burst(aim + Vec3{0.0f, 0.15f, 0.0f}, Vec4{0.85f, 0.78f, 0.3f, 0.85f}, 12, 2.0f,
-                           0.5f, 0.11f, 1, 1.2f);
-            } else { // Power Shot / Volley / Multishot: a bright muzzle spray along the shot
+            } else if (slot == 5) { // Caltrops: a scatter ring + little spikes flung up at the aim
+                emit_ring(aim, Vec4{0.9f, 0.82f, 0.3f, 0.9f}, 24, kHazardRadius * 1.3f, 0.5f, 0.13f);
+                for (int i = 0; i < 16; ++i) {
+                    emit(aim + Vec3{frand(-0.6f, 0.6f), 0.1f, frand(-0.6f, 0.6f)},
+                         Vec3{frand(-1.0f, 1.0f), frand(2.0f, 4.0f), frand(-1.0f, 1.0f)},
+                         Vec4{0.9f, 0.85f, 0.35f, 0.9f}, 0.5f, 0.1f, 1, 8.0f);
+                }
+            } else { // Power / Volley / Multishot / Piercing: a bright muzzle flash + spray along the shot
                 const Vec3 c = chest + fwd * 0.8f;
-                emit(c, Vec3{0.0f}, Vec4{0.8f, 1.0f, 0.7f, 1.0f}, 0.14f, 0.4f, 1);
+                emit(c, Vec3{0.0f}, Vec4{0.85f, 1.0f, 0.7f, 1.0f}, 0.15f, 0.5f, 1);
                 const bool wide = slot == 1 || slot == 4; // Volley / Multishot fan wider
-                const f32 spread = wide ? 0.4f : 0.15f;
-                for (int i = 0; i < (wide ? 22 : 12); ++i) {
+                const f32 spread = wide ? 0.45f : (slot == 3 ? 0.06f : 0.15f); // Piercing = tight line
+                for (int i = 0; i < (wide ? 26 : 14); ++i) {
                     const f32 a = std::atan2(fwd.z, fwd.x) + frand(-spread, spread);
-                    emit(c, Vec3{std::cos(a), frand(-0.1f, 0.2f), std::sin(a)} * frand(5.0f, 11.0f),
-                         Vec4{0.7f, 1.0f, 0.65f, 0.9f}, 0.35f, 0.12f, 1);
+                    emit(c, Vec3{std::cos(a), frand(-0.1f, 0.2f), std::sin(a)} * frand(6.0f, 13.0f),
+                         Vec4{0.72f, 1.0f, 0.6f, 0.9f}, 0.35f, 0.12f, 1);
                 }
             }
             break;
         case PlayerRole::Cleric:
-            if (slot == 1) { // Sanctuary: a wide radiant ring + a column of light
-                emit_ring(feet, Vec4{0.6f, 1.0f, 0.8f, 0.95f}, 30, 6.0f, 0.8f, 0.2f);
-                for (int i = 0; i < 24; ++i) {
-                    emit(feet + Vec3{frand(-1.2f, 1.2f), frand(0.0f, 0.3f), frand(-1.2f, 1.2f)},
-                         Vec3{0.0f, frand(2.0f, 4.5f), 0.0f}, Vec4{0.7f, 1.0f, 0.85f, 0.9f}, 0.9f,
-                         0.14f, 1, -1.0f);
-                }
-            } else if (slot == 2 || slot == 5) { // Smite / Judgement: a holy flash punched forward
+            if (slot == 1) { // Sanctuary: a wide radiant ring + a tall column of light
+                emit_ring(feet, Vec4{0.6f, 1.0f, 0.8f, 0.95f}, 34, 6.0f, 0.8f, 0.2f);
+                pillar(Vec4{0.72f, 1.0f, 0.86f, 0.9f}, 30, 1.4f, 4.5f);
+            } else if (slot == 2 || slot == 5) { // Smite / Judgement: a holy flash + a beam down at the aim
                 const Vec3 c = chest + fwd * 0.8f;
-                emit(c, Vec3{0.0f}, Vec4{0.85f, 1.0f, 0.9f, 1.0f}, 0.2f, 0.6f, 1);
-                emit_burst(c, Vec4{0.7f, 1.0f, 0.85f, 0.95f}, 16, 6.0f, 0.4f, 0.14f, 1);
-            } else if (slot == 3) { // Aegis: a cyan ward flares at the caster (sphere is on the target)
-                emit(chest, Vec3{0.0f}, Vec4{0.55f, 0.85f, 1.0f, 1.0f}, 0.2f, 0.5f, 1);
-                emit_ring(feet, Vec4{0.5f, 0.8f, 1.0f, 0.9f}, 18, 3.0f, 0.5f, 0.14f);
-                emit_burst(chest, Vec4{0.6f, 0.9f, 1.0f, 0.9f}, 14, 2.5f, 0.6f, 0.13f, 1, 1.5f);
+                emit(c, Vec3{0.0f}, Vec4{0.9f, 1.0f, 0.92f, 1.0f}, 0.22f, 0.7f, 1);
+                for (int i = 0; i < 16; ++i) { // a descending pillar of light onto the aim point
+                    emit(aim + Vec3{frand(-0.3f, 0.3f), frand(2.0f, 4.5f), frand(-0.3f, 0.3f)},
+                         Vec3{0.0f, -frand(5.0f, 9.0f), 0.0f}, Vec4{0.85f, 1.0f, 0.9f, 0.95f}, 0.4f, 0.13f, 1);
+                }
+                emit_ring(aim, Vec4{0.8f, 1.0f, 0.88f, 0.9f}, 14, 3.0f, 0.35f, 0.13f);
+            } else if (slot == 3) { // Aegis: a cyan ward flare (the max-rank dome burst is played by cast_ability)
+                emit(chest, Vec3{0.0f}, Vec4{0.55f, 0.85f, 1.0f, 1.0f}, 0.22f, 0.6f, 1);
+                emit_ring(feet, Vec4{0.5f, 0.8f, 1.0f, 0.9f}, 22, 3.2f, 0.5f, 0.15f);
+                emit_burst(chest, Vec4{0.6f, 0.9f, 1.0f, 0.9f}, 16, 2.8f, 0.6f, 0.13f, 1, 1.6f);
+            } else if (slot == 4) { // Renew: a lingering heal aura laid at the feet (green ground ring)
+                emit_ring(feet, Vec4{0.5f, 1.0f, 0.65f, 0.9f}, 26, kHealAuraRadius * 1.2f, 0.7f, 0.16f);
+                pillar(Vec4{0.6f, 1.0f, 0.72f, 0.85f}, 18, kHealAuraRadius * 0.7f, 2.6f);
+            } else if (slot == 6) { // Empower: a fiery co-op blessing burst
+                emit_ring(feet, Vec4{1.0f, 0.55f, 0.22f, 0.9f}, 22, 3.0f, 0.6f, 0.15f);
+                emit_burst(chest, Vec4{1.0f, 0.65f, 0.3f, 0.9f}, 18, 3.0f, 0.6f, 0.14f, 1, 2.0f);
             } else { // Heal: gentle motes rising around the caster
-                for (int i = 0; i < 18; ++i) {
+                for (int i = 0; i < 22; ++i) {
                     emit(feet + Vec3{frand(-0.5f, 0.5f), frand(0.1f, 0.4f), frand(-0.5f, 0.5f)},
-                         Vec3{frand(-0.3f, 0.3f), frand(1.6f, 3.2f), frand(-0.3f, 0.3f)},
+                         Vec3{frand(-0.3f, 0.3f), frand(1.8f, 3.4f), frand(-0.3f, 0.3f)},
                          Vec4{0.55f, 1.0f, 0.7f, 0.9f}, 0.8f, 0.12f, 1, -1.2f);
                 }
-                emit_ring(feet, Vec4{0.55f, 1.0f, 0.7f, 0.8f}, 14, 2.0f, 0.5f, 0.13f);
+                emit_ring(feet, Vec4{0.55f, 1.0f, 0.7f, 0.8f}, 16, 2.0f, 0.5f, 0.13f);
             }
             break;
         case PlayerRole::Mage:
@@ -775,6 +842,35 @@ void ClientApp::draw_buffs() {
                                  glm::translate(Mat4{1.0f}, feet + Vec3{0.0f, 0.13f, 0.0f}) *
                                      glm::scale(Mat4{1.0f}, Vec3{0.92f, 0.05f, 0.92f}),
                                  Vec4{0.4f, 1.0f, 0.45f, 0.5f * pulse});
+        }
+    }
+    // Power Conduit: a glowing beam from a channelling Cleric to the ally it heals + empowers.
+    for (const net::PlayerState& p : snapshot_.players) {
+        if (p.link == 0) {
+            continue;
+        }
+        const net::PlayerState* target = nullptr;
+        for (const net::PlayerState& q : snapshot_.players) {
+            if (q.id == p.link) {
+                target = &q;
+                break;
+            }
+        }
+        if (target == nullptr) {
+            continue;
+        }
+        const Vec3 a = p.position + Vec3{0.0f, 1.4f, 0.0f};       // the Cleric's staff-head
+        const Vec3 b = target->position + Vec3{0.0f, 1.0f, 0.0f}; // the ally's chest
+        const f32 len = glm::length(b - a);
+        if (len > 0.1f) {
+            renderer_->draw_glow(shape_box_,
+                                 glm::translate(Mat4{1.0f}, (a + b) * 0.5f) * orient_to(b - a) *
+                                     glm::scale(Mat4{1.0f}, Vec3{0.1f, 0.1f, len}),
+                                 Vec4{0.5f, 1.0f, 0.72f, 0.5f * pulse});
+            for (int i = 0; i < 2; ++i) { // motes flowing along the beam toward the ally
+                emit(glm::mix(a, b, frand()), (b - a) * 0.35f, Vec4{0.62f, 1.0f, 0.78f, 0.9f}, 0.3f,
+                     0.1f, 1);
+            }
         }
     }
 }

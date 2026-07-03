@@ -23,6 +23,8 @@ struct Projectile {
     u32 owner = 0;
     f32 damage = 0.0f;    // damage dealt on hitting an enemy (0 = use the default)
     u8 kind = 0;          // 0 = thrown rock, 1 = enemy arrow, 2 = cleric holy bolt
+    u8 pierce = 0;        // bodies this shot can still punch THROUGH (max-rank Power Shot)
+    u32 last_hit = 0;     // last enemy id struck, so a piercing shot can't re-hit it while passing
     bool hostile = false; // an enemy arrow: damages the town side, not enemies
     bool alive = true;
     bool resting = false;

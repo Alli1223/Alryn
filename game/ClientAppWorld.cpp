@@ -7,13 +7,47 @@ namespace alryn::game {
 
 CharacterAppearance ClientApp::enemy_look() {
     CharacterAppearance a;
-    a.skin = 0;
-    a.hair_color = 0;
+    a.skin = 3;                  // a weathered, grubby complexion (mostly hidden under the hood + mask)
+    a.hair_color = 1;            // brown
     a.eyes = EyeStyle::Sharp;
-    a.ears = EarStyle::Pointed;
-    a.hair = HairStyle::Spiky;
+    a.ears = EarStyle::Round;    // human bandits, not goblins
+    a.hair = HairStyle::Short;
     return a;
 }
+
+namespace {
+// Melee raiders wear the Brigand kit (hood + face-mask, ragged jerkin); archers wear the Outlaw kit
+// (deep hood + scarf + back quiver), so ranged bandits read distinctly from the melee cutthroats.
+OutfitKind bandit_outfit_for(u8 kind) {
+    return kind == 3u ? OutfitKind::Outlaw : OutfitKind::Brigand;
+}
+// A crude scavenged weapon gripped in a bandit's hand, chosen by kind (None = hands are full with a
+// torch / satchel / mending orb, drawn separately below).
+WeaponType bandit_weapon(u8 kind) {
+    switch (kind) {
+        case 2u: return WeaponType::Mace;             // brute - a heavy maul
+        case 3u: return WeaponType::Bow;              // archer
+        case kEnemyShield: return WeaponType::Sword;  // shield-bearer (+ the big front shield below)
+        case kEnemyWarlord: return WeaponType::Sword; // champion - a notched blade
+        case 1u:                                      // torch-bearer holds the torch
+        case kEnemySapper:                            // sapper's hands are on the satchel charge
+        case kEnemyHealer: return WeaponType::None;   // healer floats the mending orb
+        default: return WeaponType::Dagger;           // grunt - a crude shiv/cleaver
+    }
+}
+// A subtle grimy tint per kind so bandits still read as hostile (the outfit carries the identity now,
+// so this is a gentle wash, not the old tomato-red player recolour). Health bars mark them too.
+Vec3 bandit_tint(u8 kind) {
+    switch (kind) {
+        case 1u: return Vec3{1.15f, 0.92f, 0.72f};        // torch-bearer - warmed by the flame
+        case 2u: return Vec3{1.0f, 0.74f, 0.72f};         // brute - a ruddy, heavy bruiser
+        case 3u: return Vec3{0.92f, 1.0f, 0.9f};          // archer/outlaw - a cold woodland cast
+        case kEnemyHealer: return Vec3{0.9f, 1.0f, 0.94f}; // healer - a sickly pallor
+        case kEnemyWarlord: return Vec3{1.08f, 0.72f, 0.72f}; // warlord - a deep crimson menace
+        default: return Vec3{1.0f, 0.9f, 0.88f};          // grunts - a grimy warm neutral
+    }
+}
+} // namespace
 
 void ClientApp::update_enemy_visuals(Timestep dt) {
     if (!have_snapshot_) {
@@ -23,10 +57,19 @@ void ClientApp::update_enemy_visuals(Timestep dt) {
         const auto [it, created] = enemy_visuals_.try_emplace(en.id);
         EnemyVisual& v = it->second;
         if (created) {
-            v.model = CharacterModel::create(en.id ^ 0xE0E0u, enemy_look());
+            const OutfitKind kind = bandit_outfit_for(en.kind);
+            CharacterAppearance look = enemy_look();
+            look.skin = static_cast<u8>((en.id * 7u + 2u) % 6u); // vary complexion per bandit
+            v.model = CharacterModel::create(en.id ^ 0xE0E0u, look);
+            Equipment eq;
+            eq.outfit_tint = static_cast<u8>(en.id % 4u); // vary the cloth colour per bandit
+            apply_outfit(v.model, kind, eq);              // dress them (adds decorative attachment bones)
             v.body_skin = build_body_mesh(v.model);
+            v.outfit_skin = build_outfit_mesh(v.model, kind, eq);
             v.last_pos = en.position;
+            v.kind = en.kind;
         }
+        v.last_health = en.health;
         f32 measured = 0.0f;
         if (dt.seconds > 0.0001f) {
             Vec3 d = en.position - v.last_pos;
@@ -39,6 +82,21 @@ void ClientApp::update_enemy_visuals(Timestep dt) {
             v.animator.play_swing(); // the enemy just struck - play the swing
         }
         v.last_action = en.action;
+        // Elemental Shatter VFX: while chilled, drift a few frost motes; when the chill clears with the
+        // enemy still alive (a heavy hit shattered it), burst icy shards.
+        const bool chilled = (en.status & 1u) != 0u;
+        if (chilled && dt.seconds > 0.0001f) {
+            emit(en.position + Vec3{frand(-0.3f, 0.3f), frand(0.4f, 1.4f), frand(-0.3f, 0.3f)},
+                 Vec3{0.0f, frand(-0.4f, 0.2f), 0.0f}, Vec4{0.7f, 0.88f, 1.0f, 0.8f}, 0.5f, 0.07f, 1);
+        } else if (!chilled && (v.last_status & 1u) != 0u) {
+            emit_burst(en.position + Vec3{0.0f, 0.9f, 0.0f}, Vec4{0.72f, 0.9f, 1.0f, 0.95f}, 20, 6.0f,
+                       0.45f, 0.12f, 1, 1.0f, 3.0f);
+            combat_text(en.position, "SHATTER!", Vec4{0.75f, 0.92f, 1.0f, 1.0f}); // the combo landed
+            if (Audio* snd = audio()) {
+                snd->play_at(SfxId::Shatter, en.position, 0.9f);
+            }
+        }
+        v.last_status = en.status;
         v.animator.update(v.speed, dt);
     }
     for (auto it = enemy_visuals_.begin(); it != enemy_visuals_.end();) {
@@ -47,7 +105,32 @@ void ClientApp::update_enemy_visuals(Timestep dt) {
         if (live) {
             ++it;
         } else {
+            // A bandit vanishing MID-HAUL died (dusk despawns / contract ends flip the phase the same
+            // tick, so those don't shower loot). Felled -> a spilled purse of golden coins; a sapper
+            // that was still healthy went up on its own satchel -> a fiery blast instead.
+            if (snapshot_.contract_phase == static_cast<u8>(ContractPhase::Active)) {
+                const EnemyVisual& dv = it->second;
+                const Vec3 at = dv.last_pos + Vec3{0.0f, 0.9f, 0.0f};
+                Audio* snd = audio();
+                if (dv.kind == kEnemySapper && dv.last_health > 128u) {
+                    emit_burst(at, Vec4{1.0f, 0.55f, 0.2f, 1.0f}, 26, 7.0f, 0.5f, 0.16f, 1, 2.0f);
+                    emit_burst(at, Vec4{0.25f, 0.22f, 0.2f, 0.8f}, 14, 3.0f, 1.1f, 0.3f, 0, 2.5f);
+                    if (snd != nullptr) {
+                        snd->play_at(SfxId::Explosion, at, 1.0f); // the satchel goes up
+                    }
+                } else {
+                    for (int c = 0; c < 12; ++c) { // coins: golden glints tossed up, arcing down
+                        emit(at, Vec3{frand(-2.2f, 2.2f), frand(2.5f, 5.5f), frand(-2.2f, 2.2f)},
+                             Vec4{1.0f, 0.85f, 0.3f, 1.0f}, 0.9f, 0.09f, 1, 9.0f, 0.4f);
+                    }
+                    emit_burst(at, Vec4{0.5f, 0.42f, 0.35f, 0.7f}, 10, 2.5f, 0.6f, 0.2f, 0, 1.0f);
+                    if (snd != nullptr) {
+                        snd->play_at(SfxId::Coin, at, 0.6f, frand(0.9f, 1.15f)); // the purse spills
+                    }
+                }
+            }
             retire_mesh(std::move(it->second.body_mesh)); // defer the GPU free past the frames in flight
+            retire_mesh(std::move(it->second.outfit_mesh));
             it = enemy_visuals_.erase(it);
         }
     }
@@ -63,28 +146,31 @@ void ClientApp::draw_enemies() {
             continue;
         }
         EnemyVisual& v = it->second;
-        // 0 = grunt (dark red), 1 = torch-bearer (fiery), 2 = brute (big + dark),
-        // 3 = archer (sickly green, carries a bow), 4 = shield-bearer (steel, carries a shield),
-        // 5 = healer (pale mystic, floats a glowing green orb).
+        // Bandit kinds: 0 grunt (dagger), 1 torch-bearer, 2 brute (maul, big), 3 archer (Outlaw kit +
+        // bow), 4 shield-bearer (sword + big shield), 5 healer (orb), 6 sapper (satchel), 7 warlord.
         const f32 scale = en.kind == 2 ? 1.5f : en.kind == kEnemyWarlord ? 1.28f : 1.0f;
         const Mat4 root = glm::translate(Mat4{1.0f}, en.position) *
                           glm::rotate(Mat4{1.0f}, HalfPi - en.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
                           glm::scale(Mat4{1.0f}, Vec3{scale}) * v.animator.body_offset();
-        const Vec3 tint = en.kind == 1   ? Vec3{1.5f, 0.7f, 0.18f}
-                          : en.kind == 2 ? Vec3{1.05f, 0.26f, 0.4f}
-                          : en.kind == 3 ? Vec3{0.5f, 0.85f, 0.45f}
-                          : en.kind == 4 ? Vec3{0.62f, 0.66f, 0.78f}
-                          : en.kind == 5 ? Vec3{0.78f, 0.82f, 0.70f}
-                          : en.kind == kEnemySapper ? Vec3{0.5f, 0.42f, 0.30f}  // dark, hunched
-                          : en.kind == kEnemyWarlord ? Vec3{0.85f, 0.14f, 0.26f} // deep crimson champion
-                                                     : Vec3{1.3f, 0.32f, 0.3f};
+        Vec3 tint = bandit_tint(en.kind);
+        if ((en.status & 1u) != 0u) {
+            tint = glm::mix(tint, Vec3{0.55f, 0.75f, 1.2f}, 0.6f); // chilled (Frost Bolt): an icy-blue rime
+        }
         const std::vector<Quat> pose = v.animator.pose(v.model);
         if (v.body_skin.vertices.empty()) {
             v.body_skin = build_body_mesh(v.model);
         }
-        skin_and_draw(v.model, v.body_skin, v.body_mesh, root, pose, tint); // continuous skinned body
+        skin_and_draw(v.model, v.body_skin, v.body_mesh, root, pose, tint);     // continuous skinned body
+        skin_and_draw(v.model, v.outfit_skin, v.outfit_mesh, root, pose, tint); // worn bandit leather
         const std::vector<Mat4> emats = v.model.bone_matrices(root, pose);
-        draw_rig(v.model, emats, tint, /*attachments_only=*/true); // face/hair on top
+        draw_rig(v.model, emats, tint, /*attachments_only=*/true); // hood / mask / quiver / face on top
+        // A crude weapon gripped in the weapon hand (the L-suffixed forearm on the mirrored rig), built
+        // from the shared modular weapon_pieces at the tarnished bandit palette so it swings with the arm.
+        const std::vector<Mat4> jmats = v.model.joint_matrices(root, pose);
+        if (const WeaponType bw = bandit_weapon(en.kind); bw != WeaponType::None) {
+            draw_weapon(bw, hand_frame(v.model, jmats, BonePart::LowerArmL), v.model.palette(),
+                        EquipmentTier::Worn);
+        }
         // The lone last raider is ENRAGED (server gives it a speed/damage boost) - a red angry aura
         // so the climax reads (derived from the snapshot: one non-brute ambusher left).
         if (snapshot_.enemies.size() == 1 && en.kind != 2) {
@@ -160,28 +246,19 @@ void ClientApp::draw_enemies() {
                                      glm::scale(Mat4{1.0f}, Vec3{0.42f}),
                                  Vec4{1.0f, 0.5f, 0.15f, 0.5f * spark});
         }
-        if (en.kind == 3) {
-            // A bow held out front (a curved stave + string).
-            const Vec3 hand = en.position +
-                              Vec3{std::cos(en.yaw), 0.0f, std::sin(en.yaw)} * 0.4f +
-                              Vec3{0.0f, 1.0f, 0.0f};
-            renderer_->draw(shape_box_,
-                            glm::translate(Mat4{1.0f}, hand) *
-                                glm::rotate(Mat4{1.0f}, en.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
-                                glm::scale(Mat4{1.0f}, Vec3{0.04f, 0.85f, 0.04f}),
-                            Vec4{0.34f, 0.22f, 0.12f, 1.0f});
-            if (en.action == 2) {
-                // Aiming a heavy shot: a charging glow swells at the bow (telegraph - dodge it!).
-                const f32 chg = 0.5f + 0.5f * std::sin(elapsed_ * 16.0f);
-                renderer_->draw_glow(shape_sphere_,
+        if (en.kind == 3 && en.action == 2) {
+            // Aiming a heavy shot: a nocked, charging glow swells at the bow hand (a telegraph the
+            // party reads to dodge or break line of sight). The bow itself is the held weapon above.
+            const Vec3 hand = Vec3{hand_frame(v.model, jmats, BonePart::LowerArmL)[3]};
+            const f32 chg = 0.5f + 0.5f * std::sin(elapsed_ * 16.0f);
+            renderer_->draw_glow(shape_sphere_,
+                                 glm::translate(Mat4{1.0f}, hand) *
+                                     glm::scale(Mat4{1.0f}, Vec3{0.28f + 0.1f * chg}),
+                                 Vec4{1.0f, 0.4f, 0.18f, 0.55f});
+            renderer_->draw_emissive(shape_sphere_,
                                      glm::translate(Mat4{1.0f}, hand) *
-                                         glm::scale(Mat4{1.0f}, Vec3{0.28f + 0.1f * chg}),
-                                     Vec4{1.0f, 0.4f, 0.18f, 0.55f});
-                renderer_->draw_emissive(shape_sphere_,
-                                         glm::translate(Mat4{1.0f}, hand) *
-                                             glm::scale(Mat4{1.0f}, Vec3{0.10f}),
-                                         Vec4{1.0f, 0.7f, 0.3f, 1.0f});
-            }
+                                         glm::scale(Mat4{1.0f}, Vec3{0.10f}),
+                                     Vec4{1.0f, 0.7f, 0.3f, 1.0f});
         }
         if (en.kind == 5) {
             // A healer floats a pulsing green orb of mending magic above its hand + a soft glow.

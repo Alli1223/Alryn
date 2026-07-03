@@ -14,6 +14,7 @@ class Event;
 class Window;
 class Renderer;
 class Input;
+class Audio;
 
 struct ApplicationConfig {
     std::string name = "Alryn Application";
@@ -51,10 +52,11 @@ public:
     const ApplicationConfig& config() const { return config_; }
     u64 frame_count() const { return frame_; }
 
-    // The windowed renderer/input, or nullptr in headless mode.
+    // The windowed renderer/input/audio, or nullptr in headless mode.
     Renderer* renderer() { return renderer_; }
     Window* window() { return window_.get(); }
     Input* input() { return input_; }
+    Audio* audio() { return audio_; }
 
     static Application& get() { return *s_instance; }
 
@@ -75,6 +77,7 @@ private:
     std::unique_ptr<Window> window_;  // windowed mode only
     Renderer* renderer_ = nullptr;    // owned by the engine's subsystem list
     Input* input_ = nullptr;          // owned by the engine's subsystem list
+    Audio* audio_ = nullptr;          // owned by the engine's subsystem list
     u64 frame_ = 0;
 
     static Application* s_instance;

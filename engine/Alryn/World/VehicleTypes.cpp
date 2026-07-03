@@ -91,32 +91,97 @@ std::vector<Seat> WagonType::seats() const {
     return {Seat{{0.1f, 0.85f, 0.72f}}, Seat{{0.1f, 0.85f, -0.72f}}, Seat{{-0.7f, 0.95f, 0.0f}}};
 }
 
-// ---- Carriage: large enclosed horse-drawn coach -------------------------
+// ---- Carriage: an ornate enclosed horse-drawn coach (oriental red-and-gold, framed lit windows,
+// a stacked pagoda roof with upturned eaves + finials, and a hanging lantern at both ends) --------
 MeshData CarriageType::body() const {
     MeshData m;
-    const Vec3 coach{0.36f, 0.17f, 0.14f}; // dark red lacquer
-    const Vec3 trim{0.55f, 0.44f, 0.2f};   // gilt trim
-    const Vec3 window{0.78f, 0.82f, 0.86f};
+    const Vec3 coach{0.46f, 0.11f, 0.10f};  // deep oriental red lacquer
+    const Vec3 coach2{0.32f, 0.08f, 0.08f}; // darker red (roof)
+    const Vec3 gold{0.82f, 0.62f, 0.22f};   // gilt trim
+    const Vec3 dark{0.15f, 0.11f, 0.07f};
+    const Vec3 pane{1.0f, 0.82f, 0.46f};    // warm, lit window glass (reads illuminated)
+
     for (f32 wx : {-1.0f, 1.0f}) {
         add_box(m, {wx - 0.07f, 0.42f, -0.75f}, {wx + 0.07f, 0.58f, 0.75f}, kMetal); // axles
     }
-    add_box(m, {-1.2f, 0.6f, -0.7f}, {1.2f, 0.8f, 0.7f}, kDark);            // chassis
-    add_box(m, {-1.0f, 0.8f, -0.66f}, {0.7f, 1.85f, 0.66f}, coach);        // cabin
-    add_box(m, {-1.02f, 1.85f, -0.72f}, {0.74f, 2.0f, 0.72f}, coach * 0.8f); // roof
-    add_box(m, {-1.0f, 1.8f, -0.7f}, {0.7f, 1.86f, 0.7f}, trim);           // roof trim
-    // Windows on each side + back.
-    add_box(m, {-0.7f, 1.15f, 0.66f}, {0.3f, 1.6f, 0.69f}, window);
-    add_box(m, {-0.7f, 1.15f, -0.69f}, {0.3f, 1.6f, -0.66f}, window);
-    add_box(m, {-1.02f, 1.15f, -0.4f}, {-0.99f, 1.6f, 0.4f}, window);
+    add_box(m, {-1.2f, 0.6f, -0.7f}, {1.2f, 0.8f, 0.7f}, dark);      // chassis
+    add_box(m, {-1.06f, 0.78f, -0.7f}, {0.76f, 0.87f, 0.7f}, gold);  // gilt sill molding
+    add_box(m, {-1.0f, 0.85f, -0.66f}, {0.7f, 1.82f, 0.66f}, coach); // cabin
+
+    // Gilt corner posts on the cabin's four vertical edges + waist/eave molding bands.
+    for (f32 cx : {-0.99f, 0.69f}) {
+        for (f32 cz : {-0.65f, 0.65f}) {
+            add_box(m, {cx - 0.05f, 0.85f, cz - 0.05f}, {cx + 0.05f, 1.84f, cz + 0.05f}, gold);
+        }
+    }
+    add_box(m, {-1.02f, 1.06f, -0.68f}, {0.72f, 1.14f, 0.68f}, gold); // waistline molding
+    add_box(m, {-1.02f, 1.66f, -0.68f}, {0.72f, 1.73f, 0.68f}, gold); // upper molding
+
+    // Framed, warm-glowing windows on both sides + the back. `t` is the thin (facing) axis
+    // (0 = the back's x-face, 2 = a side's z-face); the pane sits proud of the cabin by `out`.
+    auto window = [&](int t, f32 face, f32 out, f32 u0, f32 u1, f32 v0, f32 v1) {
+        const int u = (t == 0) ? 2 : 0; // the in-plane horizontal axis
+        auto box3 = [&](f32 a0, f32 a1, f32 b0, f32 b1, f32 d0, f32 d1, const Vec3& col) {
+            Vec3 a{0.0f}, b{0.0f};
+            a[u] = a0; b[u] = a1; a[1] = b0; b[1] = b1; a[t] = d0; b[t] = d1;
+            add_box(m, glm::min(a, b), glm::max(a, b), col);
+        };
+        box3(u0 - 0.06f, u1 + 0.06f, v0 - 0.06f, v1 + 0.06f, face - 0.02f, face + 0.02f, gold); // frame
+        box3(u0, u1, v0, v1, face + out - 0.02f, face + out + 0.02f, pane);                     // lit pane
+        const f32 um = (u0 + u1) * 0.5f, vm = (v0 + v1) * 0.5f;
+        box3(um - 0.03f, um + 0.03f, v0, v1, face + out, face + out + 0.03f, dark); // mullion |
+        box3(u0, u1, vm - 0.03f, vm + 0.03f, face + out, face + out + 0.03f, dark); // mullion --
+    };
+    window(2, 0.66f, 0.06f, -0.66f, 0.28f, 1.18f, 1.6f);   // right side
+    window(2, -0.66f, -0.06f, -0.66f, 0.28f, 1.18f, 1.6f); // left side
+    window(0, -1.0f, -0.06f, -0.38f, 0.38f, 1.18f, 1.6f);  // back
+
+    // ---- Pagoda-style roof: a broad eaved roof, a stacked upper tier, gold ridge + finials ----
+    add_box(m, {-1.14f, 1.82f, -0.82f}, {0.84f, 1.93f, 0.82f}, coach2); // main roof (overhangs)
+    add_box(m, {-1.16f, 1.79f, -0.84f}, {0.86f, 1.85f, 0.84f}, gold);   // gilt eave band
+    // Upturned eaves: a rotated slab lifting at the front + the back edge (the oriental sweep).
+    {
+        const MeshData lip = primitives::box({-0.16f, -0.03f, -0.86f}, {0.16f, 0.03f, 0.86f}, coach2);
+        append_xf(m, lip,
+                  glm::translate(Mat4{1.0f}, Vec3{0.9f, 1.9f, 0.0f}) *
+                      glm::rotate(Mat4{1.0f}, 0.6f, Vec3{0.0f, 0.0f, 1.0f}),
+                  Vec3{1.0f}); // front eave sweeps up
+        append_xf(m, lip,
+                  glm::translate(Mat4{1.0f}, Vec3{-1.2f, 1.9f, 0.0f}) *
+                      glm::rotate(Mat4{1.0f}, -0.6f, Vec3{0.0f, 0.0f, 1.0f}),
+                  Vec3{1.0f}); // back eave sweeps up
+    }
+    add_box(m, {-0.66f, 1.94f, -0.5f}, {0.34f, 2.06f, 0.5f}, coach2); // pagoda upper tier (smaller, red)
+    add_box(m, {-0.68f, 1.92f, -0.52f}, {0.36f, 1.98f, 0.52f}, gold); // its gilt eave rim
+    add_box(m, {-0.2f, 2.02f, -0.04f}, {-0.1f, 2.42f, 0.04f}, gold);  // central finial spire
+    add_box(m, {-0.21f, 2.34f, -0.08f}, {-0.09f, 2.46f, 0.08f}, gold); // finial ball
+    for (f32 cx : {-1.08f, 0.78f}) {                                   // gilt corner finials
+        for (f32 cz : {-0.78f, 0.78f}) {
+            add_box(m, {cx - 0.03f, 1.9f, cz - 0.03f}, {cx + 0.03f, 2.12f, cz + 0.03f}, gold);
+        }
+    }
+
     // Driver bench up top front + footboard.
-    add_box(m, {0.7f, 1.5f, -0.6f}, {1.15f, 1.62f, 0.6f}, kWood);          // footboard
-    add_box(m, {0.78f, 1.62f, -0.55f}, {1.05f, 2.05f, 0.55f}, kWood);      // bench seat back
-    add_box(m, {0.78f, 1.62f, -0.55f}, {1.12f, 1.75f, 0.55f}, kWood);      // bench cushion
-    // Harness shaft forward to the horse + lamps on the front corners.
+    add_box(m, {0.7f, 1.5f, -0.6f}, {1.15f, 1.62f, 0.6f}, kWood);      // footboard
+    add_box(m, {0.78f, 1.62f, -0.55f}, {1.05f, 2.05f, 0.55f}, coach2); // bench seat back
+    add_box(m, {0.78f, 1.62f, -0.55f}, {1.12f, 1.75f, 0.55f}, kWood);  // bench cushion
+
+    // Hanging coach lanterns (a bracket + gilt cage + warm glass) mounted at the cabin corners fore
+    // and a single one aft - so the carriage is lit at both ends (the client adds the glow + light at
+    // lamps()). Unlike a cart's ground-up lamp post, these hang off the coach body.
+    auto coach_lamp = [&](const Vec3& at) {
+        add_box(m, {at.x - 0.02f, at.y + 0.02f, at.z - 0.02f}, {at.x + 0.02f, at.y + 0.16f, at.z + 0.02f}, dark); // bracket
+        add_box(m, {at.x - 0.09f, at.y - 0.02f, at.z - 0.09f}, {at.x + 0.09f, at.y + 0.05f, at.z + 0.09f}, gold); // cap
+        add_box(m, {at.x - 0.07f, at.y - 0.2f, at.z - 0.07f}, {at.x + 0.07f, at.y - 0.02f, at.z + 0.07f}, pane);  // warm glass
+        add_box(m, {at.x - 0.08f, at.y - 0.24f, at.z - 0.08f}, {at.x + 0.08f, at.y - 0.19f, at.z + 0.08f}, gold); // base
+    };
+    coach_lamp(Vec3{0.73f, 1.6f, 0.66f});   // front-right corner (hangs below the eave)
+    coach_lamp(Vec3{0.73f, 1.6f, -0.66f});  // front-left corner
+    coach_lamp(Vec3{-1.06f, 1.58f, 0.0f});  // rear centre
+
+    // Harness shaft forward to the horse.
     add_box(m, {1.2f, 0.7f, -0.18f}, {2.4f, 0.8f, -0.06f}, kDark);
     add_box(m, {1.2f, 0.7f, 0.06f}, {2.4f, 0.8f, 0.18f}, kDark);
-    add_lamp(m, Vec3{1.45f, 1.9f, 0.55f});
-    add_lamp(m, Vec3{1.45f, 1.9f, -0.55f});
     return m;
 }
 std::vector<Vec3> CarriageType::wheels() const {

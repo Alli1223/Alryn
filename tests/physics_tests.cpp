@@ -74,6 +74,33 @@ TEST_CASE("CharacterController: walks across flat ground while staying grounded"
     CHECK(character.on_ground());
 }
 
+TEST_CASE("CharacterController: a ballistic launch flies forward then lands (Ally Toss)") {
+    const DensitySampler density = flat_floor(2.0f);
+    CharacterController character;
+    character.set_position(Vec3{0.0f, 2.0f, 0.0f});
+    for (int i = 0; i < 10; ++i) {
+        character.update(density, Vec3{0.0f}, false, kStep); // settle on the ground
+    }
+    REQUIRE(character.on_ground());
+    const Vec3 start = character.position();
+    character.launch(Vec3{14.0f, 8.0f, 0.0f}); // hurl +x and up (an Ally Toss)
+    CHECK_FALSE(character.on_ground());
+    bool went_up = false;
+    for (int i = 0; i < 240; ++i) {
+        character.update(density, Vec3{0.0f}, false, kStep);
+        if (character.position().y > start.y + 0.4f) {
+            went_up = true;
+        }
+        if (character.on_ground() && i > 4) {
+            break;
+        }
+    }
+    CHECK(went_up);                                // it arced up off the ground
+    CHECK(character.on_ground());                  // and came back down
+    CHECK(character.position().x > start.x + 4.0f); // and carried well forward (the launch is unclamped)
+    CHECK(std::abs(character.position().z - start.z) < 0.5f);
+}
+
 TEST_CASE("CharacterController: a wall blocks horizontal movement") {
     // Solid everywhere past x = 5, floor at y = 2 otherwise.
     const DensitySampler density = [](const Vec3& p) {

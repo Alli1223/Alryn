@@ -53,6 +53,10 @@ public:
         f32 spell_cd = 0.0f;                  // Mage: seconds until the next combo spell can cast
         f32 damage_boost_timer = 0.0f;        // Empower: x outgoing damage while > 0 (co-op buff)
         f32 haste_timer = 0.0f;               // War Horn: x walk speed while > 0 (co-op buff)
+        // --- Gauntlet co-op combos ---
+        f32 toss_timer = 0.0f;  // Ally Toss: while > 0 this player is airborne from a toss (i-frames + ballistic)
+        f32 toss_cd = 0.0f;     // cooldown before this player can toss an ally again
+        net::PlayerId conduit_target = 0; // Power Conduit: the ally this (Cleric) player is channelling to
         f32 rampage_timer = 0.0f;             // Rampage: kill-momentum window; stacks decay when it lapses
         u8 rampage_stacks = 0;                // current kill-momentum stacks (x outgoing damage)
         f32 parry_window = 0.0f;              // Knight: a parry window opens when the shield is raised
@@ -60,6 +64,14 @@ public:
         u8 hit_fx = 0;                        // monotonic counter: bumps when this player's attack lands (-> hit marker)
         Equipment equipment;                  // authoritative worn gear (look + the stat bonus below)
         u8 owned_tier = 0;                    // highest gear tier bought from a shop (clamps equipment)
+        // Per-(role,ability) upgrade rank bought from a town shop (see ability_max_rank). Persists
+        // across role swaps; the CURRENT role's ranks are packed into PlayerState.ability_ranks.
+        u8 ability_rank[kRoleCount * kAbilityCount] = {};
+        u8 prev_upgrade = 0;                  // last tick's input.upgrade, for rising-edge buy dedupe
+        // Upgrade rank of `ability` for this player's current role.
+        u8 rank_of(u8 ability) const {
+            return ability_rank[static_cast<u8>(role) * kAbilityCount + (ability % kAbilityCount)];
+        }
 
         // Multiplier applied to this player's outgoing damage (Empower buff x kill-momentum rampage x
         // the weapon tier bonus).
@@ -95,10 +107,12 @@ public:
         i32 wood = 0;                         // barricades buildable today (dormant siege)
         bool carrying = false;                // hauling a spilled cargo crate back to the cart
 
-        // Incoming damage after role mitigation + the armour tier + a held shield block + bulwark.
+        // Incoming damage after role mitigation + the race passive + the armour tier + a held
+        // shield block + bulwark (a Dwarf's stoutness stacks with all of it, capped below 1).
         f32 mitigated(f32 raw) const {
             const bool guarding = input.block && role == PlayerRole::Knight; // Cleric block = channel
             f32 r = role_stats(role).damage_reduction + equipment_bonus(equipment).mitigation_add +
+                    race_combat(input.appearance.race).mitigation_add +
                     (guarding ? kBlockReduction : 0.0f) + (bulwark_timer > 0.0f ? kBulwarkReduction : 0.0f);
             return raw * (1.0f - glm::clamp(r, 0.0f, 0.9f));
         }
@@ -117,6 +131,9 @@ public:
                 // danger, hit harder. Short + refreshed per evaded hit, capped by the roll cooldown.
                 damage_boost_timer = std::max(damage_boost_timer, kPerfectDodgeBuff);
                 return;
+            }
+            if (toss_timer > 0.0f) {
+                return; // i-frames while flying through the air from an Ally Toss
             }
             f32 d = mitigated(raw);
             if (shield_hp > 0.0f) {
@@ -215,6 +232,17 @@ public:
         net::PlayerId owner = 0; // who cast it (consecration taunts enemies toward the owner)
     };
 
+    // A Cleric max-rank Aegis DOME: a large protective bubble that FOLLOWS its caster and blocks
+    // enemy ranged attacks (arrows) for everyone - and the cargo - inside it. Its health chips as it
+    // absorbs shots; it pops early if fully battered, else fades when its lifetime runs out.
+    struct BubbleShield {
+        Vec3 position{0.0f};
+        f32 radius = kAegisBubbleRadius;
+        f32 health = kAegisBubbleHealth;
+        f32 ttl = kAegisBubbleDuration;
+        net::PlayerId owner = 0; // the caster it re-centres on each tick
+    };
+
     usize player_count() const { return players_.size(); }
     usize enemy_count() const { return enemies_.size(); }
     // --- Wagon-contract loop (the active game mode; see Game/Contracts.cpp) ---
@@ -238,6 +266,9 @@ public:
     f32 wheel_repair() const { return wheel_repair_; } // 0..1 re-attach progress
     void force_wheel_break();                        // trigger a break now (test / debug hook)
     void debug_place_player(net::PlayerId id, const Vec3& pos); // move a player (test / debug hook)
+    // Wound a player directly (raw, no mitigation; floored above 0 so they don't respawn) - a
+    // test hook for exercising heals/shields without simulating a whole ambush.
+    void debug_hurt_player(net::PlayerId id, f32 damage);
     // Unlock a gear tier for a player (raises owned_tier so they can equip up to it). The town shop
     // calls this on a purchase; also a test hook.
     void unlock_tier(net::PlayerId id, u8 tier);
@@ -257,6 +288,11 @@ public:
     const std::unordered_map<u32, HouseFire>& houses() const { return houses_; }
     const std::vector<Barricade>& barricades() const { return barricades_; }
     const std::vector<Wall>& walls() const { return walls_; }
+    const std::vector<BubbleShield>& bubbles() const { return bubbles_; }
+    // A hostile projectile at `pos` that has entered a live max-Aegis dome is absorbed: the dome's
+    // health is chipped by `damage` and true is returned (the caller kills the shot). This is what
+    // protects allies + the cargo from enemy ranged attacks. Public so the ambush loop + tests use it.
+    bool bubble_absorbs(const Vec3& pos, f32 damage);
 
 private:
     Vec3 spawn_point(net::PlayerId id) const;
@@ -295,6 +331,22 @@ private:
     void update_walls(Timestep dt);                                 // age out raised rock walls
     static void wall_colliders(const Wall& w, std::vector<Collider>& out); // 1-3 boxes for the span
     void append_walls(const Vec3& pos, std::vector<Collider>& out) const;  // feed walls to NPC pathing
+    // --- Cleric max-Aegis protective dome (Game/Abilities.cpp) ---
+    void spawn_bubble(net::PlayerId owner); // raise a ranged-blocking dome around the caster
+    void update_bubbles(Timestep dt);       // re-centre on the caster, age out, drop dead ones
+    // --- Gauntlet co-op combos (Game/Abilities.cpp) ---
+    void update_combos(Timestep dt);        // ticks combo cooldowns; the toss trigger + conduit channel
+    // An Ally Toss landing: a radial burst on nearby enemies, scaled by the TOSSED ally's race
+    // (a Dwarf is the heaviest cannonball).
+    void toss_impact(const Vec3& at, Race race);
+    // Damage multiplier applied to an ally's hit on an enemy standing in a FOCUS ZONE (a Knight
+    // Consecration / Hunter Caltrops aura); 1.0 outside any zone.
+    f32 focus_zone_mult(const Vec3& enemy_pos) const;
+    // Amplify an ally's `base` damage to `e`: the FOCUS ZONE multiplier, plus ELEMENTAL SHATTER (extra
+    // damage that consumes the chill when `e` is chilled and the hit is heavy). Called at every ally
+    // damage site (melee / projectiles / abilities) so all of them get the combos. `allow_shatter` is
+    // false for a Frost Bolt itself (so it applies chill rather than shattering its own).
+    f32 combo_amp(Enemy& e, f32 base, bool allow_shatter = true);
     // --- Dormant night siege (Combat/SiegeMode.cpp; not driven in the transport game) ---
     void player_attack(ServerPlayer& player, const net::PlayerInput& in);
     void player_build(ServerPlayer& player, const net::PlayerInput& in); // place a barricade
@@ -328,6 +380,7 @@ private:
     std::vector<Barricade> barricades_;           // player-built defences
     std::vector<Wall> walls_;                     // Mage rock walls (NPCs path around them)
     std::vector<Aura> auras_;                     // ground auras (heal / consecration)
+    std::vector<BubbleShield> bubbles_;           // Cleric max-Aegis domes (block enemy ranged attacks)
     u32 next_enemy_id_ = 1;
     u32 wave_ = 0;            // = nights survived
     u32 spawn_index_ = 0;     // distinct layout per wave spawn

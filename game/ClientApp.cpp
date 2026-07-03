@@ -251,6 +251,16 @@ void ClientApp::on_update(Timestep dt) {
                 case net::ClientEventType::SnapshotReceived:
                     snapshot_ = e.snapshot;
                     have_snapshot_ = true;
+                    // Adopt the local player's authoritative upgrade ranks (packed 2 bits/ability) for
+                    // the skills-tree UI + the max-Aegis cast behaviour + local cast VFX.
+                    for (const net::PlayerState& p : snapshot_.players) {
+                        if (p.id == my_id_) {
+                            for (u8 a = 0; a < kAbilityCount; ++a) {
+                                ability_rank_[a] = static_cast<u8>((p.ability_ranks >> (2 * a)) & 0x3u);
+                            }
+                            break;
+                        }
+                    }
                     break;
                 case net::ClientEventType::DeformReceived:
                     if (terrain_ != nullptr) {
@@ -266,6 +276,11 @@ void ClientApp::on_update(Timestep dt) {
         update_camera();
         if (renderer_ != nullptr) {
             renderer_->set_player_position(local_feet()); // bends nearby vegetation
+        }
+        if (Audio* a = audio()) {
+            // The ears ride the local player, facing the way the fixed iso camera LOOKS
+            // (opposite the pull-back direction), so 3D sounds pan with what's on screen.
+            a->set_listener(local_feet(), radians(iso::yaw_deg + 180.0f));
         }
         // World map: drag to pan, scroll to zoom (the camera ignores scroll while it's open).
         if (map_open_) {
@@ -383,6 +398,7 @@ void ClientApp::on_render() {
     draw_goods();
     draw_auras();
     draw_shields();
+    draw_bubbles();
     draw_buffs();
     draw_particles();
     draw_deer();         // ambient wildlife grazing in the meadows
@@ -648,12 +664,15 @@ void ClientApp::update_day_night(Timestep dt) {
     renderer_->set_sky_color(sky);
     renderer_->set_wind(0.12f + wz * 0.7f);
 
-    // Lightning flashes in a heavy storm (decays fast; thunder would need an audio system).
+    // Lightning flashes in a heavy storm (decays fast), each with a rolling thunder clap.
     if (wz > 0.55f) {
         lightning_cd_ -= dt.seconds;
         if (lightning_cd_ <= 0.0f) {
             lightning_ = 1.0f;
             lightning_cd_ = frand(2.5f, 7.0f) / std::max(wz, 0.5f);
+            if (Audio* snd = audio()) {
+                snd->play(SfxId::Thunder, 0.9f, frand(0.85f, 1.15f)); // varied so storms don't loop
+            }
         }
     }
     lightning_ = std::max(0.0f, lightning_ - dt.seconds * 3.5f);
@@ -781,13 +800,53 @@ void ClientApp::update_visuals(Timestep dt) {
             emit_burst(p.position + Vec3{0.0f, 0.12f, 0.0f}, Vec4{0.74f, 0.69f, 0.58f, 0.65f}, 12,
                        2.4f, 0.45f, 0.14f, 1, 0.5f, 3.5f);
         }
+        // Ally Toss: a whoosh trail while flying, then a cannonball dust-ring + shockwave on landing.
+        if (p.action == 4) {
+            emit(p.position + Vec3{0.0f, 0.9f, 0.0f}, Vec3{0.0f}, Vec4{0.82f, 0.88f, 1.0f, 0.5f}, 0.28f,
+                 0.16f, 1);
+        } else if (v.last_action == 4) {
+            emit_ring(p.position + Vec3{0.0f, 0.1f, 0.0f}, Vec4{0.86f, 0.8f, 0.62f, 0.85f}, 28,
+                      kTossImpactRadius * 1.5f, 0.55f, 0.17f);
+            emit_burst(p.position + Vec3{0.0f, 0.3f, 0.0f}, Vec4{0.92f, 0.86f, 0.68f, 0.85f}, 22, 5.5f,
+                       0.5f, 0.15f, 1, 1.2f, 3.5f);
+            combat_text(p.position, "CANNONBALL!", Vec4{1.0f, 0.88f, 0.55f, 1.0f});
+            if (Audio* a = audio()) {
+                a->play_at(SfxId::Thud, p.position, 1.0f, frand(0.9f, 1.05f));
+            }
+        }
         v.last_action = p.action;
+        // Floating combat text on buff EDGES, over whoever the buff landed on - so the co-op plays
+        // (Empower / Conduit / War Horn / Aegis / a perfect dodge) read at a glance for everyone.
+        if ((p.buffs & 1u) != 0u && (v.last_buffs & 1u) == 0u) {
+            combat_text(p.position, "EMPOWERED!", Vec4{1.0f, 0.62f, 0.28f, 1.0f});
+        }
+        if ((p.buffs & 2u) != 0u && (v.last_buffs & 2u) == 0u) {
+            combat_text(p.position, "HASTED!", Vec4{0.5f, 1.0f, 0.55f, 1.0f});
+        }
+        if (p.shield > 0 && v.last_shield == 0) {
+            combat_text(p.position, "WARDED!", Vec4{0.6f, 0.82f, 1.0f, 1.0f});
+        }
+        v.last_buffs = p.buffs;
+        v.last_shield = p.shield;
         v.animator.update(v.speed, dt);
     }
     pending_local_swing_ = false;
 }
 
+void ClientApp::combat_text(const Vec3& world, std::string text, const Vec4& color, f32 size) {
+    if (float_texts_.size() >= 24) {
+        float_texts_.erase(float_texts_.begin()); // a busy fight can't stack labels forever
+    }
+    float_texts_.push_back({world + Vec3{0.0f, 2.1f, 0.0f}, std::move(text), color, 0.0f, 1.1f, size});
+}
+
 void ClientApp::update_feedback(Timestep dt) {
+    // Age out the floating combat labels (drawn in the HUD pass).
+    for (FloatText& ft : float_texts_) {
+        ft.age += dt.seconds;
+    }
+    std::erase_if(float_texts_, [](const FloatText& ft) { return ft.age >= ft.life; });
+
     const f32 hp = local_health();
     if (hp < last_health_ - 0.001f) {
         hit_flash_ = 1.0f;
@@ -810,10 +869,55 @@ void ClientApp::update_feedback(Timestep dt) {
                 emit_burst(aim_ + Vec3{0.0f, 0.9f, 0.0f}, Vec4{1.0f, 0.92f, 0.6f, 1.0f}, 14, 4.5f, 0.35f,
                            0.12f, /*style=*/1, /*up=*/1.5f);
             }
+            if (Audio* a = audio()) { // the thunk of a landed blow, where it landed
+                a->play_at(SfxId::SwordHit, aim_valid_ ? aim_ : local_feet(), 0.9f,
+                           frand(0.9f, 1.12f));
+            }
             last_hit_fx_ = lp->hit_fx;
         }
     }
     hit_marker_ = std::max(0.0f, hit_marker_ - dt.seconds * 3.2f);
+
+    // Loot feedback: the shared wallet ticking UP (a bandit's purse, a delivery) pops a golden
+    // "+$n" beside the money counter, so earnings visibly land as they happen.
+    if (have_snapshot_) {
+        if (!money_init_) {
+            last_money_ = snapshot_.money; // adopt the first value: joining isn't a windfall
+            money_init_ = true;
+        } else if (snapshot_.money > last_money_) {
+            money_gain_ = snapshot_.money - last_money_;
+            money_pulse_ = 1.0f;
+            if (Audio* a = audio()) {
+                a->play(SfxId::Coin, 0.7f, frand(0.95f, 1.1f)); // loot lands with a ding
+            }
+        }
+        last_money_ = snapshot_.money;
+    }
+    money_pulse_ = std::max(0.0f, money_pulse_ - dt.seconds * 0.8f);
+
+    // Haul-event stingers, driven off snapshot edges so remote players hear them too: the wheel
+    // shearing off (at the cart), and the delivered / wrecked verdict.
+    if (have_snapshot_ && !snapshot_.wagons.empty()) {
+        const net::WagonState& wg = snapshot_.wagons.front();
+        if (wg.wheel_off != 0 && last_wheel_off_ == 0) {
+            if (Audio* a = audio()) {
+                a->play_at(SfxId::WheelBreak, wg.position, 1.0f);
+            }
+        }
+        last_wheel_off_ = wg.wheel_off;
+    } else {
+        last_wheel_off_ = 0;
+    }
+    if (have_snapshot_ && snapshot_.contract_outcome != last_outcome_) {
+        if (Audio* a = audio(); a != nullptr && snapshot_.contract_outcome != 0) {
+            if (snapshot_.contract_outcome == 1) {
+                a->play(SfxId::Fanfare); // delivered
+            } else {
+                a->play(SfxId::Explosion, 0.8f, 0.8f); // wrecked
+            }
+        }
+        last_outcome_ = snapshot_.contract_outcome;
+    }
 }
 
 void ClientApp::update_debug(Timestep dt) {

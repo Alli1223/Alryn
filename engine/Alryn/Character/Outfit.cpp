@@ -439,6 +439,108 @@ void build_peasant(CharacterModel& m, const Equipment& eq) {
           BoneColor::Dark, BoneShape::RoundedBox);
 }
 
+// ------------------------------------------------------------------------------------------------
+// Brigand - a MELEE bandit/cutthroat. A rough hood pushed back off the face, a drab cloth mask over
+// the nose + mouth (the classic bandit read), a crossed leather bandolier + a hip satchel, ONE
+// scavenged (mismatched) iron pauldron, arm wraps, a heavy studded belt with tattered kilt-strips,
+// and worn boots. Grimy + asymmetric = a scruffy brigand rather than a uniformed soldier. The clad
+// leather jerkin + trousers are the skinned OutfitMesh; these are the decorative bits on top.
+void build_brigand(CharacterModel& m, const Equipment& eq) {
+    (void)eq;
+    const Vec3 ts = part_size(m, BonePart::Torso), tc = part_center(m, BonePart::Torso);
+    const Vec3 hs = part_size(m, BonePart::Head), hc = part_center(m, BonePart::Head);
+    const Vec3 ps = part_size(m, BonePart::Pelvis);
+
+    // Hood shell pushed back so the face shows + a neck cowl.
+    piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.1f, -hs.z * 0.24f}, hs * Vec3{1.24f, 1.3f, 1.16f},
+          BoneColor::Dark); // hood
+    piece(m, BonePart::Head, Vec3{0.0f, hc.y - hs.y * 0.5f, -hs.z * 0.02f}, hs * Vec3{1.2f, 0.54f, 1.22f},
+          BoneColor::Dark); // neck cowl
+    // Cloth mask over the lower face (nose + mouth) - the bandit's wrap.
+    piece(m, BonePart::Head, Vec3{0.0f, hc.y - hs.y * 0.2f, hs.z * 0.5f},
+          Vec3{hs.x * 0.84f, hs.y * 0.46f, hs.z * 0.52f}, BoneColor::Primary, BoneShape::RoundedBox);
+
+    // Heavy studded belt + a metal buckle, with a few tattered kilt strips hanging at the front.
+    piece(m, BonePart::Pelvis, Vec3{0.0f, 0.02f, 0.0f}, ps * Vec3{1.24f, 0.42f, 1.24f}, BoneColor::Dark);
+    piece(m, BonePart::Pelvis, Vec3{0.0f, 0.02f, ps.z * 0.6f}, Vec3{0.09f, 0.08f, 0.04f}, BoneColor::Metal);
+    for (f32 ex : {-1.0f, 0.0f, 1.0f}) {
+        piece(m, BonePart::Pelvis, Vec3{ex * 0.12f, -0.17f, ps.z * 0.5f}, Vec3{0.1f, 0.27f, 0.03f},
+              BoneColor::Primary, BoneShape::Box, roll(ex * 0.12f)); // ragged kilt strip
+    }
+    // A crossed leather bandolier + a slung hip satchel.
+    piece(m, BonePart::Torso, Vec3{0.0f, tc.y, ts.z * 0.64f}, Vec3{0.08f, ts.y * 1.36f, 0.05f},
+          BoneColor::Dark, BoneShape::Box, roll(-0.6f)); // bandolier
+    piece(m, BonePart::Torso, Vec3{-0.17f, tc.y * 0.4f, ts.z * 0.18f}, Vec3{0.12f, 0.15f, 0.1f},
+          BoneColor::Dark); // hip satchel
+    // ONE scavenged iron pauldron on the (left = weapon-arm) shoulder - mismatched, looted armour.
+    {
+        const f32 uy = part_size(m, BonePart::UpperArmL).y;
+        piece(m, BonePart::UpperArmL, Vec3{0.02f, -uy * 0.02f, 0.0f}, Vec3{0.3f, 0.2f, 0.32f},
+              BoneColor::Metal, BoneShape::Box, roll(0.3f)); // iron shoulder plate
+        piece(m, BonePart::UpperArmL, Vec3{0.03f, -uy * 0.2f, 0.0f}, Vec3{0.27f, 0.1f, 0.29f},
+              BoneColor::Metal, BoneShape::Box, roll(0.22f)); // lower lame
+    }
+    // Arm wraps on both forearms.
+    for (BonePart lo : {BonePart::LowerArmL, BonePart::LowerArmR}) {
+        piece(m, lo, Vec3{0.0f, -part_size(m, lo).y * 0.55f, 0.0f},
+              Vec3{0.12f, part_size(m, lo).y * 0.72f, 0.13f}, BoneColor::Dark, BoneShape::Box);
+    }
+    // Worn boots.
+    for (BonePart fp : {BonePart::FootL, BonePart::FootR}) {
+        piece(m, fp, part_center(m, fp), part_size(m, fp) * Vec3{1.14f, 1.18f, 1.12f}, BoneColor::Dark,
+              BoneShape::Box);
+    }
+}
+
+// ------------------------------------------------------------------------------------------------
+// Outlaw - a RANGED bandit/poacher. A deep hood with a swept-back peak + a scarf over the lower face,
+// a buckled bandolier + belt, bracers, shin wraps + boots, and a QUIVER of arrows angled across the
+// back - so a ranged raider reads distinctly from the melee cutthroat even before drawing the bow.
+void build_outlaw(CharacterModel& m, const Equipment& eq) {
+    (void)eq;
+    const Vec3 ts = part_size(m, BonePart::Torso), tc = part_center(m, BonePart::Torso);
+    const Vec3 hs = part_size(m, BonePart::Head), hc = part_center(m, BonePart::Head);
+    const Vec3 ps = part_size(m, BonePart::Pelvis);
+
+    // A deep hood with a swept-back peak + a scarf over the lower face.
+    piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.12f, -hs.z * 0.2f}, hs * Vec3{1.26f, 1.34f, 1.2f},
+          BoneColor::Dark); // deep hood shell
+    piece(m, BonePart::Head, Vec3{0.0f, hc.y + hs.y * 0.46f, -hs.z * 0.5f},
+          Vec3{hs.x * 0.5f, hs.y * 0.7f, hs.z * 0.62f}, BoneColor::Dark, BoneShape::RoundedBox,
+          pitch(-0.5f)); // peak swept back
+    piece(m, BonePart::Head, Vec3{0.0f, hc.y - hs.y * 0.22f, hs.z * 0.5f},
+          Vec3{hs.x * 0.8f, hs.y * 0.44f, hs.z * 0.5f}, BoneColor::Primary, BoneShape::RoundedBox); // scarf
+    // Bandolier + belt + buckle.
+    piece(m, BonePart::Torso, Vec3{0.0f, tc.y, ts.z * 0.64f}, Vec3{0.075f, ts.y * 1.36f, 0.05f},
+          BoneColor::Dark, BoneShape::Box, roll(0.6f)); // bandolier
+    piece(m, BonePart::Pelvis, Vec3{0.0f, 0.03f, 0.0f}, ps * Vec3{1.2f, 0.4f, 1.22f}, BoneColor::Dark);
+    piece(m, BonePart::Pelvis, Vec3{0.0f, 0.03f, ps.z * 0.6f}, Vec3{0.08f, 0.07f, 0.04f}, BoneColor::Metal);
+    // Bracers on both forearms.
+    for (BonePart lo : {BonePart::LowerArmL, BonePart::LowerArmR}) {
+        piece(m, lo, Vec3{0.0f, -part_size(m, lo).y * 0.5f, 0.0f},
+              Vec3{0.12f, part_size(m, lo).y * 0.7f, 0.13f}, BoneColor::Dark, BoneShape::Box);
+    }
+    // Shin wraps + boots.
+    for (BonePart lo : {BonePart::LowerLegL, BonePart::LowerLegR}) {
+        piece(m, lo, Vec3{0.0f, -part_size(m, lo).y * 0.4f, 0.04f},
+              part_size(m, lo) * Vec3{1.2f, 0.5f, 1.24f}, BoneColor::Dark, BoneShape::Box);
+    }
+    for (BonePart fp : {BonePart::FootL, BonePart::FootR}) {
+        piece(m, fp, part_center(m, fp), part_size(m, fp) * Vec3{1.12f, 1.16f, 1.1f}, BoneColor::Dark,
+              BoneShape::Box);
+    }
+    // A quiver of arrows angled across the back.
+    piece(m, BonePart::Torso, Vec3{-0.15f, ts.y * 0.55f, -ts.z * 0.72f}, Vec3{0.12f, ts.y * 0.96f, 0.12f},
+          BoneColor::Dark, BoneShape::Box, roll(0.18f)); // quiver
+    for (int i = 0; i < 4; ++i) {
+        const f32 ax = -0.11f - static_cast<f32>(i) * 0.04f;
+        piece(m, BonePart::Torso, Vec3{ax, ts.y * 1.32f, -ts.z * 0.72f}, Vec3{0.012f, ts.y * 0.46f, 0.012f},
+              BoneColor::Dark, BoneShape::Box); // arrow shaft
+        piece(m, BonePart::Torso, Vec3{ax, ts.y * 1.54f, -ts.z * 0.72f}, Vec3{0.05f, 0.08f, 0.012f},
+              BoneColor::Accent, BoneShape::Box); // fletching
+    }
+}
+
 } // namespace
 
 void apply_outfit(CharacterModel& model, OutfitKind kind, const Equipment& equip) {
@@ -456,6 +558,33 @@ void apply_outfit(CharacterModel& model, OutfitKind kind, const Equipment& equip
         pal.accent = Vec3{0.42f, 0.35f, 0.24f}; // apron
         pal.shirt = pal.primary;
         build_peasant(model, equip);
+        return;
+    }
+
+    if (kind == OutfitKind::Brigand || kind == OutfitKind::Outlaw) {
+        // Grimy scavenged bandit garb: dark worn leather, tarnished mismatched iron, a drab cloth
+        // mask/scarf. A little per-bandit variety via the (re-purposed) tint index.
+        static const Vec3 brigand_cloth[4] = {{0.46f, 0.20f, 0.18f},  // dried-blood red rag
+                                              {0.40f, 0.36f, 0.30f},  // dirty grey
+                                              {0.34f, 0.26f, 0.18f},  // mud brown
+                                              {0.30f, 0.30f, 0.34f}}; // slate
+        static const Vec3 outlaw_cloth[4] = {{0.30f, 0.36f, 0.22f},  // moss green
+                                             {0.42f, 0.34f, 0.22f},  // tan
+                                             {0.26f, 0.30f, 0.24f},  // dark olive
+                                             {0.36f, 0.28f, 0.20f}}; // umber
+        const bool ranged = kind == OutfitKind::Outlaw;
+        pal.primary = (ranged ? outlaw_cloth : brigand_cloth)[equip.outfit_tint % 4];
+        pal.dark = ranged ? Vec3{0.16f, 0.14f, 0.11f} : Vec3{0.14f, 0.11f, 0.09f}; // near-black leather
+        pal.metal = Vec3{0.34f, 0.33f, 0.34f};                                     // tarnished dull iron
+        pal.accent = Vec3{0.44f, 0.36f, 0.20f};                                    // dull brass buckles
+        pal.shirt = Vec3{0.18f, 0.16f, 0.15f};                                     // dark under-tunic
+        pal.pants = ranged ? Vec3{0.21f, 0.19f, 0.15f} : Vec3{0.17f, 0.15f, 0.14f};
+        pal.glow = Vec3{0.5f, 0.85f, 1.0f};
+        if (ranged) {
+            build_outlaw(model, equip);
+        } else {
+            build_brigand(model, equip);
+        }
         return;
     }
 
@@ -484,7 +613,9 @@ void apply_outfit(CharacterModel& model, OutfitKind kind, const Equipment& equip
         case OutfitKind::Robe: build_robe(model, equip); break;
         case OutfitKind::Leather: build_leather(model, equip); break;
         case OutfitKind::Holy: build_holy(model, equip); break;
-        case OutfitKind::Peasant: break; // handled above
+        case OutfitKind::Peasant:                 // handled above (early return)
+        case OutfitKind::Brigand:                 // handled above (early return)
+        case OutfitKind::Outlaw: break;           // handled above (early return)
     }
 }
 
