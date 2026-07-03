@@ -495,7 +495,7 @@ void Renderer::process_lights() {
     ubo.fog_color = Vec4{fog_color_, fog_density_};
     const VkExtent2D ext = swapchain_.extent();
     ubo.screen = Vec4{static_cast<f32>(ext.width), static_cast<f32>(ext.height), gloom_, 0.0f};
-    ubo.fog_volume = Vec4{fog_patch_, player_position_.y, 0.0f, 0.0f};
+    ubo.fog_volume = Vec4{fog_patch_, player_position_.y, cloud_cover_, wind_strength_};
     frames_[frame_index_].light_ubo.upload(&ubo, sizeof(ubo));
 }
 

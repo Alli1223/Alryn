@@ -37,7 +37,7 @@ layout(set = 0, binding = 2) uniform Lights {
     vec4 camPos;     // xyz = camera position (world)
     vec4 fogColor;   // rgb = atmospheric fog/haze colour, w = density
     vec4 screen;     // xy = framebuffer resolution (px), z = town "gloom" 0..1
-    vec4 fogVolume;  // x = road fog-bank strength 0..1, y = ground reference height (player feet)
+    vec4 fogVolume;  // x = road fog-bank 0..1, y = ground ref height, z = cloud cover 0..1, w = wind
 } lights;
 
 layout(push_constant) uniform Push {
@@ -207,6 +207,19 @@ float vignette() {
     float r = length(gl_FragCoord.xy / lights.screen.xy - 0.5);
     return mix(1.0, smoothstep(0.86, 0.32, r), 0.34 + 0.18 * lights.screen.z);
 }
+// Drifting cloud shadows - matches mesh.frag so the canopy darkens with the ground under it.
+float cloudShadow(vec3 wpos) {
+    float cover = lights.fogVolume.z;
+    if (cover <= 0.001) {
+        return 1.0;
+    }
+    vec2 cp = wpos.xz + pc.sun.xz * ((120.0 - wpos.y) / max(pc.sun.y, 0.2));
+    vec2 drift = vec2(1.0, 0.6) * pc.params.x * (0.5 + 2.2 * lights.fogVolume.w);
+    float n = fbm(cp * 0.011 + drift * 0.012);
+    float edge = mix(0.72, 0.30, cover);
+    float cloud = smoothstep(edge, edge + 0.22, n);
+    return 1.0 - cloud * (0.32 + 0.26 * cover);
+}
 
 void main() {
     float peek = peekAmount();
@@ -224,7 +237,7 @@ void main() {
     float ndotl = max(dot(N, L), 0.0);
     float shadow = shadowOcclusion(vShadowCoord, ndotl);
     float lit = 1.0 - pc.sunColor.w * shadow;
-    float diffuse = ndotl * intensity * lit;
+    float diffuse = ndotl * intensity * lit * cloudShadow(vWorldPos);
 
     // Hemispheric ambient: low in daylight so shadows stay dark + the key sun gives form (matches mesh.frag).
     vec3 skyAmb = mix(vec3(0.10, 0.13, 0.21), vec3(0.19, 0.26, 0.40), intensity);

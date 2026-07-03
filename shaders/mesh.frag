@@ -31,7 +31,7 @@ layout(set = 0, binding = 2) uniform Lights {
     vec4 camPos;     // xyz = camera position (world)
     vec4 fogColor;   // rgb = atmospheric fog/haze colour, w = density
     vec4 screen;     // xy = framebuffer resolution (px), z = town "gloom" 0..1
-    vec4 fogVolume;  // x = road fog-bank strength 0..1, y = ground reference height (player feet)
+    vec4 fogVolume;  // x = road fog-bank 0..1, y = ground ref height, z = cloud cover 0..1, w = wind
 } lights;
 
 layout(push_constant) uniform Push {
@@ -202,6 +202,24 @@ float fogFactor(vec3 wpos) {
     }
     return clamp(f, 0.0, 1.0);
 }
+// Drifting cloud shadows: a slow-scrolling fbm "cloud deck" (~120m up) projected along the
+// sun direction onto the world modulates the sun's diffuse term, so soft shadow patches roam
+// the ground and break up big, uniformly-lit midday areas (the main flat-noon fix).
+// fogVolume.z = cloud cover 0..1 (storms overcast), fogVolume.w = wind strength (drift speed).
+float cloudShadow(vec3 wpos) {
+    float cover = lights.fogVolume.z;
+    if (cover <= 0.001) {
+        return 1.0;
+    }
+    // Where a ray from this point toward the sun pierces the cloud deck (parallax with height).
+    vec2 cp = wpos.xz + pc.sun.xz * ((120.0 - wpos.y) / max(pc.sun.y, 0.2));
+    vec2 drift = vec2(1.0, 0.6) * pc.params.x * (0.5 + 2.2 * lights.fogVolume.w);
+    float n = fbm(cp * 0.011 + drift * 0.012);
+    // More cover slides the threshold down, so more of the noise field reads as cloud.
+    float edge = mix(0.72, 0.30, cover);
+    float cloud = smoothstep(edge, edge + 0.22, n);
+    return 1.0 - cloud * (0.32 + 0.26 * cover);
+}
 // Soft radial vignette to pull the eye in and darken the frame edges (cinematic framing).
 float vignette() {
     if (lights.screen.x < 1.0) {
@@ -221,7 +239,7 @@ void main() {
     float ndotl = max(dot(N, L), 0.0);
     float shadow = shadowOcclusion(vShadowCoord, ndotl);
     float lit = 1.0 - pc.sunColor.w * shadow; // sunColor.w = shadow strength
-    float diffuse = ndotl * intensity * lit;
+    float diffuse = ndotl * intensity * lit * cloudShadow(vWorldPos);
 
     // Hemispheric ambient: sky-tinted from above, darker/earthier from below. Kept LOW in daylight
     // so shadowed + downward faces and cast shadows fall genuinely dark (the strong key sun below

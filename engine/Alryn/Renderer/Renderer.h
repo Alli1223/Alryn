@@ -70,6 +70,11 @@ public:
         fog_patch_ = patch;
     }
 
+    // Cloud cover 0..1 driving the drifting cloud shadows that mottle the sunlight
+    // (0 = clear sky, 1 = overcast storm deck). Set per-frame with the day/night cycle;
+    // the drift speed follows set_wind. Defaults to 0 so offscreen tests are unaffected.
+    void set_cloud_cover(f32 cover) { cloud_cover_ = cover; }
+
     // A shadow-casting spotlight (e.g. a lantern). Submit each frame before
     // end_frame; the nearest few to the camera get rendered shadow maps.
     struct SpotLight {
@@ -250,6 +255,7 @@ private:
     f32 fog_density_ = 0.011f;            // exp-squared distance fog density
     f32 gloom_ = 0.0f;                    // town gloom 0..1 (deepens grade + vignette)
     f32 fog_patch_ = 0.0f;                // road fog-bank strength 0..1 (dense volumetric mist)
+    f32 cloud_cover_ = 0.0f;              // cloud-shadow coverage 0..1 (0 = clear sky)
     Mat4 light_view_proj_{1.0f};
     f32 shadow_strength_ = 0.0f; // 0 until the shadow pass is active
 };

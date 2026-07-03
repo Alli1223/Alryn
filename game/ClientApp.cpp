@@ -677,6 +677,14 @@ void ClientApp::update_day_night(Timestep dt) {
     renderer_->set_sky_color(sky);
     renderer_->set_wind(0.12f + wz * 0.7f);
 
+    // Cloud cover for the drifting cloud shadows: a slow ebb and flow across the day so
+    // some stretches are clear and others mottled with roaming shadow patches (which is
+    // what keeps big sunlit areas from reading flat), building to a full deck in a storm.
+    const f32 ebb = 0.5f + 0.5f * std::sin(time_of_day_ * TwoPi * 2.0f + 1.7f);
+    f32 cloud_cover = glm::mix(0.18f, 0.55f, ebb);
+    cloud_cover = glm::mix(cloud_cover, 1.0f, wz); // a storm socks the sky in
+    renderer_->set_cloud_cover(cloud_cover);
+
     // Lightning flashes in a heavy storm (decays fast), each with a rolling thunder clap.
     if (wz > 0.55f) {
         lightning_cd_ -= dt.seconds;
