@@ -632,8 +632,21 @@ void ClientApp::update_day_night(Timestep dt) {
 
     // The sun arcs east -> overhead -> west; below the horizon is night.
     const f32 a = (time_of_day_ - 0.25f) * TwoPi;
-    const Vec3 sun_dir = glm::normalize(Vec3{std::cos(a), std::sin(a), 0.28f});
-    const f32 h = sun_dir.y;
+    Vec3 sun_dir = glm::normalize(Vec3{std::cos(a), std::sin(a), 0.28f});
+    const f32 h = sun_dir.y; // TRUE elevation drives the day/night timing below
+    // Cap the elevation used for LIGHTING (~52 deg). With the top-down iso camera an
+    // overhead noon sun is the flattest possible light: every up-facing surface gets
+    // the same N.L, walls get none, and shadows shrink to slivers under the buildings.
+    // Keeping the sun angled all day preserves the lit/shade gradient across roofs and
+    // walls and keeps shadow shapes readable - the classic iso-game trick.
+    constexpr f32 max_sun_y = 0.79f;
+    if (sun_dir.y > max_sun_y) {
+        Vec2 hz{sun_dir.x, sun_dir.z};
+        const f32 hl = glm::length(hz);
+        hz = hl > 1e-4f ? hz / hl : Vec2{0.0f, 1.0f}; // due south when exactly at zenith
+        const f32 horiz = std::sqrt(1.0f - max_sun_y * max_sun_y);
+        sun_dir = Vec3{hz.x * horiz, max_sun_y, hz.y * horiz};
+    }
     const f32 intensity = glm::smoothstep(-0.04f, 0.18f, h);
     sun_intensity_ = intensity;
 
