@@ -18,3 +18,4 @@ add_executable(alryn_game
 target_link_libraries(alryn_game PRIVATE alryn)
 
 alryn_set_warnings(alryn_game)
+alryn_stage_shaders_next_to(alryn_game)

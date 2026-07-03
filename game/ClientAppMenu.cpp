@@ -165,7 +165,7 @@ void ClientApp::build_join(f32 w, f32 h) {
 void ClientApp::build_settings(f32 w, f32 h) {
     add_title(w, h, "SETTINGS", nullptr);
     constexpr f32 cw = 460.0f, pad = 28.0f, rh = 54.0f, gap = 18.0f;
-    const f32 ch = pad * 2.0f + 5.0f * rh + 4.0f * gap;
+    const f32 ch = pad * 2.0f + 6.0f * rh + 5.0f * gap;
     const ui::Rect card{(w - cw) * 0.5f, h * 0.36f, cw, ch};
     auto& panel = ui_.root().add<ui::Panel>();
     panel.bounds = card;
@@ -181,17 +181,33 @@ void ClientApp::build_settings(f32 w, f32 h) {
              }
          }).bounds = row(0);
 
-    std::vector<std::string> res{"1280 X 720", "1600 X 900", "1920 X 1080", "FULLSCREEN"};
-    panel.add<ui::Stepper>("RESOLUTION", std::move(res), res_index_,
+    const bool is_fullscreen = window() != nullptr && window()->fullscreen();
+    panel.add<ui::Toggle>("FULLSCREEN", is_fullscreen, [this](bool on) {
+             if (window() == nullptr) {
+                 return;
+             }
+             window()->set_fullscreen(on);
+             if (renderer_ != nullptr) {
+                 renderer_->request_resize();
+             }
+             if (Audio* a = audio()) {
+                 a->play(SfxId::UiClick);
+             }
+         }).bounds = row(1);
+
+    // Windowed sizes only; FULLSCREEN is the toggle above. Picking a size here
+    // drops out of fullscreen (see apply_resolution).
+    std::vector<std::string> res{"1280 X 720", "1600 X 900", "1920 X 1080"};
+    panel.add<ui::Stepper>("RESOLUTION", std::move(res), std::min(res_index_, usize{2}),
                            [this](usize i) { apply_resolution(i); })
-        .bounds = row(1);
+        .bounds = row(2);
 
     auto& rd = panel.add<ui::Slider>("RENDER DISTANCE", static_cast<f32>(render_distance_), 2.0f,
                                      8.0f, [this](f32 v) {
                                          render_distance_ = static_cast<int>(std::lround(v));
                                      });
     rd.integer = true;
-    rd.bounds = row(2);
+    rd.bounds = row(3);
 
     // Master volume for the synthesized SFX bank; a click previews the level as you let go.
     panel.add<ui::Slider>("VOLUME", audio() != nullptr ? audio()->master_volume() : 0.8f, 0.0f,
@@ -202,9 +218,9 @@ void ClientApp::build_settings(f32 w, f32 h) {
                                   a->play(SfxId::UiClick);
                               }
                           })
-        .bounds = row(3);
+        .bounds = row(4);
 
-    panel.add<ui::Button>("BACK", [this] { settings_back(); }).bounds = row(4);
+    panel.add<ui::Button>("BACK", [this] { settings_back(); }).bounds = row(5);
 }
 
 void ClientApp::build_customise(f32 w, f32 h) {
@@ -366,17 +382,15 @@ void ClientApp::build_class(f32 w, f32 h) {
 }
 
 void ClientApp::apply_resolution(usize idx) {
-    res_index_ = idx;
+    static constexpr UVec2 sizes[3] = {{1280, 720}, {1600, 900}, {1920, 1080}};
+    res_index_ = std::min(idx, usize{2});
     if (window() == nullptr) {
         return;
     }
-    static constexpr UVec2 sizes[3] = {{1280, 720}, {1600, 900}, {1920, 1080}};
-    if (idx < 3) {
-        window()->set_fullscreen(false);
-        window()->set_size(sizes[idx].x, sizes[idx].y);
-    } else {
-        window()->set_fullscreen(true);
-    }
+    // Choosing a windowed size drops out of fullscreen (the FULLSCREEN toggle owns
+    // that state). set_fullscreen(false) first so set_size isn't ignored.
+    window()->set_fullscreen(false);
+    window()->set_size(sizes[res_index_].x, sizes[res_index_].y);
     if (renderer_ != nullptr) {
         renderer_->request_resize();
     }

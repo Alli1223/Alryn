@@ -47,3 +47,19 @@ function(alryn_compile_shaders target)
     add_custom_target(${target}_shaders DEPENDS ${spv_outputs})
     add_dependencies(${target} ${target}_shaders)
 endfunction()
+
+# Ensures the compiled shaders sit next to an executable so shader_path()
+# (executable_dir()/shaders) finds them. Multi-config generators (Visual Studio)
+# put the executable in a per-config subdirectory (bin/Debug, bin/Release) while
+# shaders stage once in bin/shaders, so we copy them across as a post-build step.
+# Single-config generators (Make/Ninja) already co-locate them, so this is a
+# no-op there.
+function(alryn_stage_shaders_next_to exe_target)
+    if(CMAKE_CONFIGURATION_TYPES)
+        add_custom_command(TARGET ${exe_target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders
+                $<TARGET_FILE_DIR:${exe_target}>/shaders
+            COMMENT "Staging shaders next to ${exe_target}")
+    endif()
+endfunction()

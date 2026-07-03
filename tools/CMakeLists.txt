@@ -6,3 +6,4 @@ add_executable(asset_preview
 
 target_include_directories(asset_preview PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 target_link_libraries(asset_preview PRIVATE alryn)
+alryn_stage_shaders_next_to(asset_preview)

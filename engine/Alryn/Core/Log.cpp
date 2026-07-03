@@ -5,7 +5,13 @@
 #include <mutex>
 #include <print>
 
-#include <unistd.h> // isatty / fileno
+#if defined(_WIN32)
+#    include <io.h> // _isatty / _fileno
+#    define WIN32_LEAN_AND_MEAN
+#    include <windows.h> // console virtual-terminal mode
+#else
+#    include <unistd.h> // isatty / fileno
+#endif
 
 namespace alryn {
 
@@ -43,7 +49,20 @@ double seconds_since_start() {
 
 void Log::init(LogLevel level) {
     s_level = level;
+#if defined(_WIN32)
+    g_color = ::_isatty(::_fileno(stderr)) != 0;
+    if (g_color) {
+        // Opt the console into ANSI escape processing so our color codes render
+        // instead of printing literally (Windows 10+ / Terminal).
+        const HANDLE h = ::GetStdHandle(STD_ERROR_HANDLE);
+        DWORD mode = 0;
+        if (h != INVALID_HANDLE_VALUE && ::GetConsoleMode(h, &mode) != 0) {
+            ::SetConsoleMode(h, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+        }
+    }
+#else
     g_color = ::isatty(::fileno(stderr)) != 0;
+#endif
     (void)seconds_since_start(); // anchor the start time
 }
 
