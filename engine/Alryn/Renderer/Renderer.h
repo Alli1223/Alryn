@@ -75,6 +75,10 @@ public:
     // the drift speed follows set_wind. Defaults to 0 so offscreen tests are unaffected.
     void set_cloud_cover(f32 cover) { cloud_cover_ = cover; }
 
+    // Ground wetness 0..1 (rain-soaked world): darkens + adds puddle sheen to upward
+    // faces in mesh.frag. Ease it up during a storm and let it linger while drying.
+    void set_wetness(f32 wetness) { wetness_ = wetness; }
+
     // A shadow-casting spotlight (e.g. a lantern). Submit each frame before
     // end_frame; the nearest few to the camera get rendered shadow maps.
     struct SpotLight {
@@ -273,6 +277,7 @@ private:
     f32 gloom_ = 0.0f;                    // town gloom 0..1 (deepens grade + vignette)
     f32 fog_patch_ = 0.0f;                // road fog-bank strength 0..1 (dense volumetric mist)
     f32 cloud_cover_ = 0.0f;              // cloud-shadow coverage 0..1 (0 = clear sky)
+    f32 wetness_ = 0.0f;                  // rain-soaked ground 0..1 (0 = dry)
     Mat4 light_view_proj_{1.0f};
     f32 shadow_strength_ = 0.0f; // 0 until the shadow pass is active
 };

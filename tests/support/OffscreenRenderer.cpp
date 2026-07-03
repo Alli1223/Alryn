@@ -40,6 +40,7 @@ struct LightUbo {
     Vec4 fog_color;  // rgb = fog colour, w = density
     Vec4 screen;     // xy = resolution, z = gloom
     Vec4 fog_volume; // x = road fog-bank strength (0 in shots), y = ground ref
+    Vec4 extra;      // xy = projection depth terms (0 in shots -> water shore foam off)
 };
 constexpr VkDeviceSize kLightUboSize = sizeof(LightUbo);
 
@@ -133,7 +134,7 @@ bool OffscreenRenderer::init(u32 width, u32 height) {
 // dummies + a zeroed UBO (count = 0) so the shader samples no lighting, and a WHITE
 // AO texel so mesh.frag's SSAO term reads "fully open" (shots stay deterministic).
 bool OffscreenRenderer::create_descriptors() {
-    VkDescriptorSetLayoutBinding binds[4]{};
+    VkDescriptorSetLayoutBinding binds[5]{};
     binds[0].binding = 0;
     binds[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     binds[0].descriptorCount = 1;
@@ -146,9 +147,11 @@ bool OffscreenRenderer::create_descriptors() {
     binds[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     binds[3] = binds[0];
     binds[3].binding = 3;
+    binds[4] = binds[0];
+    binds[4].binding = 4;
     VkDescriptorSetLayoutCreateInfo layout_info{};
     layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layout_info.bindingCount = 4;
+    layout_info.bindingCount = 5;
     layout_info.pBindings = binds;
     if (vkCreateDescriptorSetLayout(device_.handle(), &layout_info, nullptr, &set_layout_) !=
         VK_SUCCESS) {
@@ -156,7 +159,7 @@ bool OffscreenRenderer::create_descriptors() {
     }
 
     if (!shadow_dummy_.create(device_, 1, 1, kDepthFormat,
-                              VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                              VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                               VK_IMAGE_ASPECT_DEPTH_BIT)) {
         return false;
     }
@@ -166,9 +169,23 @@ bool OffscreenRenderer::create_descriptors() {
         return false;
     }
     device_.immediate_submit([&](VkCommandBuffer cmd) {
+        // Clear the depth dummy to 1.0 (far) so sampling it is deterministic: "unshadowed"
+        // for the shadow-map bindings, "no scene beneath" for water's shore-foam lookup.
         barrier(cmd, shadow_dummy_.handle(), VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, VK_ACCESS_SHADER_READ_BIT);
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, 0, VK_ACCESS_TRANSFER_WRITE_BIT);
+        VkClearDepthStencilValue far_depth{1.0f, 0};
+        VkImageSubresourceRange depth_range{};
+        depth_range.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        depth_range.levelCount = 1;
+        depth_range.layerCount = 1;
+        vkCmdClearDepthStencilImage(cmd, shadow_dummy_.handle(),
+                                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &far_depth, 1,
+                                    &depth_range);
+        barrier(cmd, shadow_dummy_.handle(), VK_IMAGE_ASPECT_DEPTH_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
         // Clear the AO dummy to white (1.0 = no occlusion), then hand it to the shader.
         barrier(cmd, ao_dummy_.handle(), VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
@@ -202,7 +219,7 @@ bool OffscreenRenderer::create_descriptors() {
     }
 
     VkDescriptorPoolSize pool_sizes[2]{};
-    pool_sizes[0] = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3};
+    pool_sizes[0] = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4};
     pool_sizes[1] = {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1};
     VkDescriptorPoolCreateInfo pool_info{};
     pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -233,8 +250,8 @@ bool OffscreenRenderer::create_descriptors() {
     VkDescriptorBufferInfo ubo{};
     ubo.buffer = light_ubo_.handle();
     ubo.range = kLightUboSize;
-    VkWriteDescriptorSet writes[4]{};
-    for (int b = 0; b < 4; ++b) {
+    VkWriteDescriptorSet writes[5]{};
+    for (int b = 0; b < 5; ++b) {
         writes[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[b].dstSet = set_;
         writes[b].dstBinding = static_cast<u32>(b);
@@ -248,7 +265,9 @@ bool OffscreenRenderer::create_descriptors() {
     writes[2].pBufferInfo = &ubo;
     writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[3].pImageInfo = &ao;
-    vkUpdateDescriptorSets(device_.handle(), 4, writes, 0, nullptr);
+    writes[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[4].pImageInfo = &dummy; // depth dummy: cleared far => no scene under the water
+    vkUpdateDescriptorSets(device_.handle(), 5, writes, 0, nullptr);
     return true;
 }
 

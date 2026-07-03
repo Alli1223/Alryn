@@ -49,6 +49,8 @@ struct LightUbo {
     Vec4 fog_color;      // rgb = atmospheric fog/haze colour, w = density
     Vec4 screen;         // xy = framebuffer resolution (px), z = town "gloom" 0..1
     Vec4 fog_volume;     // x = road fog-bank strength 0..1, y = ground reference height
+    Vec4 extra;          // xy = projection terms P22/P32 (view-depth reconstruction),
+                         // z = ground wetness 0..1, w = unused
 };
 
 // Must match the push_constant block in ui.vert / ui.frag.
@@ -226,6 +228,7 @@ void Renderer::write_ssao_descriptors() {
     add(ssao_blur_set_, 0, &raw_info);
     for (const FrameSync& frame : frames_) {
         add(frame.shadow_set, 3, &blur_info);
+        add(frame.shadow_set, 4, &depth_info); // water reads the scene depth under it
     }
     vkUpdateDescriptorSets(device_.handle(), static_cast<u32>(writes.size()), writes.data(), 0,
                            nullptr);
@@ -372,8 +375,9 @@ bool Renderer::create_pipelines() {
 
 bool Renderer::create_shadow_resources() {
     // set 0: binding 0 = sun shadow map, 1 = spot-light atlas, 2 = light UBO,
-    //        3 = blurred SSAO (written by write_ssao_descriptors).
-    VkDescriptorSetLayoutBinding bindings[4]{};
+    //        3 = blurred SSAO, 4 = camera depth prepass (water shoreline foam).
+    //        3 + 4 are written by write_ssao_descriptors.
+    VkDescriptorSetLayoutBinding bindings[5]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[0].descriptorCount = 1;
@@ -386,9 +390,11 @@ bool Renderer::create_shadow_resources() {
     bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     bindings[3] = bindings[0];
     bindings[3].binding = 3;
+    bindings[4] = bindings[0];
+    bindings[4].binding = 4;
     VkDescriptorSetLayoutCreateInfo layout_info{};
     layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layout_info.bindingCount = 4;
+    layout_info.bindingCount = 5;
     layout_info.pBindings = bindings;
     ALRYN_VK_CHECK(
         vkCreateDescriptorSetLayout(device_.handle(), &layout_info, nullptr, &shadow_set_layout_));
@@ -403,7 +409,7 @@ bool Renderer::create_shadow_resources() {
 
     VkDescriptorPoolSize pool_sizes[2]{};
     pool_sizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    pool_sizes[0].descriptorCount = 3 * kFramesInFlight + 2; // +2: the SSAO pass inputs
+    pool_sizes[0].descriptorCount = 4 * kFramesInFlight + 2; // +2: the SSAO pass inputs
     pool_sizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     pool_sizes[1].descriptorCount = kFramesInFlight;
     VkDescriptorPoolCreateInfo pool_info{};
@@ -641,6 +647,9 @@ void Renderer::process_lights() {
     const VkExtent2D ext = swapchain_.extent();
     ubo.screen = Vec4{static_cast<f32>(ext.width), static_cast<f32>(ext.height), gloom_, 0.0f};
     ubo.fog_volume = Vec4{fog_patch_, player_position_.y, cloud_cover_, wind_strength_};
+    // Projection terms so fragment shaders can turn a raw depth into metres in front of
+    // the camera (water uses the scene depth under it for shoreline foam + soft edges).
+    ubo.extra = Vec4{projection_[2][2], projection_[3][2], wetness_, 0.0f};
     frames_[frame_index_].light_ubo.upload(&ubo, sizeof(ubo));
 }
 
