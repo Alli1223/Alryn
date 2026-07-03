@@ -277,6 +277,11 @@ void ClientApp::on_update(Timestep dt) {
         if (renderer_ != nullptr) {
             renderer_->set_player_position(local_feet()); // bends nearby vegetation
         }
+        if (Audio* a = audio()) {
+            // The ears ride the local player, facing the way the fixed iso camera LOOKS
+            // (opposite the pull-back direction), so 3D sounds pan with what's on screen.
+            a->set_listener(local_feet(), radians(iso::yaw_deg + 180.0f));
+        }
         // World map: drag to pan, scroll to zoom (the camera ignores scroll while it's open).
         if (map_open_) {
             if (Input* in = input()) {
@@ -659,12 +664,15 @@ void ClientApp::update_day_night(Timestep dt) {
     renderer_->set_sky_color(sky);
     renderer_->set_wind(0.12f + wz * 0.7f);
 
-    // Lightning flashes in a heavy storm (decays fast; thunder would need an audio system).
+    // Lightning flashes in a heavy storm (decays fast), each with a rolling thunder clap.
     if (wz > 0.55f) {
         lightning_cd_ -= dt.seconds;
         if (lightning_cd_ <= 0.0f) {
             lightning_ = 1.0f;
             lightning_cd_ = frand(2.5f, 7.0f) / std::max(wz, 0.5f);
+            if (Audio* snd = audio()) {
+                snd->play(SfxId::Thunder, 0.9f, frand(0.85f, 1.15f)); // varied so storms don't loop
+            }
         }
     }
     lightning_ = std::max(0.0f, lightning_ - dt.seconds * 3.5f);
@@ -802,6 +810,9 @@ void ClientApp::update_visuals(Timestep dt) {
             emit_burst(p.position + Vec3{0.0f, 0.3f, 0.0f}, Vec4{0.92f, 0.86f, 0.68f, 0.85f}, 22, 5.5f,
                        0.5f, 0.15f, 1, 1.2f, 3.5f);
             combat_text(p.position, "CANNONBALL!", Vec4{1.0f, 0.88f, 0.55f, 1.0f});
+            if (Audio* a = audio()) {
+                a->play_at(SfxId::Thud, p.position, 1.0f, frand(0.9f, 1.05f));
+            }
         }
         v.last_action = p.action;
         // Floating combat text on buff EDGES, over whoever the buff landed on - so the co-op plays
@@ -858,6 +869,10 @@ void ClientApp::update_feedback(Timestep dt) {
                 emit_burst(aim_ + Vec3{0.0f, 0.9f, 0.0f}, Vec4{1.0f, 0.92f, 0.6f, 1.0f}, 14, 4.5f, 0.35f,
                            0.12f, /*style=*/1, /*up=*/1.5f);
             }
+            if (Audio* a = audio()) { // the thunk of a landed blow, where it landed
+                a->play_at(SfxId::SwordHit, aim_valid_ ? aim_ : local_feet(), 0.9f,
+                           frand(0.9f, 1.12f));
+            }
             last_hit_fx_ = lp->hit_fx;
         }
     }
@@ -872,10 +887,37 @@ void ClientApp::update_feedback(Timestep dt) {
         } else if (snapshot_.money > last_money_) {
             money_gain_ = snapshot_.money - last_money_;
             money_pulse_ = 1.0f;
+            if (Audio* a = audio()) {
+                a->play(SfxId::Coin, 0.7f, frand(0.95f, 1.1f)); // loot lands with a ding
+            }
         }
         last_money_ = snapshot_.money;
     }
     money_pulse_ = std::max(0.0f, money_pulse_ - dt.seconds * 0.8f);
+
+    // Haul-event stingers, driven off snapshot edges so remote players hear them too: the wheel
+    // shearing off (at the cart), and the delivered / wrecked verdict.
+    if (have_snapshot_ && !snapshot_.wagons.empty()) {
+        const net::WagonState& wg = snapshot_.wagons.front();
+        if (wg.wheel_off != 0 && last_wheel_off_ == 0) {
+            if (Audio* a = audio()) {
+                a->play_at(SfxId::WheelBreak, wg.position, 1.0f);
+            }
+        }
+        last_wheel_off_ = wg.wheel_off;
+    } else {
+        last_wheel_off_ = 0;
+    }
+    if (have_snapshot_ && snapshot_.contract_outcome != last_outcome_) {
+        if (Audio* a = audio(); a != nullptr && snapshot_.contract_outcome != 0) {
+            if (snapshot_.contract_outcome == 1) {
+                a->play(SfxId::Fanfare); // delivered
+            } else {
+                a->play(SfxId::Explosion, 0.8f, 0.8f); // wrecked
+            }
+        }
+        last_outcome_ = snapshot_.contract_outcome;
+    }
 }
 
 void ClientApp::update_debug(Timestep dt) {

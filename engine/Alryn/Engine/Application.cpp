@@ -1,5 +1,6 @@
 #include <Alryn/Engine/Application.h>
 
+#include <Alryn/Audio/Audio.h>
 #include <Alryn/Core/Event.h>
 #include <Alryn/Core/Log.h>
 #include <Alryn/Platform/Events.h>
@@ -56,6 +57,9 @@ void Application::run() {
         if (window_->create(window_config)) {
             window_->set_event_callback([this](Event& event) { handle_event(event); });
             input_ = &engine_->add_subsystem<Input>();
+            // Audio rides with the windowed client (a dedicated server plays nothing); it opens
+            // silent-if-no-device, so a soundless box still runs fine.
+            audio_ = &engine_->add_subsystem<Audio>();
             RendererConfig renderer_config;
             renderer_config.enable_validation = config_.enable_validation;
             renderer_ = &engine_->add_subsystem<Renderer>(*window_, renderer_config);

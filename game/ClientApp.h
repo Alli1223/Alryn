@@ -8,6 +8,7 @@
 
 #include <Alryn/Alryn.h>
 
+#include <Alryn/Audio/Audio.h>
 #include <Alryn/Character/BodyMesh.h>
 #include <Alryn/Character/CharacterAnimator.h>
 #include <Alryn/Character/CharacterModel.h>
@@ -994,6 +995,8 @@ private:
     bool money_init_ = false;
     u32 money_gain_ = 0;     // size of the latest gain (shown while the pulse lasts)
     f32 money_pulse_ = 0.0f; // "+$n" pop intensity beside the money counter (decays)
+    u8 last_wheel_off_ = 0;  // previous wagon wheel_off flag - the rising edge plays the crack
+    u8 last_outcome_ = 0;    // previous contract outcome - an edge plays the fanfare / wreck boom
 
     // Debug / testing overlay (F1) state + sampled performance metrics.
     bool debug_open_ = false;       // the overlay is showing

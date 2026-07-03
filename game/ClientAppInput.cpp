@@ -14,6 +14,20 @@ void ClientApp::cast_ability(u8 ability) {
     ability_cd_[ability] =
         ability_def(role_, ability).cooldown * race_combat(appearance_.race).cooldown_mult;
     spawn_ability_vfx(role_, ability, local_feet(), face_yaw_, aim_valid_ ? aim_ : local_feet());
+    if (Audio* a = audio()) {
+        // A role-flavoured cast: mends chime, the War Horn blows, arrows twang, the rest shimmer
+        // (pitch varies by slot so each ability has its own voice).
+        const f32 pitch = 0.9f + 0.06f * static_cast<f32>(ability);
+        if (role_ == PlayerRole::Cleric && (ability == 0 || ability == 1 || ability == 4)) {
+            a->play(SfxId::Heal, 0.8f, pitch);
+        } else if (role_ == PlayerRole::Hunter && ability == 6) {
+            a->play(SfxId::Horn, 0.9f);
+        } else if (role_ == PlayerRole::Hunter && (ability <= 1 || ability == 3 || ability == 4)) {
+            a->play(SfxId::BowShot, 0.8f, pitch);
+        } else {
+            a->play(SfxId::CastMagic, 0.8f, pitch);
+        }
+    }
     if (role_ == PlayerRole::Knight && ability == 0 && ability_rank_[0] >= kMaxAbilityRank) {
         // Max-rank Shield Bash: the SHOCKWAVE - a line of ground bursts rolling down the corridor
         // so the transformed line attack reads instantly (the damage itself is server-side).
@@ -65,6 +79,9 @@ void ClientApp::cast_mage_spell(SpellId sp) {
     // Mirror the server cooldown (incl. the race passive) for the HUD + to gate spam.
     mage_cd_ = spell_cooldown(sp) * race_combat(appearance_.race).cooldown_mult;
     spawn_primary_vfx();           // a cast flourish at the staff
+    if (Audio* a = audio()) {      // each spell speaks at its own pitch
+        a->play(SfxId::CastMagic, 0.85f, 0.8f + 0.07f * static_cast<f32>(sp));
+    }
     // Projectile spells (fireball/frost/boulder) are visible as the projectile; give the INSTANT
     // ones (meteor / heal bloom / empower) a burst so the cast reads.
     const Vec3 feet = local_feet();
@@ -417,14 +434,22 @@ void ClientApp::primary_action() {
     // The left-click / right-trigger primary attack is role-specific: the Knight swings the held
     // sword, the Hunter looses an arrow, the Cleric casts a damage spell (both fire a role projectile
     // the server picks), the Mage throws a basic fireball. Only the Knight melees + plays the swing.
+    Audio* a = audio();
     if (role_ == PlayerRole::Knight) {
         pending_attack_ = true;      // melee swing (carves terrain if nothing to hit)
         pending_local_swing_ = true; // swing the actual held sword on our own model
+        if (a != nullptr) {
+            a->play(SfxId::SwordSwing, 0.8f, frand(0.92f, 1.1f));
+        }
     } else if (role_ == PlayerRole::Mage) {
         cast_mage_spell(SpellId::Fireball); // basic bolt (1-4 = elements, CTRL = combos)
     } else {
         pending_fire_ = true; // Hunter arrow / Cleric arcane bolt
         spawn_primary_vfx();  // muzzle / cast flourish at the hand
+        if (a != nullptr) {
+            a->play(role_ == PlayerRole::Hunter ? SfxId::BowShot : SfxId::CastMagic, 0.75f,
+                    frand(0.95f, 1.08f));
+        }
     }
 }
 

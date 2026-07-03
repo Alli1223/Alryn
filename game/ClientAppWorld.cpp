@@ -92,6 +92,9 @@ void ClientApp::update_enemy_visuals(Timestep dt) {
             emit_burst(en.position + Vec3{0.0f, 0.9f, 0.0f}, Vec4{0.72f, 0.9f, 1.0f, 0.95f}, 20, 6.0f,
                        0.45f, 0.12f, 1, 1.0f, 3.0f);
             combat_text(en.position, "SHATTER!", Vec4{0.75f, 0.92f, 1.0f, 1.0f}); // the combo landed
+            if (Audio* snd = audio()) {
+                snd->play_at(SfxId::Shatter, en.position, 0.9f);
+            }
         }
         v.last_status = en.status;
         v.animator.update(v.speed, dt);
@@ -108,15 +111,22 @@ void ClientApp::update_enemy_visuals(Timestep dt) {
             if (snapshot_.contract_phase == static_cast<u8>(ContractPhase::Active)) {
                 const EnemyVisual& dv = it->second;
                 const Vec3 at = dv.last_pos + Vec3{0.0f, 0.9f, 0.0f};
+                Audio* snd = audio();
                 if (dv.kind == kEnemySapper && dv.last_health > 128u) {
                     emit_burst(at, Vec4{1.0f, 0.55f, 0.2f, 1.0f}, 26, 7.0f, 0.5f, 0.16f, 1, 2.0f);
                     emit_burst(at, Vec4{0.25f, 0.22f, 0.2f, 0.8f}, 14, 3.0f, 1.1f, 0.3f, 0, 2.5f);
+                    if (snd != nullptr) {
+                        snd->play_at(SfxId::Explosion, at, 1.0f); // the satchel goes up
+                    }
                 } else {
                     for (int c = 0; c < 12; ++c) { // coins: golden glints tossed up, arcing down
                         emit(at, Vec3{frand(-2.2f, 2.2f), frand(2.5f, 5.5f), frand(-2.2f, 2.2f)},
                              Vec4{1.0f, 0.85f, 0.3f, 1.0f}, 0.9f, 0.09f, 1, 9.0f, 0.4f);
                     }
                     emit_burst(at, Vec4{0.5f, 0.42f, 0.35f, 0.7f}, 10, 2.5f, 0.6f, 0.2f, 0, 1.0f);
+                    if (snd != nullptr) {
+                        snd->play_at(SfxId::Coin, at, 0.6f, frand(0.9f, 1.15f)); // the purse spills
+                    }
                 }
             }
             retire_mesh(std::move(it->second.body_mesh)); // defer the GPU free past the frames in flight
