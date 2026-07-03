@@ -207,6 +207,7 @@ private:
     void record_light_atlas_pass(VkCommandBuffer cmd);
     void record_ssao_pass(VkCommandBuffer cmd); // depth prepass -> raw AO -> blurred AO
     void record_main_pass(VkCommandBuffer cmd);
+    void record_post_pass(VkCommandBuffer cmd); // bloom + god rays -> composite to swapchain
     void record_ui_pass(VkCommandBuffer cmd);
 
     Window& window_;
@@ -222,6 +223,13 @@ private:
     vk::Image prepass_depth_;
     vk::Image ssao_raw_;
     vk::Image ssao_blur_;
+    // Post chain: the main pass renders into scene_color_, the bright pass + two blur
+    // ping-pongs build the bloom, godrays march the prepass depth, and the composite
+    // pass screen-blends everything onto the swapchain (UI then draws on top).
+    vk::Image scene_color_; // full res, swapchain format
+    vk::Image bloom_a_;     // half res ping-pong (final blurred bloom lands here)
+    vk::Image bloom_b_;
+    vk::Image rays_;        // half res god-ray intensity
     vk::Pipeline pipeline_opaque_;
     vk::Pipeline pipeline_cutout_; // opaque + peek-through dissolve (tree trunks)
     vk::Pipeline pipeline_foliage_;
@@ -233,6 +241,10 @@ private:
     vk::Pipeline pipeline_prepass_;   // camera depth prepass (feeds SSAO)
     vk::Pipeline pipeline_ssao_;      // fullscreen AO generation
     vk::Pipeline pipeline_ssao_blur_; // fullscreen AO blur
+    vk::Pipeline pipeline_bright_;    // bloom bright-pass
+    vk::Pipeline pipeline_bloom_blur_;// bloom box blur (ping-pong)
+    vk::Pipeline pipeline_rays_;      // god-ray radial march
+    vk::Pipeline pipeline_composite_; // scene + bloom + rays -> swapchain
     vk::Pipeline pipeline_ui_;
     vk::Pipeline pipeline_sky_; // gradient sky + sun disc (drawn first in the main pass)
     VkPipeline current_pipeline_ = VK_NULL_HANDLE; // avoids redundant binds within a frame
@@ -245,7 +257,13 @@ private:
     VkDescriptorSetLayout ssao_set_layout_ = VK_NULL_HANDLE;
     VkDescriptorSet ssao_gen_set_ = VK_NULL_HANDLE;
     VkDescriptorSet ssao_blur_set_ = VK_NULL_HANDLE;
-    VkSampler ssao_sampler_ = VK_NULL_HANDLE; // linear, clamp-to-edge
+    VkSampler ssao_sampler_ = VK_NULL_HANDLE; // linear, clamp-to-edge (shared by post)
+    // Post-chain inputs (one-sampler sets reuse ssao_set_layout_).
+    VkDescriptorSet bright_set_ = VK_NULL_HANDLE;    // reads scene_color_
+    VkDescriptorSet bloom_ab_set_ = VK_NULL_HANDLE;  // reads bloom_a_ (blur a -> b)
+    VkDescriptorSet bloom_ba_set_ = VK_NULL_HANDLE;  // reads bloom_b_ (blur b -> a)
+    VkDescriptorSetLayout composite_set_layout_ = VK_NULL_HANDLE; // 3 samplers
+    VkDescriptorSet composite_set_ = VK_NULL_HANDLE; // scene + bloom + rays
 
     VkCommandPool command_pool_ = VK_NULL_HANDLE;
     std::vector<FrameSync> frames_;

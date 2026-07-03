@@ -181,7 +181,11 @@ alryn_compile_shaders(alryn SHADERS
     ${CMAKE_SOURCE_DIR}/shaders/sky.vert
     ${CMAKE_SOURCE_DIR}/shaders/sky.frag
     ${CMAKE_SOURCE_DIR}/shaders/ssao.frag
-    ${CMAKE_SOURCE_DIR}/shaders/ssao_blur.frag)
+    ${CMAKE_SOURCE_DIR}/shaders/ssao_blur.frag
+    ${CMAKE_SOURCE_DIR}/shaders/bloom_bright.frag
+    ${CMAKE_SOURCE_DIR}/shaders/bloom_blur.frag
+    ${CMAKE_SOURCE_DIR}/shaders/godrays.frag
+    ${CMAKE_SOURCE_DIR}/shaders/composite.frag)
 
 if(ALRYN_BUILD_GAME)
     add_subdirectory(game)
