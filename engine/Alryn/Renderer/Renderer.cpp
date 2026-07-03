@@ -548,7 +548,18 @@ Mat4 Renderer::compute_light_matrix() const {
                                                        : Vec3{0.0f, 1.0f, 0.0f};
     const Mat4 light_view = glm::lookAt(light_pos, focus, up);
     constexpr f32 s = 42.0f;
-    const Mat4 light_proj = glm::ortho(-s, s, -s, s, 1.0f, 140.0f);
+    Mat4 light_proj = glm::ortho(-s, s, -s, s, 1.0f, 140.0f);
+    // Snap the light window to whole shadow texels: as the camera pans, the ortho
+    // window otherwise slides continuously under the rasterised depth samples and
+    // shadow edges shimmer/crawl. Rounding the projected world origin to texel
+    // increments keeps the world->texel mapping identical frame to frame.
+    const Vec4 origin = (light_proj * light_view) * Vec4{0.0f, 0.0f, 0.0f, 1.0f};
+    const f32 half_size = static_cast<f32>(kShadowSize) * 0.5f;
+    const Vec2 texel_pos{origin.x * half_size, origin.y * half_size};
+    const Vec2 snap{(std::round(texel_pos.x) - texel_pos.x) / half_size,
+                    (std::round(texel_pos.y) - texel_pos.y) / half_size};
+    light_proj[3][0] += snap.x;
+    light_proj[3][1] += snap.y;
     return light_proj * light_view;
 }
 

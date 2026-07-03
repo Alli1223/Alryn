@@ -45,7 +45,15 @@ layout(push_constant) uniform Push {
     vec4 sunColor; // rgb = sun colour, w = shadow strength
 } pc;
 
-// Fraction of the fragment in shadow (0 = lit, 1 = fully shadowed), 3x3 PCF.
+// Stable per-pixel random used to rotate the shadow taps (distinct from hash21 below,
+// which feeds the fbm noise; GLSL wants declaration-before-use in file order).
+float shadowJitter(vec2 p) {
+    return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+// Fraction of the fragment in shadow (0 = lit, 1 = fully shadowed): an 8-tap Poisson
+// disk, rotated per pixel - a softer, wider penumbra than a box PCF at the same cost,
+// with the rotation turning banding into gentle (visually blurred) noise.
 float shadowOcclusion(vec4 coord, float ndotl) {
     vec3 p = coord.xyz / coord.w;
     // The shadow map is rendered and sampled with the same lightVP, so NDC->UV is
@@ -57,14 +65,19 @@ float shadowOcclusion(vec4 coord, float ndotl) {
     }
     float bias = max(0.0025 * (1.0 - ndotl), 0.0008);
     vec2 texel = 1.0 / vec2(textureSize(shadowMap, 0));
+    const vec2 kPoisson[8] = vec2[](
+        vec2(-0.326, -0.406), vec2(-0.840, -0.074), vec2(-0.696, 0.457),
+        vec2(-0.203, 0.621), vec2(0.962, -0.195), vec2(0.473, -0.480),
+        vec2(0.519, 0.767), vec2(0.185, -0.893));
+    float a = shadowJitter(gl_FragCoord.xy) * 6.2831853;
+    float ca = cos(a), sa = sin(a);
+    mat2 rot = mat2(ca, sa, -sa, ca);
     float sum = 0.0;
-    for (int y = -1; y <= 1; ++y) {
-        for (int x = -1; x <= 1; ++x) {
-            float d = texture(shadowMap, uv + vec2(x, y) * texel).r;
-            sum += (p.z - bias > d) ? 1.0 : 0.0;
-        }
+    for (int i = 0; i < 8; ++i) {
+        float d = texture(shadowMap, uv + rot * kPoisson[i] * texel * 2.2).r;
+        sum += (p.z - bias > d) ? 1.0 : 0.0;
     }
-    return sum / 9.0;
+    return sum / 8.0;
 }
 
 // Occlusion of a fragment from a spot light, sampling that light's atlas tile.
