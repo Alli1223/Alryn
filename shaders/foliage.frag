@@ -38,6 +38,7 @@ layout(set = 0, binding = 2) uniform Lights {
     vec4 fogColor;   // rgb = atmospheric fog/haze colour, w = density
     vec4 screen;     // xy = framebuffer resolution (px), z = town "gloom" 0..1
     vec4 fogVolume;  // x = road fog-bank 0..1, y = ground ref height, z = cloud cover 0..1, w = wind
+    vec4 extra;      // xy = projection depth terms (water), z = ground wetness (unused here)
 } lights;
 
 layout(push_constant) uniform Push {

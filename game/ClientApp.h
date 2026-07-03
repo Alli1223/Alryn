@@ -846,6 +846,7 @@ private:
     f32 fog_gloom_ = 0.0f;     // eased 0..1 town-gloom factor (denser/cooler fog + grade in towns)
     f32 fog_patch_ = 0.0f;     // eased 0..1 road fog-bank strength (occasional dense volumetric mist)
     f32 weather_amt_ = 0.0f;   // eased 0..1 storminess (from the networked weather) - rain/sky/wind
+    f32 wetness_ = 0.0f;       // eased 0..1 rain-soaked ground (soaks fast in a storm, dries slowly)
     f32 lightning_ = 0.0f;     // current lightning-flash brightness (decays)
     f32 lightning_cd_ = 4.0f;  // seconds until the next storm flash
     f32 cam_distance_ = iso::distance; // scroll-wheel zoom

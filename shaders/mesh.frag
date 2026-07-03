@@ -33,6 +33,7 @@ layout(set = 0, binding = 2) uniform Lights {
     vec4 fogColor;   // rgb = atmospheric fog/haze colour, w = density
     vec4 screen;     // xy = framebuffer resolution (px), z = town "gloom" 0..1
     vec4 fogVolume;  // x = road fog-bank 0..1, y = ground ref height, z = cloud cover 0..1, w = wind
+    vec4 extra;      // xy = projection depth terms (water), z = ground wetness 0..1
 } lights;
 
 layout(push_constant) uniform Push {
@@ -275,11 +276,33 @@ void main() {
                      : 1.0; // screen size unset (headless tests) -> AO off
 
     vec3 base = vColor * pc.tint.rgb;
+    // Rain-soaked world (extra.z): upward faces darken + cool while wet, like real
+    // drenched earth and stone. Puddle sheen is layered on after lighting, below.
+    float wet = lights.extra.z;
+    float soak = wet * smoothstep(0.55, 0.9, N.y);
+    base *= mix(vec3(1.0), vec3(0.60, 0.63, 0.68), soak * 0.75);
+
     vec3 illum = ambient * ssao + sunCol * diffuse * mix(1.0, ssao, 0.35) * 1.35 +
                  vec3(0.55, 0.65, 0.9) * moon +
                  spotLighting(N, vWorldPos) + pointLighting(N, vWorldPos);
 
     vec3 col = base * illum;
+
+    // Puddles: a slow noise mask collects on near-flat ground, reflecting a soft
+    // sky tint (stronger at glancing view angles) with a tight sun glint - the
+    // world visibly SHINES after rain instead of just darkening.
+    if (wet > 0.01) {
+        float pud = smoothstep(0.60, 0.72, fbm(vWorldPos.xz * 0.35)) *
+                    smoothstep(0.93, 0.995, N.y) * wet;
+        if (pud > 0.001) {
+            vec3 V = normalize(lights.camPos.xyz - vWorldPos);
+            float fres = pow(1.0 - max(dot(N, V), 0.0), 2.0);
+            vec3 skyTint = mix(vec3(0.35, 0.42, 0.55), lights.fogColor.rgb * 1.4, 0.5);
+            float glintSun = pow(max(dot(N, normalize(L + V)), 0.0), 90.0) * intensity;
+            vec3 puddleCol = skyTint * (0.45 + 0.55 * intensity) + sunCol * glintSun * 2.0;
+            col = mix(col, puddleCol, pud * (0.35 + 0.45 * fres));
+        }
+    }
     col = mix(col, lights.fogColor.rgb, fogFactor(vWorldPos)); // atmospheric haze
     col = acesFilm(col * 1.05);                                // exposure + filmic tonemap
     col = grade(col, lights.screen.z);                         // split-tone + contrast

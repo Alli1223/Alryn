@@ -685,6 +685,13 @@ void ClientApp::update_day_night(Timestep dt) {
     cloud_cover = glm::mix(cloud_cover, 1.0f, wz); // a storm socks the sky in
     renderer_->set_cloud_cover(cloud_cover);
 
+    // Rain-soaked ground: wetness climbs quickly once a storm sets in and lingers well
+    // after it passes (slow drying), so paths stay dark and puddled for a while.
+    const f32 wet_target = glm::smoothstep(0.25f, 0.8f, wz);
+    const f32 wet_rate = wet_target > wetness_ ? 0.35f : 0.03f; // soak fast, dry slow
+    wetness_ += (wet_target - wetness_) * std::min(1.0f, dt.seconds * wet_rate);
+    renderer_->set_wetness(wetness_);
+
     // Lightning flashes in a heavy storm (decays fast), each with a rolling thunder clap.
     if (wz > 0.55f) {
         lightning_cd_ -= dt.seconds;
