@@ -173,7 +173,7 @@ vec3 acesFilm(vec3 x) {
 vec3 grade(vec3 col, float gloom) {
     float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
     col = mix(vec3(lum), col, 1.28 - 0.24 * gloom);     // >1 = saturate (vibrant foliage)
-    col *= mix(vec3(0.90, 0.96, 1.13), vec3(1.12, 1.03, 0.84), smoothstep(0.0, 0.6, lum)); // warm/cool split
+    col *= mix(vec3(0.94, 0.97, 1.09), vec3(1.15, 1.04, 0.82), smoothstep(0.0, 0.6, lum)); // warm/cool split
     col = mix(col, col * col * (3.0 - 2.0 * col), 0.42); // S-curve contrast (punchier)
     return col;
 }
@@ -251,8 +251,8 @@ void main() {
     float diffuse = ndotl * intensity * lit * cloudShadow(vWorldPos);
 
     // Hemispheric ambient: low in daylight so shadows stay dark + the key sun gives form (matches mesh.frag).
-    vec3 skyAmb = mix(vec3(0.10, 0.13, 0.21), vec3(0.19, 0.26, 0.40), intensity);
-    vec3 groundAmb = mix(vec3(0.04, 0.045, 0.06), vec3(0.11, 0.085, 0.055), intensity);
+    vec3 skyAmb = mix(vec3(0.10, 0.13, 0.21), vec3(0.26, 0.30, 0.40), intensity);
+    vec3 groundAmb = mix(vec3(0.04, 0.045, 0.06), vec3(0.17, 0.125, 0.075), intensity);
     vec3 ambient = mix(groundAmb, skyAmb, N.y * 0.5 + 0.5);
 
     float night = 1.0 - intensity;

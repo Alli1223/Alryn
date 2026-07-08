@@ -652,11 +652,11 @@ void ClientApp::update_day_night(Timestep dt) {
     sun_intensity_ = intensity;
 
     const Vec3 horizon{1.0f, 0.46f, 0.24f}; // deep warm gold at the horizon (golden hour)
-    const Vec3 noon{1.0f, 0.93f, 0.78f};    // warm daylight (not a clinical white)
+    const Vec3 noon{1.0f, 0.90f, 0.70f};    // golden warm daylight (not a clinical white)
     const Vec3 sun_color = glm::mix(horizon, noon, glm::smoothstep(0.0f, 0.32f, h));
 
     const Vec3 sky_night{0.03f, 0.04f, 0.09f};
-    const Vec3 sky_day{0.34f, 0.55f, 0.82f}; // a clear, vibrant daytime blue
+    const Vec3 sky_day{0.40f, 0.60f, 0.84f}; // a clear, sunny daytime blue
     const Vec3 sky_dusk{0.92f, 0.44f, 0.26f};
     Vec3 sky = glm::mix(sky_night, sky_day, intensity);
     const f32 dusk = glm::clamp(1.0f - std::abs(h) * 3.5f, 0.0f, 1.0f) * intensity;
@@ -682,7 +682,7 @@ void ClientApp::update_day_night(Timestep dt) {
     // some stretches are clear and others mottled with roaming shadow patches (which is
     // what keeps big sunlit areas from reading flat), building to a full deck in a storm.
     const f32 ebb = 0.5f + 0.5f * std::sin(time_of_day_ * TwoPi * 2.0f + 1.7f);
-    f32 cloud_cover = glm::mix(0.18f, 0.55f, ebb);
+    f32 cloud_cover = glm::mix(0.10f, 0.42f, ebb); // mostly-sunny days (a storm still socks it in)
     cloud_cover = glm::mix(cloud_cover, 1.0f, wz); // a storm socks the sky in
     renderer_->set_cloud_cover(cloud_cover);
 

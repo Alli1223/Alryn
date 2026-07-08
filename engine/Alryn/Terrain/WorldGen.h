@@ -353,9 +353,11 @@ inline Vec3 surface_color(const Vec3& p, const Vec3& normal, u32 seed) {
     // road network (town_path_tint + Path props), so the green sits between the paths.
     if (h > water_level + 0.5f && up > 0.55f && inside_village(p.x, p.z, seed)) {
         const f32 worn = noise::fbm2d(p.x * 0.13f, p.z * 0.13f, 2, 2.0f, 0.5f, seed + 909u);
-        const Vec3 town_grass{0.30f, 0.5f, 0.22f}; // lush green over most of the open ground
-        const Vec3 town_dirt{0.47f, 0.36f, 0.23f}; // warm bare earth only on the most-trodden spots
-        Vec3 town_ground = glm::mix(town_grass, town_dirt, glm::smoothstep(0.62f, 0.95f, worn));
+        const Vec3 town_grass{0.31f, 0.56f, 0.22f}; // bright storybook green over most of the open ground
+        const Vec3 town_grass2{0.40f, 0.63f, 0.26f}; // sunnier clearing green (variation, not mud)
+        const Vec3 town_dirt{0.47f, 0.36f, 0.23f};  // warm bare earth only on the most-trodden spots
+        Vec3 town_ground = glm::mix(town_grass, town_grass2, glm::smoothstep(-0.2f, 0.45f, worn));
+        town_ground = glm::mix(town_ground, town_dirt, glm::smoothstep(0.74f, 1.05f, worn));
         color = glm::mix(color, town_ground, glm::smoothstep(0.55f, 0.78f, up));
     }
 
