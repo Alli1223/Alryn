@@ -23,9 +23,21 @@ layout(set = 0, binding = 2) uniform Lights {
     vec4 _pad[216]; // spots[9] (8 vec4 each) + points[48] (3 vec4 each) = 72 + 144
     vec4 playerPeek;
     vec4 camPos;
-    vec4 fogColor; // rgb = fog colour, w = density
-    vec4 screen;   // xy = resolution, z = gloom
+    vec4 fogColor;  // rgb = fog colour, w = density
+    vec4 screen;    // xy = resolution, z = gloom
+    vec4 fogVolume; // (unused here - kept for std140 offset parity with mesh.frag)
+    vec4 extra;     // xy = projection terms P22/P32 (depth -> metres), z = wetness
 } lights;
+
+// Scene depth WITHOUT the water (the SSAO prepass): how deep the terrain sits under
+// each water fragment, for shoreline foam + soft edges.
+layout(set = 0, binding = 4) uniform sampler2D sceneDepth;
+
+// Raw 0..1 depth -> metres in front of the camera (perspective, Vulkan 0..1 clip):
+// with clip.z = P22*z + P32 and clip.w = -z, inverting gives metres = P32/(d + P22).
+float viewDist(float d) {
+    return lights.extra.y / (d + lights.extra.x);
+}
 
 float hash21(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
@@ -94,6 +106,23 @@ void main() {
     foam *= 0.45 + 0.55 * hash21(floor(vWorldPos.xz * 3.0) + floor(t * 2.0));
     color = mix(color, vec3(0.92, 0.96, 1.0), foam * mix(0.18, 0.5, intensity));
 
+    // --- Shoreline foam + soft edge: the SSAO depth prepass holds the scene WITHOUT the
+    // water, so (bed distance - surface distance) is how deep the water is right here.
+    // A lapping animated foam band hugs the shallows, and the surface melts to
+    // transparent at the meniscus instead of a hard intersection line. Gated on the
+    // projection terms being set (0 in the headless offscreen shots -> skipped).
+    float edgeFade = 1.0;
+    if (lights.extra.y != 0.0 && lights.screen.x >= 1.0) {
+        float bed = viewDist(texture(sceneDepth, gl_FragCoord.xy / lights.screen.xy).r);
+        float depthBelow = max(bed - viewDist(gl_FragCoord.z), 0.0);
+        float shore = 1.0 - smoothstep(0.05, 0.85, depthBelow);
+        float lap = 0.5 + 0.5 * sin(t * 1.7 + depthBelow * 9.0 + fb * 2.0); // waves lapping in
+        float shoreFoam = shore * (0.4 + 0.6 * lap);
+        shoreFoam *= 0.55 + 0.45 * hash21(floor(vWorldPos.xz * 6.0) + floor(t * 3.0));
+        color = mix(color, vec3(0.94, 0.97, 1.0), shoreFoam * mix(0.25, 0.7, intensity));
+        edgeFade = smoothstep(0.0, 0.12, depthBelow); // vanish right at the waterline
+    }
+
     // Saturation lift so the pool reads vibrant blue (matching the world re-grade), not muddy teal.
     float wlum = dot(color, vec3(0.2126, 0.7152, 0.0722));
     color = mix(vec3(wlum), color, 1.22);
@@ -110,6 +139,6 @@ void main() {
 
     // The more it reflects, the less it transmits: fairly transparent looking down (so the lily
     // pads / fish / coral read through it), near-opaque mirror at grazing.
-    float alpha = mix(0.62, 0.96, refl);
+    float alpha = mix(0.62, 0.96, refl) * edgeFade;
     outColor = vec4(color, alpha);
 }

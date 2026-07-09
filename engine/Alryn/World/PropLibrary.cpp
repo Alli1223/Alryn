@@ -1072,6 +1072,7 @@ PropDef PropLibrary::build_house(u32 variant) {
             chim_stone * 0.82f); // corbelled cap
     add_box(op, {ccx - 0.2f, ctop + 0.16f, ccz - 0.2f}, {ccx + 0.2f, ctop + 0.44f, ccz + 0.2f},
             Vec3{0.55f, 0.28f, 0.2f}); // clay pot
+    def.chimney_spot = Vec3{ccx, ctop + 0.5f, ccz}; // hearth smoke rises from the pot
     add_box(em, {-w + t + 0.15f, 0.08f, -d + t + 0.1f}, {-w + t + 1.0f, 0.5f, -d + t + 0.5f}, fire);
     furn({-0.55f, 0.0f, -0.3f}, {0.55f, 0.74f, 0.6f}, wood); // table
 
@@ -1294,6 +1295,7 @@ PropDef PropLibrary::build_pub() {
     // chimney
     add_box(op, {-w + 0.3f, wallTop - 0.4f, -d + 0.25f}, {-w + 0.95f, apex + 0.55f, -d + 0.85f}, kStone * 0.88f);
     add_box(op, {-w + 0.22f, apex + 0.55f, -d + 0.17f}, {-w + 1.03f, apex + 0.72f, -d + 0.93f}, kStone * 0.76f);
+    def.chimney_spot = Vec3{-w + 0.625f, apex + 0.75f, -d + 0.55f}; // pub hearth smoke
 
     // hanging tavern sign: a bracket arm off the upper front-left, two chains + a board
     {
@@ -1438,6 +1440,7 @@ PropDef PropLibrary::build_blacksmith() {
         add_box(op, {cx - chw, cTop, bz}, {cx - chw + 0.22f, cTop + 0.4f, bz + sgd - 0.1f}, brick * 0.92f);
         add_box(op, {cx + chw - 0.22f, cTop, bz}, {cx + chw, cTop + 0.4f, bz + sgd - 0.1f}, brick * 0.92f);
     }
+    def.chimney_spot = Vec3{cx, cTop + 0.45f, cz}; // forge smoke billows from the tower
 
     // ---- Stone forge hearth at the tower base, opening toward the bay (+z), with a roaring fire.
     const f32 hfz = cz + chd + 0.5f; // hearth front face (projects into the bay)
@@ -2971,7 +2974,33 @@ PropDef PropLibrary::build_stone_bridge() {
     return def;
 }
 
-PropLibrary::PropLibrary() {
+namespace {
+
+// Bake per-def vertex AO: every Opaque/Roof part is darkened by hemisphere rays cast
+// against all Opaque/Roof parts of the same def, so eaves shade walls, doorways fall
+// dark and clutter sits INTO its surroundings instead of floating on them. Emissive/
+// Glow parts (lit windows, lantern glass) neither receive nor occlude, and Foliage
+// keeps its airy alpha-blended look.
+void bake_def_ao(PropDef& def) {
+    std::vector<const MeshData*> occluders;
+    for (const PropPart& p : def.parts) {
+        if (p.layer == PropLayer::Opaque || p.layer == PropLayer::Roof) {
+            occluders.push_back(&p.mesh);
+        }
+    }
+    if (occluders.empty()) {
+        return;
+    }
+    for (PropPart& p : def.parts) {
+        if (p.layer == PropLayer::Opaque || p.layer == PropLayer::Roof) {
+            p.mesh.bake_vertex_ao(occluders);
+        }
+    }
+}
+
+} // namespace
+
+PropLibrary::PropLibrary(bool bake_ao) {
     for (int i = 0; i < 3; ++i) {
         bushes_.push_back(build_bush(i));
     }
@@ -3016,6 +3045,22 @@ PropLibrary::PropLibrary() {
         monuments_.push_back(build_monument(static_cast<int>(i)));
     }
     watchtowers_.push_back(build_watchtower());
+
+    // One-time vertex-AO bake over the whole catalogue (see bake_def_ao above). Skipped
+    // for never-rendered copies (the server's collider-only library). Defs run
+    // sequentially; the bake itself threads across each mesh's vertices, which keeps
+    // the few HEAVY defs (houses) on all cores instead of serialised on one.
+    if (bake_ao) {
+        for (auto* catalogue :
+             {&bushes_, &rocks_, &logs_, &fences_, &fence_rails_, &lanterns_, &houses_,
+              &walls_, &gates_, &wells_, &bridges_, &markets_, &paths_, &planters_,
+              &fountains_, &decor_, &rivers_, &crystals_, &glow_shrooms_, &campfires_,
+              &monuments_, &watchtowers_}) {
+            for (PropDef& def : *catalogue) {
+                bake_def_ao(def);
+            }
+        }
+    }
 }
 
 const PropDef& PropLibrary::resolve(const PropInstance& inst) const {

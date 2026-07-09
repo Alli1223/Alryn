@@ -17,7 +17,10 @@ inline constexpr f32 kWagonWheelZ = 0.62f; // wheel offset left/right (local z)
 // ground vegetation live in MeshPrimitives but are conceptually part of the set.
 class PropLibrary {
 public:
-    PropLibrary();
+    // `bake_ao` runs the one-time vertex-AO bake over the catalogue (see Mesh.h). Pass
+    // false where the meshes are never rendered (the dedicated/listen server only reads
+    // colliders) to skip that startup cost.
+    explicit PropLibrary(bool bake_ao = true);
 
     const std::vector<PropDef>& bushes() const { return bushes_; }
     const std::vector<PropDef>& rocks() const { return rocks_; }

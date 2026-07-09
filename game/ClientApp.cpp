@@ -140,6 +140,7 @@ void ClientApp::on_init() {
             gp.lights = def.lights;
             gp.footprint = def.footprint;
             gp.wall_height = def.wall_height;
+            gp.chimney_spot = def.chimney_spot;
             out.push_back(std::move(gp));
         }
     };
@@ -632,17 +633,30 @@ void ClientApp::update_day_night(Timestep dt) {
 
     // The sun arcs east -> overhead -> west; below the horizon is night.
     const f32 a = (time_of_day_ - 0.25f) * TwoPi;
-    const Vec3 sun_dir = glm::normalize(Vec3{std::cos(a), std::sin(a), 0.28f});
-    const f32 h = sun_dir.y;
+    Vec3 sun_dir = glm::normalize(Vec3{std::cos(a), std::sin(a), 0.28f});
+    const f32 h = sun_dir.y; // TRUE elevation drives the day/night timing below
+    // Cap the elevation used for LIGHTING (~52 deg). With the top-down iso camera an
+    // overhead noon sun is the flattest possible light: every up-facing surface gets
+    // the same N.L, walls get none, and shadows shrink to slivers under the buildings.
+    // Keeping the sun angled all day preserves the lit/shade gradient across roofs and
+    // walls and keeps shadow shapes readable - the classic iso-game trick.
+    constexpr f32 max_sun_y = 0.79f;
+    if (sun_dir.y > max_sun_y) {
+        Vec2 hz{sun_dir.x, sun_dir.z};
+        const f32 hl = glm::length(hz);
+        hz = hl > 1e-4f ? hz / hl : Vec2{0.0f, 1.0f}; // due south when exactly at zenith
+        const f32 horiz = std::sqrt(1.0f - max_sun_y * max_sun_y);
+        sun_dir = Vec3{hz.x * horiz, max_sun_y, hz.y * horiz};
+    }
     const f32 intensity = glm::smoothstep(-0.04f, 0.18f, h);
     sun_intensity_ = intensity;
 
     const Vec3 horizon{1.0f, 0.46f, 0.24f}; // deep warm gold at the horizon (golden hour)
-    const Vec3 noon{1.0f, 0.93f, 0.78f};    // warm daylight (not a clinical white)
+    const Vec3 noon{1.0f, 0.90f, 0.70f};    // golden warm daylight (not a clinical white)
     const Vec3 sun_color = glm::mix(horizon, noon, glm::smoothstep(0.0f, 0.32f, h));
 
     const Vec3 sky_night{0.03f, 0.04f, 0.09f};
-    const Vec3 sky_day{0.34f, 0.55f, 0.82f}; // a clear, vibrant daytime blue
+    const Vec3 sky_day{0.40f, 0.60f, 0.84f}; // a clear, sunny daytime blue
     const Vec3 sky_dusk{0.92f, 0.44f, 0.26f};
     Vec3 sky = glm::mix(sky_night, sky_day, intensity);
     const f32 dusk = glm::clamp(1.0f - std::abs(h) * 3.5f, 0.0f, 1.0f) * intensity;
@@ -663,6 +677,21 @@ void ClientApp::update_day_night(Timestep dt) {
     renderer_->set_sun(sun_dir, storm_sun, storm_intensity);
     renderer_->set_sky_color(sky);
     renderer_->set_wind(0.12f + wz * 0.7f);
+
+    // Cloud cover for the drifting cloud shadows: a slow ebb and flow across the day so
+    // some stretches are clear and others mottled with roaming shadow patches (which is
+    // what keeps big sunlit areas from reading flat), building to a full deck in a storm.
+    const f32 ebb = 0.5f + 0.5f * std::sin(time_of_day_ * TwoPi * 2.0f + 1.7f);
+    f32 cloud_cover = glm::mix(0.10f, 0.42f, ebb); // mostly-sunny days (a storm still socks it in)
+    cloud_cover = glm::mix(cloud_cover, 1.0f, wz); // a storm socks the sky in
+    renderer_->set_cloud_cover(cloud_cover);
+
+    // Rain-soaked ground: wetness climbs quickly once a storm sets in and lingers well
+    // after it passes (slow drying), so paths stay dark and puddled for a while.
+    const f32 wet_target = glm::smoothstep(0.25f, 0.8f, wz);
+    const f32 wet_rate = wet_target > wetness_ ? 0.35f : 0.03f; // soak fast, dry slow
+    wetness_ += (wet_target - wetness_) * std::min(1.0f, dt.seconds * wet_rate);
+    renderer_->set_wetness(wetness_);
 
     // Lightning flashes in a heavy storm (decays fast), each with a rolling thunder clap.
     if (wz > 0.55f) {

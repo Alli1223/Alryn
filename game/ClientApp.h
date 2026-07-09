@@ -784,6 +784,7 @@ private:
         std::vector<PropLight> lights; // lantern / hearth / brazier spot lights
         Vec2 footprint{0.0f};          // house interior half-extents (0 = not a house)
         f32 wall_height = 0.0f;
+        Vec3 chimney_spot{0.0f};       // local chimney-pot top (zero = no hearth smoke)
     };
 
     std::unordered_map<net::PlayerId, PlayerVisual> visuals_;
@@ -846,6 +847,7 @@ private:
     f32 fog_gloom_ = 0.0f;     // eased 0..1 town-gloom factor (denser/cooler fog + grade in towns)
     f32 fog_patch_ = 0.0f;     // eased 0..1 road fog-bank strength (occasional dense volumetric mist)
     f32 weather_amt_ = 0.0f;   // eased 0..1 storminess (from the networked weather) - rain/sky/wind
+    f32 wetness_ = 0.0f;       // eased 0..1 rain-soaked ground (soaks fast in a storm, dries slowly)
     f32 lightning_ = 0.0f;     // current lightning-flash brightness (decays)
     f32 lightning_cd_ = 4.0f;  // seconds until the next storm flash
     f32 cam_distance_ = iso::distance; // scroll-wheel zoom

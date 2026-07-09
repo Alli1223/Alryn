@@ -37,7 +37,8 @@ layout(set = 0, binding = 2) uniform Lights {
     vec4 camPos;     // xyz = camera position (world)
     vec4 fogColor;   // rgb = atmospheric fog/haze colour, w = density
     vec4 screen;     // xy = framebuffer resolution (px), z = town "gloom" 0..1
-    vec4 fogVolume;  // x = road fog-bank strength 0..1, y = ground reference height (player feet)
+    vec4 fogVolume;  // x = road fog-bank 0..1, y = ground ref height, z = cloud cover 0..1, w = wind
+    vec4 extra;      // xy = projection depth terms (water), z = ground wetness (unused here)
 } lights;
 
 layout(push_constant) uniform Push {
@@ -50,6 +51,11 @@ layout(push_constant) uniform Push {
     vec4 sunColor;
 } pc;
 
+float shadowJitter(vec2 p) {
+    return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+// 8-tap rotated Poisson PCF - matches mesh.frag (softer penumbra, no banding).
 float shadowOcclusion(vec4 coord, float ndotl) {
     vec3 p = coord.xyz / coord.w;
     vec2 uv = p.xy * 0.5 + 0.5;
@@ -58,14 +64,19 @@ float shadowOcclusion(vec4 coord, float ndotl) {
     }
     float bias = max(0.0025 * (1.0 - ndotl), 0.0008);
     vec2 texel = 1.0 / vec2(textureSize(shadowMap, 0));
+    const vec2 kPoisson[8] = vec2[](
+        vec2(-0.326, -0.406), vec2(-0.840, -0.074), vec2(-0.696, 0.457),
+        vec2(-0.203, 0.621), vec2(0.962, -0.195), vec2(0.473, -0.480),
+        vec2(0.519, 0.767), vec2(0.185, -0.893));
+    float a = shadowJitter(gl_FragCoord.xy) * 6.2831853;
+    float ca = cos(a), sa = sin(a);
+    mat2 rot = mat2(ca, sa, -sa, ca);
     float sum = 0.0;
-    for (int y = -1; y <= 1; ++y) {
-        for (int x = -1; x <= 1; ++x) {
-            float d = texture(shadowMap, uv + vec2(x, y) * texel).r;
-            sum += (p.z - bias > d) ? 1.0 : 0.0;
-        }
+    for (int i = 0; i < 8; ++i) {
+        float d = texture(shadowMap, uv + rot * kPoisson[i] * texel * 2.2).r;
+        sum += (p.z - bias > d) ? 1.0 : 0.0;
     }
-    return sum / 9.0;
+    return sum / 8.0;
 }
 
 float spotOcclusion(Spot s, vec3 wpos) {
@@ -162,7 +173,7 @@ vec3 acesFilm(vec3 x) {
 vec3 grade(vec3 col, float gloom) {
     float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
     col = mix(vec3(lum), col, 1.28 - 0.24 * gloom);     // >1 = saturate (vibrant foliage)
-    col *= mix(vec3(0.90, 0.96, 1.13), vec3(1.12, 1.03, 0.84), smoothstep(0.0, 0.6, lum)); // warm/cool split
+    col *= mix(vec3(0.94, 0.97, 1.09), vec3(1.15, 1.04, 0.82), smoothstep(0.0, 0.6, lum)); // warm/cool split
     col = mix(col, col * col * (3.0 - 2.0 * col), 0.42); // S-curve contrast (punchier)
     return col;
 }
@@ -207,6 +218,19 @@ float vignette() {
     float r = length(gl_FragCoord.xy / lights.screen.xy - 0.5);
     return mix(1.0, smoothstep(0.86, 0.32, r), 0.34 + 0.18 * lights.screen.z);
 }
+// Drifting cloud shadows - matches mesh.frag so the canopy darkens with the ground under it.
+float cloudShadow(vec3 wpos) {
+    float cover = lights.fogVolume.z;
+    if (cover <= 0.001) {
+        return 1.0;
+    }
+    vec2 cp = wpos.xz + pc.sun.xz * ((120.0 - wpos.y) / max(pc.sun.y, 0.2));
+    vec2 drift = vec2(1.0, 0.6) * pc.params.x * (0.5 + 2.2 * lights.fogVolume.w);
+    float n = fbm(cp * 0.011 + drift * 0.012);
+    float edge = mix(0.72, 0.30, cover);
+    float cloud = smoothstep(edge, edge + 0.22, n);
+    return 1.0 - cloud * (0.32 + 0.26 * cover);
+}
 
 void main() {
     float peek = peekAmount();
@@ -224,11 +248,11 @@ void main() {
     float ndotl = max(dot(N, L), 0.0);
     float shadow = shadowOcclusion(vShadowCoord, ndotl);
     float lit = 1.0 - pc.sunColor.w * shadow;
-    float diffuse = ndotl * intensity * lit;
+    float diffuse = ndotl * intensity * lit * cloudShadow(vWorldPos);
 
     // Hemispheric ambient: low in daylight so shadows stay dark + the key sun gives form (matches mesh.frag).
-    vec3 skyAmb = mix(vec3(0.10, 0.13, 0.21), vec3(0.19, 0.26, 0.40), intensity);
-    vec3 groundAmb = mix(vec3(0.04, 0.045, 0.06), vec3(0.11, 0.085, 0.055), intensity);
+    vec3 skyAmb = mix(vec3(0.10, 0.13, 0.21), vec3(0.26, 0.30, 0.40), intensity);
+    vec3 groundAmb = mix(vec3(0.04, 0.045, 0.06), vec3(0.17, 0.125, 0.075), intensity);
     vec3 ambient = mix(groundAmb, skyAmb, N.y * 0.5 + 0.5);
 
     float night = 1.0 - intensity;

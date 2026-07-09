@@ -25,6 +25,15 @@ struct MeshData {
     // vertices are not shared across triangles - which is how the marching-cubes
     // mesher and the primitives below emit geometry.
     void recompute_flat_normals();
+
+    // Bakes cheap ambient occlusion into the vertex COLOURS: short hemisphere rays are
+    // cast from every vertex against `occluders` (triangle soup - usually the prop's own
+    // opaque parts, this mesh included) and the hit fraction darkens the colour, so
+    // creases, eaves, doorways and prop-against-prop contacts fall naturally dark.
+    // Run once at asset-build time (see PropLibrary) - zero cost at runtime. `radius`
+    // is how far a surface can reach to shade a vertex, `strength` the max darkening.
+    void bake_vertex_ao(const std::vector<const MeshData*>& occluders, f32 radius = 0.9f,
+                        f32 strength = 0.5f);
 };
 
 // GPU-resident mesh: vertex + index buffers and a draw helper.

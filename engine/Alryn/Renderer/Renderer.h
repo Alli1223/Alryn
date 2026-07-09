@@ -70,6 +70,15 @@ public:
         fog_patch_ = patch;
     }
 
+    // Cloud cover 0..1 driving the drifting cloud shadows that mottle the sunlight
+    // (0 = clear sky, 1 = overcast storm deck). Set per-frame with the day/night cycle;
+    // the drift speed follows set_wind. Defaults to 0 so offscreen tests are unaffected.
+    void set_cloud_cover(f32 cover) { cloud_cover_ = cover; }
+
+    // Ground wetness 0..1 (rain-soaked world): darkens + adds puddle sheen to upward
+    // faces in mesh.frag. Ease it up during a storm and let it linger while drying.
+    void set_wetness(f32 wetness) { wetness_ = wetness; }
+
     // A shadow-casting spotlight (e.g. a lantern). Submit each frame before
     // end_frame; the nearest few to the camera get rendered shadow maps.
     struct SpotLight {
@@ -173,6 +182,7 @@ private:
 
     static constexpr u32 kFramesInFlight = 2;
     static constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
+    static constexpr u32 kSsaoDivisor = 2; // SSAO renders at half resolution
     static constexpr u32 kShadowSize = 2048;
     static constexpr u32 kMaxLights = 4;       // shadow-casting spot lights (atlas tiles)
     static constexpr u32 kMaxPointLights = 48; // extra lights that illuminate without shadows
@@ -180,6 +190,8 @@ private:
     static constexpr u32 kAtlasTiles = 2;      // per axis
 
     bool create_depth();
+    bool create_ssao_targets();     // prepass depth + AO images (recreated on resize)
+    void write_ssao_descriptors();  // repoint binding 3 + the AO pass inputs after resize
     bool create_pipelines();
     bool create_shadow_resources();
     bool create_sync_and_commands();
@@ -193,7 +205,9 @@ private:
     void push_constants(const Mat4& model, const Vec4& tint, bool vegetation = false);
     void record_shadow_pass(VkCommandBuffer cmd);
     void record_light_atlas_pass(VkCommandBuffer cmd);
+    void record_ssao_pass(VkCommandBuffer cmd); // depth prepass -> raw AO -> blurred AO
     void record_main_pass(VkCommandBuffer cmd);
+    void record_post_pass(VkCommandBuffer cmd); // bloom + god rays -> composite to swapchain
     void record_ui_pass(VkCommandBuffer cmd);
 
     Window& window_;
@@ -204,6 +218,18 @@ private:
     vk::Device device_;
     vk::Swapchain swapchain_;
     vk::Image depth_;
+    // SSAO chain: camera-depth prepass (full res) -> raw AO -> blurred AO (half res),
+    // sampled by the main pass at set 0 binding 3.
+    vk::Image prepass_depth_;
+    vk::Image ssao_raw_;
+    vk::Image ssao_blur_;
+    // Post chain: the main pass renders into scene_color_, the bright pass + two blur
+    // ping-pongs build the bloom, godrays march the prepass depth, and the composite
+    // pass screen-blends everything onto the swapchain (UI then draws on top).
+    vk::Image scene_color_; // full res, swapchain format
+    vk::Image bloom_a_;     // half res ping-pong (final blurred bloom lands here)
+    vk::Image bloom_b_;
+    vk::Image rays_;        // half res god-ray intensity
     vk::Pipeline pipeline_opaque_;
     vk::Pipeline pipeline_cutout_; // opaque + peek-through dissolve (tree trunks)
     vk::Pipeline pipeline_foliage_;
@@ -212,6 +238,13 @@ private:
     vk::Pipeline pipeline_glow_;
     vk::Pipeline pipeline_vegetation_;
     vk::Pipeline pipeline_shadow_;
+    vk::Pipeline pipeline_prepass_;   // camera depth prepass (feeds SSAO)
+    vk::Pipeline pipeline_ssao_;      // fullscreen AO generation
+    vk::Pipeline pipeline_ssao_blur_; // fullscreen AO blur
+    vk::Pipeline pipeline_bright_;    // bloom bright-pass
+    vk::Pipeline pipeline_bloom_blur_;// bloom box blur (ping-pong)
+    vk::Pipeline pipeline_rays_;      // god-ray radial march
+    vk::Pipeline pipeline_composite_; // scene + bloom + rays -> swapchain
     vk::Pipeline pipeline_ui_;
     vk::Pipeline pipeline_sky_; // gradient sky + sun disc (drawn first in the main pass)
     VkPipeline current_pipeline_ = VK_NULL_HANDLE; // avoids redundant binds within a frame
@@ -220,6 +253,17 @@ private:
     VkDescriptorSetLayout shadow_set_layout_ = VK_NULL_HANDLE;
     VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
     VkSampler shadow_sampler_ = VK_NULL_HANDLE;
+    // SSAO pass inputs: one-sampler sets for depth -> raw AO and raw -> blurred AO.
+    VkDescriptorSetLayout ssao_set_layout_ = VK_NULL_HANDLE;
+    VkDescriptorSet ssao_gen_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet ssao_blur_set_ = VK_NULL_HANDLE;
+    VkSampler ssao_sampler_ = VK_NULL_HANDLE; // linear, clamp-to-edge (shared by post)
+    // Post-chain inputs (one-sampler sets reuse ssao_set_layout_).
+    VkDescriptorSet bright_set_ = VK_NULL_HANDLE;    // reads scene_color_
+    VkDescriptorSet bloom_ab_set_ = VK_NULL_HANDLE;  // reads bloom_a_ (blur a -> b)
+    VkDescriptorSet bloom_ba_set_ = VK_NULL_HANDLE;  // reads bloom_b_ (blur b -> a)
+    VkDescriptorSetLayout composite_set_layout_ = VK_NULL_HANDLE; // 3 samplers
+    VkDescriptorSet composite_set_ = VK_NULL_HANDLE; // scene + bloom + rays
 
     VkCommandPool command_pool_ = VK_NULL_HANDLE;
     std::vector<FrameSync> frames_;
@@ -250,6 +294,8 @@ private:
     f32 fog_density_ = 0.011f;            // exp-squared distance fog density
     f32 gloom_ = 0.0f;                    // town gloom 0..1 (deepens grade + vignette)
     f32 fog_patch_ = 0.0f;                // road fog-bank strength 0..1 (dense volumetric mist)
+    f32 cloud_cover_ = 0.0f;              // cloud-shadow coverage 0..1 (0 = clear sky)
+    f32 wetness_ = 0.0f;                  // rain-soaked ground 0..1 (0 = dry)
     Mat4 light_view_proj_{1.0f};
     f32 shadow_strength_ = 0.0f; // 0 until the shadow pass is active
 };

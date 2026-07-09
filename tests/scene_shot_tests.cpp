@@ -2,6 +2,12 @@
 
 #include "support/OffscreenRenderer.h"
 
+#include <Alryn/Character/BodyMesh.h>
+#include <Alryn/Character/CharacterModel.h>
+#include <Alryn/Character/Outfit.h>
+#include <Alryn/Character/OutfitMesh.h>
+#include <Alryn/Character/SkinnedMesh.h>
+#include <Alryn/Character/Weapon.h>
 #include <Alryn/Core/Paths.h>
 #include <Alryn/Renderer/MeshPrimitives.h>
 #include <Alryn/Terrain/MarchingTetra.h>
@@ -728,6 +734,155 @@ TEST_CASE("Scene shot: a wagon crossing a river bridge") {
         return;
     }
     MESSAGE("no bridge found near origin in the scanned seeds - skipping");
+}
+
+// The character line-up: every playable race, the four hero roles in their outfits (with a tier
+// progression for the Knight), and the NPC garb (peasant / brigand / outlaw) - rendered exactly the
+// way the client draws a character (skinned body + skinned outfit + attachment primitives + the
+// modular held weapons), so the aesthetic can be eyeballed from one still.
+TEST_CASE("Scene shot: character line-up (races, roles, tiers, NPCs)") {
+    test::OffscreenRenderer renderer;
+    if (!renderer.init(1200, 700)) {
+        MESSAGE("No Vulkan device/shaders - skipping character line-up shot");
+        return;
+    }
+
+    std::vector<test::OffscreenRenderer::Draw> draws;
+
+    // The client's five unit shapes, tinted per bone.
+    Mesh* shape_box = renderer.upload(primitives::cube(1.0f, Vec3{1.0f}));
+    Mesh* shape_sphere = renderer.upload(primitives::sphere(18, 12, Vec3{1.0f}));
+    Mesh* shape_cyl = renderer.upload(primitives::cylinder(16, Vec3{1.0f}));
+    Mesh* shape_capsule = renderer.upload(primitives::capsule(18, 6, Vec3{1.0f}));
+    Mesh* shape_rounded = renderer.upload(primitives::rounded_box(0.32f, Vec3{1.0f}));
+    auto shape_of = [&](BoneShape s) -> Mesh* {
+        switch (s) {
+            case BoneShape::Sphere: return shape_sphere;
+            case BoneShape::Cylinder: return shape_cyl;
+            case BoneShape::Capsule: return shape_capsule;
+            case BoneShape::RoundedBox: return shape_rounded;
+            case BoneShape::Box: break;
+        }
+        return shape_box;
+    };
+
+    if (Mesh* ground = renderer.upload(primitives::grid(30, 1.2f, Vec3{0.38f, 0.33f, 0.26f}))) {
+        draws.push_back({ground, Mat4{1.0f}, Vec4{1.0f}});
+    }
+
+    // One character drawn the client's way: skinned body + skinned outfit + attachment primitives
+    // (face/hair/helm/...) + the role's modular weapons hung from the hand joints. Bind pose.
+    auto add_character = [&](u32 seed, const CharacterAppearance& app, OutfitKind kind,
+                             const Equipment& eq, const Vec3& pos, int role) {
+        CharacterModel model = CharacterModel::create(seed, app);
+        apply_outfit(model, kind, eq);
+        // The client's root convention (HalfPi - yaw); yaw = HalfPi faces the camera (+Z).
+        const Mat4 root = glm::translate(Mat4{1.0f}, pos);
+        const std::vector<Quat> pose; // bind pose
+        const CharacterPalette& pal = model.palette();
+        auto palette = [&pal](u8 m) { return body_material_color(pal, static_cast<BodyMaterial>(m)); };
+        std::vector<Vertex> verts;
+        auto add_skinned = [&](const SkinnedMesh& sm) {
+            if (sm.vertices.empty()) {
+                return;
+            }
+            skin(sm, model.joint_matrices(Mat4{1.0f}, pose), verts, palette);
+            MeshData md;
+            md.vertices = verts;
+            md.indices = sm.indices;
+            if (Mesh* m = renderer.upload(md)) {
+                draws.push_back({m, root, Vec4{1.0f}});
+            }
+        };
+        add_skinned(build_body_mesh(model));
+        add_skinned(build_outfit_mesh(model, kind, eq));
+
+        // The attachment primitives riding on the skinned body (face, hair, helm, pauldrons, ...).
+        const std::vector<Mat4> mats = model.bone_matrices(root, pose);
+        for (usize i = 0; i < model.bones().size(); ++i) {
+            const Bone& b = model.bones()[i];
+            if (!b.attachment) {
+                continue;
+            }
+            const Vec3 c = body_material_color(pal, static_cast<BodyMaterial>(b.color));
+            draws.push_back({shape_of(b.shape), mats[i], Vec4{c, 1.0f}});
+        }
+        // The held weapons, hung from the hand joints exactly as the client attaches them.
+        if (role >= 0) {
+            const std::vector<Mat4> jmats = model.joint_matrices(root, pose);
+            auto hand_frame = [&](BonePart arm) -> Mat4 {
+                for (usize i = 0; i < model.bones().size(); ++i) {
+                    if (model.bones()[i].part == arm) {
+                        const f32 wrist = model.bones()[i].box_center.y * 2.0f;
+                        return jmats[i] * glm::translate(Mat4{1.0f}, Vec3{0.0f, wrist, 0.0f});
+                    }
+                }
+                return Mat4{1.0f};
+            };
+            auto add_weapon = [&](WeaponType t, BonePart arm) {
+                if (t == WeaponType::None) {
+                    return;
+                }
+                const Mat4 hand = hand_frame(arm);
+                for (const WeaponPiece& wp : weapon_pieces(t, eq.weapon(), pal)) {
+                    draws.push_back({shape_of(wp.shape), hand * wp.local, Vec4{wp.color, 1.0f}});
+                }
+            };
+            add_weapon(role_weapon(static_cast<u8>(role), 0), BonePart::LowerArmL);
+            add_weapon(role_offhand(static_cast<u8>(role)), BonePart::LowerArmR);
+        }
+    };
+
+    // Back row: the four hero roles in MASTER gear, mixing races/skins/tints.
+    const Equipment master{3, 3, 0, 0};
+    add_character(11u, {1, 1, EyeStyle::Round, EarStyle::Round, HairStyle::Short, Race::Human},
+                  OutfitKind::Plate, master, Vec3{-4.2f, 0.0f, -4.5f}, 0);
+    add_character(12u, {3, 2, EyeStyle::Sharp, EarStyle::Pointed, HairStyle::Ponytail, Race::Elf},
+                  OutfitKind::Leather, master, Vec3{-1.4f, 0.0f, -4.5f}, 1);
+    add_character(13u, {2, 3, EyeStyle::Round, EarStyle::Round, HairStyle::Bald, Race::Dwarf},
+                  OutfitKind::Holy, master, Vec3{1.4f, 0.0f, -4.5f}, 2);
+    add_character(14u, {4, 0, EyeStyle::Wide, EarStyle::Small, HairStyle::Spiky, Race::Human},
+                  OutfitKind::Robe, master, Vec3{4.2f, 0.0f, -4.5f}, 3);
+
+    // Middle row: the Knight's plate at each tier (rags -> master), one race, same seed - so the
+    // tier progression is the only variable.
+    for (u8 t = 0; t < kTierCount; ++t) {
+        const Equipment eq{t, t, 1, 0};
+        add_character(21u, {1, 0, EyeStyle::Round, EarStyle::Round, HairStyle::Short, Race::Human},
+                      OutfitKind::Plate, eq, Vec3{-4.2f + 2.8f * static_cast<f32>(t), 0.0f, 0.0f}, 0);
+    }
+
+    // Front row: the three races side by side in peasant garb, then the two bandit kinds.
+    const Equipment rags{0, 0, 0, 0};
+    add_character(31u, {2, 1, EyeStyle::Round, EarStyle::Round, HairStyle::Short, Race::Human},
+                  OutfitKind::Peasant, rags, Vec3{-5.6f, 0.0f, 4.5f}, -1);
+    add_character(32u, {1, 3, EyeStyle::Sleepy, EarStyle::Round, HairStyle::Mohawk, Race::Dwarf},
+                  OutfitKind::Peasant, rags, Vec3{-2.8f, 0.0f, 4.5f}, -1);
+    add_character(33u, {0, 2, EyeStyle::Sharp, EarStyle::Pointed, HairStyle::Ponytail, Race::Elf},
+                  OutfitKind::Peasant, rags, Vec3{0.0f, 0.0f, 4.5f}, -1);
+    add_character(34u, {3, 0, EyeStyle::Sharp, EarStyle::Round, HairStyle::Bald, Race::Human},
+                  OutfitKind::Brigand, rags, Vec3{2.8f, 0.0f, 4.5f}, -1);
+    add_character(35u, {2, 1, EyeStyle::Round, EarStyle::Round, HairStyle::Short, Race::Human},
+                  OutfitKind::Outlaw, rags, Vec3{5.6f, 0.0f, 4.5f}, -1);
+
+    REQUIRE_FALSE(draws.empty());
+
+    const Vec3 target{0.0f, 1.0f, 0.0f};
+    const Vec3 eye{0.0f, 5.2f, 13.5f};
+    const Mat4 view = look_at(eye, target, Vec3{0.0f, 1.0f, 0.0f});
+    const Mat4 proj = perspective(radians(40.0f),
+                                  static_cast<f32>(renderer.width()) / renderer.height(), 0.1f, 100.0f);
+    const Vec3 sky{0.46f, 0.62f, 0.82f};
+    const std::string path = (executable_dir() / "characters.ppm").string();
+    // A slightly warm, dimmed key so materials don't blow out near-white (the in-game look).
+    const std::vector<u8> px =
+        renderer.render(draws, view, proj, sky, glm::normalize(Vec3{0.35f, 0.8f, 0.55f}), path,
+                        Vec4{1.0f, 0.95f, 0.85f, 0.95f});
+
+    const Vec3 mid = pixel(px, renderer.width(), renderer.width() / 2, renderer.height() / 2);
+    CHECK(glm::length(mid - sky) > 0.05f); // characters, not empty sky
+    const std::string wrote = "Wrote " + path;
+    MESSAGE(wrote);
 }
 
 TEST_CASE("Scene shot: a medieval town overview (walls, houses, market, lanterns)") {

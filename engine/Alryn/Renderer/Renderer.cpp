@@ -49,6 +49,8 @@ struct LightUbo {
     Vec4 fog_color;      // rgb = atmospheric fog/haze colour, w = density
     Vec4 screen;         // xy = framebuffer resolution (px), z = town "gloom" 0..1
     Vec4 fog_volume;     // x = road fog-bank strength 0..1, y = ground reference height
+    Vec4 extra;          // xy = projection terms P22/P32 (view-depth reconstruction),
+                         // z = ground wetness 0..1, w = unused
 };
 
 // Must match the push_constant block in ui.vert / ui.frag.
@@ -61,13 +63,45 @@ struct UIPush {
     Vec2 screen;
 };
 
+// Must match the push_constant block in ssao.frag.
+struct SsaoPush {
+    Mat4 proj;     // camera projection (view -> clip)
+    Mat4 inv_proj; // clip -> view
+    Vec4 params;   // x = world radius (m), y = strength, z = view-space bias, w = unused
+    Vec4 screen;   // xy = AO target resolution (px)
+};
+// Must match the push_constant block in ssao_blur.frag AND bloom_blur.frag.
+struct SsaoBlurPush {
+    Vec4 screen; // xy = target resolution (px)
+};
+
+// Must match the push_constant block in bloom_bright.frag.
+struct BrightPush {
+    Vec4 params; // x = knee start (luminance), y = knee end
+    Vec4 screen; // xy = target resolution (px)
+};
+// Must match the push_constant block in godrays.frag.
+struct RaysPush {
+    Vec4 sun;    // xy = sun position in UV space, z = 1 if in front of the camera
+    Vec4 params; // x = strength 0..1, y = per-step decay
+    Vec4 screen; // xy = target resolution (px)
+};
+// Must match the push_constant block in composite.frag.
+struct CompositePush {
+    Vec4 sun_color; // rgb (tints the god rays)
+    Vec4 params;    // x = bloom strength, y = rays strength
+    Vec4 screen;    // xy = target resolution (px)
+};
+
 // Must match the push_constant block in sky.frag.
 struct SkyPush {
-    Vec4 zenith;     // rgb
-    Vec4 horizon;    // rgb
-    Vec4 sun_color;  // rgb, w = intensity
-    Vec4 sun_screen; // xy = sun pixel position, z = 1 if in front of the camera
-    Vec4 screen;     // xy = viewport pixels
+    Vec4 zenith;      // rgb
+    Vec4 horizon;     // rgb
+    Vec4 sun_color;   // rgb, w = intensity
+    Vec4 sun_screen;  // xy = sun pixel position, z = 1 if in front of the camera
+    Vec4 moon_screen; // xy = moon pixel position, z = 1 if in front of the camera
+    Vec4 params;      // x = time (s), y = cloud cover 0..1, z = night amount 0..1
+    Vec4 screen;      // xy = viewport pixels
 };
 
 // A view-frustum extracted from a view-projection matrix (Gribb-Hartmann), used to cull
@@ -154,8 +188,90 @@ bool Renderer::on_init(Engine& /*engine*/) {
 bool Renderer::create_depth() {
     const VkExtent2D extent = swapchain_.extent();
     depth_.destroy();
-    return depth_.create(device_, extent.width, extent.height, kDepthFormat,
-                         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+    if (!depth_.create(device_, extent.width, extent.height, kDepthFormat,
+                       VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT)) {
+        return false;
+    }
+    return create_ssao_targets();
+}
+
+bool Renderer::create_ssao_targets() {
+    const VkExtent2D extent = swapchain_.extent();
+    const u32 aw = std::max(1u, extent.width / kSsaoDivisor);
+    const u32 ah = std::max(1u, extent.height / kSsaoDivisor);
+    prepass_depth_.destroy();
+    ssao_raw_.destroy();
+    ssao_blur_.destroy();
+    scene_color_.destroy();
+    bloom_a_.destroy();
+    bloom_b_.destroy();
+    rays_.destroy();
+    const VkImageUsageFlags color_usage =
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    return prepass_depth_.create(device_, extent.width, extent.height, kDepthFormat,
+                                 VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                                     VK_IMAGE_USAGE_SAMPLED_BIT,
+                                 VK_IMAGE_ASPECT_DEPTH_BIT) &&
+           ssao_raw_.create(device_, aw, ah, VK_FORMAT_R8_UNORM, color_usage,
+                            VK_IMAGE_ASPECT_COLOR_BIT) &&
+           ssao_blur_.create(device_, aw, ah, VK_FORMAT_R8_UNORM, color_usage,
+                             VK_IMAGE_ASPECT_COLOR_BIT) &&
+           // Post chain: the scene target matches the swapchain format so the main-pass
+           // pipelines render into it unchanged; bloom/rays live at half res.
+           scene_color_.create(device_, extent.width, extent.height, swapchain_.format(),
+                               color_usage, VK_IMAGE_ASPECT_COLOR_BIT) &&
+           bloom_a_.create(device_, aw, ah, VK_FORMAT_R8G8B8A8_UNORM, color_usage,
+                           VK_IMAGE_ASPECT_COLOR_BIT) &&
+           bloom_b_.create(device_, aw, ah, VK_FORMAT_R8G8B8A8_UNORM, color_usage,
+                           VK_IMAGE_ASPECT_COLOR_BIT) &&
+           rays_.create(device_, aw, ah, VK_FORMAT_R8_UNORM, color_usage,
+                        VK_IMAGE_ASPECT_COLOR_BIT);
+}
+
+// (Re)points every offscreen-image descriptor at the current images: the SSAO chain,
+// the main pass's AO + scene-depth bindings, and the bloom/rays/composite post chain.
+// Called at startup and after every resize (all these images are extent-sized).
+void Renderer::write_ssao_descriptors() {
+    auto image_info = [&](const vk::Image& img) {
+        VkDescriptorImageInfo info{};
+        info.sampler = ssao_sampler_;
+        info.imageView = img.view();
+        info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        return info;
+    };
+    const VkDescriptorImageInfo depth_info = image_info(prepass_depth_);
+    const VkDescriptorImageInfo raw_info = image_info(ssao_raw_);
+    const VkDescriptorImageInfo blur_info = image_info(ssao_blur_);
+    const VkDescriptorImageInfo scene_info = image_info(scene_color_);
+    const VkDescriptorImageInfo bloom_a_info = image_info(bloom_a_);
+    const VkDescriptorImageInfo bloom_b_info = image_info(bloom_b_);
+    const VkDescriptorImageInfo rays_info = image_info(rays_);
+
+    std::vector<VkWriteDescriptorSet> writes;
+    auto add = [&](VkDescriptorSet set, u32 binding, const VkDescriptorImageInfo* info) {
+        VkWriteDescriptorSet w{};
+        w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.dstSet = set;
+        w.dstBinding = binding;
+        w.descriptorCount = 1;
+        w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w.pImageInfo = info;
+        writes.push_back(w);
+    };
+    add(ssao_gen_set_, 0, &depth_info);
+    add(ssao_blur_set_, 0, &raw_info);
+    for (const FrameSync& frame : frames_) {
+        add(frame.shadow_set, 3, &blur_info);
+        add(frame.shadow_set, 4, &depth_info); // water reads the scene depth under it
+    }
+    add(bright_set_, 0, &scene_info);
+    add(bloom_ab_set_, 0, &bloom_a_info);
+    add(bloom_ba_set_, 0, &bloom_b_info);
+    add(composite_set_, 0, &scene_info);
+    add(composite_set_, 1, &bloom_a_info); // final blurred bloom lands back in a
+    add(composite_set_, 2, &rays_info);
+    vkUpdateDescriptorSets(device_.handle(), static_cast<u32>(writes.size()), writes.data(), 0,
+                           nullptr);
 }
 
 bool Renderer::create_pipelines() {
@@ -236,6 +352,66 @@ bool Renderer::create_pipelines() {
         return false;
     }
 
+    // Camera depth prepass feeding the SSAO pass: same depth-only setup as the shadow
+    // pass (shared shadow.vert), just no bias - it must match the main pass's depth.
+    vk::PipelineConfig prepass = shadow;
+    prepass.depth_bias = false;
+    if (!pipeline_prepass_.create(device_, prepass)) {
+        return false;
+    }
+
+    // Fullscreen SSAO generation + blur (vertexless triangle via sky.vert).
+    vk::PipelineConfig ssao;
+    ssao.vertex_spv = shader_path("sky.vert.spv").string();
+    ssao.fragment_spv = shader_path("ssao.frag.spv").string();
+    ssao.color_format = VK_FORMAT_R8_UNORM;
+    ssao.depth_format = VK_FORMAT_UNDEFINED;
+    ssao.push_constant_size = sizeof(SsaoPush);
+    ssao.cull_mode = VK_CULL_MODE_NONE;
+    ssao.vertexless = true;
+    ssao.depth_test = false;
+    ssao.depth_write = false;
+    ssao.descriptor_set_layout = ssao_set_layout_;
+    if (!pipeline_ssao_.create(device_, ssao)) {
+        return false;
+    }
+    vk::PipelineConfig ssao_blur = ssao;
+    ssao_blur.fragment_spv = shader_path("ssao_blur.frag.spv").string();
+    ssao_blur.push_constant_size = sizeof(SsaoBlurPush);
+    if (!pipeline_ssao_blur_.create(device_, ssao_blur)) {
+        return false;
+    }
+
+    // Post chain: bloom bright pass + blur (half-res RGBA), god rays (half-res R8),
+    // and the composite onto the swapchain - all vertexless fullscreen triangles.
+    vk::PipelineConfig bright = ssao;
+    bright.fragment_spv = shader_path("bloom_bright.frag.spv").string();
+    bright.color_format = VK_FORMAT_R8G8B8A8_UNORM;
+    bright.push_constant_size = sizeof(BrightPush);
+    if (!pipeline_bright_.create(device_, bright)) {
+        return false;
+    }
+    vk::PipelineConfig bloom_blur = bright;
+    bloom_blur.fragment_spv = shader_path("bloom_blur.frag.spv").string();
+    bloom_blur.push_constant_size = sizeof(SsaoBlurPush);
+    if (!pipeline_bloom_blur_.create(device_, bloom_blur)) {
+        return false;
+    }
+    vk::PipelineConfig rays = ssao;
+    rays.fragment_spv = shader_path("godrays.frag.spv").string();
+    rays.push_constant_size = sizeof(RaysPush);
+    if (!pipeline_rays_.create(device_, rays)) {
+        return false;
+    }
+    vk::PipelineConfig composite = ssao;
+    composite.fragment_spv = shader_path("composite.frag.spv").string();
+    composite.color_format = swapchain_.format();
+    composite.push_constant_size = sizeof(CompositePush);
+    composite.descriptor_set_layout = composite_set_layout_;
+    if (!pipeline_composite_.create(device_, composite)) {
+        return false;
+    }
+
     // Screen-space UI overlay: vertexless rounded-rect / capsule SDF, alpha
     // blended, no depth (drawn in its own pass after the 3D scene).
     vk::PipelineConfig ui;
@@ -268,8 +444,10 @@ bool Renderer::create_pipelines() {
 }
 
 bool Renderer::create_shadow_resources() {
-    // set 0: binding 0 = sun shadow map, 1 = spot-light atlas, 2 = light UBO.
-    VkDescriptorSetLayoutBinding bindings[3]{};
+    // set 0: binding 0 = sun shadow map, 1 = spot-light atlas, 2 = light UBO,
+    //        3 = blurred SSAO, 4 = camera depth prepass (water shoreline foam).
+    //        3 + 4 are written by write_ssao_descriptors.
+    VkDescriptorSetLayoutBinding bindings[5]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[0].descriptorCount = 1;
@@ -280,21 +458,47 @@ bool Renderer::create_shadow_resources() {
     bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[2].descriptorCount = 1;
     bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[3] = bindings[0];
+    bindings[3].binding = 3;
+    bindings[4] = bindings[0];
+    bindings[4].binding = 4;
     VkDescriptorSetLayoutCreateInfo layout_info{};
     layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layout_info.bindingCount = 3;
+    layout_info.bindingCount = 5;
     layout_info.pBindings = bindings;
     ALRYN_VK_CHECK(
         vkCreateDescriptorSetLayout(device_.handle(), &layout_info, nullptr, &shadow_set_layout_));
 
+    // The SSAO/bloom/rays passes each read a single sampled image.
+    VkDescriptorSetLayoutCreateInfo ssao_layout_info{};
+    ssao_layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    ssao_layout_info.bindingCount = 1;
+    ssao_layout_info.pBindings = bindings; // binding 0: combined image sampler, fragment
+    ALRYN_VK_CHECK(
+        vkCreateDescriptorSetLayout(device_.handle(), &ssao_layout_info, nullptr, &ssao_set_layout_));
+
+    // The composite pass reads three images: scene colour + blurred bloom + god rays.
+    VkDescriptorSetLayoutBinding comp_bindings[3]{};
+    for (u32 b = 0; b < 3; ++b) {
+        comp_bindings[b] = bindings[0];
+        comp_bindings[b].binding = b;
+    }
+    VkDescriptorSetLayoutCreateInfo comp_layout_info{};
+    comp_layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    comp_layout_info.bindingCount = 3;
+    comp_layout_info.pBindings = comp_bindings;
+    ALRYN_VK_CHECK(vkCreateDescriptorSetLayout(device_.handle(), &comp_layout_info, nullptr,
+                                               &composite_set_layout_));
+
     VkDescriptorPoolSize pool_sizes[2]{};
     pool_sizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    pool_sizes[0].descriptorCount = 2 * kFramesInFlight;
+    // per-frame main sets + SSAO inputs (2) + bloom chain inputs (3) + composite (3).
+    pool_sizes[0].descriptorCount = 4 * kFramesInFlight + 8;
     pool_sizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     pool_sizes[1].descriptorCount = kFramesInFlight;
     VkDescriptorPoolCreateInfo pool_info{};
     pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pool_info.maxSets = kFramesInFlight;
+    pool_info.maxSets = kFramesInFlight + 6;
     pool_info.poolSizeCount = 2;
     pool_info.pPoolSizes = pool_sizes;
     ALRYN_VK_CHECK(vkCreateDescriptorPool(device_.handle(), &pool_info, nullptr, &descriptor_pool_));
@@ -309,6 +513,12 @@ bool Renderer::create_shadow_resources() {
     sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
     sampler_info.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE; // off-map => lit
     ALRYN_VK_CHECK(vkCreateSampler(device_.handle(), &sampler_info, nullptr, &shadow_sampler_));
+
+    VkSamplerCreateInfo ssao_sampler_info = sampler_info;
+    ssao_sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    ssao_sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    ssao_sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    ALRYN_VK_CHECK(vkCreateSampler(device_.handle(), &ssao_sampler_info, nullptr, &ssao_sampler_));
     return true;
 }
 
@@ -389,6 +599,26 @@ bool Renderer::create_sync_and_commands() {
     for (VkSemaphore& sem : render_finished_) {
         ALRYN_VK_CHECK(vkCreateSemaphore(device_.handle(), &sem_info, nullptr, &sem));
     }
+
+    // Pass-input sets: SSAO (depth -> AO gen, raw -> blur), the bloom chain, and the
+    // composite; then point every offscreen descriptor at the current images.
+    VkDescriptorSetLayout post_layouts[6] = {ssao_set_layout_, ssao_set_layout_,
+                                             ssao_set_layout_, ssao_set_layout_,
+                                             ssao_set_layout_, composite_set_layout_};
+    VkDescriptorSet post_sets[6] = {};
+    VkDescriptorSetAllocateInfo post_alloc{};
+    post_alloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    post_alloc.descriptorPool = descriptor_pool_;
+    post_alloc.descriptorSetCount = 6;
+    post_alloc.pSetLayouts = post_layouts;
+    ALRYN_VK_CHECK(vkAllocateDescriptorSets(device_.handle(), &post_alloc, post_sets));
+    ssao_gen_set_ = post_sets[0];
+    ssao_blur_set_ = post_sets[1];
+    bright_set_ = post_sets[2];
+    bloom_ab_set_ = post_sets[3];
+    bloom_ba_set_ = post_sets[4];
+    composite_set_ = post_sets[5];
+    write_ssao_descriptors();
     return true;
 }
 
@@ -416,7 +646,18 @@ Mat4 Renderer::compute_light_matrix() const {
                                                        : Vec3{0.0f, 1.0f, 0.0f};
     const Mat4 light_view = glm::lookAt(light_pos, focus, up);
     constexpr f32 s = 42.0f;
-    const Mat4 light_proj = glm::ortho(-s, s, -s, s, 1.0f, 140.0f);
+    Mat4 light_proj = glm::ortho(-s, s, -s, s, 1.0f, 140.0f);
+    // Snap the light window to whole shadow texels: as the camera pans, the ortho
+    // window otherwise slides continuously under the rasterised depth samples and
+    // shadow edges shimmer/crawl. Rounding the projected world origin to texel
+    // increments keeps the world->texel mapping identical frame to frame.
+    const Vec4 origin = (light_proj * light_view) * Vec4{0.0f, 0.0f, 0.0f, 1.0f};
+    const f32 half_size = static_cast<f32>(kShadowSize) * 0.5f;
+    const Vec2 texel_pos{origin.x * half_size, origin.y * half_size};
+    const Vec2 snap{(std::round(texel_pos.x) - texel_pos.x) / half_size,
+                    (std::round(texel_pos.y) - texel_pos.y) / half_size};
+    light_proj[3][0] += snap.x;
+    light_proj[3][1] += snap.y;
     return light_proj * light_view;
 }
 
@@ -495,7 +736,10 @@ void Renderer::process_lights() {
     ubo.fog_color = Vec4{fog_color_, fog_density_};
     const VkExtent2D ext = swapchain_.extent();
     ubo.screen = Vec4{static_cast<f32>(ext.width), static_cast<f32>(ext.height), gloom_, 0.0f};
-    ubo.fog_volume = Vec4{fog_patch_, player_position_.y, 0.0f, 0.0f};
+    ubo.fog_volume = Vec4{fog_patch_, player_position_.y, cloud_cover_, wind_strength_};
+    // Projection terms so fragment shaders can turn a raw depth into metres in front of
+    // the camera (water uses the scene depth under it for shoreline foam + soft edges).
+    ubo.extra = Vec4{projection_[2][2], projection_[3][2], wetness_, 0.0f};
     frames_[frame_index_].light_ubo.upload(&ubo, sizeof(ubo));
 }
 
@@ -514,6 +758,7 @@ void Renderer::recreate_swapchain() {
         return;
     }
     create_depth();
+    write_ssao_descriptors(); // the AO images were recreated at the new size
     if (render_finished_.size() != swapchain_.image_count()) {
         for (VkSemaphore sem : render_finished_) {
             vkDestroySemaphore(device_.handle(), sem, nullptr);
@@ -699,10 +944,129 @@ void Renderer::record_light_atlas_pass(VkCommandBuffer cmd) {
                       VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
 }
 
-// Pass 2: forward-render to the swapchain, sampling the shadow map for occlusion.
+// Pass 1c: camera depth prepass -> raw SSAO (half res) -> blurred SSAO. The main pass
+// samples the result at set 0 binding 3 to darken creases and contact points.
+void Renderer::record_ssao_pass(VkCommandBuffer cmd) {
+    // --- Depth prepass: the depth-writing layers from the camera's view ------------
+    vk::image_barrier(cmd, prepass_depth_.handle(), VK_IMAGE_ASPECT_DEPTH_BIT,
+                      VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                      VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+                      0, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+
+    const VkExtent2D extent = swapchain_.extent();
+    VkRenderingAttachmentInfo depth{};
+    depth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    depth.imageView = prepass_depth_.view();
+    depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE; // sampled by the AO pass
+    depth.clearValue.depthStencil = {1.0f, 0};
+
+    VkRenderingInfo rendering{};
+    rendering.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    rendering.renderArea = {{0, 0}, extent};
+    rendering.layerCount = 1;
+    rendering.pDepthAttachment = &depth;
+    vkCmdBeginRendering(cmd, &rendering);
+
+    const VkViewport viewport{0.0f, 0.0f, static_cast<f32>(extent.width),
+                              static_cast<f32>(extent.height), 0.0f, 1.0f};
+    const VkRect2D scissor{{0, 0}, extent};
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    pipeline_prepass_.bind(cmd);
+    const Mat4 view_proj = projection_ * view_;
+    const Frustum cam_frustum = make_frustum(view_proj);
+    for (const DrawItem& item : draw_items_) {
+        // Only the layers that write depth in the main pass (water/foliage/glow don't).
+        if (item.layer == Layer::Water || item.layer == Layer::Foliage ||
+            item.layer == Layer::Glow) {
+            continue;
+        }
+        if (sphere_outside(cam_frustum, item.sphere)) {
+            continue;
+        }
+        PushConstants push{};
+        push.mvp = view_proj * item.model;
+        vkCmdPushConstants(cmd, pipeline_prepass_.layout(),
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                           sizeof(PushConstants), &push);
+        item.mesh->bind(cmd);
+        item.mesh->draw(cmd);
+    }
+    vkCmdEndRendering(cmd);
+
+    vk::image_barrier(cmd, prepass_depth_.handle(), VK_IMAGE_ASPECT_DEPTH_BIT,
+                      VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                      VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+
+    // --- Raw AO, then blur, both half-res fullscreen triangles ---------------------
+    const u32 aw = std::max(1u, extent.width / kSsaoDivisor);
+    const u32 ah = std::max(1u, extent.height / kSsaoDivisor);
+    const VkViewport ao_viewport{0.0f, 0.0f, static_cast<f32>(aw), static_cast<f32>(ah),
+                                 0.0f, 1.0f};
+    const VkRect2D ao_scissor{{0, 0}, {aw, ah}};
+
+    auto fullscreen_pass = [&](vk::Image& target, vk::Pipeline& pipeline, VkDescriptorSet set,
+                               const void* push, u32 push_size) {
+        vk::image_barrier(cmd, target.handle(), VK_IMAGE_ASPECT_COLOR_BIT,
+                          VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                          VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                          VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
+                          VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+        VkRenderingAttachmentInfo color{};
+        color.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        color.imageView = target.view();
+        color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE; // every pixel is written
+        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        VkRenderingInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        info.renderArea = {{0, 0}, {aw, ah}};
+        info.layerCount = 1;
+        info.colorAttachmentCount = 1;
+        info.pColorAttachments = &color;
+        vkCmdBeginRendering(cmd, &info);
+        vkCmdSetViewport(cmd, 0, 1, &ao_viewport);
+        vkCmdSetScissor(cmd, 0, 1, &ao_scissor);
+        pipeline.bind(cmd);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(), 0, 1,
+                                &set, 0, nullptr);
+        vkCmdPushConstants(cmd, pipeline.layout(),
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, push_size,
+                           push);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+        vkCmdEndRendering(cmd);
+        vk::image_barrier(cmd, target.handle(), VK_IMAGE_ASPECT_COLOR_BIT,
+                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                          VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                          VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+    };
+
+    SsaoPush sp{};
+    sp.proj = projection_;
+    sp.inv_proj = glm::inverse(projection_);
+    sp.params = Vec4{0.55f, 0.85f, 0.02f, 0.0f}; // radius (m), strength, view-space bias
+    sp.screen = Vec4{static_cast<f32>(aw), static_cast<f32>(ah), 0.0f, 0.0f};
+    fullscreen_pass(ssao_raw_, pipeline_ssao_, ssao_gen_set_, &sp, sizeof(sp));
+
+    SsaoBlurPush bp{};
+    bp.screen = Vec4{static_cast<f32>(aw), static_cast<f32>(ah), 0.0f, 0.0f};
+    fullscreen_pass(ssao_blur_, pipeline_ssao_blur_, ssao_blur_set_, &bp, sizeof(bp));
+
+    current_pipeline_ = VK_NULL_HANDLE; // the main pass rebinds from scratch
+}
+
+// Pass 2: forward-render to the offscreen scene target, sampling the shadow map for
+// occlusion. The post pass then composites scene + bloom + god rays onto the swapchain.
 void Renderer::record_main_pass(VkCommandBuffer cmd) {
     FrameSync& frame = frames_[frame_index_];
-    vk::image_barrier(cmd, swapchain_.image(image_index_), VK_IMAGE_ASPECT_COLOR_BIT,
+    vk::image_barrier(cmd, scene_color_.handle(), VK_IMAGE_ASPECT_COLOR_BIT,
                       VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                       VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                       0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
@@ -713,7 +1077,7 @@ void Renderer::record_main_pass(VkCommandBuffer cmd) {
 
     VkRenderingAttachmentInfo color{};
     color.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    color.imageView = swapchain_.view(image_index_);
+    color.imageView = scene_color_.view();
     color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -752,15 +1116,20 @@ void Renderer::record_main_pass(VkCommandBuffer cmd) {
         sp.horizon = Vec4{fog_color_, 1.0f};
         sp.sun_color = Vec4{sun_color_, sun_intensity_};
         sp.screen = Vec4{static_cast<f32>(extent.width), static_cast<f32>(extent.height), 0.0f, 0.0f};
-        // Project the sun onto the screen for its glow (visible at dawn/dusk near the top of the frame).
+        sp.params = Vec4{time_, cloud_cover_, 1.0f - glm::clamp(sun_intensity_, 0.0f, 1.0f), 0.0f};
+        // Project the sun (and the moon, opposite it) onto the screen for their discs.
         const Vec3 cam_pos = Vec3{glm::inverse(view_)[3]};
-        const Vec4 clip = projection_ * view_ * Vec4{cam_pos + sun_direction_ * 1000.0f, 1.0f};
-        sp.sun_screen = Vec4{-1.0f, -1.0f, 0.0f, 0.0f};
-        if (clip.w > 0.0f) {
+        auto project = [&](const Vec3& dir) {
+            const Vec4 clip = projection_ * view_ * Vec4{cam_pos + dir * 1000.0f, 1.0f};
+            if (clip.w <= 0.0f) {
+                return Vec4{-1.0f, -1.0f, 0.0f, 0.0f};
+            }
             const f32 nx = clip.x / clip.w, ny = clip.y / clip.w;
-            sp.sun_screen = Vec4{(nx * 0.5f + 0.5f) * static_cast<f32>(extent.width),
-                                 (ny * 0.5f + 0.5f) * static_cast<f32>(extent.height), 1.0f, 0.0f};
-        }
+            return Vec4{(nx * 0.5f + 0.5f) * static_cast<f32>(extent.width),
+                        (ny * 0.5f + 0.5f) * static_cast<f32>(extent.height), 1.0f, 0.0f};
+        };
+        sp.sun_screen = project(sun_direction_);
+        sp.moon_screen = project(-sun_direction_);
         vkCmdPushConstants(cmd, pipeline_sky_.layout(),
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(SkyPush),
                            &sp);
@@ -792,8 +1161,126 @@ void Renderer::record_main_pass(VkCommandBuffer cmd) {
         item.mesh->draw(cmd);
     }
     vkCmdEndRendering(cmd);
+    // Hand the scene texture to the post pass (bloom bright-pass + composite read it).
+    vk::image_barrier(cmd, scene_color_.handle(), VK_IMAGE_ASPECT_COLOR_BIT,
+                      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                      VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                      VK_ACCESS_SHADER_READ_BIT);
+}
+
+// Pass 2b: bloom (bright-pass + two box-blur ping-pongs), god rays (a radial march of
+// the depth prepass toward the low sun), and the composite onto the swapchain. The
+// swapchain image is left in COLOR_ATTACHMENT for the UI pass, which presents it.
+void Renderer::record_post_pass(VkCommandBuffer cmd) {
+    const VkExtent2D extent = swapchain_.extent();
+    const u32 aw = std::max(1u, extent.width / kSsaoDivisor);
+    const u32 ah = std::max(1u, extent.height / kSsaoDivisor);
+    const VkViewport half_viewport{0.0f, 0.0f, static_cast<f32>(aw), static_cast<f32>(ah),
+                                   0.0f, 1.0f};
+    const VkRect2D half_scissor{{0, 0}, {aw, ah}};
+    const Vec4 half_screen{static_cast<f32>(aw), static_cast<f32>(ah), 0.0f, 0.0f};
+
+    auto fullscreen_pass = [&](vk::Image& target, vk::Pipeline& pipeline, VkDescriptorSet set,
+                               const void* push, u32 push_size) {
+        vk::image_barrier(cmd, target.handle(), VK_IMAGE_ASPECT_COLOR_BIT,
+                          VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                          VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                          VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
+                          VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+        VkRenderingAttachmentInfo color{};
+        color.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        color.imageView = target.view();
+        color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE; // every pixel is written
+        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        VkRenderingInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        info.renderArea = {{0, 0}, {aw, ah}};
+        info.layerCount = 1;
+        info.colorAttachmentCount = 1;
+        info.pColorAttachments = &color;
+        vkCmdBeginRendering(cmd, &info);
+        vkCmdSetViewport(cmd, 0, 1, &half_viewport);
+        vkCmdSetScissor(cmd, 0, 1, &half_scissor);
+        pipeline.bind(cmd);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout(), 0, 1,
+                                &set, 0, nullptr);
+        vkCmdPushConstants(cmd, pipeline.layout(),
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, push_size,
+                           push);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+        vkCmdEndRendering(cmd);
+        vk::image_barrier(cmd, target.handle(), VK_IMAGE_ASPECT_COLOR_BIT,
+                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                          VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                          VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+    };
+
+    // Bloom: bright pixels -> a, blur a -> b, blur b -> a (final bloom in bloom_a_).
+    BrightPush brp{};
+    brp.params = Vec4{0.55f, 0.9f, 0.0f, 0.0f}; // luminance knee
+    brp.screen = half_screen;
+    fullscreen_pass(bloom_a_, pipeline_bright_, bright_set_, &brp, sizeof(brp));
+    SsaoBlurPush blp{};
+    blp.screen = half_screen;
+    fullscreen_pass(bloom_b_, pipeline_bloom_blur_, bloom_ab_set_, &blp, sizeof(blp));
+    fullscreen_pass(bloom_a_, pipeline_bloom_blur_, bloom_ba_set_, &blp, sizeof(blp));
+
+    // God rays: only when the sun sits LOW in the sky (dawn/dusk) and is on screen.
+    const Vec3 cam_pos = Vec3{glm::inverse(view_)[3]};
+    const Vec4 clip = projection_ * view_ * Vec4{cam_pos + sun_direction_ * 1000.0f, 1.0f};
+    RaysPush rp{};
+    rp.sun = Vec4{-1.0f, -1.0f, 0.0f, 0.0f};
+    if (clip.w > 0.0f) {
+        rp.sun = Vec4{(clip.x / clip.w) * 0.5f + 0.5f, (clip.y / clip.w) * 0.5f + 0.5f, 1.0f, 0.0f};
+    }
+    const f32 low_sun = glm::smoothstep(0.55f, 0.2f, sun_direction_.y); // strongest at the horizon
+    rp.params = Vec4{sun_intensity_ * low_sun * 0.9f, 0.94f, 0.0f, 0.0f}; // strength, decay
+    rp.screen = half_screen;
+    fullscreen_pass(rays_, pipeline_rays_, ssao_gen_set_, &rp, sizeof(rp)); // reads prepass depth
+
+    // Composite scene + bloom + rays onto the swapchain (full res).
+    vk::image_barrier(cmd, swapchain_.image(image_index_), VK_IMAGE_ASPECT_COLOR_BIT,
+                      VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                      VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                      0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+    VkRenderingAttachmentInfo color{};
+    color.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    color.imageView = swapchain_.view(image_index_);
+    color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE; // every pixel is written
+    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    VkRenderingInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    info.renderArea = {{0, 0}, extent};
+    info.layerCount = 1;
+    info.colorAttachmentCount = 1;
+    info.pColorAttachments = &color;
+    vkCmdBeginRendering(cmd, &info);
+    const VkViewport full_viewport{0.0f, 0.0f, static_cast<f32>(extent.width),
+                                   static_cast<f32>(extent.height), 0.0f, 1.0f};
+    const VkRect2D full_scissor{{0, 0}, extent};
+    vkCmdSetViewport(cmd, 0, 1, &full_viewport);
+    vkCmdSetScissor(cmd, 0, 1, &full_scissor);
+    pipeline_composite_.bind(cmd);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_composite_.layout(), 0,
+                            1, &composite_set_, 0, nullptr);
+    CompositePush cp{};
+    cp.sun_color = Vec4{sun_color_, 0.0f};
+    cp.params = Vec4{0.75f, 1.0f, 0.0f, 0.0f}; // bloom strength, rays strength
+    cp.screen = Vec4{static_cast<f32>(extent.width), static_cast<f32>(extent.height), 0.0f, 0.0f};
+    vkCmdPushConstants(cmd, pipeline_composite_.layout(),
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(cp),
+                       &cp);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdEndRendering(cmd);
     // The swapchain image stays in COLOR_ATTACHMENT_OPTIMAL for the UI pass,
     // which transitions it to PRESENT_SRC.
+    current_pipeline_ = VK_NULL_HANDLE;
 }
 
 // Pass 3: screen-space UI overlay. A second rendering instance that loads (keeps)
@@ -943,7 +1430,9 @@ void Renderer::end_frame() {
 
     record_shadow_pass(frame.cmd);
     record_light_atlas_pass(frame.cmd);
+    record_ssao_pass(frame.cmd);
     record_main_pass(frame.cmd);
+    record_post_pass(frame.cmd);
     record_ui_pass(frame.cmd);
 
     ALRYN_VK_CHECK(vkEndCommandBuffer(frame.cmd));
@@ -1002,11 +1491,22 @@ void Renderer::on_shutdown() {
     pipeline_glow_.destroy();
     pipeline_vegetation_.destroy();
     pipeline_shadow_.destroy();
+    pipeline_prepass_.destroy();
+    pipeline_ssao_.destroy();
+    pipeline_ssao_blur_.destroy();
+    pipeline_bright_.destroy();
+    pipeline_bloom_blur_.destroy();
+    pipeline_rays_.destroy();
+    pipeline_composite_.destroy();
     pipeline_ui_.destroy();
     pipeline_sky_.destroy();
     if (shadow_sampler_ != VK_NULL_HANDLE) {
         vkDestroySampler(device_.handle(), shadow_sampler_, nullptr);
         shadow_sampler_ = VK_NULL_HANDLE;
+    }
+    if (ssao_sampler_ != VK_NULL_HANDLE) {
+        vkDestroySampler(device_.handle(), ssao_sampler_, nullptr);
+        ssao_sampler_ = VK_NULL_HANDLE;
     }
     if (descriptor_pool_ != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(device_.handle(), descriptor_pool_, nullptr);
@@ -1016,6 +1516,21 @@ void Renderer::on_shutdown() {
         vkDestroyDescriptorSetLayout(device_.handle(), shadow_set_layout_, nullptr);
         shadow_set_layout_ = VK_NULL_HANDLE;
     }
+    if (ssao_set_layout_ != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device_.handle(), ssao_set_layout_, nullptr);
+        ssao_set_layout_ = VK_NULL_HANDLE;
+    }
+    if (composite_set_layout_ != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device_.handle(), composite_set_layout_, nullptr);
+        composite_set_layout_ = VK_NULL_HANDLE;
+    }
+    prepass_depth_.destroy();
+    ssao_raw_.destroy();
+    ssao_blur_.destroy();
+    scene_color_.destroy();
+    bloom_a_.destroy();
+    bloom_b_.destroy();
+    rays_.destroy();
     depth_.destroy();
     swapchain_.destroy();
     if (surface_ != VK_NULL_HANDLE) {

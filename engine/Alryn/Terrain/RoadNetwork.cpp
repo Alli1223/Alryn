@@ -659,8 +659,11 @@ Vec3 tint_surface(Vec3 color, const Vec3& p, f32 up, u32 seed) {
         }
     }
     if (on > 0.0f) {
-        const f32 speckle = noise::fbm2d(p.x * 0.9f, p.z * 0.9f, 1, 2.0f, 0.5f, seed + 717u);
-        const Vec3 road_col = glm::mix(Vec3{0.40f, 0.32f, 0.23f}, Vec3{0.52f, 0.46f, 0.38f},
+        // Gentle wear variation along the surface. Kept LOW-frequency and narrow-range: a ~1 m
+        // noise sampled per mesh vertex aliased into a patchwork of pale blotches that read as
+        // holes in the road against desert/plains ground.
+        const f32 speckle = noise::fbm2d(p.x * 0.30f, p.z * 0.30f, 1, 2.0f, 0.5f, seed + 717u);
+        const Vec3 road_col = glm::mix(Vec3{0.40f, 0.32f, 0.23f}, Vec3{0.48f, 0.40f, 0.30f},
                                        glm::smoothstep(0.1f, 0.4f, speckle));
         color = glm::mix(color, road_col, on);
     }

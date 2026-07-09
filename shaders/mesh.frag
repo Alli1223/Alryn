@@ -9,6 +9,7 @@ layout(location = 0) out vec4 outColor;
 
 layout(set = 0, binding = 0) uniform sampler2D shadowMap;   // sun
 layout(set = 0, binding = 1) uniform sampler2D lightAtlas;  // spot lights (tiled)
+layout(set = 0, binding = 3) uniform sampler2D ssaoMap;     // screen-space AO (1 = open)
 
 struct Spot {
     vec4 posRange;      // xyz position, w range
@@ -31,7 +32,8 @@ layout(set = 0, binding = 2) uniform Lights {
     vec4 camPos;     // xyz = camera position (world)
     vec4 fogColor;   // rgb = atmospheric fog/haze colour, w = density
     vec4 screen;     // xy = framebuffer resolution (px), z = town "gloom" 0..1
-    vec4 fogVolume;  // x = road fog-bank strength 0..1, y = ground reference height (player feet)
+    vec4 fogVolume;  // x = road fog-bank 0..1, y = ground ref height, z = cloud cover 0..1, w = wind
+    vec4 extra;      // xy = projection depth terms (water), z = ground wetness 0..1
 } lights;
 
 layout(push_constant) uniform Push {
@@ -44,7 +46,15 @@ layout(push_constant) uniform Push {
     vec4 sunColor; // rgb = sun colour, w = shadow strength
 } pc;
 
-// Fraction of the fragment in shadow (0 = lit, 1 = fully shadowed), 3x3 PCF.
+// Stable per-pixel random used to rotate the shadow taps (distinct from hash21 below,
+// which feeds the fbm noise; GLSL wants declaration-before-use in file order).
+float shadowJitter(vec2 p) {
+    return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+// Fraction of the fragment in shadow (0 = lit, 1 = fully shadowed): an 8-tap Poisson
+// disk, rotated per pixel - a softer, wider penumbra than a box PCF at the same cost,
+// with the rotation turning banding into gentle (visually blurred) noise.
 float shadowOcclusion(vec4 coord, float ndotl) {
     vec3 p = coord.xyz / coord.w;
     // The shadow map is rendered and sampled with the same lightVP, so NDC->UV is
@@ -56,14 +66,19 @@ float shadowOcclusion(vec4 coord, float ndotl) {
     }
     float bias = max(0.0025 * (1.0 - ndotl), 0.0008);
     vec2 texel = 1.0 / vec2(textureSize(shadowMap, 0));
+    const vec2 kPoisson[8] = vec2[](
+        vec2(-0.326, -0.406), vec2(-0.840, -0.074), vec2(-0.696, 0.457),
+        vec2(-0.203, 0.621), vec2(0.962, -0.195), vec2(0.473, -0.480),
+        vec2(0.519, 0.767), vec2(0.185, -0.893));
+    float a = shadowJitter(gl_FragCoord.xy) * 6.2831853;
+    float ca = cos(a), sa = sin(a);
+    mat2 rot = mat2(ca, sa, -sa, ca);
     float sum = 0.0;
-    for (int y = -1; y <= 1; ++y) {
-        for (int x = -1; x <= 1; ++x) {
-            float d = texture(shadowMap, uv + vec2(x, y) * texel).r;
-            sum += (p.z - bias > d) ? 1.0 : 0.0;
-        }
+    for (int i = 0; i < 8; ++i) {
+        float d = texture(shadowMap, uv + rot * kPoisson[i] * texel * 2.2).r;
+        sum += (p.z - bias > d) ? 1.0 : 0.0;
     }
-    return sum / 9.0;
+    return sum / 8.0;
 }
 
 // Occlusion of a fragment from a spot light, sampling that light's atlas tile.
@@ -153,8 +168,8 @@ vec3 grade(vec3 col, float gloom) {
     col = mix(vec3(lum), col, 1.28 - 0.24 * gloom);     // >1 = saturate (vibrant)
     // A stronger warm/cool split-tone: golden sunlit highlights, cool blue shadows. The warm-vs-cool
     // contrast both warms the image and reads as depth (aerial-perspective cue).
-    vec3 shadowTint = vec3(0.90, 0.96, 1.13);           // cool blue shadows
-    vec3 highTint = vec3(1.12, 1.03, 0.84);             // warm golden highlights
+    vec3 shadowTint = vec3(0.94, 0.97, 1.09);           // gently cool shadows (not steely)
+    vec3 highTint = vec3(1.15, 1.04, 0.82);             // warm golden highlights
     col *= mix(shadowTint, highTint, smoothstep(0.0, 0.6, lum));
     col = mix(col, col * col * (3.0 - 2.0 * col), 0.42); // S-curve contrast (punchier)
     return col;
@@ -202,6 +217,24 @@ float fogFactor(vec3 wpos) {
     }
     return clamp(f, 0.0, 1.0);
 }
+// Drifting cloud shadows: a slow-scrolling fbm "cloud deck" (~120m up) projected along the
+// sun direction onto the world modulates the sun's diffuse term, so soft shadow patches roam
+// the ground and break up big, uniformly-lit midday areas (the main flat-noon fix).
+// fogVolume.z = cloud cover 0..1 (storms overcast), fogVolume.w = wind strength (drift speed).
+float cloudShadow(vec3 wpos) {
+    float cover = lights.fogVolume.z;
+    if (cover <= 0.001) {
+        return 1.0;
+    }
+    // Where a ray from this point toward the sun pierces the cloud deck (parallax with height).
+    vec2 cp = wpos.xz + pc.sun.xz * ((120.0 - wpos.y) / max(pc.sun.y, 0.2));
+    vec2 drift = vec2(1.0, 0.6) * pc.params.x * (0.5 + 2.2 * lights.fogVolume.w);
+    float n = fbm(cp * 0.011 + drift * 0.012);
+    // More cover slides the threshold down, so more of the noise field reads as cloud.
+    float edge = mix(0.72, 0.30, cover);
+    float cloud = smoothstep(edge, edge + 0.22, n);
+    return 1.0 - cloud * (0.32 + 0.26 * cover);
+}
 // Soft radial vignette to pull the eye in and darken the frame edges (cinematic framing).
 float vignette() {
     if (lights.screen.x < 1.0) {
@@ -221,14 +254,14 @@ void main() {
     float ndotl = max(dot(N, L), 0.0);
     float shadow = shadowOcclusion(vShadowCoord, ndotl);
     float lit = 1.0 - pc.sunColor.w * shadow; // sunColor.w = shadow strength
-    float diffuse = ndotl * intensity * lit;
+    float diffuse = ndotl * intensity * lit * cloudShadow(vWorldPos);
 
     // Hemispheric ambient: sky-tinted from above, darker/earthier from below. Kept LOW in daylight
     // so shadowed + downward faces and cast shadows fall genuinely dark (the strong key sun below
     // does the lifting) - that ambient/sun contrast is what gives form + depth instead of a flat,
     // evenly-filled look.
-    vec3 skyAmb = mix(vec3(0.10, 0.13, 0.21), vec3(0.19, 0.26, 0.40), intensity);   // up (cool sky fill)
-    vec3 groundAmb = mix(vec3(0.04, 0.045, 0.06), vec3(0.11, 0.085, 0.055), intensity); // down (dim earth bounce)
+    vec3 skyAmb = mix(vec3(0.10, 0.13, 0.21), vec3(0.26, 0.30, 0.40), intensity);   // up (soft warm-blue sky fill)
+    vec3 groundAmb = mix(vec3(0.04, 0.045, 0.06), vec3(0.17, 0.125, 0.075), intensity); // down (warm earth bounce)
     float hemi = N.y * 0.5 + 0.5;
     vec3 ambient = mix(groundAmb, skyAmb, hemi);
 
@@ -236,11 +269,40 @@ void main() {
     float night = 1.0 - intensity;
     float moon = max(N.y, 0.0) * 0.24 * night;
 
+    // Screen-space AO: fully scales the ambient (occluded creases lose their fill light)
+    // and partially scales the sun (a corner under the eaves still darkens at noon).
+    float ssao = lights.screen.x > 1.0
+                     ? texture(ssaoMap, gl_FragCoord.xy / lights.screen.xy).r
+                     : 1.0; // screen size unset (headless tests) -> AO off
+
     vec3 base = vColor * pc.tint.rgb;
-    vec3 illum = ambient + sunCol * diffuse * 1.35 + vec3(0.55, 0.65, 0.9) * moon +
+    // Rain-soaked world (extra.z): upward faces darken + cool while wet, like real
+    // drenched earth and stone. Puddle sheen is layered on after lighting, below.
+    float wet = lights.extra.z;
+    float soak = wet * smoothstep(0.55, 0.9, N.y);
+    base *= mix(vec3(1.0), vec3(0.60, 0.63, 0.68), soak * 0.75);
+
+    vec3 illum = ambient * ssao + sunCol * diffuse * mix(1.0, ssao, 0.35) * 1.35 +
+                 vec3(0.55, 0.65, 0.9) * moon +
                  spotLighting(N, vWorldPos) + pointLighting(N, vWorldPos);
 
     vec3 col = base * illum;
+
+    // Puddles: a slow noise mask collects on near-flat ground, reflecting a soft
+    // sky tint (stronger at glancing view angles) with a tight sun glint - the
+    // world visibly SHINES after rain instead of just darkening.
+    if (wet > 0.01) {
+        float pud = smoothstep(0.60, 0.72, fbm(vWorldPos.xz * 0.35)) *
+                    smoothstep(0.93, 0.995, N.y) * wet;
+        if (pud > 0.001) {
+            vec3 V = normalize(lights.camPos.xyz - vWorldPos);
+            float fres = pow(1.0 - max(dot(N, V), 0.0), 2.0);
+            vec3 skyTint = mix(vec3(0.35, 0.42, 0.55), lights.fogColor.rgb * 1.4, 0.5);
+            float glintSun = pow(max(dot(N, normalize(L + V)), 0.0), 90.0) * intensity;
+            vec3 puddleCol = skyTint * (0.45 + 0.55 * intensity) + sunCol * glintSun * 2.0;
+            col = mix(col, puddleCol, pud * (0.35 + 0.45 * fres));
+        }
+    }
     col = mix(col, lights.fogColor.rgb, fogFactor(vWorldPos)); // atmospheric haze
     col = acesFilm(col * 1.05);                                // exposure + filmic tonemap
     col = grade(col, lights.screen.z);                         // split-tone + contrast

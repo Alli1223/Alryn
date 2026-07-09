@@ -568,11 +568,22 @@ void ClientApp::draw_prop(const PropInstance& p) {
     const Vec4 char_tint{charcoal, 1.0f};
 
     const f32 night = 1.0f - sun_intensity_;
+    // Firelight breathes: a per-prop low-frequency flicker (phase seeded from the prop's
+    // position so every lantern/window beats to its own rhythm) applied to both the
+    // emissive glow and the spot lights below - candlelight instead of a dead-flat glow.
+    const f32 flick_phase =
+        glm::fract(std::sin(p.position.x * 12.9898f + p.position.z * 78.233f) * 43758.5453f) *
+        TwoPi;
+    const f32 flicker = 1.0f + 0.05f * std::sin(elapsed_ * 7.3f + flick_phase) +
+                        0.03f * std::sin(elapsed_ * 11.9f + flick_phase * 1.7f);
+
     for (const GpuPropPart& part : gp.parts) {
         if (part.layer == PropLayer::Foliage) {
             renderer_->draw_transparent(part.mesh, m, Vec4{1.0f});
         } else if (part.layer == PropLayer::Emissive) {
-            const f32 e = glow * cozy;
+            // Only flicker where the glow is actually firelight (night); by day the
+            // emissive is nearly off and a wobble would read as shimmer.
+            const f32 e = glow * cozy * glm::mix(1.0f, flicker, night);
             renderer_->draw_emissive(part.mesh, m, Vec4{e, e, e, 1.0f});
         } else if (part.layer == PropLayer::Glow) {
             // Window light shafts: additive, dusk/night only, gone once ablaze.
@@ -601,7 +612,11 @@ void ClientApp::draw_prop(const PropInstance& p) {
             Renderer::SpotLight sl;
             sl.position = Vec3{m * Vec4{pl.offset, 1.0f}};
             sl.direction = glm::normalize(rot * pl.direction);
-            sl.color = pl.color * (pl.intensity * night * cozy);
+            // The flicker also warms slightly as it dims (ember) and cools as it
+            // brightens (flame lick), like real firelight.
+            const Vec3 warm_shift = glm::mix(Vec3{1.06f, 0.97f, 0.88f}, Vec3{0.97f, 1.0f, 1.08f},
+                                             glm::clamp((flicker - 0.94f) * 6.0f, 0.0f, 1.0f));
+            sl.color = pl.color * warm_shift * (pl.intensity * night * cozy * flicker);
             sl.range = pl.range;
             const f32 half = glm::radians(pl.cone_deg * 0.5f);
             sl.cone_outer_cos = std::cos(half);
@@ -617,6 +632,29 @@ void ClientApp::draw_prop(const PropInstance& p) {
             sl.indoor = (p.category == PropCategory::House);
             sl.cast_shadow = (p.category == PropCategory::House) || wild_lantern;
             renderer_->add_light(sl);
+        }
+    }
+
+    // Chimney smoke: soft grey puffs rising from the chimney pot on a deterministic loop
+    // (pure function of time - nothing to simulate, spawn or cull), swaying as they climb
+    // and leaning with the storm wind. Intact houses near the player only.
+    if (gp.chimney_spot.y > 0.01f && cozy > 0.5f && near_player) {
+        const Vec3 stack = Vec3{m * Vec4{gp.chimney_spot, 1.0f}};
+        const f32 lean = 0.3f + weather_amt_ * 1.6f; // wind pushes the column over
+        for (int i = 0; i < 4; ++i) {
+            const f32 ph = glm::fract(elapsed_ * 0.10f + flick_phase * 0.159f +
+                                      static_cast<f32>(i) * 0.25f); // 0 at the pot, 1 dispersed
+            const f32 rise = ph * 3.4f;
+            const f32 sway = std::sin(elapsed_ * 0.8f + flick_phase + static_cast<f32>(i) * 2.1f) *
+                             (0.08f + 0.3f * ph);
+            const Vec3 at = stack + Vec3{sway + lean * rise * 0.35f, rise, sway * 0.7f};
+            const f32 size = 0.16f + ph * 0.6f;                     // puffs grow as they thin
+            const f32 alpha =
+                0.32f * (1.0f - ph) * glm::smoothstep(0.0f, 0.1f, ph); // fade in at the pot, out on top
+            renderer_->draw_transparent(shape_sphere_,
+                                        glm::translate(Mat4{1.0f}, at) *
+                                            glm::scale(Mat4{1.0f}, Vec3{size}),
+                                        Vec4{0.60f, 0.59f, 0.58f, alpha});
         }
     }
 }
