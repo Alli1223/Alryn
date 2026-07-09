@@ -128,11 +128,15 @@ inline MeshData build_vegetation(int cx, int cz, f32 chunk_world, u32 seed) {
         f32 moist;
         const f32 gh = worldgen::height(wx, wz, seed);
         if (!detail::veg_ground(wx, wz, seed, gh, 2.4f, -0.08f, moist, true)) return; // grows in town too
-        const f32 density = 0.4f + glm::clamp(moist, 0.0f, 0.7f) * 0.5f;
+        // Town greens are kept LUSH regardless of the local moisture field - the village reads as a
+        // tended, grassy commons (dense tufts between the dirt streets) rather than trampled scrub.
+        const bool town = worldgen::inside_village(wx, wz, seed);
+        const f32 density = town ? 0.85f : 0.4f + glm::clamp(moist, 0.0f, 0.7f) * 0.5f;
         if (detail::hash01(detail::tree_hash(gx, gz, seed + 5003u)) > density) return;
         const Vec3 dry{0.55f, 0.50f, 0.26f};
         const Vec3 lush{0.24f, 0.52f, 0.23f};
-        const Vec3 g = glm::mix(dry, lush, glm::smoothstep(-0.05f, 0.32f, moist));
+        const Vec3 g = glm::mix(dry, lush,
+                                town ? 0.9f : glm::smoothstep(-0.05f, 0.32f, moist));
         const f32 shade = 0.85f + detail::hash01(detail::tree_hash(gx, gz, seed + 5004u)) * 0.28f;
         const f32 sc = 0.8f + detail::hash01(detail::tree_hash(gx, gz, seed + 5005u)) * 0.8f;
         const f32 sy = 0.8f + detail::hash01(detail::tree_hash(gx, gz, seed + 5006u)) * 0.6f;
@@ -253,7 +257,10 @@ inline MeshData build_vegetation(int cx, int cz, f32 chunk_world, u32 seed) {
         const f32 gh = worldgen::height(wx, wz, seed);
         if (!detail::veg_ground(wx, wz, seed, gh, 2.2f, -0.02f, moist, true)) return;
         const f32 meadow = noise::fbm2d(wx * 0.05f, wz * 0.05f, 2, 2.0f, 0.5f, seed + 5599u);
-        const f32 density = 0.1f + glm::smoothstep(-0.1f, 0.55f, meadow) * 0.55f; // dense in flowery patches
+        f32 density = 0.1f + glm::smoothstep(-0.1f, 0.55f, meadow) * 0.55f; // dense in flowery patches
+        if (worldgen::inside_village(wx, wz, seed)) {
+            density = glm::max(density, 0.45f); // village greens always carry flower beds
+        }
         if (detail::hash01(detail::tree_hash(gx, gz, seed + 5503u)) > density) return;
         const int count = 1 + static_cast<int>(detail::hash01(detail::tree_hash(gx, gz, seed + 5510u)) * 3.0f);
         for (int k = 0; k < count; ++k) {

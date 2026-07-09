@@ -43,26 +43,30 @@ inline std::vector<TreeInstance> scatter_trees(int cx, int cz, f32 chunk_world, 
             const f32 wz = (static_cast<f32>(gz) + 0.5f) * cell + jz;
 
             const f32 gh = worldgen::height(wx, wz, seed);
-            if (gh < worldgen::water_level + 1.2f || gh > 9.0f) {
-                continue; // in/near water, or up on the peaks
-            }
-            const f32 moist = worldgen::moisture(wx, wz, seed);
-            if (moist < -0.1f) {
-                continue; // very dry ground stays open
+            if (gh < worldgen::water_level + 1.2f || gh > 12.5f) {
+                continue; // in/near water, or above the tree line on the very summit
             }
             const worldgen::Biome biome = worldgen::biome_at(wx, wz, seed);
-            if (biome == worldgen::Biome::Desert || biome == worldgen::Biome::Snow ||
-                biome == worldgen::Biome::Beach || biome == worldgen::Biome::Ocean) {
-                continue; // deserts grow cacti, peaks/coasts grow nothing
+            const f32 moist = worldgen::moisture(wx, wz, seed);
+            if (moist < -0.1f && biome != worldgen::Biome::Snow) {
+                continue; // very dry ground stays open (the peaks' dryness doesn't count)
+            }
+            if (biome == worldgen::Biome::Desert || biome == worldgen::Biome::Beach ||
+                biome == worldgen::Biome::Ocean) {
+                continue; // deserts grow cacti, coasts grow nothing
+            }
+            if (biome == worldgen::Biome::Mountains && gh > 9.0f) {
+                continue; // the bare rocky band between the alpine forest and the snow pines
             }
             const u32 h = detail::tree_hash(gx, gz, seed + 777u);
             // Canopy density per biome: thick wet forest, sparse alpine conifers, a few gnarled
-            // trees in the bog, scattered lone trees on the open plains.
+            // trees in the bog, scattered lone trees on the open plains, lone pines on the snow.
             f32 density;
             switch (biome) {
                 case worldgen::Biome::Mountains: density = 0.24f; break;
                 case worldgen::Biome::Bog: density = 0.18f; break;
                 case worldgen::Biome::Plains: density = 0.14f; break;
+                case worldgen::Biome::Snow: density = 0.10f; break;
                 default: density = 0.45f + glm::clamp(moist, 0.0f, 0.7f) * 0.5f; break;
             }
             if (detail::hash01(h) > density) {
@@ -123,7 +127,12 @@ inline std::vector<TreeInstance> scatter_trees(int cx, int cz, f32 chunk_world, 
             t.yaw = detail::hash01(detail::tree_hash(gx, gz, seed + 4u)) * TwoPi;
             const f32 cv = 0.85f + detail::hash01(detail::tree_hash(gx, gz, seed + 5u)) * 0.3f;
             const Vec3 leaf_base{0.16f, 0.40f, 0.19f};
-            if (biome == worldgen::Biome::Mountains) {
+            if (biome == worldgen::Biome::Snow) {
+                t.variant = 0;    // snow-dusted pines standing alone on the white slopes
+                t.scale *= 0.68f; // stunted at altitude
+                t.tint = glm::mix(Vec3{cv * 0.50f, cv * 0.66f, cv * 0.54f},
+                                  Vec3{0.93f, 0.95f, 1.0f}, 0.55f); // dark boughs under snow
+            } else if (biome == worldgen::Biome::Mountains) {
                 t.variant = 0;        // alpine conifers
                 t.scale *= 0.82f;     // a touch smaller up high
                 t.tint = Vec3{cv * 0.64f, cv * 0.86f, cv * 0.66f}; // deep, cool green

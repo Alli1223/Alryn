@@ -296,7 +296,11 @@ inline Vec3 surface_color(const Vec3& p, const Vec3& normal, u32 seed) {
     const Vec3 sand{0.84f, 0.74f, 0.46f};
     const Vec3 wet_sand{0.46f, 0.42f, 0.32f};
     const Vec3 rock{0.44f, 0.44f, 0.48f};
-    const Vec3 snow{0.93f, 0.94f, 0.98f};
+    // Kept COOL + slightly dark on purpose: the renderer's warm split-tone grade + golden sun
+    // push anything bright toward cream (a near-white albedo lands looking like pale sand).
+    // Sitting the albedo below the blow-out range with a strong blue lean is what actually
+    // reads as cold snow on screen.
+    const Vec3 snow{0.58f, 0.68f, 0.88f};
 
     // Forest floor: blend two greens by a mid-frequency field, with patches of
     // bare earth / leaf-litter, so the ground reads varied rather than flat green.
@@ -306,6 +310,10 @@ inline Vec3 surface_color(const Vec3& p, const Vec3& normal, u32 seed) {
     ground = glm::mix(ground, dirt, glm::smoothstep(0.22f, 0.5f, litter));
     // Flat ground: desert sand <-> forest floor by moisture.
     Vec3 flat = glm::mix(sand, ground, glm::smoothstep(-0.15f, 0.2f, m));
+    // Mountainsides: above the foothills, dry ground turns to grey scree instead of smooth dune
+    // sand (whole peaks used to read as cream sand right up to the snowline).
+    const Vec3 scree{0.52f, 0.50f, 0.47f};
+    flat = glm::mix(flat, scree, glm::smoothstep(5.0f, 8.5f, h));
     // Steep slopes turn rocky.
     Vec3 color = glm::mix(rock, flat, glm::smoothstep(0.5f, 0.75f, up));
 
@@ -315,8 +323,12 @@ inline Vec3 surface_color(const Vec3& p, const Vec3& normal, u32 seed) {
     color = glm::mix(color, sand, beach);
     // Darker silt below the waterline.
     color = glm::mix(color, wet_sand, glm::smoothstep(water_level + 0.2f, water_level - 2.5f, h));
-    // Snow on high, flatter ground.
-    const f32 snow_amt = glm::smoothstep(8.5f, 12.5f, h) * glm::smoothstep(0.5f, 0.8f, up);
+    // Snow up high: it clings to everything but the sheer cliff faces (a gentle-ground-only
+    // gate left whole peaks reading as cream rock/sand), and what rock still shows through
+    // cools toward blue-grey granite so the summits read cold.
+    const f32 alt = glm::smoothstep(8.5f, 12.5f, h);
+    const f32 snow_amt = alt * glm::smoothstep(0.30f, 0.58f, up);
+    color = glm::mix(color, Vec3{0.47f, 0.50f, 0.58f}, alt * (1.0f - snow_amt) * 0.8f); // exposed granite
     color = glm::mix(color, snow, snow_amt);
 
     // Desert: hot + dry, gentle, above the beach band -> warm rippled sand dunes. (Smooth masks
@@ -325,6 +337,7 @@ inline Vec3 surface_color(const Vec3& p, const Vec3& normal, u32 seed) {
     const f32 desert_mask = glm::smoothstep(0.50f, 0.62f, t) * glm::smoothstep(0.16f, 0.0f, m) *
                             glm::smoothstep(0.55f, 0.78f, up) *
                             glm::smoothstep(water_level + 1.5f, water_level + 3.5f, h) *
+                            glm::smoothstep(9.0f, 6.0f, h) * // dunes stay in the lowlands (scree above)
                             (1.0f - snow_amt);
     if (desert_mask > 0.001f) {
         const Vec3 dune{0.82f, 0.70f, 0.42f};
@@ -351,12 +364,24 @@ inline Vec3 surface_color(const Vec3& p, const Vec3& normal, u32 seed) {
     // Town ground: GRASSY open areas (so the town has green, not all mud) with worn bare-earth
     // patches trampled through it. The dirt streets + light flagstones are overlaid on top as the
     // road network (town_path_tint + Path props), so the green sits between the paths.
-    if (h > water_level + 0.5f && up > 0.55f && inside_village(p.x, p.z, seed)) {
-        const f32 worn = noise::fbm2d(p.x * 0.13f, p.z * 0.13f, 2, 2.0f, 0.5f, seed + 909u);
-        const Vec3 town_grass{0.30f, 0.5f, 0.22f}; // lush green over most of the open ground
-        const Vec3 town_dirt{0.47f, 0.36f, 0.23f}; // warm bare earth only on the most-trodden spots
-        Vec3 town_ground = glm::mix(town_grass, town_dirt, glm::smoothstep(0.62f, 0.95f, worn));
-        color = glm::mix(color, town_ground, glm::smoothstep(0.55f, 0.78f, up));
+    if (h > water_level + 0.5f && up > 0.55f) {
+        if (const auto v = village_containing(p.x, p.z, seed, 7.0f)) {
+            // Grazed commons: full green inside the walls, easing out over a soft verge that
+            // reaches a few metres beyond them - the binary inside-test used to snap storybook
+            // grass to raw biome ground in a single vertex (a sawtooth seam at the outline).
+            const Vec2 d{p.x - v->center.x, p.z - v->center.y};
+            const f32 r = town_radius(*v, std::atan2(d.y, d.x), seed);
+            const f32 verge = glm::smoothstep(r + 7.0f, r - 4.0f, glm::length(d));
+            if (verge > 0.001f) {
+                const f32 worn = noise::fbm2d(p.x * 0.13f, p.z * 0.13f, 2, 2.0f, 0.5f, seed + 909u);
+                const Vec3 town_grass{0.31f, 0.56f, 0.22f}; // bright storybook green over most of the open ground
+                const Vec3 town_grass2{0.40f, 0.63f, 0.26f}; // sunnier clearing green (variation, not mud)
+                const Vec3 town_dirt{0.47f, 0.36f, 0.23f};  // warm bare earth only on the most-trodden spots
+                Vec3 town_ground = glm::mix(town_grass, town_grass2, glm::smoothstep(-0.2f, 0.45f, worn));
+                town_ground = glm::mix(town_ground, town_dirt, glm::smoothstep(0.74f, 1.05f, worn));
+                color = glm::mix(color, town_ground, glm::smoothstep(0.55f, 0.78f, up) * verge);
+            }
+        }
     }
 
     // Gentle height shading.

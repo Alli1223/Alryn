@@ -606,6 +606,23 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
         }
     }
 
+    // A stone well near the plaza - every medieval town draws its water somewhere. Walk a few
+    // candidate spots around the plaza ring and take the first that's clear of the market,
+    // streets, the real road and every building (same siting rules as the fountain).
+    for (int i = 0; i < 8; ++i) {
+        const f32 a = TwoPi * static_cast<f32>(i) / 8.0f +
+                      detail::hash01(detail::tree_hash(vid, 3, 7600u)) * TwoPi;
+        const Vec2 wp = v.center + Vec2{std::cos(a), std::sin(a)} * 13.0f;
+        if (!occupied(wp, 1.4f) && !in_river(wp.x, wp.y) &&
+            roads::distance(wp.x, wp.y, seed) > roads::road_half_width + 1.8f &&
+            !on_street(wp.x, wp.y, 2.8f)) {
+            push(PropCategory::Well, 0, wp.x, wp.y,
+                 detail::hash01(detail::tree_hash(vid, 4, 7601u)) * TwoPi);
+            occ.emplace_back(wp, 1.4f);
+            break;
+        }
+    }
+
     // (The street network `streets`/`nstreets` + `on_street` are computed once up top, shared by the
     // fountain, lanterns and clutter, so they all agree on where the roads are.)
 
@@ -655,7 +672,7 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
     }
     // Scatter bushes + planters to green up the open ground, biased toward the bare band
     // between the outer house ring and the wall so the town doesn't read as empty there.
-    const int green_n = static_cast<int>(half * 1.6f);
+    const int green_n = static_cast<int>(half * 2.4f);
     for (int i = 0; i < green_n; ++i) {
         const f32 a = detail::hash01(detail::tree_hash(vid, i, 7700u)) * TwoPi;
         const f32 rr = (0.45f + 0.5f * detail::hash01(detail::tree_hash(vid, i, 7701u))) * half;
@@ -702,7 +719,57 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
              dp.x, dp.y, detail::hash01(detail::tree_hash(vid, static_cast<int>(hi), 8103u)) * TwoPi);
         occ.emplace_back(dp, 0.8f);
     }
-    const int decor_n = static_cast<int>(half * 1.5f);
+
+    // Fenced cottage gardens: a little post-and-rail plot beside ~a third of the houses (on the
+    // opposite side from the goods pile), with planters + a bush growing inside - the tended
+    // garden patches that sell the "lived-in storybook village" look. The rail on the house side
+    // is left out as the garden's entrance. Corners are all checked against the occupancy list,
+    // streets, the real road and the wall, so a garden that doesn't fit is simply skipped.
+    for (usize hi = 0; hi < plots.size(); ++hi) {
+        if (detail::hash01(detail::tree_hash(vid, static_cast<int>(hi), 8300u)) > 0.38f) {
+            continue;
+        }
+        const detail::HousePlot& h = plots[hi];
+        const Vec2 front{std::sin(h.yaw), std::cos(h.yaw)}; // the way the house faces (the street)
+        const Vec2 along{front.y, -front.x};                // along the street
+        constexpr f32 gu = 1.7f; // garden half-extent along the street
+        constexpr f32 gw = 1.3f; // garden half-extent toward/away from the street
+        const Vec2 gc = h.pos - along * (detail::house_reach(h.variant) + gu + 0.6f);
+        const Vec2 corners[4] = {gc + along * gu + front * gw, gc + along * gu - front * gw,
+                                 gc - along * gu - front * gw, gc - along * gu + front * gw};
+        bool fits = !occupied(gc, gu + 0.9f) && !in_river(gc.x, gc.y);
+        for (const Vec2& c : corners) {
+            const Vec2 d = c - v.center;
+            fits = fits && !on_avenue(c) && !off_road(c.x, c.y) &&
+                   glm::length(d) < worldgen::town_radius(v, std::atan2(d.y, d.x), seed) - 1.4f;
+        }
+        if (!fits) {
+            continue;
+        }
+        const u32 gh = detail::tree_hash(vid, static_cast<int>(hi), 8301u);
+        for (int c = 0; c < 4; ++c) {
+            push(PropCategory::Fence, static_cast<u8>(gh % 2u), corners[c].x, corners[c].y,
+                 std::atan2(-along.y, along.x));
+            if (c == 3) {
+                continue; // the house-side rail (corner 3 -> 0) stays open as the entrance
+            }
+            const Vec2 rd = corners[c + 1] - corners[c];
+            const f32 gap = glm::length(rd);
+            const Vec2 mid = (corners[c] + corners[c + 1]) * 0.5f;
+            push(PropCategory::FenceRail, static_cast<u8>(gh % 2u), mid.x, mid.y,
+                 std::atan2(-rd.y, rd.x), gap);
+        }
+        for (int pi = 0; pi < 2; ++pi) { // the planted rows inside
+            const Vec2 pp = gc + along * (pi == 0 ? -0.8f : 0.8f);
+            push(PropCategory::Planter,
+                 static_cast<u8>(detail::tree_hash(vid, static_cast<int>(hi) * 2 + pi, 8302u) % 3u),
+                 pp.x, pp.y, 0.0f);
+        }
+        push(PropCategory::Bush, static_cast<u8>(gh % 3u), gc.x + front.x * 0.7f,
+             gc.y + front.y * 0.7f, detail::hash01(gh) * TwoPi);
+        occ.emplace_back(gc, gu + 0.9f);
+    }
+    const int decor_n = static_cast<int>(half * 2.2f);
     for (int i = 0; i < decor_n; ++i) {
         const f32 a = detail::hash01(detail::tree_hash(vid, i, 8200u)) * TwoPi;
         const f32 rr = (0.3f + 0.64f * detail::hash01(detail::tree_hash(vid, i, 8201u))) * half;
