@@ -66,9 +66,29 @@ bool Pipeline::create(const Device& device, const PipelineConfig& config) {
 
     const auto binding = Vertex::binding_description();
     const auto attributes = Vertex::attribute_descriptions();
+    // Instanced flat-tile input: one binding advancing PER INSTANCE, carrying the
+    // tile's rect (px) and colour - the vertex shader emits the quad's corners itself.
+    VkVertexInputBindingDescription tile_binding{};
+    tile_binding.binding = 0;
+    tile_binding.stride = 2 * 4 * sizeof(f32); // vec4 rect + vec4 colour
+    tile_binding.inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
+    VkVertexInputAttributeDescription tile_attributes[2]{};
+    tile_attributes[0].location = 0; // rect
+    tile_attributes[0].binding = 0;
+    tile_attributes[0].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    tile_attributes[0].offset = 0;
+    tile_attributes[1].location = 1; // colour
+    tile_attributes[1].binding = 0;
+    tile_attributes[1].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    tile_attributes[1].offset = 4 * sizeof(f32);
     VkPipelineVertexInputStateCreateInfo vertex_input{};
     vertex_input.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    if (!config.vertexless) {
+    if (config.instance_tiles) {
+        vertex_input.vertexBindingDescriptionCount = 1;
+        vertex_input.pVertexBindingDescriptions = &tile_binding;
+        vertex_input.vertexAttributeDescriptionCount = 2;
+        vertex_input.pVertexAttributeDescriptions = tile_attributes;
+    } else if (!config.vertexless) {
         vertex_input.vertexBindingDescriptionCount = 1;
         vertex_input.pVertexBindingDescriptions = &binding;
         vertex_input.vertexAttributeDescriptionCount = static_cast<u32>(attributes.size());

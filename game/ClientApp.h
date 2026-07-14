@@ -32,12 +32,15 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <format>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -504,6 +507,13 @@ private:
     // per frame in on_update, before any wagon drawing). Removes the inter-snapshot jitter.
     void update_wagon_smooth(Timestep dt);
 
+    // Eases every networked character (players, enemies, villagers) toward its authoritative
+    // position/yaw, IN the snapshot itself - so every draw site, VFX and camera path sees the
+    // smoothed motion without changes. The authoritative target is kept per entity (refreshed
+    // when a new snapshot tick arrives); a big jump (spawn / teleport) snaps instead of gliding.
+    // This is what keeps other players' movement smooth between snapshots and under jitter/loss.
+    void update_net_smooth(Timestep dt);
+
     // The smoothed render position for a wagon (falls back to the raw position before it's seeded).
     Vec3 wagon_render_pos(const net::WagonState& wg) const {
         const auto it = wagon_smooth_.find(wg.id);
@@ -687,7 +697,16 @@ private:
     bool host_local_ = true;
     bool auto_start_ = false;
     AppState state_ = AppState::Menu;
+    // The listen server runs on its OWN thread at a steady ~60 Hz, decoupled from the
+    // render loop - a slow or hitching host frame must not stall everyone's snapshots.
+    // `server_mutex_` guards every cross-thread touch of local_server_ (the tick loop
+    // vs the debug hooks / nav-path overlay on the main thread).
     GameServer local_server_;
+    std::thread server_thread_;
+    std::mutex server_mutex_;
+    std::atomic<bool> server_thread_run_{false};
+    void start_local_server_thread();
+    void stop_local_server(); // joins the tick thread, then stops the server
     Renderer* renderer_ = nullptr;
 
     // Menu / settings.
@@ -875,11 +894,16 @@ private:
     f32 map_ppm_ = 1.0f;
     bool map_dragging_ = false;
     Vec2 map_drag_last_{0.0f};
-    // Cached terrain-relief raster (rebuilt only when the view changes): one (rect, colour) tile per
-    // grid cell, so panning/zooming doesn't recompute world noise every frame.
-    std::vector<std::pair<Vec4, Vec4>> map_tiles_;
-    Vec2 map_raster_center_{1e9f, 1e9f};
+    // Cached terrain-relief raster: fine (rect, colour) tiles drawn in ONE instanced call
+    // (Renderer::draw_ui_tiles). The cache is built with some overscan beyond the panel and
+    // tracked between rebuilds by a screen-space pan/zoom transform, so dragging stays smooth
+    // while worldgen is only re-sampled every few frames / after real movement.
+    std::vector<Renderer::UITile> map_tiles_;
+    Vec2 map_raster_center_{1e9f, 1e9f}; // world XZ the raster was built around
     f32 map_raster_zoom_ = -1.0f;
+    f32 map_raster_ppm_ = 1.0f;      // pixels-per-metre the raster was built at
+    f32 map_raster_overscan_ = 0.0f; // extra px rastered beyond the visible area, each side
+    int map_raster_cooldown_ = 0;    // frames until the next non-urgent rebuild
     UVec2 map_raster_ext_{0, 0};
     void rebuild_map_raster(const Vec4& panel, f32 ppm);
     net::Snapshot snapshot_;
@@ -968,6 +992,21 @@ private:
         bool init = false;
     };
     std::unordered_map<u32, WagonSmooth> wagon_smooth_;
+    // Smoothed render state per networked character (players / enemies / villagers - see
+    // update_net_smooth). `target` is the last authoritative position (refreshed on a new
+    // snapshot tick); `pos`/`yaw` ease toward it each frame and are written back into the
+    // snapshot, so everything downstream renders the smoothed motion.
+    struct NetSmooth {
+        Vec3 pos{0.0f};
+        Vec3 target{0.0f};
+        f32 yaw = 0.0f;
+        f32 target_yaw = 0.0f;
+        u32 stamp = 0; // last update_net_smooth pass that saw this entity (for pruning)
+        bool init = false;
+    };
+    std::unordered_map<u64, NetSmooth> net_smooth_; // keyed by (entity kind << 32) | id
+    u32 net_smooth_stamp_ = 0;
+    u32 net_smooth_tick_ = 0; // snapshot tick the targets were last refreshed from
     // A shed wheel rolling on the ground: derive its heading + rolling spin from its networked
     // position so the client can render it upright, rolling the way it travels.
     struct FallenWheel {

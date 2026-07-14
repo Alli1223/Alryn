@@ -43,6 +43,22 @@ public:
     // Uploads a mesh owned by the renderer (freed before the device on shutdown).
     Mesh* upload(const MeshData& data);
 
+    // Optional screen-space UI-tile overlay: the instanced ui_tile.* pipeline the game's
+    // world-map raster uses, drawn over the 3D scene with the map's pan/zoom transform
+    // (scale about pivot + offset, in px) and scissor clip - lets tests verify the
+    // instanced tile path down to the pixels.
+    struct UITile {
+        Vec4 rect{0.0f}; // xy = top-left (px), zw = size (px)
+        Vec4 color{1.0f};
+    };
+    struct UITileBatch {
+        std::vector<UITile> tiles;
+        Vec2 pivot{0.0f};
+        Vec2 offset{0.0f};
+        f32 scale = 1.0f;
+        Vec4 scissor{0.0f}; // px; zero size = full screen
+    };
+
     // Renders the draws and returns RGBA8 pixels (width*height*4, row-major). When
     // ppm_path is non-empty also writes a binary P6 PPM there.
     // `sun_color`: rgb = sun colour, w = intensity. Default {1,1,1,1} = the original full white key
@@ -54,7 +70,8 @@ public:
     std::vector<u8> render(const std::vector<Draw>& draws, const Mat4& view, const Mat4& proj,
                            const Vec3& background, const Vec3& sun_dir, const std::string& ppm_path = "",
                            const Vec4& sun_color = Vec4{1.0f}, const std::vector<Draw>& water = {},
-                           const std::vector<Draw>& transparent = {});
+                           const std::vector<Draw>& transparent = {},
+                           const UITileBatch* ui_tiles = nullptr);
 
     void shutdown();
 
@@ -76,6 +93,8 @@ private:
     vk::Pipeline pipeline_;
     vk::Pipeline pipeline_water_; // the real water.* shaders (reflective, alpha-blended, no depth write)
     vk::Pipeline pipeline_trans_; // alpha-blended mesh.* (shore foam + other transparency)
+    vk::Pipeline pipeline_ui_tiles_; // instanced ui_tile.* overlay (world-map raster path)
+    vk::Buffer tile_vbo_;            // per-render instanced tile data
     VkDescriptorSetLayout set_layout_ = VK_NULL_HANDLE;
     VkDescriptorPool pool_ = VK_NULL_HANDLE;
     VkDescriptorSet set_ = VK_NULL_HANDLE;

@@ -969,3 +969,67 @@ TEST_CASE("Scene shot: a medieval town overview (walls, houses, market, lanterns
     const std::string wrote = "Wrote " + path;
     MESSAGE(wrote);
 }
+
+// The world map's terrain raster draws through the renderer's instanced UI-tile path
+// (ui_tile.vert/frag + per-instance rect/colour vertex input). Verify that path down to the
+// pixels: tiles land exactly on their rects, the batch pan/zoom transform (scale about a
+// pivot + offset) moves them where the map's math says, and the scissor clip is honoured.
+TEST_CASE("Shot: instanced UI-tile raster draws, transforms and clips (world-map path)") {
+    test::OffscreenRenderer renderer;
+    if (!renderer.init(320, 240)) {
+        MESSAGE("No Vulkan device/shaders - skipping UI tile raster shot");
+        return;
+    }
+    const Vec3 bg{0.0f, 0.0f, 0.0f};
+    const Mat4 identity{1.0f};
+    const Vec3 sun{0.0f, 1.0f, 0.0f};
+    auto near3 = [](const Vec3& a, const Vec3& b) { return glm::length(a - b) < 0.02f; };
+    const Vec3 red{1.0f, 0.0f, 0.0f}, green{0.0f, 1.0f, 0.0f}, blue{0.0f, 0.0f, 1.0f};
+
+    test::OffscreenRenderer::UITileBatch batch;
+    batch.tiles.push_back({Vec4{10.0f, 10.0f, 20.0f, 20.0f}, Vec4{red, 1.0f}});
+    batch.tiles.push_back({Vec4{40.0f, 10.0f, 20.0f, 20.0f}, Vec4{green, 1.0f}});
+    batch.tiles.push_back({Vec4{10.0f, 40.0f, 20.0f, 20.0f}, Vec4{blue, 1.0f}});
+
+    // 1. Identity transform: every tile sits exactly on its rect (flat colour, no AA).
+    {
+        const std::vector<u8> px = renderer.render({}, identity, identity, bg, sun, "",
+                                                   Vec4{1.0f}, {}, {}, &batch);
+        const u32 w = renderer.width();
+        CHECK(near3(pixel(px, w, 20, 20), red));
+        CHECK(near3(pixel(px, w, 50, 20), green));
+        CHECK(near3(pixel(px, w, 20, 50), blue));
+        CHECK(near3(pixel(px, w, 150, 150), bg)); // untouched background
+    }
+
+    // 2. The map's pan/zoom transform: p' = pivot + (p - pivot) * scale + offset. With
+    //    pivot (20,20), scale 2, offset (30,10) the red tile {10,10,20,20} must cover
+    //    30..70 x 10..50 and its original spot must be background again.
+    {
+        batch.pivot = Vec2{20.0f, 20.0f};
+        batch.offset = Vec2{30.0f, 10.0f};
+        batch.scale = 2.0f;
+        const std::vector<u8> px = renderer.render({}, identity, identity, bg, sun, "",
+                                                   Vec4{1.0f}, {}, {}, &batch);
+        const u32 w = renderer.width();
+        CHECK(near3(pixel(px, w, 50, 30), red));    // scaled + shifted red tile centre
+        CHECK(near3(pixel(px, w, 110, 30), green)); // green: 90..130 x 10..50
+        CHECK(near3(pixel(px, w, 50, 90), blue));   // blue: 30..70 x 70..110
+        CHECK(near3(pixel(px, w, 15, 15), bg));     // the un-transformed spot is empty now
+    }
+
+    // 3. Scissor clip: with the identity transform back and a clip that ends at x = 45,
+    //    the green tile (40..60) is cut off past the clip edge while red still draws.
+    {
+        batch.pivot = Vec2{0.0f};
+        batch.offset = Vec2{0.0f};
+        batch.scale = 1.0f;
+        batch.scissor = Vec4{0.0f, 0.0f, 45.0f, 240.0f};
+        const std::vector<u8> px = renderer.render({}, identity, identity, bg, sun, "",
+                                                   Vec4{1.0f}, {}, {}, &batch);
+        const u32 w = renderer.width();
+        CHECK(near3(pixel(px, w, 20, 20), red));  // inside the clip
+        CHECK(near3(pixel(px, w, 42, 20), green)); // green's left edge is inside the clip
+        CHECK(near3(pixel(px, w, 50, 20), bg));   // past the clip edge: no tile drawn
+    }
+}

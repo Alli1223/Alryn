@@ -26,6 +26,9 @@ struct PipelineConfig {
     bool depth_write = true;  // write depth (turn off for transparent passes)
     bool depth_test = true;   // test depth (turn off for a background sky drawn first)
     bool vertexless = false;  // no vertex buffer (UI quads emit from gl_VertexIndex)
+    // Per-INSTANCE vertex input of two vec4s (rect px + colour) instead of alryn::Vertex:
+    // the instanced flat-tile UI path (world-map raster), one quad per instance.
+    bool instance_tiles = false;
     bool depth_only = false;  // no fragment shader / colour attachment (shadow pass)
     bool depth_bias = false;  // slope-scaled depth bias (shadow pass, fights acne)
     f32 depth_bias_constant = 1.25f;

@@ -161,6 +161,7 @@ void ClientApp::skills_click(const Vec2& p) {
 void ClientApp::apply_debug_flags() {
     // The debug gameplay toggles only have teeth on a listen server we host (we own the sim).
     if (host_local_ && local_server_.running()) {
+        std::lock_guard<std::mutex> lock(server_mutex_); // the server ticks on its own thread
         local_server_.set_debug_god(debug_god_);
         local_server_.set_debug_no_ambush(debug_no_ambush_);
     }

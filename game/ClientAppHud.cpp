@@ -438,7 +438,13 @@ void ClientApp::draw_nav_paths(ui::DrawList& draw, f32 W, f32 H) {
         {0.45f, 0.9f, 0.5f, 0.7f},   // 2 villager/guard goal - green
         {1.0f, 0.4f, 0.32f, 0.8f},   // 3 ambusher goal     - red
     };
-    for (const GameServer::DebugNavPath& path : local_server_.debug_nav_paths()) {
+    // The server ticks on its own thread; take the lock while copying its path data out.
+    std::vector<GameServer::DebugNavPath> paths;
+    {
+        std::lock_guard<std::mutex> lock(server_mutex_);
+        paths = local_server_.debug_nav_paths();
+    }
+    for (const GameServer::DebugNavPath& path : paths) {
         const Vec4 col = kind_col[path.kind % 4];
         const f32 thick = path.kind <= 1 ? 2.6f : 1.6f; // emphasise the A* path + the wagon route
         Vec2 prev{};
@@ -948,60 +954,122 @@ void ClientApp::rebuild_map_raster(const Vec4& panel, f32 ppm) {
     const Vec2 mc{panel.x + panel.z * 0.5f, panel.y + panel.w * 0.5f};
     const f32 top = panel.y + 38.0f, left = panel.x + 5.0f;
     const f32 right = panel.x + panel.z - 5.0f, bot = panel.y + panel.w - 5.0f;
-    const f32 area_w = right - left, area_h = bot - top;
-    const int cols = glm::clamp(static_cast<int>(area_w / 10.0f), 30, 110); // finer terrain detail
+    // Raster an overscan margin beyond the visible area, so draw_map's screen-space transform
+    // can pan / gently zoom the cached raster between rebuilds without exposing bare panel at
+    // the edges (the visible window is scissored back to the panel).
+    const f32 over = std::min(panel.z, panel.w) * 0.16f;
+    const f32 rx0 = left - over, ry0 = top - over;
+    const f32 area_w = (right + over) - rx0, area_h = (bot + over) - ry0;
+    // Fine ~6 px cells: the raster is drawn as ONE instanced call (Renderer::draw_ui_tiles),
+    // so the cell size is a worldgen-sampling budget, not a draw-call budget - the old
+    // draw-call-per-rect path is what capped the map at chunky ~16 px tiles.
+    const int cols = glm::clamp(static_cast<int>(area_w / 6.0f), 60, 400);
     const f32 cell = area_w / static_cast<f32>(cols);
     const int rows = std::max(1, static_cast<int>(std::ceil(area_h / cell)));
     const u32 seed = world_seed_;
-    map_tiles_.reserve(static_cast<usize>(cols) * static_cast<usize>(rows));
 
-    // A top-down terrain colour with relief hill-shading, so the map reads as the real landscape:
-    // ocean/shallows by depth, beach, then the surface palette (grass/dirt/rock/snow), lit by a
-    // soft directional shade computed from the local height gradient.
-    auto terrain_color = [&](f32 wx, f32 wz) -> Vec4 {
-        const f32 h = worldgen::height(wx, wz, seed);
-        if (h < worldgen::water_level) {
-            const f32 depth = glm::clamp((worldgen::water_level - h) / 8.0f, 0.0f, 1.0f);
-            return Vec4{glm::mix(Vec3{0.24f, 0.46f, 0.56f}, Vec3{0.04f, 0.12f, 0.28f}, depth), 1.0f};
-        }
-        const f32 step = 4.0f;
-        const f32 hx = worldgen::height(wx + step, wz, seed);
-        const f32 hz = worldgen::height(wx, wz + step, seed);
-        const Vec3 n = glm::normalize(Vec3{h - hx, step, h - hz});
-        Vec3 c = worldgen::surface_color(Vec3{wx, h, wz}, Vec3{0.0f, 1.0f, 0.0f}, seed);
-        // Lean each cell toward a clear canonical BIOME colour, so deserts / bogs / mountains /
-        // snow read distinctly on the map (the in-world surface tints are deliberately subtle).
-        auto biome_key = [](worldgen::Biome b) -> Vec3 {
-            switch (b) {
-                case worldgen::Biome::Desert: return {0.86f, 0.75f, 0.47f};
-                case worldgen::Biome::Bog: return {0.27f, 0.31f, 0.20f};
-                case worldgen::Biome::Mountains: return {0.55f, 0.54f, 0.57f};
-                case worldgen::Biome::Snow: return {0.93f, 0.95f, 0.99f};
-                case worldgen::Biome::Plains: return {0.56f, 0.63f, 0.34f};
-                case worldgen::Biome::Beach: return {0.84f, 0.77f, 0.55f};
-                default: return {0.28f, 0.46f, 0.22f}; // forest
+    // Sample the height field ONCE per tile centre (plus one extra row/column so every tile
+    // has forward neighbours for its gradient) and share the samples between the relief
+    // shading, the water/beach bands and the biome classification. The old per-tile colour
+    // re-evaluated height() ~9 times (gradient + biome_at + its slope/temperature) - cutting
+    // that is what makes the finer raster affordable.
+    const f32 wstep = cell / ppm; // world metres per cell
+    const int gw = cols + 1;
+    std::vector<f32> hgrid(static_cast<usize>(gw) * static_cast<usize>(rows + 1));
+
+    // The worldgen fields are pure functions (the terrain mesher already samples them from its
+    // worker thread concurrently with the main thread), so the raster rows fan out across a few
+    // threads - this keeps the occasional rebuild a small blip instead of a Debug-build hitch.
+    auto parallel_rows = [](int count, auto&& fn) {
+        const u32 workers =
+            std::max(1u, std::min(8u, std::thread::hardware_concurrency()));
+        if (workers <= 1 || count < 32) {
+            for (int j = 0; j < count; ++j) {
+                fn(j);
             }
-        };
-        c = glm::mix(c, biome_key(worldgen::biome_at(wx, wz, seed)), 0.42f);
-        if (h < worldgen::water_level + 0.7f) {
-            c = glm::mix(c, Vec3{0.80f, 0.74f, 0.54f}, 0.55f); // beach band
+            return;
         }
-        const f32 shade =
-            glm::clamp(glm::dot(n, glm::normalize(Vec3{0.5f, 0.85f, 0.35f})), 0.45f, 1.18f);
-        return Vec4{glm::clamp(c * shade, Vec3{0.0f}, Vec3{1.0f}), 1.0f};
+        std::atomic<int> next{0};
+        std::vector<std::thread> pool;
+        pool.reserve(workers);
+        for (u32 t = 0; t < workers; ++t) {
+            pool.emplace_back([&] {
+                for (int j = next.fetch_add(1); j < count; j = next.fetch_add(1)) {
+                    fn(j);
+                }
+            });
+        }
+        for (std::thread& th : pool) {
+            th.join();
+        }
     };
 
-    for (int j = 0; j < rows; ++j) {
+    parallel_rows(rows + 1, [&](int j) {
+        for (int i = 0; i <= cols; ++i) {
+            const f32 wx =
+                map_center_.x + (rx0 + (static_cast<f32>(i) + 0.5f) * cell - mc.x) / ppm;
+            const f32 wz =
+                map_center_.y + (ry0 + (static_cast<f32>(j) + 0.5f) * cell - mc.y) / ppm;
+            hgrid[static_cast<usize>(j) * gw + i] = worldgen::height(wx, wz, seed);
+        }
+    });
+
+    // Lean each cell toward a clear canonical BIOME colour, so deserts / bogs / mountains /
+    // snow read distinctly on the map (the in-world surface tints are deliberately subtle).
+    auto biome_key = [](worldgen::Biome b) -> Vec3 {
+        switch (b) {
+            case worldgen::Biome::Desert: return {0.86f, 0.75f, 0.47f};
+            case worldgen::Biome::Bog: return {0.27f, 0.31f, 0.20f};
+            case worldgen::Biome::Mountains: return {0.55f, 0.54f, 0.57f};
+            case worldgen::Biome::Snow: return {0.93f, 0.95f, 0.99f};
+            case worldgen::Biome::Plains: return {0.56f, 0.63f, 0.34f};
+            case worldgen::Biome::Beach: return {0.84f, 0.77f, 0.55f};
+            default: return {0.28f, 0.46f, 0.22f}; // forest
+        }
+    };
+
+    // A top-down terrain colour with relief hill-shading, so the map reads as the real
+    // landscape: ocean/shallows by depth, beach, then the surface palette, lit by a soft
+    // directional shade computed from the shared height-grid gradient. Rows write into
+    // pre-sized storage so they can run in parallel.
+    map_tiles_.resize(static_cast<usize>(cols) * static_cast<usize>(rows));
+    parallel_rows(rows, [&](int j) {
         for (int i = 0; i < cols; ++i) {
-            const f32 rx = left + static_cast<f32>(i) * cell;
-            const f32 ry = top + static_cast<f32>(j) * cell;
+            const f32 rx = rx0 + static_cast<f32>(i) * cell;
+            const f32 ry = ry0 + static_cast<f32>(j) * cell;
             const f32 wx = map_center_.x + (rx + cell * 0.5f - mc.x) / ppm;
             const f32 wz = map_center_.y + (ry + cell * 0.5f - mc.y) / ppm;
-            map_tiles_.emplace_back(Vec4{rx, ry, cell + 1.0f, cell + 1.0f}, terrain_color(wx, wz));
+            const f32 h = hgrid[static_cast<usize>(j) * gw + i];
+            Vec4 col;
+            if (h < worldgen::water_level) {
+                const f32 depth = glm::clamp((worldgen::water_level - h) / 8.0f, 0.0f, 1.0f);
+                col = Vec4{glm::mix(Vec3{0.24f, 0.46f, 0.56f}, Vec3{0.04f, 0.12f, 0.28f}, depth),
+                           1.0f};
+            } else {
+                const f32 hx = hgrid[static_cast<usize>(j) * gw + i + 1];
+                const f32 hz = hgrid[static_cast<usize>(j + 1) * gw + i];
+                const Vec3 n = glm::normalize(Vec3{(h - hx) / wstep, 1.0f, (h - hz) / wstep});
+                Vec3 c = worldgen::surface_color(Vec3{wx, h, wz}, Vec3{0.0f, 1.0f, 0.0f}, seed);
+                // slope() measures |dh| per metre in x + z; reuse the grid gradient for it.
+                const f32 sl = (std::abs(hx - h) + std::abs(hz - h)) / wstep;
+                const f32 m = worldgen::moisture(wx, wz, seed);
+                const f32 t = worldgen::temperature(wx, wz, seed, h);
+                c = glm::mix(c, biome_key(worldgen::classify_biome(h, sl, m, t)), 0.42f);
+                if (h < worldgen::water_level + 0.7f) {
+                    c = glm::mix(c, Vec3{0.80f, 0.74f, 0.54f}, 0.55f); // beach band
+                }
+                const f32 shade = glm::clamp(
+                    glm::dot(n, glm::normalize(Vec3{0.5f, 0.85f, 0.35f})), 0.45f, 1.18f);
+                col = Vec4{glm::clamp(c * shade, Vec3{0.0f}, Vec3{1.0f}), 1.0f};
+            }
+            map_tiles_[static_cast<usize>(j) * cols + i] = {
+                Vec4{rx, ry, cell + 1.0f, cell + 1.0f}, col};
         }
-    }
+    });
     map_raster_center_ = map_center_;
     map_raster_zoom_ = map_zoom_;
+    map_raster_ppm_ = ppm;
+    map_raster_overscan_ = over;
 }
 
 void ClientApp::draw_map() {
@@ -1024,15 +1092,34 @@ void ClientApp::draw_map() {
     map_ppm_ = ppm;
     const Vec2 mc{panel.x + panel.z * 0.5f, panel.y + panel.w * 0.5f};
 
-    // Rebuild the cached terrain raster only when the view actually moved (so panning stays cheap).
-    if (map_center_ != map_raster_center_ || map_zoom_ != map_raster_zoom_ ||
-        ext.width != map_raster_ext_.x || ext.height != map_raster_ext_.y) {
+    // The cached terrain raster tracks the live view with a cheap screen-space transform
+    // (scale about the panel centre + a pan offset), so worldgen is only re-sampled when the
+    // view has actually outrun the raster's overscan (urgent) or - rate-limited to every few
+    // frames - after any movement. Dragging + zooming therefore stay smooth even though the
+    // raster itself is far finer than the old rebuild-every-frame one.
+    if (map_raster_cooldown_ > 0) {
+        --map_raster_cooldown_;
+    }
+    const bool ext_changed = ext.width != map_raster_ext_.x || ext.height != map_raster_ext_.y;
+    // Zoom + pan drift since the raster was built (the draw-time transform hides it).
+    f32 raster_scale = map_raster_zoom_ > 0.0f ? ppm / map_raster_ppm_ : 1.0f;
+    Vec2 raster_off = (map_raster_center_ - map_center_) * ppm;
+    const bool moved = map_center_ != map_raster_center_ || map_zoom_ != map_raster_zoom_;
+    const bool urgent = map_tiles_.empty() || ext_changed || raster_scale < 0.80f ||
+                        raster_scale > 1.25f ||
+                        std::abs(raster_off.x) > map_raster_overscan_ * 0.55f ||
+                        std::abs(raster_off.y) > map_raster_overscan_ * 0.55f;
+    if (urgent || (moved && map_raster_cooldown_ == 0)) {
         rebuild_map_raster(panel, ppm);
         map_raster_ext_ = UVec2{ext.width, ext.height};
+        map_raster_cooldown_ = 6; // ~0.1 s between non-urgent rebuilds
+        raster_scale = 1.0f;
+        raster_off = Vec2{0.0f};
     }
-    for (const auto& [rect, col] : map_tiles_) {
-        draw.rect(rect, col);
-    }
+    const f32 clip_l = panel.x + 5.0f, clip_t = panel.y + 38.0f;
+    renderer_->draw_ui_tiles(map_tiles_, mc, raster_off, raster_scale,
+                             Vec4{clip_l, clip_t, panel.x + panel.z - 5.0f - clip_l,
+                                  panel.y + panel.w - 5.0f - clip_t});
 
     // Title strip + frame on top of the raster.
     draw.rect(Vec4{panel.x, panel.y, panel.z, 34.0f}, Vec4{0.06f, 0.07f, 0.10f, 0.96f}, 10.0f);

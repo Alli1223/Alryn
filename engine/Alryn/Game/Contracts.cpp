@@ -24,8 +24,12 @@
 namespace alryn {
 
 namespace {
-constexpr f32 kAmbushSpawnRadius = 18.0f; // how far around the wagon ambushers appear
+constexpr f32 kAmbushSpawnRadius = 30.0f; // how far around the wagon ambushers appear - well
+                                          // outside the fight, so the party SEES them coming
 constexpr f32 kAggroRadius = 16.0f;       // an ambusher chases a player within this range
+// Far-off raiders JOG toward the wagon (easing to normal pace as they close on it), so the
+// distant spawn reads as an approach without making the ambush land any later.
+constexpr f32 kApproachSpeedMult = 1.55f;
 constexpr f32 kArcherShootRange = 16.0f;
 constexpr f32 kArcherKeepDist = 9.0f;
 constexpr f32 kArcherInterval = 2.4f;
@@ -1489,7 +1493,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                                   : 0u;
             e.health = enemy_max_health(e.kind);
             const f32 a = detail::hash01(h) * TwoPi;
-            const f32 r = kAmbushSpawnRadius + detail::hash01(h ^ 0x55u) * 6.0f;
+            const f32 r = kAmbushSpawnRadius + detail::hash01(h ^ 0x55u) * 8.0f;
             e.position = Vec3{w.position.x + std::cos(a) * r, 0.0f, w.position.z + std::sin(a) * r};
             e.position.y = ground_at(density, e.position.x, e.position.z);
             e.home = w.position;
@@ -1500,6 +1504,17 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
     // spawn inside the town while it's still parked / crossing / being hitched.
     const bool left_town =
         glm::length(Vec2{w.position.x - w.source.x, w.position.z - w.source.y}) > w.source_half + 4.0f;
+    // Towns are safe ground, wherever they are on the route: no fresh raiders spawn while the
+    // wagon sits inside ANY town (the source check above only covers the origin - this also
+    // covers the destination and towns the road passes through, e.g. a wheel shed on the way
+    // in). "In town" uses the same `half + 4` yardstick as left_town above, NOT the organic
+    // wall outline (which can bulge past half + 4), so the two notions can never disagree
+    // about the same spot. The wide search margin only helps FIND the nearby town first.
+    const auto town_here = worldgen::village_containing(w.position.x, w.position.z, wseed, 22.0f);
+    const bool in_town =
+        town_here &&
+        glm::length(Vec2{w.position.x - town_here->center.x, w.position.z - town_here->center.y}) <
+            town_here->half + 4.0f;
     const u32 total = ambush_count(w.difficulty, contract_modifier(w.id));
     if (w.ambush_waves_spawned == 0) {
         if (!left_town) {
@@ -1509,7 +1524,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
         w.ambush_waves_spawned = 1;
     } else if (w.ambush_waves_spawned == 1) {
         const int idx = static_cast<int>(w.progress);
-        if (idx > static_cast<int>(w.route.size()) / 2) {
+        if (idx > static_cast<int>(w.route.size()) / 2 && !in_town) {
             spawn_wave(total / 2u);
             w.ambush_waves_spawned = 2;
         }
@@ -1518,7 +1533,8 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
     // A stranded cart (a wheel is off, being refitted) is a sitting duck: opportunist bandits close
     // in on a timer while it's down, so the party has to defend the repair. (The cart is halted, so
     // the travel-progress waves above don't advance meanwhile - these are the only fresh spawns.)
-    if (wheel_off_ && left_town) {
+    // Not inside a town, though: a wheel shed within the walls is a safe, guarded repair.
+    if (wheel_off_ && left_town && !in_town) {
         bandit_cd_ -= dt.seconds;
         if (bandit_cd_ <= 0.0f && ambush_.size() < kRepairBanditCap) {
             spawn_wave(kBanditWaveSize);
@@ -1574,6 +1590,14 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             }
         }
 
+        // Approach jog: raiders spawn well outside the fight now, so while still far from
+        // their goal they close at kApproachSpeedMult, easing back to normal combat pace as
+        // they arrive - the ambush is visible coming in but lands just as fast.
+        const f32 sprint =
+            1.0f + (kApproachSpeedMult - 1.0f) *
+                       glm::smoothstep(kAggroRadius, kAmbushSpawnRadius,
+                                       glm::length(goal - e.position));
+
         if (e.kind == kEnemyHealer) {
             // Hang back out of reach (kite from the nearest player) and mend the most-wounded raider.
             const Vec3 target = victim != nullptr ? victim->controller.position() : w.position;
@@ -1586,7 +1610,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                     g = e.position + glm::normalize(away) * 5.0f;
                 }
             }
-            step_enemy(e, density, collider_scratch_, g, dt, kEnemySpeed, bridge);
+            step_enemy(e, density, collider_scratch_, g, dt, kEnemySpeed * sprint, bridge);
             const int widx = most_wounded_ally(e, std::span<const Enemy>(ambush_), kHealerRange);
             if (widx >= 0) {
                 Enemy& ally = ambush_[static_cast<usize>(widx)];
@@ -1642,7 +1666,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                         }
                     }
                 }
-                step_enemy(e, density, collider_scratch_, g, dt, kEnemySpeed, bridge);
+                step_enemy(e, density, collider_scratch_, g, dt, kEnemySpeed * sprint, bridge);
                 if (e.attack_cd <= 0.0f && td < kArcherShootRange) {
                     e.slam_windup = kAimWindup; // start the aim telegraph
                 }
@@ -1653,7 +1677,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
         if (e.kind == kEnemySapper) {
             // Sapper: ignores the players and rushes the WAGON, then DETONATES on contact - a heavy
             // hit to the cargo + a small blast on nearby players. Intercept it before it arrives!
-            step_enemy(e, density, collider_scratch_, w.position, dt, kSapperSpeed, bridge);
+            step_enemy(e, density, collider_scratch_, w.position, dt, kSapperSpeed * sprint, bridge);
             if (glm::length(w.position - e.position) < kSapperRange) {
                 if (!debug_god_) {
                     w.health -= kSapperDamage * rig_damage_mult(rig_level_);
@@ -1689,7 +1713,8 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                     e.attack_cd = kSlamCooldown;
                 }
             } else {
-                step_enemy(e, density, collider_scratch_, goal, dt, kEnemySpeed * 0.62f, bridge);
+                step_enemy(e, density, collider_scratch_, goal, dt, kEnemySpeed * 0.62f * sprint,
+                           bridge);
                 if (e.attack_cd <= 0.0f) {
                     const f32 trig = kSlamRadius * 0.8f; // commit once a target is well inside the ring
                     const bool nearV = victim != nullptr && best < trig;
@@ -1708,7 +1733,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
         const f32 rally = near_warlord(e, std::span<const Enemy>(ambush_)) ? kWarlordBuff : 1.0f;
         const f32 spd = (e.kind == kEnemyShield ? kEnemySpeed * 0.85f // shield-bearer is weighed down
                                                 : kEnemySpeed) *
-                        enrage * rally;
+                        enrage * rally * sprint;
         const f32 dmg = kEnemyAttackDamage * enrage * rally;
         step_enemy(e, density, collider_scratch_, goal, dt, spd, bridge);
         if (e.attack_cd <= 0.0f) {

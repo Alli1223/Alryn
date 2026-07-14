@@ -84,11 +84,15 @@ inline f32 moisture(f32 x, f32 z, u32 seed) {
 // Temperature field: VERY large, low-frequency climate zones (so a desert / cold belt spans many
 // towns, not a single patch), colder at altitude. ~0 cold .. 1 hot. With moisture + height this is
 // what separates desert (hot+dry) from bog (wet lowland) from forest/plains/mountains.
-inline f32 temperature(f32 x, f32 z, u32 seed) {
+// Overload for callers that already sampled the height at (x,z) - the altitude chill reuses it
+// instead of paying for another height() evaluation (the world-map raster grids its heights).
+inline f32 temperature(f32 x, f32 z, u32 seed, f32 h) {
     const f32 base = noise::fbm2d(x * 0.0013f, z * 0.0013f, 3, 2.0f, 0.5f, seed + 511u);
     const f32 warm = glm::smoothstep(-0.5f, 0.5f, base);
-    const f32 h = height(x, z, seed);
     return glm::clamp(warm - glm::smoothstep(3.0f, 12.0f, h) * 0.55f, 0.0f, 1.0f);
+}
+inline f32 temperature(f32 x, f32 z, u32 seed) {
+    return temperature(x, z, seed, height(x, z, seed));
 }
 
 // Roads connecting nearby towns (routed to avoid water) live in Terrain/RoadNetwork.h.
@@ -119,12 +123,14 @@ enum class Biome : u8 {
     Snow,      // the highest peaks
 };
 
-inline Biome biome_at(f32 x, f32 z, u32 seed) {
-    const f32 h = height(x, z, seed);
+// The classification itself, over already-sampled field values (h = height, s = slope as
+// slope() defines it, m = moisture, t = temperature). Callers that grid-sample the fields
+// (the world-map raster) classify without re-evaluating them; biome_at below samples then
+// delegates, so the thresholds live in exactly one place.
+inline Biome classify_biome(f32 h, f32 s, f32 m, f32 t) {
     if (h < water_level + 0.25f) {
         return Biome::Ocean;
     }
-    const f32 s = slope(x, z, seed);
     if (h > 11.0f) {
         return Biome::Snow;
     }
@@ -134,14 +140,22 @@ inline Biome biome_at(f32 x, f32 z, u32 seed) {
     if (h < water_level + 1.8f && s < 0.6f) {
         return Biome::Beach;
     }
-    const f32 m = moisture(x, z, seed);
     if (m > 0.42f && h < water_level + 4.5f) {
         return Biome::Bog; // wet hollows turn to swamp
     }
-    if (temperature(x, z, seed) > 0.58f && m < 0.08f) {
+    if (t > 0.58f && m < 0.08f) {
         return Biome::Desert; // hot + dry
     }
     return m > 0.02f ? Biome::Forest : Biome::Plains;
+}
+
+inline Biome biome_at(f32 x, f32 z, u32 seed) {
+    const f32 h = height(x, z, seed);
+    if (h < water_level + 0.25f) {
+        return Biome::Ocean; // cheap early-out before the slope/moisture/temperature samples
+    }
+    return classify_biome(h, slope(x, z, seed), moisture(x, z, seed),
+                          temperature(x, z, seed, h));
 }
 
 inline const char* biome_name(Biome b) {

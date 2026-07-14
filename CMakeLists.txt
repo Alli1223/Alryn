@@ -178,6 +178,8 @@ alryn_compile_shaders(alryn SHADERS
     ${CMAKE_SOURCE_DIR}/shaders/grass.vert
     ${CMAKE_SOURCE_DIR}/shaders/ui.vert
     ${CMAKE_SOURCE_DIR}/shaders/ui.frag
+    ${CMAKE_SOURCE_DIR}/shaders/ui_tile.vert
+    ${CMAKE_SOURCE_DIR}/shaders/ui_tile.frag
     ${CMAKE_SOURCE_DIR}/shaders/sky.vert
     ${CMAKE_SOURCE_DIR}/shaders/sky.frag
     ${CMAKE_SOURCE_DIR}/shaders/ssao.frag
