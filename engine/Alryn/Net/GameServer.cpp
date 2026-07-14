@@ -7,6 +7,7 @@
 #include <Alryn/World/VehicleTypes.h>
 #include <Alryn/World/Village.h>
 
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 
@@ -17,6 +18,17 @@ constexpr f32 kEditRadius = 2.5f;
 constexpr f32 kEditAmount = 2.0f;
 constexpr f32 kProjectileSpeed = 24.0f;
 constexpr usize kMaxProjectiles = 256;
+
+// Lightweight tick profiler: accumulates per-section time and logs a breakdown
+// every few seconds - always when ALRYN_SERVER_PROF is set, else only when the
+// server is visibly struggling (so a healthy server stays quiet).
+using ProfClock = std::chrono::steady_clock;
+f64 ms_since(ProfClock::time_point& mark) {
+    const auto now = ProfClock::now();
+    const f64 ms = std::chrono::duration<f64, std::milli>(now - mark).count();
+    mark = now;
+    return ms;
+}
 } // namespace
 
 bool GameServer::start(u16 port, u32 seed, u32 max_clients) {
@@ -33,6 +45,7 @@ bool GameServer::start(u16 port, u32 seed, u32 max_clients) {
 void GameServer::stop() {
     server_.stop();
     players_.clear();
+    town_spawn_cache_.clear(); // layouts depend on the world seed; a restart may use a new one
 }
 
 Vec3 GameServer::spawn_point(net::PlayerId id) const {
@@ -108,6 +121,8 @@ Vec3 GameServer::spawn_point(net::PlayerId id) const {
 }
 
 void GameServer::tick(Timestep dt) {
+    auto prof_mark = ProfClock::now();
+    const auto prof_tick_start = prof_mark;
     const DensitySampler density = sampler_.as_sampler();
     manager_.update(dt); // advances the day/night clock + (later) the transport objective
 
@@ -178,10 +193,13 @@ void GameServer::tick(Timestep dt) {
         }
     }
 
+    prof_ms_[0] += ms_since(prof_mark); // events: manager + poll + connect/input handling
+
     // Adopt each player's role (stats + walk speed) and resolve any ability they cast
     // this tick (against the live ambush enemies / allies) before they move.
     update_abilities(dt, density);
     update_spells(dt, density); // Mage combo spells + ageing out raised rock walls
+    prof_ms_[1] += ms_since(prof_mark); // abilities + spells
 
     for (auto& [id, player] : players_) {
         if (riders_.count(id) != 0u || id == pilot_) {
@@ -268,9 +286,12 @@ void GameServer::tick(Timestep dt) {
         step_projectile(pr, density, collider_scratch_, dt);
     }
     std::erase_if(projectiles_, [](const Projectile& pr) { return !pr.alive; });
+    prof_ms_[2] += ms_since(prof_mark); // player movement + projectiles
 
     update_townsfolk(dt, density); // peaceful villagers stroll the nearby towns
+    prof_ms_[3] += ms_since(prof_mark); // townsfolk spawn scan + strolling
     update_contracts(dt, density); // the wagon-transport game loop (offers / haul / ambush)
+    prof_ms_[4] += ms_since(prof_mark); // contracts: wagon + cargo + ambush
 
     net::Snapshot snapshot;
     snapshot.tick = ++tick_;
@@ -441,6 +462,78 @@ void GameServer::tick(Timestep dt) {
     }
     // fires / barricades stay empty (siege dormant); outcome/phase/wave keep defaults.
     server_.broadcast_snapshot(snapshot);
+    prof_ms_[5] += ms_since(prof_mark); // snapshot build + broadcast
+
+    // Periodic tick-cost breakdown: every ~5s of ticks, if profiling is enabled or the
+    // average tick is slow enough to drag the send rate below a smooth 60 Hz.
+    const f64 tick_ms =
+        std::chrono::duration<f64, std::milli>(ProfClock::now() - prof_tick_start).count();
+    prof_max_ = std::max(prof_max_, tick_ms);
+    if (++prof_ticks_ >= 300) {
+        static const bool prof_enabled = std::getenv("ALRYN_SERVER_PROF") != nullptr;
+        const f64 n = static_cast<f64>(prof_ticks_);
+        const f64 total =
+            (prof_ms_[0] + prof_ms_[1] + prof_ms_[2] + prof_ms_[3] + prof_ms_[4] + prof_ms_[5]) / n;
+        if (prof_enabled || total > 8.0) {
+            ALRYN_INFO("Server tick avg {:.2f}ms max {:.1f}ms | events {:.2f} abilities {:.2f} "
+                       "move {:.2f} townsfolk {:.2f} contracts {:.2f} snapshot {:.2f} "
+                       "({} players, {} villagers, {} enemies)",
+                       total, prof_max_, prof_ms_[0] / n, prof_ms_[1] / n, prof_ms_[2] / n,
+                       prof_ms_[3] / n, prof_ms_[4] / n, prof_ms_[5] / n, players_.size(),
+                       villagers_.size(), ambush_.size());
+        }
+        for (f64& v : prof_ms_) {
+            v = 0.0;
+        }
+        prof_ticks_ = 0;
+        prof_max_ = 0.0;
+    }
+}
+
+// The townsfolk spawn slots of town `v`: one villager per cottage (standing on the street
+// in front of it) plus, in ~half the towns, a few wall-archer guards. Laying the town out
+// (gates + for_each_house + the garrison ring) costs milliseconds - far too much for the
+// per-tick path - so it runs once per town and is cached for the server's lifetime.
+const std::vector<GameServer::TownSpawn>& GameServer::town_spawns(const worldgen::Village& v) {
+    const auto it = town_spawn_cache_.find(v.vseed);
+    if (it != town_spawn_cache_.end()) {
+        return it->second;
+    }
+    const u32 seed = sampler_.seed();
+    std::vector<TownSpawn> spawns;
+    const auto vgates = detail::village_gate_points(v, seed);
+    u32 hi = 0;
+    detail::for_each_house(v, seed, vgates, [&](const detail::HousePlot& h) {
+        const u32 id = (v.vseed * 2654435761u) ^ ((hi + 1u) * 40499u);
+        ++hi;
+        // Stand them on the street just in front of their house.
+        Vec2 toward = v.center - h.pos;
+        const f32 len = glm::length(toward);
+        toward = len > 1e-3f ? toward / len : Vec2{0.0f, 1.0f};
+        const Vec2 sp = h.pos + toward * (detail::house_reach(h.variant) + 1.0f);
+        spawns.push_back({id, 0, Vec3{sp.x, worldgen::height(sp.x, sp.y, seed), sp.y}, 0.0f});
+    });
+
+    // Garrison: ~half the towns post a few archer guards on their walls.
+    if (detail::hash01(detail::tree_hash(static_cast<int>(v.vseed), 7, 5151u)) < 0.5f) {
+        for (int gidx = 0; gidx < kWallGuardsPerTown; ++gidx) {
+            const u32 gid = (v.vseed * 2654435761u) ^
+                            ((static_cast<u32>(gidx) + 1u) * 26171u) ^ 0xA5A50000u;
+            f32 ang = TwoPi * (static_cast<f32>(gidx) + 0.5f) /
+                          static_cast<f32>(kWallGuardsPerTown) +
+                      detail::hash01(detail::tree_hash(static_cast<int>(v.vseed), gidx,
+                                                       5152u)) * 0.6f;
+            for (const detail::VillageGate& g : vgates) {
+                if (std::abs(detail::ang_diff(ang, g.ang)) < 0.28f) {
+                    ang += 0.45f; // nudge off a gate so the guard stands on solid wall
+                }
+            }
+            const Vec2 bp = detail::town_boundary(v, ang, seed);
+            spawns.push_back(
+                {gid, 2, Vec3{bp.x, worldgen::height(bp.x, bp.y, seed) + 2.0f, bp.y}, ang});
+        }
+    }
+    return town_spawn_cache_.emplace(v.vseed, std::move(spawns)).first->second;
 }
 
 // Peaceful townsfolk: ensure one villager per cottage in towns near a player, then have
@@ -449,69 +542,37 @@ void GameServer::tick(Timestep dt) {
 void GameServer::update_townsfolk(Timestep dt, const DensitySampler& density) {
     const u32 seed = sampler_.seed();
 
-    for (const auto& [pid, player] : players_) {
-        const Vec3 focus = player.controller.position();
-        const int vcx = static_cast<int>(std::floor(focus.x / worldgen::village_cell));
-        const int vcz = static_cast<int>(std::floor(focus.z / worldgen::village_cell));
-        for (int dz = -1; dz <= 1; ++dz) {
-            for (int dx = -1; dx <= 1; ++dx) {
-                const auto vv = worldgen::village_at(vcx + dx, vcz + dz, seed);
-                if (!vv) {
-                    continue;
-                }
-                u32 hi = 0;
-                const auto vgates = detail::village_gate_points(*vv, seed);
-                detail::for_each_house(*vv, seed, vgates, [&](const detail::HousePlot& h) {
-                    const u32 id = (vv->vseed * 2654435761u) ^ ((hi + 1u) * 40499u);
-                    ++hi;
-                    if (villagers_.count(id) != 0u) {
-                        return;
+    // (Re)spawn pass. Throttled: it only needs to notice a town coming into a player's
+    // range, so a few scans a second is plenty - and the town layout itself comes from
+    // the once-per-town cache (town_spawns), so a scan is just id lookups.
+    townsfolk_scan_cd_ -= dt.seconds;
+    if (townsfolk_scan_cd_ <= 0.0f) {
+        townsfolk_scan_cd_ = 0.25f;
+        for (const auto& [pid, player] : players_) {
+            const Vec3 focus = player.controller.position();
+            const int vcx = static_cast<int>(std::floor(focus.x / worldgen::village_cell));
+            const int vcz = static_cast<int>(std::floor(focus.z / worldgen::village_cell));
+            for (int dz = -1; dz <= 1; ++dz) {
+                for (int dx = -1; dx <= 1; ++dx) {
+                    const auto vv = worldgen::village_at(vcx + dx, vcz + dz, seed);
+                    if (!vv) {
+                        continue;
                     }
-                    // Stand them on the street just in front of their house.
-                    Vec2 toward = vv->center - h.pos;
-                    const f32 len = glm::length(toward);
-                    toward = len > 1e-3f ? toward / len : Vec2{0.0f, 1.0f};
-                    const Vec2 sp = h.pos + toward * (detail::house_reach(h.variant) + 1.0f);
-                    Villager vg;
-                    vg.id = id;
-                    vg.appearance = villager_look(id);
-                    vg.position = Vec3{sp.x, worldgen::height(sp.x, sp.y, seed), sp.y};
-                    vg.target = vg.position;
-                    vg.home_center = vv->center;
-                    vg.home_half = vv->half;
-                    vg.rng = id | 1u;
-                    villagers_.emplace(id, std::move(vg));
-                });
-
-                // Garrison: ~half the towns post a few archer guards on their walls.
-                if (detail::hash01(detail::tree_hash(static_cast<int>(vv->vseed), 7, 5151u)) < 0.5f) {
-                    for (int gidx = 0; gidx < kWallGuardsPerTown; ++gidx) {
-                        const u32 gid = (vv->vseed * 2654435761u) ^
-                                        ((static_cast<u32>(gidx) + 1u) * 26171u) ^ 0xA5A50000u;
-                        if (villagers_.count(gid) != 0u) {
+                    for (const TownSpawn& sp : town_spawns(*vv)) {
+                        if (villagers_.count(sp.id) != 0u) {
                             continue;
                         }
-                        f32 ang = TwoPi * (static_cast<f32>(gidx) + 0.5f) /
-                                      static_cast<f32>(kWallGuardsPerTown) +
-                                  detail::hash01(detail::tree_hash(static_cast<int>(vv->vseed), gidx,
-                                                                   5152u)) * 0.6f;
-                        for (const detail::VillageGate& g : vgates) {
-                            if (std::abs(detail::ang_diff(ang, g.ang)) < 0.28f) {
-                                ang += 0.45f; // nudge off a gate so the guard stands on solid wall
-                            }
-                        }
-                        const Vec2 bp = detail::town_boundary(*vv, ang, seed);
                         Villager vg;
-                        vg.id = gid;
-                        vg.kind = 2; // wall archer
-                        vg.appearance = villager_look(gid);
-                        vg.position = Vec3{bp.x, worldgen::height(bp.x, bp.y, seed) + 2.0f, bp.y};
+                        vg.id = sp.id;
+                        vg.kind = sp.kind;
+                        vg.appearance = villager_look(sp.id);
+                        vg.position = sp.position;
                         vg.target = vg.position;
                         vg.home_center = vv->center;
                         vg.home_half = vv->half;
-                        vg.yaw = ang; // facing outward over the wall
-                        vg.rng = gid | 1u;
-                        villagers_.emplace(gid, std::move(vg));
+                        vg.yaw = sp.yaw;
+                        vg.rng = sp.id | 1u;
+                        villagers_.emplace(sp.id, std::move(vg));
                     }
                 }
             }
