@@ -114,7 +114,11 @@ public:
     // shader so it sways in the breeze and bends away from the player.
     void draw_vegetation(const Mesh& mesh, const Mat4& model);
     // Alpha-blended geometry (foliage). tint.a is the opacity. Draw after opaque.
-    void draw_transparent(const Mesh& mesh, const Mat4& model, const Vec4& tint);
+    // `peek_dissolve` opts the draw into the camera->player peek-through tunnel: ONLY the
+    // tree canopy wants that - ground foliage (bushes, planter plants), roof fades and VFX
+    // must stay visible even when they sit between the camera and the player.
+    void draw_transparent(const Mesh& mesh, const Mat4& model, const Vec4& tint,
+                          bool peek_dissolve = false);
     // Animated water surface (its own shader). Draw after opaque.
     void draw_water(const Mesh& mesh, const Mat4& model);
     // Self-lit geometry (lantern glass, glowing windows): full-bright, casts shadows.
@@ -129,6 +133,18 @@ public:
                       f32 border = 0.0f, const Vec4& border_color = Vec4{0.0f});
     // A rounded-cap line segment of the given thickness (vector-font strokes, etc.).
     void draw_ui_segment(const Vec2& p0, const Vec2& p1, f32 thickness, const Vec4& color);
+    // One flat-colour tile for draw_ui_tiles (the world-map terrain raster).
+    struct UITile {
+        Vec4 rect{0.0f};  // xy = top-left (px), zw = size (px), in the raster's build-time space
+        Vec4 color{1.0f};
+    };
+    // Draws a batch of tiles as ONE instanced call (the per-rect push-constant path above
+    // costs a draw call each - far too slow for a fine terrain raster), interleaved in
+    // submission order with the other UI primitives. The whole batch is scaled by `scale`
+    // about `pivot` then shifted by `offset` (all px), so a cached raster can keep tracking
+    // pan/zoom between rebuilds; it is clipped to `scissor_xywh` (px; zero size = no clip).
+    void draw_ui_tiles(const std::vector<UITile>& tiles, const Vec2& pivot, const Vec2& offset,
+                       f32 scale, const Vec4& scissor_xywh);
 
     void end_frame();
 
@@ -158,7 +174,8 @@ private:
         Mat4 model;
         Vec4 tint;
         Layer layer;
-        Vec4 sphere; // world-space bounding sphere (xyz centre, w radius) for culling
+        Vec4 sphere;     // world-space bounding sphere (xyz centre, w radius) for culling
+        f32 peek = 0.0f; // foliage only: 1 = obeys the camera->player peek dissolve (canopy)
     };
 
     // One screen-space UI primitive (matches the ui.* push-constant block).
@@ -170,6 +187,18 @@ private:
         Vec4 border{0.0f};
     };
 
+    // One submitted draw_ui_tiles batch: a range of ui_tile_data_ plus its transform and
+    // clip, remembering how many UIDrawCmds preceded it so submission order is preserved.
+    struct UITileBatch {
+        u32 first = 0;
+        u32 count = 0;
+        usize before_item = 0; // drawn before ui_items_[before_item]
+        Vec2 pivot{0.0f};
+        Vec2 offset{0.0f};
+        f32 scale = 1.0f;
+        Vec4 scissor{0.0f}; // px; zero size = no clip
+    };
+
     struct FrameSync {
         VkSemaphore image_available = VK_NULL_HANDLE;
         VkFence in_flight = VK_NULL_HANDLE;
@@ -177,6 +206,7 @@ private:
         vk::Image shadow_map;                    // sun shadow map (per frame, no aliasing)
         vk::Image light_atlas;                   // spot-light shadow atlas (tiled)
         vk::Buffer light_ubo;                    // per-frame spot-light data
+        vk::Buffer ui_tiles;                     // per-frame instanced UI tile data (grown on demand)
         VkDescriptorSet shadow_set = VK_NULL_HANDLE;
     };
 
@@ -201,8 +231,9 @@ private:
     // The world-space bounding sphere of a draw (mesh local sphere transformed by the model),
     // cached on each DrawItem so the shadow/light/main passes can frustum-cull cheaply.
     static Vec4 world_sphere(const Mesh& mesh, const Mat4& model);
-    void submit(const Mesh& mesh, const Mat4& model, const Vec4& tint, Layer layer);
-    void push_constants(const Mat4& model, const Vec4& tint, bool vegetation = false);
+    void submit(const Mesh& mesh, const Mat4& model, const Vec4& tint, Layer layer,
+                f32 peek = 0.0f);
+    void push_constants(const DrawItem& item);
     void record_shadow_pass(VkCommandBuffer cmd);
     void record_light_atlas_pass(VkCommandBuffer cmd);
     void record_ssao_pass(VkCommandBuffer cmd); // depth prepass -> raw AO -> blurred AO
@@ -246,6 +277,7 @@ private:
     vk::Pipeline pipeline_rays_;      // god-ray radial march
     vk::Pipeline pipeline_composite_; // scene + bloom + rays -> swapchain
     vk::Pipeline pipeline_ui_;
+    vk::Pipeline pipeline_ui_tiles_; // instanced flat tiles (world-map raster)
     vk::Pipeline pipeline_sky_; // gradient sky + sun disc (drawn first in the main pass)
     VkPipeline current_pipeline_ = VK_NULL_HANDLE; // avoids redundant binds within a frame
 
@@ -270,6 +302,8 @@ private:
     std::vector<VkSemaphore> render_finished_; // one per swapchain image
     std::vector<DrawItem> draw_items_;         // deferred draws for the current frame
     std::vector<UIDrawCmd> ui_items_;          // deferred 2D UI primitives (drawn last)
+    std::vector<UITile> ui_tile_data_;         // all tiles submitted this frame (batch ranges)
+    std::vector<UITileBatch> ui_tile_batches_; // instanced tile batches, in submission order
     std::vector<SpotLight> pending_lights_;    // lights submitted this frame
     std::vector<Mat4> active_light_vp_;        // view-proj of the lights given atlas tiles
 

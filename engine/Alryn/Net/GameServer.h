@@ -365,6 +365,18 @@ private:
     static Collider barricade_collider(const Barricade& b);
     void append_barricades(const Vec3& pos, std::vector<Collider>& out) const;
 
+    // One pre-computed townsfolk spawn slot in a town (a cottage dweller or a wall
+    // guard): everything update_townsfolk needs to (re)spawn the villager cheaply.
+    // The full house layout + garrison walk is far too expensive to run per tick,
+    // so it's computed ONCE per town and cached here (keyed by vseed).
+    struct TownSpawn {
+        u32 id = 0;
+        u8 kind = 0; // 0 = stroller, 2 = wall archer
+        Vec3 position{0.0f};
+        f32 yaw = 0.0f;
+    };
+    const std::vector<TownSpawn>& town_spawns(const worldgen::Village& v);
+
     net::NetServer server_;
     GameManager manager_;                     // day/night clock + game-mode orchestration
     WorldSampler sampler_;
@@ -372,6 +384,8 @@ private:
     std::optional<CollisionWorld> collision_; // built in start() once the seed is known
     std::vector<Collider> collider_scratch_;  // reused per player each tick
     std::unordered_map<net::PlayerId, ServerPlayer> players_;
+    std::unordered_map<u32, std::vector<TownSpawn>> town_spawn_cache_; // vseed -> spawn slots
+    f32 townsfolk_scan_cd_ = 0.0f; // seconds until the next spawn rescan (throttled)
     std::vector<Projectile> projectiles_;     // live thrown bodies
     std::vector<Enemy> enemies_;              // live hostile NPCs
     std::unordered_map<u32, Villager> villagers_; // townsfolk + guards (Villager.kind)
@@ -454,6 +468,12 @@ private:
     u32 next_ambush_id_ = 1;
 
     u32 tick_ = 0;
+
+    // Tick profiler (see tick()): per-section ms accumulators over a logging window.
+    // Sections: events, abilities, movement, townsfolk, contracts, snapshot.
+    f64 prof_ms_[6] = {};
+    f64 prof_max_ = 0.0;
+    u32 prof_ticks_ = 0;
 };
 
 } // namespace alryn

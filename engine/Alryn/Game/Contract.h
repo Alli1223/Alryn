@@ -74,19 +74,21 @@ inline u8 goods_for_capacity(u32 capacity) {
     return static_cast<u8>(2u * (capacity > 0 ? capacity : 1u));
 }
 inline constexpr f32 kTowSizePenalty = 0.34f; // a hauled cart slows the puller per capacity unit
-inline constexpr f32 kDamageSpeedFloor = 0.5f; // a wrecked-but-rolling cart moves at half speed
+inline constexpr f32 kDamageSpeedFloor = 0.4f; // a wrecked-but-rolling cart crawls
+// Damage-only speed multiplier (for horse/teamster/driven carriage motion). QUADRATIC in the
+// health fraction (not linear) so raider hits on the cart slow it noticeably as soon as the
+// damage mounts - at half health it already crawls at ~55%, not a barely-felt 75% - making
+// "defend the wagon or limp" a live tradeoff. Endpoints unchanged: 1 at full health,
+// kDamageSpeedFloor at zero.
+inline f32 damage_speed_factor(f32 health_frac) {
+    const f32 hf = health_frac < 0.0f ? 0.0f : (health_frac > 1.0f ? 1.0f : health_frac);
+    return kDamageSpeedFloor + (1.0f - kDamageSpeedFloor) * hf * hf;
+}
 // How much slower a player hauls a cart of this `capacity` at this `health_frac` (0..1).
 // Bigger and more damaged => slower. Returns a multiplier in (0, 1].
 inline f32 tow_speed_factor(u32 capacity, f32 health_frac) {
     const f32 size = 1.0f / (1.0f + kTowSizePenalty * static_cast<f32>(capacity > 0 ? capacity - 1 : 0));
-    const f32 hf = health_frac < 0.0f ? 0.0f : (health_frac > 1.0f ? 1.0f : health_frac);
-    const f32 dmg = kDamageSpeedFloor + (1.0f - kDamageSpeedFloor) * hf;
-    return size * dmg;
-}
-// Damage-only speed multiplier (for horse/teamster/driven carriage motion).
-inline f32 damage_speed_factor(f32 health_frac) {
-    const f32 hf = health_frac < 0.0f ? 0.0f : (health_frac > 1.0f ? 1.0f : health_frac);
-    return kDamageSpeedFloor + (1.0f - kDamageSpeedFloor) * hf;
+    return size * damage_speed_factor(health_frac);
 }
 // Laden weight: a full load is heavy, so a fully-loaded cart tows slower; as crates spill or are lost
 // the bed lightens and the haul quickens (though it pays less - reward scales by the share delivered).

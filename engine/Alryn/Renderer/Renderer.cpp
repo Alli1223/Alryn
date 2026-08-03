@@ -62,6 +62,14 @@ struct UIPush {
     Vec4 border;
     Vec2 screen;
 };
+// Must match the push_constant block in ui_tile.vert.
+struct UITilePush {
+    Vec2 screen;
+    Vec2 pivot;
+    Vec2 offset;
+    f32 scale;
+    f32 pad;
+};
 
 // Must match the push_constant block in ssao.frag.
 struct SsaoPush {
@@ -424,6 +432,18 @@ bool Renderer::create_pipelines() {
     ui.blend = true;
     ui.vertexless = true;
     if (!pipeline_ui_.create(device_, ui)) {
+        return false;
+    }
+    // Instanced flat-colour tiles (world-map terrain raster): same pass/blend state as the
+    // UI pipeline, but each instance pulls its rect + colour from a vertex buffer, so tens
+    // of thousands of tiles cost one draw call instead of one push-constant draw each.
+    vk::PipelineConfig ui_tiles = ui;
+    ui_tiles.vertex_spv = shader_path("ui_tile.vert.spv").string();
+    ui_tiles.fragment_spv = shader_path("ui_tile.frag.spv").string();
+    ui_tiles.push_constant_size = sizeof(UITilePush);
+    ui_tiles.vertexless = false;
+    ui_tiles.instance_tiles = true;
+    if (!pipeline_ui_tiles_.create(device_, ui_tiles)) {
         return false;
     }
 
@@ -795,24 +815,30 @@ bool Renderer::begin_frame() {
     vkResetFences(device_.handle(), 1, &frame.in_flight);
     draw_items_.clear();
     ui_items_.clear();
+    ui_tile_data_.clear();
+    ui_tile_batches_.clear();
     pending_lights_.clear();
     frame_active_ = true;
     return true;
 }
 
-void Renderer::push_constants(const Mat4& model, const Vec4& tint, bool vegetation) {
+void Renderer::push_constants(const DrawItem& item) {
     FrameSync& frame = frames_[frame_index_];
     PushConstants push{};
-    push.mvp = projection_ * view_ * model;
-    push.model = model;
+    push.mvp = projection_ * view_ * item.model;
+    push.model = item.model;
     push.light_vp = light_view_proj_;
-    push.tint = tint;
+    push.tint = item.tint;
     // mesh.frag ignores params; the vegetation shader (grass.vert) reads the player
-    // position + wind there, while everything else carries the camera position (for
-    // the water shader).
-    push.params = vegetation
-                      ? Vec4{time_, player_position_.x, player_position_.z, wind_strength_}
-                      : Vec4{time_, camera_position_.x, camera_position_.y, camera_position_.z};
+    // position + wind there, foliage carries its peek-dissolve opt-in in w (the fragment
+    // shader only reads params.x + w), and everything else carries the camera position
+    // (for the water shader).
+    push.params =
+        item.layer == Layer::Vegetation
+            ? Vec4{time_, player_position_.x, player_position_.z, wind_strength_}
+        : item.layer == Layer::Foliage
+            ? Vec4{time_, camera_position_.x, camera_position_.y, item.peek}
+            : Vec4{time_, camera_position_.x, camera_position_.y, camera_position_.z};
     push.sun = Vec4{sun_direction_, sun_intensity_};
     push.sun_color = Vec4{sun_color_, shadow_strength_};
     // Layouts of all main pipelines are compatible, so push via the opaque one.
@@ -1156,7 +1182,7 @@ void Renderer::record_main_pass(VkCommandBuffer cmd) {
             pipe.bind(cmd);
             current_pipeline_ = pipe.handle();
         }
-        push_constants(item.model, item.tint, item.layer == Layer::Vegetation);
+        push_constants(item);
         item.mesh->bind(cmd);
         item.mesh->draw(cmd);
     }
@@ -1287,7 +1313,28 @@ void Renderer::record_post_pass(VkCommandBuffer cmd) {
 // the 3D image and draws alpha-blended rounded-rect / capsule SDF primitives, then
 // transitions the image to present.
 void Renderer::record_ui_pass(VkCommandBuffer cmd) {
-    if (!ui_items_.empty()) {
+    if (!ui_items_.empty() || !ui_tile_batches_.empty()) {
+        // Upload this frame's instanced tile data (host-visible per-frame buffer, grown on
+        // demand). The frame's fence was waited in begin_frame, so re-creating is safe.
+        FrameSync& frame = frames_[frame_index_];
+        bool tiles_ready = false;
+        if (!ui_tile_data_.empty()) {
+            const VkDeviceSize needed = ui_tile_data_.size() * sizeof(UITile);
+            if (!frame.ui_tiles.valid() || frame.ui_tiles.size() < needed) {
+                frame.ui_tiles.destroy();
+                // 1.5x headroom so a slowly-growing raster doesn't re-create every frame.
+                tiles_ready = frame.ui_tiles.create(device_, needed + needed / 2,
+                                                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                                                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            } else {
+                tiles_ready = true;
+            }
+            if (tiles_ready) {
+                frame.ui_tiles.upload(ui_tile_data_.data(), needed);
+            }
+        }
+
         VkRenderingAttachmentInfo color{};
         color.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
         color.imageView = swapchain_.view(image_index_);
@@ -1309,21 +1356,73 @@ void Renderer::record_ui_pass(VkCommandBuffer cmd) {
         const VkRect2D scissor{{0, 0}, extent};
         vkCmdSetViewport(cmd, 0, 1, &viewport);
         vkCmdSetScissor(cmd, 0, 1, &scissor);
+        const Vec2 screen{static_cast<f32>(extent.width), static_cast<f32>(extent.height)};
+
+        // Draws every tile batch whose submission point has been reached (before_item <= i),
+        // preserving the interleave with the push-constant primitives. Returns true if it
+        // drew anything (the caller must then re-bind the general UI pipeline).
+        usize next_batch = 0;
+        auto flush_tile_batches = [&](usize upto_item) {
+            bool drew = false;
+            while (next_batch < ui_tile_batches_.size() &&
+                   ui_tile_batches_[next_batch].before_item <= upto_item) {
+                const UITileBatch& b = ui_tile_batches_[next_batch++];
+                if (!tiles_ready) {
+                    continue; // buffer allocation failed - skip the raster, keep the rest of the UI
+                }
+                pipeline_ui_tiles_.bind(cmd);
+                VkBuffer vbuf = frame.ui_tiles.handle();
+                const VkDeviceSize voff = 0;
+                vkCmdBindVertexBuffers(cmd, 0, 1, &vbuf, &voff);
+                if (b.scissor.z > 0.0f && b.scissor.w > 0.0f) {
+                    // Clamp the batch clip to the framebuffer.
+                    const i32 sx = std::max(0, static_cast<i32>(b.scissor.x));
+                    const i32 sy = std::max(0, static_cast<i32>(b.scissor.y));
+                    const i32 ex = std::min(static_cast<i32>(extent.width),
+                                            static_cast<i32>(b.scissor.x + b.scissor.z));
+                    const i32 ey = std::min(static_cast<i32>(extent.height),
+                                            static_cast<i32>(b.scissor.y + b.scissor.w));
+                    if (ex <= sx || ey <= sy) {
+                        continue; // fully clipped
+                    }
+                    const VkRect2D clip{{sx, sy},
+                                        {static_cast<u32>(ex - sx), static_cast<u32>(ey - sy)}};
+                    vkCmdSetScissor(cmd, 0, 1, &clip);
+                }
+                UITilePush push{};
+                push.screen = screen;
+                push.pivot = b.pivot;
+                push.offset = b.offset;
+                push.scale = b.scale;
+                vkCmdPushConstants(cmd, pipeline_ui_tiles_.layout(),
+                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                                   sizeof(UITilePush), &push);
+                vkCmdDraw(cmd, 6, b.count, 0, b.first);
+                vkCmdSetScissor(cmd, 0, 1, &scissor); // restore the full-screen clip
+                drew = true;
+            }
+            return drew;
+        };
 
         pipeline_ui_.bind(cmd);
-        for (const UIDrawCmd& item : ui_items_) {
+        for (usize i = 0; i < ui_items_.size(); ++i) {
+            if (flush_tile_batches(i)) {
+                pipeline_ui_.bind(cmd);
+            }
+            const UIDrawCmd& item = ui_items_[i];
             UIPush push{};
             push.rect = item.rect;
             push.color = item.color;
             push.params = item.params;
             push.seg = item.seg;
             push.border = item.border;
-            push.screen = Vec2{static_cast<f32>(extent.width), static_cast<f32>(extent.height)};
+            push.screen = screen;
             vkCmdPushConstants(cmd, pipeline_ui_.layout(),
                                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                                sizeof(UIPush), &push);
             vkCmdDraw(cmd, 6, 1, 0, 0);
         }
+        flush_tile_batches(ui_items_.size()); // any batches submitted after the last primitive
         vkCmdEndRendering(cmd);
     }
 
@@ -1340,9 +1439,10 @@ Vec4 Renderer::world_sphere(const Mesh& mesh, const Mat4& model) {
     return Vec4{c, mesh.bounds_radius() * scale};
 }
 
-void Renderer::submit(const Mesh& mesh, const Mat4& model, const Vec4& tint, Layer layer) {
+void Renderer::submit(const Mesh& mesh, const Mat4& model, const Vec4& tint, Layer layer,
+                      f32 peek) {
     if (frame_active_) {
-        draw_items_.push_back({&mesh, model, tint, layer, world_sphere(mesh, model)});
+        draw_items_.push_back({&mesh, model, tint, layer, world_sphere(mesh, model), peek});
     }
 }
 
@@ -1362,8 +1462,9 @@ void Renderer::draw_glow(const Mesh& mesh, const Mat4& model, const Vec4& tint) 
     submit(mesh, model, tint, Layer::Glow);
 }
 
-void Renderer::draw_transparent(const Mesh& mesh, const Mat4& model, const Vec4& tint) {
-    submit(mesh, model, tint, Layer::Foliage);
+void Renderer::draw_transparent(const Mesh& mesh, const Mat4& model, const Vec4& tint,
+                                bool peek_dissolve) {
+    submit(mesh, model, tint, Layer::Foliage, peek_dissolve ? 1.0f : 0.0f);
 }
 
 void Renderer::draw_water(const Mesh& mesh, const Mat4& model) {
@@ -1385,6 +1486,23 @@ void Renderer::draw_ui_rect(const Vec4& rect_xywh, const Vec4& color, f32 radius
     cmd.params = Vec4{radius, 1.0f, 0.0f /*rect mode*/, border};
     cmd.border = border_color;
     ui_items_.push_back(cmd);
+}
+
+void Renderer::draw_ui_tiles(const std::vector<UITile>& tiles, const Vec2& pivot,
+                             const Vec2& offset, f32 scale, const Vec4& scissor_xywh) {
+    if (!frame_active_ || tiles.empty()) {
+        return;
+    }
+    UITileBatch batch;
+    batch.first = static_cast<u32>(ui_tile_data_.size());
+    batch.count = static_cast<u32>(tiles.size());
+    batch.before_item = ui_items_.size(); // keep submission order vs the other UI primitives
+    batch.pivot = pivot;
+    batch.offset = offset;
+    batch.scale = scale;
+    batch.scissor = scissor_xywh;
+    ui_tile_batches_.push_back(batch);
+    ui_tile_data_.insert(ui_tile_data_.end(), tiles.begin(), tiles.end());
 }
 
 void Renderer::draw_ui_segment(const Vec2& p0, const Vec2& p1, f32 thickness, const Vec4& color) {
@@ -1499,6 +1617,7 @@ void Renderer::on_shutdown() {
     pipeline_rays_.destroy();
     pipeline_composite_.destroy();
     pipeline_ui_.destroy();
+    pipeline_ui_tiles_.destroy();
     pipeline_sky_.destroy();
     if (shadow_sampler_ != VK_NULL_HANDLE) {
         vkDestroySampler(device_.handle(), shadow_sampler_, nullptr);

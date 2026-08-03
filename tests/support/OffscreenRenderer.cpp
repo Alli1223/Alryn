@@ -22,6 +22,15 @@ struct PushConstants {
 constexpr VkFormat kColorFormat = VK_FORMAT_R8G8B8A8_UNORM;
 constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
 
+// Must match the push_constant block in ui_tile.vert.
+struct UITilePush {
+    Vec2 screen;
+    Vec2 pivot;
+    Vec2 offset;
+    f32 scale;
+    f32 pad;
+};
+
 // Mirrors the renderer's Lights UBO (std140) so the shots exercise the real mesh.frag fog +
 // grading. Lighting arrays stay zeroed (count = 0); only the atmosphere fields are filled.
 struct GpuSpot {
@@ -117,6 +126,23 @@ bool OffscreenRenderer::init(u32 width, u32 height) {
     trans.blend = true;
     trans.depth_write = false;
     if (!pipeline_trans_.create(device_, trans)) {
+        return false;
+    }
+    // The instanced UI-tile overlay (the same ui_tile.* pipeline the game's world map uses).
+    // Depth format must match the pass's depth attachment, but the overlay neither tests nor
+    // writes it - it draws over the finished scene like the game's UI pass.
+    vk::PipelineConfig ui_tiles;
+    ui_tiles.vertex_spv = shader_path("ui_tile.vert.spv").string();
+    ui_tiles.fragment_spv = shader_path("ui_tile.frag.spv").string();
+    ui_tiles.color_format = kColorFormat;
+    ui_tiles.depth_format = kDepthFormat;
+    ui_tiles.push_constant_size = sizeof(UITilePush);
+    ui_tiles.cull_mode = VK_CULL_MODE_NONE;
+    ui_tiles.blend = true;
+    ui_tiles.depth_test = false;
+    ui_tiles.depth_write = false;
+    ui_tiles.instance_tiles = true;
+    if (!pipeline_ui_tiles_.create(device_, ui_tiles)) {
         return false;
     }
 
@@ -285,10 +311,26 @@ std::vector<u8> OffscreenRenderer::render(const std::vector<Draw>& draws, const 
                                           const Mat4& proj, const Vec3& background,
                                           const Vec3& sun_dir, const std::string& ppm_path,
                                           const Vec4& sun_color, const std::vector<Draw>& water,
-                                          const std::vector<Draw>& transparent) {
+                                          const std::vector<Draw>& transparent,
+                                          const UITileBatch* ui_tiles) {
     std::vector<u8> out(static_cast<usize>(width_) * height_ * 4, 0);
     if (!ready_) {
         return out;
+    }
+
+    // Stage the tile overlay's instance data before recording (host-visible vertex buffer).
+    const bool have_tiles = ui_tiles != nullptr && !ui_tiles->tiles.empty();
+    if (have_tiles) {
+        const VkDeviceSize needed = ui_tiles->tiles.size() * sizeof(UITile);
+        if (!tile_vbo_.valid() || tile_vbo_.size() < needed) {
+            tile_vbo_.destroy();
+            if (!tile_vbo_.create(device_, needed, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+                return out;
+            }
+        }
+        tile_vbo_.upload(ui_tiles->tiles.data(), needed);
     }
 
     // Feed the shared atmosphere UBO so the shots show the real fog + grading: fog fades distant
@@ -371,6 +413,31 @@ std::vector<u8> OffscreenRenderer::render(const std::vector<Draw>& draws, const 
         record(pipeline_, draws, Vec4{0.0f});
         record(pipeline_water_, water, Vec4{1.5f, cam_pos.x, cam_pos.y, cam_pos.z});
         record(pipeline_trans_, transparent, Vec4{0.0f});
+        // The instanced UI-tile overlay, exactly the way the game's UI pass draws the
+        // world-map raster: one instanced draw, batch transform in push constants,
+        // scissored to the batch clip.
+        if (have_tiles) {
+            pipeline_ui_tiles_.bind(cmd);
+            VkBuffer vbuf = tile_vbo_.handle();
+            const VkDeviceSize voff = 0;
+            vkCmdBindVertexBuffers(cmd, 0, 1, &vbuf, &voff);
+            if (ui_tiles->scissor.z > 0.0f && ui_tiles->scissor.w > 0.0f) {
+                const VkRect2D clip{
+                    {static_cast<i32>(ui_tiles->scissor.x), static_cast<i32>(ui_tiles->scissor.y)},
+                    {static_cast<u32>(ui_tiles->scissor.z), static_cast<u32>(ui_tiles->scissor.w)}};
+                vkCmdSetScissor(cmd, 0, 1, &clip);
+            }
+            UITilePush push{};
+            push.screen = Vec2{static_cast<f32>(width_), static_cast<f32>(height_)};
+            push.pivot = ui_tiles->pivot;
+            push.offset = ui_tiles->offset;
+            push.scale = ui_tiles->scale;
+            vkCmdPushConstants(cmd, pipeline_ui_tiles_.layout(),
+                               VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                               sizeof(UITilePush), &push);
+            vkCmdDraw(cmd, 6, static_cast<u32>(ui_tiles->tiles.size()), 0, 0);
+            vkCmdSetScissor(cmd, 0, 1, &scissor);
+        }
         vkCmdEndRendering(cmd);
 
         barrier(cmd, color_.handle(), VK_IMAGE_ASPECT_COLOR_BIT,
@@ -411,6 +478,8 @@ void OffscreenRenderer::shutdown() {
     }
     meshes_.clear(); // free GPU meshes before the device
     pipeline_trans_.destroy();
+    pipeline_ui_tiles_.destroy();
+    tile_vbo_.destroy();
     pipeline_water_.destroy();
     pipeline_.destroy();
     readback_.destroy();

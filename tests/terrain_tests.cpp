@@ -713,6 +713,7 @@ TEST_CASE("Village: decorative props don't spawn on the roads") {
     int towns_checked = 0;
     int decor_seen = 0;
     int on_road = 0;
+    int decor_on_street = 0; // decor must also clear the town's own dirt streets
     for (int cz = -8; cz <= 8 && towns_checked < 6; ++cz) {
         for (int cx = -8; cx <= 8 && towns_checked < 6; ++cx) {
             const auto v = worldgen::village_at(cx, cz, seed);
@@ -720,10 +721,14 @@ TEST_CASE("Village: decorative props don't spawn on the roads") {
                 continue;
             }
             ++towns_checked;
+            const auto gates = detail::village_gate_points(*v, seed);
+            std::array<detail::Street, 20> streets;
+            const int nstreets = detail::town_streets(*v, seed, gates, streets);
             for (const PropInstance& p : village_props(*v, seed)) {
                 const bool decorative =
                     p.category == PropCategory::Lantern || p.category == PropCategory::Planter ||
-                    p.category == PropCategory::Bush || p.category == PropCategory::Decor;
+                    p.category == PropCategory::Bush || p.category == PropCategory::Decor ||
+                    p.category == PropCategory::Well;
                 // The fountain is a big basin (~2.6 m radius), so its CENTRE must clear the road by
                 // that footprint, not merely sit off the lane - otherwise the basin overhangs the road.
                 const bool fountain = p.category == PropCategory::Fountain;
@@ -736,12 +741,27 @@ TEST_CASE("Village: decorative props don't spawn on the roads") {
                 if (d < need) {
                     ++on_road;
                 }
+                // Decor must also clear the town's own dirt streets, whose visible band reaches
+                // ~2.9 m from each centreline (town_path_amount's outer smoothstep edge) - the
+                // wagon drives these, so a pot/well/basin poking onto the band snags it. Fat
+                // props must clear by their footprint too (centre further out than the band).
+                const f32 street_need = p.category == PropCategory::Fountain ? 5.4f
+                                        : p.category == PropCategory::Well   ? 4.2f
+                                                                             : 2.85f;
+                for (int s = 0; s < nstreets; ++s) {
+                    if (detail::point_seg_dist(Vec2{p.position.x, p.position.z}, streets[s].a,
+                                               streets[s].b) < street_need) {
+                        ++decor_on_street;
+                        break;
+                    }
+                }
             }
         }
     }
     REQUIRE(towns_checked > 0);
     REQUIRE(decor_seen > 0);
-    CHECK(on_road == 0); // nothing decorative (and no fountain basin) sits in the road
+    CHECK(on_road == 0);         // nothing decorative (and no fountain basin) sits in the road
+    CHECK(decor_on_street == 0); // nothing decorative encroaches on a town street's dirt band
 }
 
 // The streaming terrain meshes a fixed vertical band per column; the surface must never rise above

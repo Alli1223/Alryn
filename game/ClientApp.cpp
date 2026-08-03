@@ -183,6 +183,7 @@ void ClientApp::enter_game(bool host_local, std::string host) {
         const u32 seed = world_seed();
         if (local_server_.start(kPort, seed)) {
             ALRYN_INFO("Hosting a local listen server on port {} (world seed {})", kPort, seed);
+            start_local_server_thread();
         } else {
             ALRYN_WARN("Port {} busy - joining the existing server instead", kPort);
             host_local_ = false;
@@ -196,6 +197,52 @@ void ClientApp::enter_game(bool host_local, std::string host) {
                host_, kPort);
     state_ = AppState::Playing;
     ui_.root().clear_children(); // hide the menu while in-game
+
+    // ALRYN_OPEN_MAP=1 opens the world map immediately, fully zoomed out - lets scripted /
+    // smoke runs exercise the map raster (instanced tile path, worst-case zoom) without
+    // input, like the other ALRYN_* debug toggles.
+    if (const char* env = std::getenv("ALRYN_OPEN_MAP"); env != nullptr && env[0] == '1') {
+        map_open_ = true;
+        map_zoom_ = 0.4f;
+    }
+}
+
+void ClientApp::start_local_server_thread() {
+    // Fixed ~60 Hz tick loop for the listen server, on its own thread. The render loop
+    // used to drive tick() once per frame, so a slow host frame rate (heavy scene, Debug
+    // build, window drag) throttled the snapshot rate for EVERY connected client - that
+    // is what made remote players stutter and teleport. sleep_until keeps the cadence
+    // steady; if a tick overruns, the loop re-anchors instead of spiralling to catch up.
+    server_thread_run_ = true;
+    server_thread_ = std::thread([this] {
+        constexpr auto period = std::chrono::microseconds(16667); // ~60 Hz
+        auto next = std::chrono::steady_clock::now() + period;
+        Clock clock;
+        while (server_thread_run_) {
+            const f32 dt = glm::clamp(static_cast<f32>(clock.restart()), 0.0f, 0.1f);
+            {
+                std::lock_guard<std::mutex> lock(server_mutex_);
+                if (!local_server_.running()) {
+                    break;
+                }
+                local_server_.tick(Timestep{dt});
+            }
+            const auto now = std::chrono::steady_clock::now();
+            if (next < now - std::chrono::milliseconds(100)) {
+                next = now; // fell far behind (a layout-cache miss) - re-anchor
+            }
+            std::this_thread::sleep_until(next);
+            next += period;
+        }
+    });
+}
+
+void ClientApp::stop_local_server() {
+    server_thread_run_ = false;
+    if (server_thread_.joinable()) {
+        server_thread_.join();
+    }
+    local_server_.stop();
 }
 
 void ClientApp::return_to_menu() {
@@ -206,7 +253,7 @@ void ClientApp::return_to_menu() {
     }
     paused_ = false;
     client_.disconnect();
-    local_server_.stop();
+    stop_local_server();
     terrain_.reset();
     visuals_.clear();
     enemy_visuals_.clear();
@@ -233,9 +280,7 @@ void ClientApp::on_update(Timestep dt) {
     }
 
     if (state_ == AppState::Playing) {
-        if (host_local_ && local_server_.running()) {
-            local_server_.tick(dt);
-        }
+        // (The listen server ticks on its own ~60 Hz thread; see start_local_server_thread.)
         if (renderer_ != nullptr) {
             update_day_night(dt);
         }
@@ -273,6 +318,7 @@ void ClientApp::on_update(Timestep dt) {
             }
         }
 
+        update_net_smooth(dt); // ease players/enemies/villagers toward the snapshot (kills jitter)
         apply_gamepad(dt); // fold a connected controller into the input path (before aim + camera)
         update_camera();
         if (renderer_ != nullptr) {
@@ -506,7 +552,7 @@ void ClientApp::on_render() {
                                                       glm::length(cc - cam_eye)));
         alpha = std::min(alpha, cam_fade);
         renderer_->draw_transparent(tree_library_[tree_index(t)].foliage, tree_model(t),
-                                    Vec4{t.tint, alpha});
+                                    Vec4{t.tint, alpha}, /*peek_dissolve=*/true);
     });
 
     draw_rain();    // world-space falling streaks (depth-tested against the scene)
@@ -592,7 +638,7 @@ void ClientApp::on_shutdown() {
     gate_door_mesh_.destroy();
     terrain_.reset();
     client_.disconnect();
-    local_server_.stop();
+    stop_local_server();
 }
 
 ClientApp::PlayerVisual& ClientApp::ensure_visual(net::PlayerId id,
@@ -771,6 +817,55 @@ void ClientApp::update_camera() {
     camera_.set_perspective(radians(iso::fov_deg), renderer_->aspect(), cam::near_plane,
                             cam::far_plane);
     camera_.look_at(eye, cam_target_);
+}
+
+void ClientApp::update_net_smooth(Timestep dt) {
+    if (!have_snapshot_) {
+        return;
+    }
+    ++net_smooth_stamp_;
+    // A new snapshot arrived since the last pass: its values are the raw authoritative ones,
+    // so refresh each entity's ease target from them (afterwards the snapshot holds smoothed
+    // values, so the stored target is what we keep gliding toward on the frames in between).
+    const bool fresh = snapshot_.tick != net_smooth_tick_;
+    net_smooth_tick_ = snapshot_.tick;
+    // Critically-damped ease, same constant as the wagons; a jump too big to be movement
+    // (spawn / respawn / debug teleport) snaps rather than gliding across the world.
+    constexpr f32 tau = 0.06f;
+    constexpr f32 snap_dist = 6.0f;
+    const f32 a = 1.0f - std::exp(-dt.seconds / tau);
+    auto ease = [&](u64 key, Vec3& pos, f32& yaw, bool snap) {
+        NetSmooth& s = net_smooth_[key];
+        s.stamp = net_smooth_stamp_;
+        if (fresh || !s.init) {
+            s.target = pos;
+            s.target_yaw = yaw;
+        }
+        if (!s.init || snap || glm::length(s.target - s.pos) > snap_dist) {
+            s.pos = s.target;
+            s.yaw = s.target_yaw;
+            s.init = true;
+        } else {
+            s.pos += (s.target - s.pos) * a;
+            s.yaw += detail::ang_diff(s.target_yaw, s.yaw) * a; // shortest arc
+        }
+        pos = s.pos;
+        yaw = s.yaw;
+    };
+    for (net::PlayerState& p : snapshot_.players) {
+        // Seated riders are placed through the (already smoothed) cart transform - easing their
+        // seat position against the smoothed cart would make them swim around the bench.
+        ease(0x100000000ull | p.id, p.position, p.yaw, p.seated != 0);
+    }
+    for (net::EnemyState& en : snapshot_.enemies) {
+        ease(0x200000000ull | en.id, en.position, en.yaw, false);
+    }
+    for (net::VillagerState& vg : snapshot_.villagers) {
+        ease(0x300000000ull | vg.id, vg.position, vg.yaw, false);
+    }
+    // Forget entities that left the snapshot (died / despawned / disconnected).
+    std::erase_if(net_smooth_,
+                  [&](const auto& kv) { return kv.second.stamp != net_smooth_stamp_; });
 }
 
 void ClientApp::update_visuals(Timestep dt) {

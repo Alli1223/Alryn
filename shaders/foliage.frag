@@ -1,11 +1,12 @@
 #version 450
 
-// Tree-canopy fragment shader: the same lit + shadowed look as mesh.frag, plus a
-// "peek-through" cutout. Canopy leaves growing BETWEEN the camera and the player (i.e.
-// occluding them) dissolve away through an ordered (Bayer) dither, so it looks like the
-// camera is peeking through the leaves to keep the character visible. Used ONLY by the
-// alpha-blended tree-foliage pipeline - tree trunks/branches and ground vegetation use
-// mesh.frag and stay solid, so the peek only thins the leafy tops, not the whole scene.
+// Alpha-blended foliage fragment shader: the same lit + shadowed look as mesh.frag, plus
+// an OPT-IN "peek-through" cutout (params.w = 1). Canopy leaves growing BETWEEN the camera
+// and the player (i.e. occluding them) dissolve away through an ordered (Bayer) dither, so
+// it looks like the camera is peeking through the leaves to keep the character visible.
+// Only the tree canopy opts in - bush leaves, planter plants, roof fades and transparent
+// VFX share this pipeline but keep params.w = 0 and stay solid in front of the player
+// (tree trunks/branches and ground grass/ferns use mesh.frag and never dissolve).
 
 layout(location = 0) in vec3 vWorldNormal;
 layout(location = 1) in vec3 vColor;
@@ -46,7 +47,7 @@ layout(push_constant) uniform Push {
     mat4 model;
     mat4 lightVP;
     vec4 tint;
-    vec4 params;
+    vec4 params; // x = time; w = peek-dissolve opt-in (1 = tree canopy, 0 = ground foliage/VFX)
     vec4 sun;
     vec4 sunColor;
 } pc;
@@ -233,7 +234,9 @@ float cloudShadow(vec3 wpos) {
 }
 
 void main() {
-    float peek = peekAmount();
+    // Only draws that opted in (params.w = 1, the tree canopy) dissolve for the peek
+    // tunnel - bushes, planter plants, roof fades and VFX stay solid in front of the player.
+    float peek = peekAmount() * clamp(pc.params.w, 0.0, 1.0);
     // Dither dissolve: discard a growing fraction of pixels toward the tunnel core, so the
     // foliage melts into a soft stippled hole the camera sees the character through.
     if (peek > bayerThreshold()) {

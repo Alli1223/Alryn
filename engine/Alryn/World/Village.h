@@ -581,23 +581,25 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
         occ.emplace_back(Vec2{s.x, s.z}, 2.0f);
     }
 
-    // A fountain set as a little plaza garden, just off the market on the cross-axis, ringed
-    // with planters so it reads as a deliberate feature rather than a lone basin.
+    // A fountain set as a little garden in the mid-town green (between the ring road and the
+    // wall), ringed with planters so it reads as a deliberate feature rather than a lone basin.
+    // The basin is wide (~2.6 m), so its CENTRE must clear every street by the dirt band
+    // (~2.9 m) plus that whole footprint - the old 12-14 m offsets could never satisfy even a
+    // 3.4 m clearance once the plaza ring road (octagon radius ~11.5 m) existed, and anything
+    // closer would overhang a street and snag the wagon.
     const Vec2 gate_dir = gates.empty() ? Vec2{0.0f, 1.0f} : glm::normalize(gates[0].pos - v.center);
     const Vec2 gate_perp{-gate_dir.y, gate_dir.x};
-    for (f32 off : {12.0f, -12.0f, 14.0f}) {
+    for (f32 off : {17.0f, -17.0f, 19.5f, -19.5f}) {
         const Vec2 fp = v.center + gate_perp * off;
-        // The basin is wide (~2.6 m), so it must clear the road / streets by its whole footprint -
-        // otherwise it floats out over the cart road. Try the next offset if this spot is blocked.
         if (!occupied(fp, 2.6f) && !in_river(fp.x, fp.y) &&
             roads::distance(fp.x, fp.y, seed) > roads::road_half_width + 3.0f &&
-            !on_street(fp.x, fp.y, 3.4f)) {
+            !on_street(fp.x, fp.y, 5.5f)) {
             push(PropCategory::Fountain, 0, fp.x, fp.y, 0.0f);
             occ.emplace_back(fp, 2.6f);
             for (int i = 0; i < 4; ++i) { // a ring of planters around the basin
                 const f32 a = TwoPi * (static_cast<f32>(i) + 0.5f) / 4.0f;
                 const Vec2 pp = fp + Vec2{std::cos(a), std::sin(a)} * 2.4f;
-                if (!occupied(pp, 0.6f) && !off_road(pp.x, pp.y)) {
+                if (!occupied(pp, 0.6f) && !off_road(pp.x, pp.y) && !on_street(pp.x, pp.y, 3.5f)) {
                     push(PropCategory::Planter, static_cast<u8>(i % 3), pp.x, pp.y, 0.0f);
                     occ.emplace_back(pp, 0.6f);
                 }
@@ -612,10 +614,14 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
     for (int i = 0; i < 8; ++i) {
         const f32 a = TwoPi * static_cast<f32>(i) / 8.0f +
                       detail::hash01(detail::tree_hash(vid, 3, 7600u)) * TwoPi;
-        const Vec2 wp = v.center + Vec2{std::cos(a), std::sin(a)} * 13.0f;
+        // Candidates sit past the ring road's outer dirt edge (octagon ~10.6-11.5 m + the
+        // ~2.9 m band): the old 13 m ring landed every candidate ON the ring road.
+        const Vec2 wp = v.center + Vec2{std::cos(a), std::sin(a)} * 16.0f;
+        // The well is ~1.4 m across, so its centre clears the street band (~2.9 m) by that
+        // footprint too - a well lip poking onto the street was another wagon snag.
         if (!occupied(wp, 1.4f) && !in_river(wp.x, wp.y) &&
             roads::distance(wp.x, wp.y, seed) > roads::road_half_width + 1.8f &&
-            !on_street(wp.x, wp.y, 2.8f)) {
+            !on_street(wp.x, wp.y, 4.3f)) {
             push(PropCategory::Well, 0, wp.x, wp.y,
                  detail::hash01(detail::tree_hash(vid, 4, 7601u)) * TwoPi);
             occ.emplace_back(wp, 1.4f);
@@ -629,6 +635,12 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
     // Street lanterns line the high street + branches (lit dirt roads at night), plus a few by the
     // plaza. The old raised COBBLESTONE tiles are gone - the streets are now worn DIRT, tinted onto
     // the terrain by town_path_amount / town_path_tint, matching the reference's earth roads.
+    // The visible dirt band reaches ~2.9 m from a street's centreline (town_path_amount's outer
+    // smoothstep edge), so a post must clear EVERY street by more than that - not just its own:
+    // at junctions (ring corners, ring->avenue joins) a post lining one street used to land
+    // squarely on the crossing one. kLanternOff keeps a strip of verge between band and post.
+    constexpr f32 kStreetClear = 3.4f; // min distance from any street centreline (band edge + verge)
+    constexpr f32 kLanternOff = 3.9f;  // side offset from the lined street (> kStreetClear)
     for (int s = 0; s < nstreets; ++s) {
         Vec2 dir = streets[s].b - streets[s].a;
         const f32 len = glm::length(dir);
@@ -640,18 +652,26 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
         const int n = static_cast<int>(len / 8.5f);
         for (int k = 1; k <= n; ++k) {
             const f32 side = (k % 2 == 0) ? 1.0f : -1.0f;
-            const Vec2 lp = streets[s].a + dir * (static_cast<f32>(k) * 8.5f) + nrm * side * 3.2f;
-            if (glm::length(lp - v.center) < 9.0f || in_river(lp.x, lp.y) || on_road(lp.x, lp.y)) {
-                continue; // keep the plaza, river + the actual road clear (lanterns sit BESIDE the road)
+            const Vec2 lp =
+                streets[s].a + dir * (static_cast<f32>(k) * 8.5f) + nrm * side * kLanternOff;
+            if (glm::length(lp - v.center) < 9.0f || in_river(lp.x, lp.y) || on_road(lp.x, lp.y) ||
+                on_street(lp.x, lp.y, kStreetClear)) {
+                continue; // keep the plaza, river, the road + EVERY street clear (posts sit BESIDE them)
             }
             push(PropCategory::Lantern, 0, lp.x, lp.y, 0.0f);
         }
     }
+    // A ring of lanterns around the plaza. They must sit OUTSIDE the ring road: the market's
+    // footprint (kMarketHalf + the post's clearance) meets the ring road's inner dirt edge, so
+    // there is no clear ground between them - the old radius (10.5 m) put these posts right ON
+    // the ring road (octagon apothem ~10.6 m).
+    const f32 plaza_ring_r = detail::kMarketHalf + 6.2f; // just beyond the ring road's outer dirt edge
     for (int i = 0; i < 6; ++i) {
         const f32 a = TwoPi * static_cast<f32>(i) / 6.0f + 0.4f;
-        const Vec2 lp{cx + std::cos(a) * 10.5f, cz + std::sin(a) * 10.5f};
-        if (occupied(lp, 0.6f) || in_river(lp.x, lp.y) || on_road(lp.x, lp.y)) {
-            continue; // a plaza-ring lantern must not land on the avenue/road or a building
+        const Vec2 lp{cx + std::cos(a) * plaza_ring_r, cz + std::sin(a) * plaza_ring_r};
+        if (occupied(lp, 0.6f) || in_river(lp.x, lp.y) || on_road(lp.x, lp.y) ||
+            on_street(lp.x, lp.y, kStreetClear)) {
+            continue; // a plaza-ring lantern must not land on a street/road or a building
         }
         push(PropCategory::Lantern, 0, lp.x, lp.y, 0.0f);
         occ.emplace_back(lp, 0.6f);
@@ -662,10 +682,13 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
     // repeated mesh, so they read as an ugly grid of identical square cobble patches - removed.)
 
     // Greenery: planters ringing the plaza + bushes scattered on open interior ground.
+    // Like the plaza lanterns, the planter ring sits OUTSIDE the ring road (the old 11 m
+    // radius put every planter ON the octagon's dirt band, right in the wagon's way).
     for (int i = 0; i < 5; ++i) {
         const f32 a = TwoPi * static_cast<f32>(i) / 5.0f + 1.1f;
-        const Vec2 pp = v.center + Vec2{std::cos(a), std::sin(a)} * 11.0f;
-        if (!occupied(pp, 0.7f) && !in_river(pp.x, pp.y) && !off_road(pp.x, pp.y)) {
+        const Vec2 pp = v.center + Vec2{std::cos(a), std::sin(a)} * 15.2f;
+        if (!occupied(pp, 0.7f) && !in_river(pp.x, pp.y) && !off_road(pp.x, pp.y) &&
+            !on_street(pp.x, pp.y, 3.6f)) {
             push(PropCategory::Planter, 0, pp.x, pp.y, 0.0f);
             occ.emplace_back(pp, 0.7f);
         }
@@ -680,7 +703,11 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
             continue; // stay inside the wall
         }
         const Vec2 bp = v.center + Vec2{std::cos(a), std::sin(a)} * rr;
-        if (occupied(bp, 1.0f) || in_river(bp.x, bp.y) || off_road(bp.x, bp.y)) {
+        // Clear every street by the dirt band + this prop's ~1 m footprint (off_road only
+        // covers the meandering cart road - scattered pots ON the town streets were what the
+        // wagon kept snagging on).
+        if (occupied(bp, 1.0f) || in_river(bp.x, bp.y) || off_road(bp.x, bp.y) ||
+            on_street(bp.x, bp.y, 3.9f)) {
             continue;
         }
         const bool planter = detail::hash01(detail::tree_hash(vid, i, 7702u)) < 0.22f;
@@ -694,9 +721,12 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
     // tucked against house fronts, plus stalls, hay, signposts and troughs scattered along the
     // streets and plaza. Everything avoids the occupancy list and the gate->market avenues, so
     // nothing blocks a building or the cart's route.
-    auto on_avenue = [&](const Vec2& p) {
+    // True when a prop of footprint radius `foot` at `p` would encroach on a street: its
+    // centre must clear every centreline by the visible dirt band (~2.9 m) plus that
+    // footprint, so no clutter edge pokes onto the road the wagon drives.
+    auto on_avenue = [&](const Vec2& p, f32 foot) {
         for (int s = 0; s < nstreets; ++s) {
-            if (detail::point_seg_dist(p, streets[s].a, streets[s].b) < 2.6f) {
+            if (detail::point_seg_dist(p, streets[s].a, streets[s].b) < 2.9f + foot) {
                 return true; // keep clutter off the streets / cart route
             }
         }
@@ -711,7 +741,8 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
         const Vec2 along{front.y, -front.x};                // along the street, beside the house front
         const f32 soff = (detail::hash01(detail::tree_hash(vid, static_cast<int>(hi), 8101u)) - 0.5f) * 1.2f;
         const Vec2 dp = h.pos + along * (detail::house_reach(h.variant) * 0.82f + 0.5f) + front * soff;
-        if (occupied(dp, 0.8f) || on_avenue(dp) || in_river(dp.x, dp.y) || off_road(dp.x, dp.y)) {
+        if (occupied(dp, 0.8f) || on_avenue(dp, 0.8f) || in_river(dp.x, dp.y) ||
+            off_road(dp.x, dp.y)) {
             continue;
         }
         const u8 stored[5] = {0, 1, 6, 7, 2}; // barrel, crates, woodpile, sacks, hay
@@ -740,7 +771,7 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
         bool fits = !occupied(gc, gu + 0.9f) && !in_river(gc.x, gc.y);
         for (const Vec2& c : corners) {
             const Vec2 d = c - v.center;
-            fits = fits && !on_avenue(c) && !off_road(c.x, c.y) &&
+            fits = fits && !on_avenue(c, 0.5f) && !off_road(c.x, c.y) &&
                    glm::length(d) < worldgen::town_radius(v, std::atan2(d.y, d.x), seed) - 1.4f;
         }
         if (!fits) {
@@ -777,7 +808,8 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
             continue; // stay inside the wall
         }
         const Vec2 dp = v.center + Vec2{std::cos(a), std::sin(a)} * rr;
-        if (occupied(dp, 1.1f) || on_avenue(dp) || in_river(dp.x, dp.y) || off_road(dp.x, dp.y)) {
+        if (occupied(dp, 1.1f) || on_avenue(dp, 1.1f) || in_river(dp.x, dp.y) ||
+            off_road(dp.x, dp.y)) {
             continue;
         }
         u8 var;
