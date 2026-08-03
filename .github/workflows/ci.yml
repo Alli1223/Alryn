@@ -5,6 +5,9 @@ name: CI
 # headless runner; the logic tests (core, scene, physics, collision, terrain,
 # networking, character, UI) all run. Shaders need glslc, which the runner does not
 # have - CompileShaders just warns and skips, which is fine for the logic tests.
+#
+# Shipping a build is a separate pipeline: push a v* tag and release.yml builds the
+# Windows client and publishes the downloadable zip to the Releases page.
 on:
   push:
     branches: [main]
