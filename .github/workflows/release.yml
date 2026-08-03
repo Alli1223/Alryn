@@ -75,10 +75,11 @@ jobs:
           # find the x64 CRT folder by looking for the DLL itself rather than guessing.
           $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
           $vs = & $vswhere -latest -property installationPath
-          # Skip the onecore\ variant - that CRT targets OneCore editions; a desktop
-          # game wants the plain x64 desktop runtime.
+          # Match ONLY <version>\x64\Microsoft.VC***.CRT - the plain desktop runtime.
+          # The same tree also carries onecore\ (OneCore editions) and spectre\
+          # (mitigation-enabled) variants that a desktop game should not ship.
           $crt = Get-ChildItem (Join-Path $vs 'VC\Redist\MSVC') -Recurse -Filter 'msvcp140.dll' -ErrorAction SilentlyContinue |
-                 Where-Object { $_.FullName -like '*\x64\*' -and $_.FullName -notlike '*\onecore\*' } |
+                 Where-Object { $_.FullName -match '\\Redist\\MSVC\\[\d.]+\\x64\\Microsoft\.VC\d+\.CRT\\msvcp140\.dll$' } |
                  Sort-Object { $_.VersionInfo.FileVersionRaw } -Descending |
                  Select-Object -First 1
           if (-not $crt) { throw "Could not find the x64 MSVC runtime redistributable under $vs" }
