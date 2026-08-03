@@ -71,17 +71,26 @@ jobs:
           Copy-Item 'build/bin/Release/shaders' $stage -Recurse
           Copy-Item 'README.md' $stage
           # Ship the MSVC runtime DLLs so players do not need the VC++ redistributable.
-          try {
-            $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-            $vs = & $vswhere -latest -property installationPath
-            $redist = Get-ChildItem (Join-Path $vs 'VC\Redist\MSVC') -Directory | Sort-Object Name -Descending | Select-Object -First 1
-            foreach ($crt in Get-ChildItem (Join-Path $redist.FullName 'x64') -Filter 'Microsoft.VC*.CRT' -Directory) {
-              Copy-Item (Join-Path $crt.FullName '*.dll') $stage
-            }
-          } catch {
-            Write-Warning "Could not stage the MSVC runtime DLLs: $_"
+          # The Redist tree holds both versioned folders and layout ones (v145/...), so
+          # find the x64 CRT folder by looking for the DLL itself rather than guessing.
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -property installationPath
+          $crt = Get-ChildItem (Join-Path $vs 'VC\Redist\MSVC') -Recurse -Filter 'msvcp140.dll' -ErrorAction SilentlyContinue |
+                 Where-Object { $_.FullName -like '*\x64\*' } |
+                 Sort-Object { $_.VersionInfo.FileVersionRaw } -Descending |
+                 Select-Object -First 1
+          if (-not $crt) { throw "Could not find the x64 MSVC runtime redistributable under $vs" }
+          Write-Host "Staging MSVC runtime from $($crt.DirectoryName)"
+          Copy-Item (Join-Path $crt.DirectoryName '*.dll') $stage
+
+          # A missing runtime DLL only shows up as a cryptic error box on the player's
+          # machine, so make sure the ones the executable imports are actually in there.
+          foreach ($dll in 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll') {
+            if (-not (Test-Path (Join-Path $stage $dll))) { throw "$dll is missing from the package" }
           }
+
           Compress-Archive -Path $stage -DestinationPath (Join-Path 'dist' "$name.zip") -Force
+          Get-ChildItem $stage | Select-Object Name, Length | Format-Table -AutoSize
           Get-ChildItem 'dist/*.zip' | Format-List Name, Length
 
       - name: Upload package
@@ -180,6 +189,12 @@ jobs:
 
           Full changelog: https://github.com/$REPO/commits/$VERSION
           EOF
-          args=(release create "$VERSION" dist/* --repo "$REPO" --title "Alryn $VERSION" --notes-file notes.md)
-          case "$VERSION" in *-*) args+=(--prerelease);; esac  # v1.2.3-beta1 etc.
-          gh "${args[@]}"
+          # Re-running the workflow for a tag refreshes the assets instead of failing.
+          if gh release view "$VERSION" --repo "$REPO" >/dev/null 2>&1; then
+            echo "Release $VERSION already exists - replacing its assets"
+            gh release upload "$VERSION" dist/* --repo "$REPO" --clobber
+          else
+            args=(release create "$VERSION" dist/* --repo "$REPO" --title "Alryn $VERSION" --notes-file notes.md)
+            case "$VERSION" in *-*) args+=(--prerelease);; esac  # v1.2.3-beta1 etc.
+            gh "${args[@]}"
+          fi
