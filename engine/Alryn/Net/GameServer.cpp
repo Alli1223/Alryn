@@ -79,8 +79,19 @@ Vec3 GameServer::spawn_point(net::PlayerId id) const {
                     const f32 d = glm::length(v->center);
                     if (d < best) {
                         best = d;
-                        x = v->center.x + base_x * 0.4f; // land in the plaza, spread out
-                        z = v->center.y + base_z * 0.4f;
+                        // Land at the plaza's edge ACROSS the market from the contract depot (the main
+                        // gate side) - not on top of the market cross, which used to hide a freshly
+                        // joined hero from the camera - so a new hero's first walk is through the
+                        // market to the wagons (the client marks the way). Players spread along the edge.
+                        const auto gates = detail::village_gate_points(*v, seed);
+                        Vec2 dir = gates.empty() ? Vec2{0.0f, 1.0f} : gates[0].pos - v->center;
+                        dir = glm::length(dir) > 1e-3f ? glm::normalize(dir) : Vec2{0.0f, 1.0f};
+                        const Vec2 perp{-dir.y, dir.x};
+                        const f32 lane = (static_cast<f32>(id % 5u) - 2.0f) * 1.5f;
+                        const f32 row = static_cast<f32>((id / 5u) % 2u) * 1.0f;
+                        const Vec2 p = v->center - dir * (detail::kMarketHalf + row) + perp * lane;
+                        x = p.x;
+                        z = p.y;
                         village_found = true;
                     }
                 }
@@ -137,6 +148,7 @@ void GameServer::tick(Timestep dt) {
                 ServerPlayer player;
                 player.controller.set_position(spawn_point(e.client));
                 players_.emplace(e.client, std::move(player));
+                assign_color(e.client); // their own identity colour (ring / name plate / map pin)
                 server_.send_welcome(e.client, net::Welcome{e.client, sampler_.seed()});
                 ALRYN_INFO("Player {} joined ({} online)", e.client, players_.size());
                 break;
@@ -195,6 +207,8 @@ void GameServer::tick(Timestep dt) {
 
     prof_ms_[0] += ms_since(prof_mark); // events: manager + poll + connect/input handling
 
+    // Names + colours, the saved hero adopted on joining, skill-tree learning and the journey.
+    update_progression(dt);
     // Adopt each player's role (stats + walk speed) and resolve any ability they cast
     // this tick (against the live ambush enemies / allies) before they move.
     update_abilities(dt, density);
@@ -337,6 +351,19 @@ void GameServer::tick(Timestep dt) {
                                     buffs, player.hit_fx, player.input.appearance, player.equipment,
                                     player.owned_tier, ranks, player.conduit_target,
                                     player.input.aim});
+        net::PlayerState& ps = snapshot.players.back();
+        ps.color = player.color;
+        ps.level = player.level;
+        ps.name = player.name;
+        ps.progress.xp = player.xp;
+        ps.progress.known = player.known[static_cast<u8>(player.role)];
+        ps.progress.talents = player.talent_mask();
+        ps.progress.journey = player.journey;
+        ps.progress.owned_tier = player.owned_tier;
+        ps.progress.ranks = ranks;
+        ps.progress.kills = player.kills;
+        ps.progress.deliveries = player.deliveries;
+        ps.progress.best_danger = player.best_danger;
     }
     snapshot.projectiles.reserve(projectiles_.size());
     for (const Projectile& pr : projectiles_) {

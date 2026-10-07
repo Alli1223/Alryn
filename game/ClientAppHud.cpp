@@ -145,6 +145,8 @@ void ClientApp::draw_hud() {
         }
     }
     draw_combat_text(draw, W, H); // world-anchored "SHATTER!" / "EMPOWERED!" / "CANNONBALL!" labels
+    draw_nameplates(draw, W, H);  // teammates' names in their colours (+ edge pointers when off-screen)
+    draw_party_frames(draw, W, H, ts);
 
     // Always-on corner minimap (hidden while the full M map is open).
     if (!map_open_) {
@@ -188,6 +190,7 @@ void ClientApp::draw_hud() {
             ch += r.h;
         }
         hud::plaque(draw, Vec4{margin, margin, cw + pad * 2.0f, ch + pad * 1.6f});
+        objective_bottom_ = margin + ch + pad * 1.6f;
         f32 y = margin + pad * 0.9f;
         for (const Row& r : rows) {
             r.paint(margin + pad, y);
@@ -195,9 +198,32 @@ void ClientApp::draw_hud() {
         }
     };
 
+    // The hero's JOURNEY - the linear spine of goals - closes out the objective card: the current
+    // step, what to do, and progress toward a counted goal.
+    auto add_journey = [&]() {
+        const u8 step = std::min<u8>(live_progress_.journey, kJourneySteps);
+        const JourneyStep js = journey_step(step);
+        rows.push_back({ts * 0.55f, 0.0f, [&draw, ts](f32 x, f32 y) {
+                            draw.line(Vec2{x, y + ts * 0.22f}, Vec2{x + ts * 9.0f, y + ts * 0.22f}, 1.0f,
+                                      hud::alpha(ui::theme().accent, 0.45f));
+                        }});
+        const std::string head = step >= kJourneySteps ? std::string{"JOURNEY COMPLETE"}
+                                                       : std::format("JOURNEY {} / {}", step + 1, kJourneySteps);
+        add_text(head, ts * 0.5f, hud::alpha(ui::theme().text_muted, 0.95f), 0.3f);
+        std::string title = js.title;
+        if (js.target > 0) {
+            HeroRecord rec;
+            rec.kills = live_progress_.kills;
+            title += std::format("   {} / {}", journey_count(step, rec), js.target);
+        }
+        add_text(title, ts * 0.72f, hud::kGold, 0.3f);
+        add_rich(js.hint, ts * 0.52f, ui::theme().text);
+    };
+
     if (phase == static_cast<u8>(ContractPhase::Offer)) {
         add_heading("FIND A CONTRACT", ts * 0.95f);
         add_text("WALK UP TO A WAGON TO VIEW ITS CONTRACT", ts * 0.68f, ui::theme().text, 0.2f);
+        add_journey();
         paint_card(0.0f);
         // A small floating tag over every offered wagon so you can see where they are and
         // pick which to walk to (gold reward; the one you're next to gets the full panel).
@@ -334,6 +360,7 @@ void ClientApp::draw_hud() {
         }
         for (char& c : hint) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
         add_rich(hint, ts * 0.62f, ui::theme().text);
+        add_journey();
         paint_card(0.0f);
         // Wheel-off: a prominent centred alert + the re-attach progress bar while someone refits.
         if (wheel_off) {
@@ -355,6 +382,7 @@ void ClientApp::draw_hud() {
         }
         draw_dest_arrow(draw, feet, Vec3{wg.dest.x, feet.y, wg.dest.z}, W);
     } else {
+        add_journey();
         paint_card(0.0f);
     }
 
@@ -406,7 +434,18 @@ void ClientApp::draw_hud() {
     const f32 hs = ts * 0.64f;
     hud::rich(draw, Vec2{x, controls_y - hs * 2.0f}, combo_hint, hs,
               can_combo ? hud::kGold : hud::alpha(ui::theme().text, 0.85f));
-    hud::rich(draw, Vec2{x, controls_y}, "[M] MAP   [K] SKILLS   [U] GEAR", hs, ui::theme().text);
+    {
+        // An unspent skill point makes the [K] hint glow, so levelling up leads straight to the tree.
+        const i32 pts = points_available(role_, hero_level(), known_mask(), live_progress_.talents);
+        const f32 cw = hud::rich(draw, Vec2{x, controls_y}, "[M] MAP   [K] SKILLS   [U] GEAR   [J] JOURNEY", hs,
+                                 ui::theme().text);
+        if (pts > 0) {
+            const f32 pulse = 0.82f + 0.18f * std::sin(elapsed_ * 5.0f);
+            hud::chip(draw, Vec2{x + cw + hs * 0.6f, controls_y - hs * 0.3f},
+                      std::format("{} SKILL POINT{}", pts, pts == 1 ? "" : "S"), hs * 0.8f,
+                      Vec4{1.0f, 0.85f, 0.45f, pulse});
+        }
+    }
 
     hud::plaque(draw, frame, 0.86f);
     // The crest: the role's signature icon on a round gold-rimmed boss, in the role's colour.
@@ -414,11 +453,23 @@ void ClientApp::draw_hud() {
     const Vec2 cc{frame.x + frame_pad + crest * 0.5f, frame.y + frame.w * 0.5f};
     hud::medallion(draw, cc, crest * 0.5f - 4.0f, Vec4{0.06f, 0.04f, 0.03f, 1.0f});
     draw_ability_icon(draw, role_, 0, cc.x, cc.y, crest * 0.2f, Vec4{rc, 1.0f});
-    // Name over the health gauge, which trails a pale ghost of recent damage as it drains.
+    // The hero's name (in their identity colour) + level over the health gauge, which trails a pale
+    // ghost of recent damage as it drains; a thin XP gauge runs along the frame's foot.
     const f32 gx = frame.x + frame_pad * 2.0f + crest;
-    const f32 name_s = ts * 0.78f;
-    hud::text(draw, Vec2{gx, frame.y + frame_pad * 0.9f}, role_name(role_), name_s,
-              Vec4{glm::mix(rc, Vec3{1.0f}, 0.45f), 1.0f}, ui::TextAlign::Left, ui::FontFace::Display);
+    const f32 name_s = ts * 0.74f;
+    const Vec3 pc = player_color(live_color_);
+    const f32 nw = hud::text(draw, Vec2{gx, frame.y + frame_pad * 0.9f}, hero_.name, name_s,
+                             Vec4{glm::mix(pc, Vec3{1.0f}, 0.4f), 1.0f}, ui::TextAlign::Left, ui::FontFace::Display);
+    hud::chip(draw, Vec2{gx + nw + ts * 0.4f, frame.y + frame_pad * 0.9f - ts * 0.05f},
+              std::format("LV {}  {}", hero_level(), role_name(role_)), ts * 0.46f, hud::kGold);
+    {
+        const f32 xf = level_progress(live_progress_.xp);
+        const Vec4 xb{frame.x + 8.0f, frame.y + frame.w - 6.0f, frame.z - 16.0f, 3.5f};
+        draw.rect(xb, Vec4{0.02f, 0.015f, 0.01f, 0.85f}, 1.75f);
+        if (xf > 0.0f) {
+            draw.gradient(Vec4{xb.x, xb.y, xb.z * xf, xb.w}, hud::kGold, hud::shade(hud::kGold, 0.7f), 1.75f);
+        }
+    }
     hud_hp_ghost_ = std::max(hp, hud_hp_ghost_ - frame_dt_ * 0.45f);
     const Vec4 gauge{gx, frame.y + frame.w - frame_pad - bh, bw, bh};
     const Vec3 col = glm::mix(Vec3{0.88f, 0.22f, 0.18f}, Vec3{0.38f, 0.8f, 0.32f}, hp);
@@ -513,6 +564,9 @@ void ClientApp::draw_hud() {
             draw.line(pa, pb, thick, mark_col);
         }
     }
+
+    draw_journey_guide(draw, W, H); // the next goal's marker + the town arrival banner
+    draw_progress_fx(draw, W, H);   // LEVEL UP / JOURNEY STEP banners
 
     // NPC pathfinding routes (toggled via the F1 overlay's NPC PATHS button / F4). Drawn whether or
     // not the panel is open, so you can switch it on and watch the routes while playing.
@@ -793,6 +847,22 @@ void ClientApp::draw_ability_bar(ui::DrawList& draw, f32 W, f32 H, f32 ts) {
             continue;
         }
 
+        if (!knows(known_mask(), static_cast<u8>(a))) {
+            // Not learned yet (a Mage's locked element): a dim socket with the faded icon + a padlock.
+            draw.gradient(sr, Vec4{0.04f, 0.03f, 0.02f, 0.9f}, Vec4{0.08f, 0.06f, 0.04f, 0.9f}, r,
+                          hud::alpha(th.accent, 0.3f), 1.25f);
+            draw_ability_icon(draw, role_, static_cast<u8>(a), sx + slot * 0.5f, sy + slot * 0.52f, slot * 0.26f,
+                              Vec4{0.4f, 0.36f, 0.32f, 0.6f});
+            const Vec2 lc{sx + slot * 0.72f, sy + slot * 0.72f};
+            const f32 ls = slot * 0.13f;
+            draw.line(Vec2{lc.x - ls * 0.32f, lc.y - ls * 0.1f}, Vec2{lc.x - ls * 0.32f, lc.y - ls * 0.42f}, ls * 0.2f, th.text_muted);
+            draw.line(Vec2{lc.x + ls * 0.32f, lc.y - ls * 0.1f}, Vec2{lc.x + ls * 0.32f, lc.y - ls * 0.42f}, ls * 0.2f, th.text_muted);
+            draw.line(Vec2{lc.x - ls * 0.32f, lc.y - ls * 0.42f}, Vec2{lc.x + ls * 0.32f, lc.y - ls * 0.42f}, ls * 0.2f, th.text_muted);
+            draw.rect(Vec4{lc.x - ls * 0.55f, lc.y - ls * 0.1f, ls * 1.1f, ls * 0.85f}, th.text_muted, ls * 0.15f);
+            hud::key_cap(draw, Vec2{sx - ks * 0.35f, sy - ks * 0.2f}, std::format("{}", i + 1), ks);
+            sx += slot + gap;
+            continue;
+        }
         const AbilityDef ab = ability_def(role_, static_cast<u8>(a));
         // The Mage shares ONE spell cooldown (mage_cd_) across its element slots; the slot's element
         // single-spell cooldown is the reference for the sweep. Other roles use the per-ability cd.
@@ -1097,12 +1167,25 @@ void ClientApp::draw_minimap(ui::DrawList& draw, const Vec3& feet, f32 W, f32 H)
         }
         draw.rect(Vec4{d.x - 4.0f, d.y - 4.0f, 8.0f, 8.0f}, Vec4{0.98f, 0.82f, 0.3f, 1.0f}, 4.0f);
     }
+    // Teammates, each in their identity colour (edge-clamped so you can always find them).
+    for (const net::PlayerState& p : snapshot_.players) {
+        if (p.id == my_id_) {
+            continue;
+        }
+        Vec2 d = to_mm(Vec2{p.position.x, p.position.z});
+        const f32 r = sz * 0.5f - 6.0f;
+        if (const Vec2 off = d - c; glm::length(off) > r) {
+            d = c + glm::normalize(off) * r;
+        }
+        draw.rect(Vec4{d.x - 5.0f, d.y - 5.0f, 10.0f, 10.0f}, Vec4{0.05f, 0.03f, 0.02f, 0.9f}, 5.0f);
+        draw.rect(Vec4{d.x - 3.5f, d.y - 3.5f, 7.0f, 7.0f}, Vec4{player_color(p.color), 1.0f}, 3.5f);
+    }
     // The player at centre + a heading tick.
     const Vec2 fwd{std::cos(face_yaw_), std::sin(face_yaw_)};
     draw.line(c, c + fwd * 12.0f, 4.5f, Vec4{0.05f, 0.03f, 0.02f, 0.9f});
     draw.line(c, c + fwd * 11.0f, 2.5f, Vec4{1.0f, 0.97f, 0.9f, 1.0f});
     draw.rect(Vec4{c.x - 4.5f, c.y - 4.5f, 9.0f, 9.0f}, Vec4{0.05f, 0.03f, 0.02f, 0.9f}, 4.5f);
-    draw.rect(Vec4{c.x - 3.0f, c.y - 3.0f, 6.0f, 6.0f}, Vec4{1.0f, 0.97f, 0.9f, 1.0f}, 3.0f);
+    draw.rect(Vec4{c.x - 3.0f, c.y - 3.0f, 6.0f, 6.0f}, Vec4{glm::mix(player_color(live_color_), Vec3{1.0f}, 0.3f), 1.0f}, 3.0f);
     // North, on the rim.
     const Vec2 n{c.x, box.y + 2.0f};
     draw.rect(Vec4{n.x - 9.0f, n.y - 9.0f, 18.0f, 18.0f}, Vec4{0.08f, 0.05f, 0.03f, 1.0f}, 9.0f);
@@ -1380,7 +1463,7 @@ void ClientApp::draw_map() {
         }
     }
 
-    // Players: each in the hair colour they chose; the local player is ringed white with a facing
+    // Players: each in their identity colour; the local player is ringed white with a facing
     // tick. Drawn even when panned away, so you can always see where everyone is.
     if (have_snapshot_) {
         for (const net::PlayerState& pl : snapshot_.players) {
@@ -1388,7 +1471,7 @@ void ClientApp::draw_map() {
             if (!in_panel(p)) {
                 continue;
             }
-            const Vec3 col = hair_color_of(pl.appearance.hair_color);
+            const Vec3 col = player_color(pl.color);
             const bool me = pl.id == my_id_;
             const f32 r = me ? 6.0f : 5.0f;
             if (me) {
@@ -1453,208 +1536,6 @@ void ClientApp::draw_map() {
                       hs * 2.6f};
         hud::plaque(draw, hp, 0.9f);
         hud::rich(draw, Vec2{hp.x + 13.0f, hp.y + (hp.w - hs) * 0.5f}, help, hs, th.text);
-    }
-}
-
-void ClientApp::draw_skills() {
-    if (renderer_ == nullptr) {
-        return;
-    }
-    const VkExtent2D ext = renderer_->extent();
-    const f32 W = static_cast<f32>(ext.width);
-    const f32 H = static_cast<f32>(ext.height);
-    ui::DrawList draw{*renderer_};
-    const ui::Theme& th = ui::theme();
-    const Vec3 accent = role_color(role_);
-
-    // The shared overlay window: the world dimmed behind a studded, gold-bound board.
-    const f32 mg = std::min(W, H) * 0.06f;
-    const Vec4 panel{mg, mg, W - 2.0f * mg, H - 2.0f * mg};
-    f32 hy = hud::window(draw, W, H, panel, "SKILLS");
-    const f32 hx = panel.x + 34.0f;
-    // The chosen role and its fantasy, right-aligned on the title row.
-    const std::string rn = std::format("{}  -  {}", role_name(role_), role_desc(role_));
-    hud::text(draw, Vec2{panel.x + panel.z - 34.0f, panel.y + 34.0f}, rn, 15.0f,
-              Vec4{glm::mix(accent, Vec3{1.0f}, 0.3f), 1.0f}, ui::TextAlign::Right);
-
-    // Controls reminder (the role's primary / secondary mouse actions), as key caps.
-    const char* primary = role_ == PlayerRole::Knight  ? "SWORD SWING"
-                          : role_ == PlayerRole::Hunter ? "LOOSE AN ARROW"
-                                                        : "ARCANE BOLT";
-    const char* secondary = role_ == PlayerRole::Knight  ? "RAISE SHIELD (BLOCK)"
-                            : role_ == PlayerRole::Cleric ? "CHANNEL HEAL AURA"
-                                                          : "BUILD TERRAIN";
-    hud::rich(draw, Vec2{hx, hy}, std::format("[LEFT CLICK] {}     [RIGHT CLICK] {}", primary, secondary),
-              12.0f, th.text);
-    hy += 24.0f;
-    hud::rich(draw, Vec2{hx, hy},
-              "CLICK A SKILL TO EQUIP / UNEQUIP  -  DRAG THE ACTION BAR TO REORDER ([1]-[4])", 12.0f,
-              th.text_muted);
-    hy += 28.0f;
-
-    // The tree: a role crest on the left branches to every ability node (one per row). Each node
-    // is clickable to equip/unequip (skills_click hit-tests skill_node_rects_).
-    const f32 rows_top = hy;
-    const f32 rows_bot = panel.y + panel.w - 46.0f;
-    const f32 row_h = (rows_bot - rows_top) / static_cast<f32>(kAbilityCount);
-    const f32 icon_box = std::min(row_h * 0.6f, 74.0f);
-    const f32 node_x = panel.x + 176.0f; // left edge of the ability icon boxes
-    const f32 root_x = panel.x + 58.0f;
-    const f32 root_y = (rows_top + rows_bot) * 0.5f;
-    const f32 root_r = std::min(icon_box * 0.62f, 44.0f);
-    const Vec4 branch = hud::alpha(th.accent, 0.55f);
-
-    // Branch connectors (drawn first, behind the nodes): an inked elbow from the crest to each row.
-    for (u8 i = 0; i < kAbilityCount; ++i) {
-        const f32 cy = rows_top + (static_cast<f32>(i) + 0.5f) * row_h;
-        const f32 midx = (root_x + root_r + node_x) * 0.5f;
-        for (const auto& [w, col] : {std::pair{4.5f, Vec4{0.03f, 0.02f, 0.01f, 0.6f}}, std::pair{2.0f, branch}}) {
-            draw.line(Vec2{root_x + root_r, root_y}, Vec2{midx, root_y}, w, col);
-            draw.line(Vec2{midx, root_y}, Vec2{midx, cy}, w, col);
-            draw.line(Vec2{midx, cy}, Vec2{node_x, cy}, w, col);
-        }
-    }
-
-    // The crest: a round gold-bound boss with the role's signature icon, its name beneath.
-    hud::medallion(draw, Vec2{root_x, root_y}, root_r, Vec4{0.07f, 0.05f, 0.035f, 1.0f});
-    draw.glow(Vec4{root_x - root_r, root_y - root_r, root_r * 2.0f, root_r * 2.0f}, Vec4{accent, 0.3f},
-              Vec4{accent, 0.0f});
-    draw_ability_icon(draw, role_, 0, root_x, root_y, root_r * 0.5f, Vec4{accent, 1.0f});
-    hud::text(draw, Vec2{root_x, root_y + root_r + 12.0f}, role_name(role_), 14.0f, th.text,
-              ui::TextAlign::Center, ui::FontFace::Display);
-
-    // One node per ability: icon slot + (when equipped) its hotkey badge, then name, cooldown,
-    // description and an equip status. Equipped nodes glow; the whole row is the click target.
-    // Upgradeable abilities also show rank pips + a town/gold-gated UPGRADE button.
-    const f32 row_right = panel.x + panel.z - 24.0f;
-    const Vec3 sk_feet = local_feet();
-    const bool sk_in_town =
-        world_seed_ != 0 && worldgen::inside_village(sk_feet.x, sk_feet.z, world_seed_, 6.0f);
-    for (u8 i = 0; i < kAbilityCount; ++i) {
-        const AbilityDef ab = ability_def(role_, i);
-        const f32 ry = rows_top + static_cast<f32>(i) * row_h;
-        const f32 cy = ry + row_h * 0.5f;
-        const f32 bx = node_x;
-        const f32 by = cy - icon_box * 0.5f;
-
-        // Which hotbar slot (if any) this ability is bound to.
-        int bound = -1;
-        for (u8 s = 0; s < kAbilitySlots; ++s) {
-            if (bar_[s] == static_cast<int>(i)) {
-                bound = static_cast<int>(s);
-            }
-        }
-        const bool equipped = bound >= 0;
-
-        // The whole row is clickable to equip / unequip.
-        skill_node_rects_[i] = ui::Rect{bx - 6.0f, ry + 3.0f, row_right - bx + 6.0f, row_h - 6.0f};
-        // Each row is a card; an equipped skill's card is lit gold, the one under the cursor lifts.
-        const Vec4 card{bx - 8.0f, ry + 3.0f, row_right - bx + 12.0f, row_h - 6.0f};
-        const bool hot = in_rect(pointer_pos(), skill_node_rects_[i]);
-        draw.gradient(card, Vec4{1.0f, 0.9f, 0.7f, equipped ? 0.10f : (hot ? 0.07f : 0.035f)},
-                      Vec4{1.0f, 0.9f, 0.7f, equipped ? 0.04f : 0.015f}, 8.0f,
-                      hud::alpha(th.accent, equipped ? 0.55f : (hot ? 0.4f : 0.15f)), 1.0f);
-
-        const Vec4 ib{bx, by, icon_box, icon_box};
-        if (equipped) {
-            draw.shadow(ib, icon_box * 0.16f, 7.0f, hud::alpha(th.accent_hover, 0.35f));
-        }
-        draw.gradient(ib, Vec4{0.13f, 0.095f, 0.065f, 0.97f}, Vec4{0.05f, 0.035f, 0.025f, 0.97f},
-                      icon_box * 0.16f, equipped ? th.accent_hover : hud::alpha(th.accent, 0.45f),
-                      equipped ? 2.0f : 1.25f);
-        draw.glow(Vec4{bx + icon_box * 0.12f, by + icon_box * 0.12f, icon_box * 0.76f, icon_box * 0.76f},
-                  Vec4{accent, equipped ? 0.28f : 0.1f}, Vec4{accent, 0.0f});
-        const Vec4 icol{equipped ? glm::mix(accent, Vec3{1.0f}, 0.2f) : accent * 0.6f, 1.0f};
-        draw_ability_icon(draw, role_, i, bx + icon_box * 0.5f, by + icon_box * 0.5f,
-                          icon_box * 0.26f, icol);
-        if (equipped) { // a key cap showing which hotkey (1..4) casts it
-            hud::key_cap(draw, Vec2{bx - 6.0f, by - 4.0f}, std::format("{}", bound + 1), icon_box * 0.17f);
-        }
-
-        const f32 tx = bx + icon_box + 24.0f;
-        const f32 name_sz = std::min(row_h * 0.22f, 20.0f);
-        f32 ty = cy - name_sz - 7.0f;
-        const Vec4 name_col{equipped ? th.text : Vec4{th.text.r, th.text.g, th.text.b, 0.8f}};
-        const f32 nw = hud::text(draw, Vec2{tx, ty}, ab.name, name_sz, name_col, ui::TextAlign::Left,
-                                 ui::FontFace::Display);
-        hud::chip(draw, Vec2{tx + nw + 14.0f, ty + name_sz * 0.5f - name_sz * 0.58f * 0.85f},
-                  std::format("{:.0f}S COOLDOWN", ab.cooldown), name_sz * 0.5f, hud::alpha(th.text_muted, 0.95f));
-        // Equip status on the right of the name line.
-        const std::string status = equipped ? std::format("EQUIPPED  [{}]", bound + 1) : "CLICK TO EQUIP";
-        const f32 stsz = name_sz * 0.56f;
-        hud::rich(draw, Vec2{row_right - hud::rich_width(status, stsz), ty + name_sz * 0.3f}, status, stsz,
-                  equipped ? hud::kGood : hud::alpha(th.accent_hover, 0.8f));
-        ty += name_sz + 9.0f;
-        const f32 desc_sz = std::min(row_h * 0.15f, 14.0f);
-        // Upgradeable transformations tease what the final rank buys until it's bought.
-        std::string desc{ab.desc};
-        if (const char* mx = ability_rank_desc(role_, i);
-            mx[0] != '\0' && ability_rank_[i] < kMaxAbilityRank) {
-            desc += std::format("  ({})", mx);
-        }
-        // Wrapped to stay clear of the upgrade controls on the right (two lines at most).
-        const f32 desc_w = row_right - tx - (ability_max_rank(role_, i) > 0 ? 250.0f : 24.0f);
-        f32 ly = ty;
-        for (const std::string& line : hud::wrap(desc, desc_sz, desc_w)) {
-            draw.text(Vec2{tx, ly}, line, desc_sz, th.text_muted);
-            ly += desc_sz * 1.35f;
-        }
-
-        // Upgrade controls for upgradeable abilities: rank pips + a town/gold-gated UPGRADE button.
-        skill_upgrade_rects_[i] = ui::Rect{};
-        const u8 maxr = ability_max_rank(role_, i);
-        if (maxr > 0) {
-            const u8 rank = ability_rank_[i];
-            const f32 pip = std::min(row_h * 0.16f, 14.0f);
-            const f32 py = ty - name_sz * 0.15f;
-            f32 px = row_right - static_cast<f32>(maxr) * (pip + 5.0f);
-            const f32 pips_left = px;
-            for (u8 k = 0; k < maxr; ++k) {
-                // Rank gems: lit gold for ranks bought, dark sockets for the rest.
-                const bool filled = k < rank;
-                const Vec4 gr{px, py, pip, pip};
-                if (filled) {
-                    draw.shadow(gr, pip * 0.5f, 4.0f, hud::alpha(th.accent_hover, 0.5f));
-                    draw.gradient(gr, th.accent_hover, hud::shade(th.accent, 0.7f), pip * 0.5f, hud::kInk, 1.0f);
-                } else {
-                    draw.gradient(gr, Vec4{0.03f, 0.02f, 0.015f, 0.95f}, Vec4{0.1f, 0.07f, 0.05f, 0.95f},
-                                  pip * 0.5f, hud::alpha(th.accent, 0.5f), 1.0f);
-                }
-                px += pip + 5.0f;
-            }
-            if (rank < maxr) {
-                const u32 cost = ability_upgrade_price(static_cast<u8>(rank + 1));
-                const bool can = sk_in_town && snapshot_.money >= cost;
-                const std::string label = std::format("UPGRADE  {}", cost);
-                const f32 bsz = std::min(row_h * 0.15f, 13.0f);
-                const f32 bw = hud::width(label, bsz) + bsz * 3.0f;
-                const f32 bh = bsz + 14.0f;
-                const f32 ubx = pips_left - bw - 12.0f;
-                const f32 uby = py - (bh - pip) * 0.5f;
-                const Vec4 ub{ubx, uby, bw, bh};
-                if (can) {
-                    draw.shadow(ub, bh * 0.3f, 6.0f, hud::alpha(th.accent_hover, 0.3f));
-                }
-                draw.gradient(ub, can ? th.accent_hover : Vec4{0.2f, 0.15f, 0.1f, 0.92f},
-                              can ? hud::shade(th.accent, 0.72f) : Vec4{0.12f, 0.09f, 0.06f, 0.92f}, bh * 0.3f,
-                              can ? hud::shade(th.accent, 0.5f) : hud::alpha(th.accent, 0.35f), 1.25f);
-                hud::coin(draw, Vec2{ubx + bsz * 1.0f, uby + bh * 0.5f}, bsz * 0.45f);
-                ui::TextStyle us = hud::style(bsz, can ? th.accent_text : th.text_muted);
-                us.outline = Vec4{0.0f};
-                us.shadow = can ? Vec4{1.0f, 0.9f, 0.6f, 0.35f} : Vec4{0.0f, 0.0f, 0.0f, 0.5f};
-                draw.text(Vec2{ubx + bsz * 1.9f, uby + (bh - bsz) * 0.5f}, label, us);
-                skill_upgrade_rects_[i] = ui::Rect{ubx, uby, bw, bh};
-            } else {
-                hud::text(draw, Vec2{pips_left - 10.0f, py - 1.0f}, "MAX", pip, hud::kGold, ui::TextAlign::Right);
-            }
-        }
-    }
-
-    const f32 fy = panel.y + panel.w - 34.0f;
-    const f32 cw = hud::rich(draw, Vec2{hx, fy}, "[K] / [ESC] CLOSE", 12.0f, th.text_muted);
-    if (!sk_in_town) {
-        hud::text(draw, Vec2{hx + cw + 30.0f, fy}, "VISIT A TOWN TO BUY UPGRADES", 12.0f,
-                  hud::alpha(th.accent_hover, 0.85f));
     }
 }
 

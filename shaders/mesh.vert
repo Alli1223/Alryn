@@ -3,6 +3,7 @@
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec3 inColor;
+layout(location = 3) in float inSway; // static geometry: 0; terrain: -(cobble paving weight)
 
 layout(push_constant) uniform Push {
     mat4 mvp;
@@ -18,6 +19,7 @@ layout(location = 0) out vec3 vWorldNormal;
 layout(location = 1) out vec3 vColor;
 layout(location = 2) out vec4 vShadowCoord;
 layout(location = 3) out vec3 vWorldPos;
+layout(location = 4) out float vPave; // 0..1 cobblestone paving (town streets + plazas)
 
 void main() {
     vec4 worldPos = pc.model * vec4(inPosition, 1.0);
@@ -26,4 +28,5 @@ void main() {
     vColor = inColor;
     vShadowCoord = pc.lightVP * worldPos;
     vWorldPos = worldPos.xyz;
+    vPave = clamp(-inSway, 0.0, 1.0);
 }

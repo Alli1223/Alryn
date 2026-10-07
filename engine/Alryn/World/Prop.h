@@ -98,8 +98,16 @@ inline constexpr u32 kHouseBlacksmith = kHouseVariants + 2; // 10
 inline constexpr u32 kHouseDefs = kHouseVariants + 3;      // total entries in houses()
 
 // How many distinct Decor props `PropLibrary` builds (barrel, crates, hay, market stall,
-// signpost, trough, woodpile, sacks). The town scatter picks a specific one by index.
-inline constexpr u32 kDecorVariants = 8;
+// signpost, trough, woodpile, sacks, street bench, flower cart, banner poles (crimson / blue), notice
+// board, flower barrel, pennant bunting). The town scatter picks a specific one by index.
+inline constexpr u32 kDecorVariants = 15;
+inline constexpr u8 kDecorBench = 8;
+inline constexpr u8 kDecorFlowerCart = 9;
+inline constexpr u8 kDecorBannerRed = 10;
+inline constexpr u8 kDecorBannerBlue = 11;
+inline constexpr u8 kDecorNoticeBoard = 12;
+inline constexpr u8 kDecorFlowerBarrel = 13;
+inline constexpr u8 kDecorBunting = 14; // a unit-long string of pennants (stretched to its span)
 
 struct PropInstance {
     PropCategory category = PropCategory::Bush;

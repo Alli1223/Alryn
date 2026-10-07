@@ -27,8 +27,9 @@ enum class SfxId : u8 {
     Thunder,        // a long storm rumble (follows the lightning flash)
     Fanfare,        // a three-note delivery jingle
     UiClick,        // a short dry tick for menu/button presses
+    LevelUp,        // a bright rising arpeggio + shimmer (a hero levels up / a journey step lands)
 };
-inline constexpr usize kSfxCount = 15;
+inline constexpr usize kSfxCount = 16;
 
 // The shared engine sample rate for synthesis + playback (miniaudio converts to native).
 inline constexpr u32 kSfxSampleRate = 48000;

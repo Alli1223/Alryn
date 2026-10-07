@@ -3,6 +3,8 @@
 #include <Alryn/Core/Math.h>
 #include <Alryn/Core/Types.h>
 
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace alryn::net {
@@ -16,6 +18,8 @@ public:
     void write_f32(f32 v);
     void write_bool(bool v) { write_u8(v ? 1 : 0); }
     void write_vec3(const Vec3& v);
+    // A short string: a u8 length then the bytes (anything past 255 bytes is cut).
+    void write_string(std::string_view s);
 
     const std::vector<u8>& data() const { return data_; }
     const u8* bytes() const { return data_.data(); }
@@ -37,6 +41,7 @@ public:
     f32 read_f32();
     bool read_bool() { return read_u8() != 0; }
     Vec3 read_vec3();
+    std::string read_string();
 
     bool ok() const { return ok_; }
     usize remaining() const { return pos_ <= size_ ? size_ - pos_ : 0; }

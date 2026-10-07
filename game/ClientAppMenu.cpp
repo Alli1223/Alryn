@@ -69,7 +69,7 @@ protected:
 // a little under the cursor.
 class RoleCard : public ui::Widget {
 public:
-    std::string name, tag, hp, weapon;
+    std::string name, tag, hp, weapon, starts;
     Vec3 color{1.0f};
     bool selected = false;
     std::function<void()> on_click;
@@ -143,6 +143,12 @@ protected:
         hud::chip(dl, Vec2{cc.x - cw * 0.5f, y}, hp, cs, hud::kGood);
         y += cs * 1.7f + 12.0f;
         hud::text(dl, Vec2{cc.x, y}, weapon, ns * 0.46f, th.text_muted, ui::TextAlign::Center);
+        y += ns * 0.46f + 14.0f;
+        if (!starts.empty()) {
+            hud::text(dl, Vec2{cc.x, y}, "STARTING SKILLS", ns * 0.38f, hud::alpha(th.accent_hover, 0.85f),
+                      ui::TextAlign::Center);
+            hud::text(dl, Vec2{cc.x, y + ns * 0.38f + 6.0f}, starts, ns * 0.42f, th.text, ui::TextAlign::Center);
+        }
         if (selected) {
             const f32 bs = ns * 0.45f;
             const f32 bw = hud::width("CHOSEN", bs) + bs * 1.2f;
@@ -155,6 +161,123 @@ private:
     bool pressed_ = false;
     f32 hover_ = 0.0f;
 };
+
+// One saved hero on the hero-select screen: an identity-colour stripe, the class crest, the name in
+// display capitals, "LEVEL n CLASS", their place on the journey and an XP gauge. The chosen card is
+// lit gold; the "forge a new hero" card is a dim, dashed invitation.
+class HeroCard : public ui::Widget {
+public:
+    std::string name, sub, note;
+    Vec3 color{1.0f};    // identity colour
+    Vec3 accent{1.0f};   // the class colour (crest glow)
+    f32 xp_frac = 0.0f;
+    bool selected = false;
+    bool is_new = false; // the "forge a new hero" card
+    std::function<void()> on_click;
+    std::function<void(ui::DrawList&, Vec2, f32)> icon;
+
+    bool can_focus() const override { return true; }
+    void on_activate() override {
+        if (on_click) {
+            on_click();
+        }
+    }
+
+protected:
+    void on_update(f32 dt) override {
+        hover_ += ((hovered_ ? 1.0f : 0.0f) - hover_) * std::min(1.0f, dt * 12.0f);
+    }
+    bool on_pointer_move(const Vec2& p) override {
+        hovered_ = bounds.contains(p);
+        return false;
+    }
+    bool on_pointer_down(const Vec2& p, int button) override {
+        pressed_ = button == 0 && bounds.contains(p);
+        return pressed_;
+    }
+    bool on_pointer_up(const Vec2& p, int button) override {
+        const bool fire = pressed_ && button == 0 && bounds.contains(p);
+        pressed_ = false;
+        if (fire && on_click) {
+            on_click(); // may rebuild the menu (destroying this card) - touch nothing after it
+        }
+        return fire;
+    }
+    void on_draw(ui::DrawList& dl) override {
+        const ui::Theme& th = ui::theme();
+        const Vec4 r{bounds.x - hover_ * 3.0f, bounds.y, bounds.w, bounds.h};
+        const f32 rad = 10.0f;
+        if (selected) {
+            dl.shadow(r, rad, 18.0f, hud::alpha(th.accent_hover, 0.4f));
+        }
+        dl.shadow(r, rad, 10.0f, Vec4{0.0f, 0.0f, 0.0f, 0.5f}, Vec2{0.0f, 5.0f});
+        const f32 a = is_new ? 0.55f + 0.25f * hover_ : 1.0f;
+        dl.gradient(r, hud::alpha(th.panel, a), hud::alpha(th.panel_bottom, a), rad,
+                    selected ? th.accent_hover : hud::alpha(th.accent, 0.4f + 0.35f * hover_),
+                    selected ? 2.25f : 1.25f);
+        const f32 cr = bounds.h * 0.30f; // crest radius
+        const Vec2 cc{r.x + 18.0f + cr, r.y + bounds.h * 0.5f};
+        if (is_new) {
+            // A plus inside an empty medallion: "forge a new hero".
+            hud::medallion(dl, cc, cr, Vec4{0.05f, 0.035f, 0.025f, 1.0f});
+            const Vec4 g = hud::alpha(th.accent_hover, 0.75f + 0.25f * hover_);
+            dl.line(Vec2{cc.x - cr * 0.45f, cc.y}, Vec2{cc.x + cr * 0.45f, cc.y}, 3.0f, g);
+            dl.line(Vec2{cc.x, cc.y - cr * 0.45f}, Vec2{cc.x, cc.y + cr * 0.45f}, 3.0f, g);
+            const f32 tx = cc.x + cr + 18.0f;
+            hud::text(dl, Vec2{tx, r.y + bounds.h * 0.5f - 12.0f}, name, 17.0f, th.title, ui::TextAlign::Left,
+                      ui::FontFace::Display);
+            hud::text(dl, Vec2{tx, r.y + bounds.h * 0.5f + 9.0f}, sub, 11.0f, th.text_muted);
+            return;
+        }
+        // The identity-colour stripe down the left edge.
+        dl.rect(Vec4{r.x + 3.0f, r.y + 6.0f, 5.0f, bounds.h - 12.0f}, Vec4{color, 0.95f}, 2.5f);
+        dl.glow(Vec4{cc.x - cr * 1.8f, cc.y - cr * 1.8f, cr * 3.6f, cr * 3.6f}, Vec4{accent, 0.18f + 0.1f * hover_},
+                Vec4{accent, 0.0f});
+        hud::medallion(dl, cc, cr, Vec4{0.06f, 0.045f, 0.03f, 1.0f});
+        if (icon) {
+            icon(dl, cc, cr * 0.5f);
+        }
+        const f32 tx = cc.x + cr + 16.0f;
+        const f32 ns = std::clamp(bounds.h * 0.22f, 13.0f, 20.0f);
+        f32 y = r.y + bounds.h * 0.16f;
+        ui::TextStyle st = hud::style(ns, Vec4{glm::mix(color, Vec3{1.0f}, 0.55f), 1.0f}, ui::TextAlign::Left,
+                                      ui::FontFace::Display);
+        st.tracking = 0.05f;
+        dl.text(Vec2{tx, y}, name, st);
+        y += ns + 6.0f;
+        hud::text(dl, Vec2{tx, y}, sub, ns * 0.62f, th.text);
+        y += ns * 0.62f + 6.0f;
+        hud::text(dl, Vec2{tx, y}, note, ns * 0.55f, th.text_muted);
+        // XP gauge along the bottom.
+        const Vec4 bar{tx, r.y + bounds.h - 13.0f, r.x + r.z - tx - 16.0f, 5.0f};
+        dl.rect(bar, Vec4{0.02f, 0.015f, 0.01f, 0.8f}, 2.5f);
+        if (xp_frac > 0.0f) {
+            dl.gradient(Vec4{bar.x, bar.y, std::max(bar.z * xp_frac, 4.0f), bar.w}, hud::kGold,
+                        hud::shade(hud::kGold, 0.65f), 2.5f);
+        }
+        if (selected) {
+            const f32 bs = 10.0f;
+            const f32 bw = hud::width("CHOSEN", bs) + bs * 1.2f;
+            hud::chip(dl, Vec2{r.x + r.z - bw - 12.0f, r.y + 10.0f}, "CHOSEN", bs, hud::kGold);
+        }
+    }
+
+private:
+    bool hovered_ = false;
+    bool pressed_ = false;
+    f32 hover_ = 0.0f;
+};
+
+// A default name for a freshly forged hero (so nobody walks the roads as "PLAYER 3").
+const char* default_hero_name(PlayerRole role, usize n) {
+    static const char* names[kRoleCount][4] = {
+        {"ALDRIC", "BRENNA", "GAWAIN", "ISOLDE"},  // Knight
+        {"WREN", "FENWICK", "SAREI", "HOLT"},      // Hunter
+        {"ELOWEN", "BEDE", "MAREN", "ANSELM"},     // Cleric
+        {"MORGRA", "THESSALY", "CORVIN", "NYX"},   // Mage
+    };
+    return names[static_cast<u8>(role) % kRoleCount][n % 4];
+}
 } // namespace
 
 void ClientApp::escape_pressed() {
@@ -197,6 +320,7 @@ void ClientApp::rebuild_ui() {
         case Screen::Customise: build_customise(w, h); break;
         case Screen::Class: build_class(w, h); break;
         case Screen::Pause: build_pause(w, h); break;
+        case Screen::Heroes: build_heroes(w, h); break;
     }
 }
 
@@ -252,35 +376,60 @@ void ClientApp::build_pause(f32 w, f32 h) {
 
 void ClientApp::build_main(f32 w, f32 h) {
     const f32 top = add_title(w, h, "ALRYN", "A MEDIEVAL WAGON-ESCORT ADVENTURE");
-    constexpr f32 cw = 360.0f, pad = 28.0f, rh = 52.0f, gap = 13.0f;
-    constexpr int rows = 5;
-    const f32 ch = pad * 2.0f + rows * rh + (rows - 1) * gap;
-    const ui::Rect card{(w - cw) * 0.5f, std::max(top + 16.0f, h * 0.38f), cw, ch};
+    constexpr f32 cw = 380.0f, pad = 28.0f, rh = 52.0f, gap = 13.0f;
+    const bool has_hero = !roster_.heroes.empty();
+    const int rows = has_hero ? 5 : 4;
+    const f32 ch = pad * 2.0f + static_cast<f32>(rows) * rh + static_cast<f32>(rows - 1) * gap;
+    const ui::Rect card{(w - cw) * 0.5f, std::max(top + 34.0f, h * 0.38f), cw, ch};
     auto& panel = ui_.root().add<ui::Panel>();
     panel.bounds = card;
     auto row = [&](int i) {
         return ui::Rect{card.x + pad, card.y + pad + static_cast<f32>(i) * (rh + gap),
                         card.w - pad * 2.0f, rh};
     };
-    auto& host = panel.add<ui::Button>("HOST GAME", [this] {
-        pending_host_local_ = true; // pick a class first, then start the listen server
-        pending_host_ip_ = "127.0.0.1";
-        show_screen(Screen::Class);
-    });
-    host.primary = true;
-    host.bounds = row(0);
-    panel.add<ui::Button>("CUSTOMISE", [this] { show_screen(Screen::Customise); }).bounds = row(1);
-    panel.add<ui::Button>("JOIN GAME", [this] { show_screen(Screen::Join); }).bounds = row(2);
-    panel.add<ui::Button>("SETTINGS", [this] { show_screen(Screen::Settings); }).bounds = row(3);
-    panel.add<ui::Button>("QUIT", [this] { close(); }).bounds = row(4);
+    int r = 0;
+    if (has_hero) {
+        // CONTINUE: straight back on the road with the last hero (hosting) - one click to play.
+        const Hero* h0 = roster_.current();
+        auto& cont = panel.add<ui::Button>("CONTINUE", [this] {
+            select_hero(roster_.selected);
+            enter_game(true, "127.0.0.1");
+        });
+        cont.primary = true;
+        cont.bounds = row(r++);
+        // Who CONTINUE plays as, just above the card.
+        auto& who = ui_.root().add<ui::Label>(
+            std::format("{}  -  LEVEL {} {}", h0->name, h0->level(), role_name(h0->role)), 14.0f, ui::TextAlign::Center);
+        who.bounds = ui::Rect{0.0f, card.y - 24.0f, w, 18.0f};
+        who.color = Vec4{glm::mix(player_color(h0->color), Vec3{1.0f}, 0.4f), 1.0f};
+        who.face = ui::FontFace::Bold;
+        who.tracking = 0.12f;
+        panel.add<ui::Button>("HEROES", [this] { show_screen(Screen::Heroes); }).bounds = row(r++);
+    } else {
+        // No heroes yet: the journey begins by forging one.
+        auto& forge = panel.add<ui::Button>("FORGE A HERO", [this] { begin_new_hero(); });
+        forge.primary = true;
+        forge.bounds = row(r++);
+    }
+    panel.add<ui::Button>("JOIN A FRIEND", [this] {
+             if (roster_.heroes.empty()) {
+                 begin_new_hero(); // you need a hero before you can ride with friends
+             } else {
+                 select_hero(roster_.selected);
+                 show_screen(Screen::Join);
+             }
+         }).bounds = row(r++);
+    panel.add<ui::Button>("SETTINGS", [this] { show_screen(Screen::Settings); }).bounds = row(r++);
+    panel.add<ui::Button>("QUIT", [this] { close(); }).bounds = row(r++);
 
-    auto& ver = ui_.root().add<ui::Label>("V0.1  -  F12 SAVES A SCREENSHOT", 11.0f, ui::TextAlign::Right);
+    auto& ver = ui_.root().add<ui::Label>("V0.2  -  F12 SAVES A SCREENSHOT", 11.0f, ui::TextAlign::Right);
     ver.bounds = ui::Rect{0.0f, h - 30.0f, w - 22.0f, 14.0f};
     ver.color = ui::theme().text_muted;
 }
 
 void ClientApp::build_join(f32 w, f32 h) {
-    const f32 top = add_title(w, h, "JOIN GAME", "CONNECT TO A FRIEND'S HOSTED GAME");
+    const std::string sub = std::format("RIDING AS {} - CONNECT TO A FRIEND'S GAME", hero_.name);
+    const f32 top = add_title(w, h, "JOIN A FRIEND", sub.c_str());
     constexpr f32 cw = 420.0f, pad = 28.0f, rh = 52.0f, gap = 16.0f;
     const f32 ch = pad * 2.0f + 4.0f * rh + 3.0f * gap;
     const ui::Rect card{(w - cw) * 0.5f, std::max(top + 16.0f, h * 0.38f), cw, ch};
@@ -307,13 +456,12 @@ void ClientApp::build_join(f32 w, f32 h) {
     field.on_change = [this](const std::string& s) { host_ip_ = s; };
 
     auto& connect = panel.add<ui::Button>("CONNECT", [this] {
-        pending_host_local_ = false; // pick a class first, then connect to the server
-        pending_host_ip_ = host_ip_.empty() ? std::string{"127.0.0.1"} : host_ip_;
-        show_screen(Screen::Class);
+        // The hero was chosen on the way here (Heroes / Main) - ride straight in.
+        enter_game(false, host_ip_.empty() ? std::string{"127.0.0.1"} : host_ip_);
     });
     connect.primary = true;
     connect.bounds = row(2);
-    panel.add<ui::Button>("BACK", [this] { show_screen(Screen::Main); }).bounds = row(3);
+    panel.add<ui::Button>("BACK", [this] { show_screen(Screen::Heroes); }).bounds = row(3);
 }
 
 void ClientApp::build_settings(f32 w, f32 h) {
@@ -384,25 +532,25 @@ void ClientApp::build_settings(f32 w, f32 h) {
 void ClientApp::build_customise(f32 w, f32 h) {
     rebuild_preview();
 
-    // Controls live in a panel on the right; the 3D preview fills the rest (drawn in on_render).
-    // The rows are laid out with a running cursor and scaled down together on a short window so
-    // everything stays inside the card.
+    // Step 2 of forging a hero (or editing one): the controls live in a panel on the right; the 3D
+    // preview fills the rest (drawn in on_render). The rows are laid out with a running cursor and
+    // scaled down together on a short window so everything stays inside the card.
     constexpr f32 pw = 400.0f;
-    const ui::Rect card{w - pw - 44.0f, h * 0.05f, pw, h * 0.9f};
+    const ui::Rect card{w - pw - 44.0f, h * 0.04f, pw, h * 0.92f};
     auto& panel = ui_.root().add<ui::Panel>();
     panel.bounds = card;
     customise_panel_ = card;
 
-    // Natural heights: header, 2 steppers + the race perk, 3 captioned swatch rows, 3 steppers,
-    // the button row - with their gaps.
-    constexpr f32 kStep = 42.0f, kSwatch = 34.0f, kCap = 18.0f, kGap = 10.0f;
-    const f32 natural = 44.0f + 2.0f * (kStep + kGap) + (kCap + kGap) + 3.0f * (kCap + kSwatch + kGap * 1.6f) +
-                        3.0f * (kStep + kGap) + 50.0f + 20.0f;
-    const f32 k = glm::clamp((card.h - 48.0f) / natural, 0.62f, 1.0f);
+    // Natural heights: header + class line, the name field, the race stepper + perk, 4 captioned
+    // swatch rows, 3 steppers, the button row - with their gaps.
+    constexpr f32 kStep = 42.0f, kSwatch = 32.0f, kCap = 18.0f, kGap = 10.0f;
+    const f32 natural = 44.0f + 22.0f + (kCap + 40.0f + kGap) + (kStep + kGap) + (kCap + kGap) +
+                        4.0f * (kCap + kSwatch + kGap * 1.4f) + 3.0f * (kStep + kGap) + 50.0f + 20.0f;
+    const f32 k = glm::clamp((card.h - 48.0f) / natural, 0.58f, 1.0f);
 
     const f32 x = card.x + 28.0f;
     const f32 cwid = card.w - 56.0f;
-    f32 y = card.y + 24.0f;
+    f32 y = card.y + 22.0f;
     auto place = [&](ui::Widget& widget, f32 height, f32 after) {
         widget.bounds = ui::Rect{x, y, cwid, height * k};
         y += (height + after) * k;
@@ -416,25 +564,36 @@ void ClientApp::build_customise(f32 w, f32 h) {
         y += (kCap + kGap * 0.4f) * k;
     };
 
-    auto& header = panel.add<ui::Label>("CHARACTER", 26.0f * std::max(k, 0.8f));
+    auto& header = panel.add<ui::Label>(creating_ ? "NAME & LOOK" : "EDIT HERO", 26.0f * std::max(k, 0.8f));
     header.heading();
-    place(header, 32.0f, 12.0f);
+    place(header, 32.0f, 4.0f);
+    // The class is fixed once forged (progress belongs to it) - shown, not stepped.
+    auto& cls = panel.add<ui::Label>(std::format("{}  -  {}", role_name(role_), creating_ ? "STEP 2 OF 2" : "CLASS IS SET"),
+                                     13.0f * std::max(k, 0.85f));
+    cls.color = Vec4{glm::mix(role_color(role_), Vec3{1.0f}, 0.3f), 1.0f};
+    cls.face = ui::FontFace::Bold;
+    cls.tracking = 0.12f;
+    place(cls, 18.0f, 10.0f);
+
+    caption("NAME", ui::theme().text_muted);
+    auto& name = panel.add<ui::TextField>(hero_.name);
+    name.placeholder = default_hero_name(role_, roster_.heroes.size());
+    name.max_length = kMaxNameLength;
+    name.text_size = 18.0f * std::max(k, 0.8f);
+    name.filter = [](char c) { return name_char_ok(c); };
+    name.on_change = [this](const std::string& v) { hero_.name = v; };
+    name.focused = creating_ && hero_.name.empty();
+    place(name, 40.0f, kGap);
 
     auto stepper = [&](const char* label, std::vector<std::string> opts, usize index,
                        std::function<void(usize)> change) {
-        auto& s = panel.add<ui::Stepper>(label, std::move(opts), index, std::move(change));
-        s.text_size = 18.0f * std::max(k, 0.8f);
-        place(s, kStep, kGap);
+        auto& st = panel.add<ui::Stepper>(label, std::move(opts), index, std::move(change));
+        st.text_size = 18.0f * std::max(k, 0.8f);
+        place(st, kStep, kGap);
     };
-    stepper("ROLE", {"KNIGHT", "HUNTER", "CLERIC", "MAGE"}, static_cast<usize>(role_), [this](usize i) {
-        role_ = static_cast<PlayerRole>(i % kRoleCount);
-        equip_loadout_.outfit_tint = signature_tint(role_); // role's signature colour
-        rebuild_ui(); // re-lay so the outfit-colour swatch reflects the new role
-    });
     stepper("RACE", {"MAN", "DWARF", "ELF"}, static_cast<usize>(appearance_.race), [this](usize i) {
         appearance_.race = static_cast<Race>(i % kRaceCount);
-        rebuild_preview(); // re-proportion the turntable avatar to the chosen race
-        rebuild_ui();      // and refresh the race-perk blurb below the stepper
+        rebuild_ui(); // re-proportion the turntable avatar + refresh the race-perk blurb
     });
     caption(race_perk_desc(appearance_.race), ui::theme().accent_hover); // the race's passive
     y += kGap * 0.6f * k;
@@ -442,8 +601,11 @@ void ClientApp::build_customise(f32 w, f32 h) {
     auto swatches = [&](const char* label, std::vector<Vec3> colors, usize index,
                         std::function<void(usize)> change) {
         caption(label, ui::theme().text_muted);
-        place(panel.add<ui::SwatchRow>(std::move(colors), index, std::move(change)), kSwatch, kGap * 1.6f);
+        place(panel.add<ui::SwatchRow>(std::move(colors), index, std::move(change)), kSwatch, kGap * 1.4f);
     };
+    swatches("PLAYER COLOUR  (RING + NAME)",
+             std::vector<Vec3>(player_colors().begin(), player_colors().end()), hero_.color,
+             [this](usize i) { hero_.color = static_cast<u8>(i); });
     swatches("SKIN TONE", std::vector<Vec3>(skin_tones().begin(), skin_tones().end()), appearance_.skin,
              [this](usize i) {
                  appearance_.skin = static_cast<u8>(i);
@@ -475,29 +637,41 @@ void ClientApp::build_customise(f32 w, f32 h) {
                 rebuild_preview();
             });
 
-    // Bottom action row: BACK + PLAY side by side, pinned to the card's foot.
+    // Bottom action row: BACK + CREATE / SAVE side by side, pinned to the card's foot.
     const f32 bh = 50.0f * std::max(k, 0.85f);
-    const f32 by = card.y + card.h - bh - 24.0f;
+    const f32 by = card.y + card.h - bh - 22.0f;
     const f32 half = (cwid - 12.0f) * 0.5f;
-    auto& back = panel.add<ui::Button>("BACK", [this] { show_screen(Screen::Main); });
+    auto& back = panel.add<ui::Button>("BACK", [this] {
+        if (creating_) {
+            show_screen(Screen::Class);
+        } else {
+            select_hero(hero_index_); // discard the edits
+            show_screen(Screen::Heroes);
+        }
+    });
     back.bounds = ui::Rect{x, by, half, bh};
-    auto& play = panel.add<ui::Button>("PLAY", [this] { enter_game(true, "127.0.0.1"); });
-    play.primary = true;
-    play.bounds = ui::Rect{x + half + 12.0f, by, half, bh};
+    auto& done = panel.add<ui::Button>(creating_ ? "CREATE HERO" : "SAVE", [this] {
+        commit_hero();
+        creating_ = false;
+        show_screen(Screen::Heroes);
+    });
+    done.primary = true;
+    done.bounds = ui::Rect{x + half + 12.0f, by, half, bh};
 }
 
 void ClientApp::build_class(f32 w, f32 h) {
-    const f32 top = add_title(w, h, "CHOOSE YOUR CLASS",
-                              pending_host_local_ ? "HOSTING A NEW GAME" : "JOINING A GAME");
+    creating_ = true; // the class screen is step 1 of forging a hero
+    const f32 top = add_title(w, h, "FORGE A HERO", "STEP 1 OF 2  -  CHOOSE A CLASS");
 
-    // A row of class cards; the chosen one stands lifted in a warm glow.
+    // A row of class cards; the chosen one stands lifted in a warm glow. Each lists the two skills
+    // the class starts with - the rest of the kit is earned in the skill tree as the hero levels.
     static const char* tags[kRoleCount] = {"TANK", "RANGED DAMAGE", "HEALER", "ELEMENTAL DAMAGE"};
     static const char* hints[kRoleCount] = {"SWORD + SHIELD", "LONGBOW", "HOLY STAFF", "COMBO SPELLS"};
     const f32 gap = 20.0f;
     const f32 total_w = std::min(w * 0.9f, 1000.0f);
     const f32 card_w = (total_w - gap * static_cast<f32>(kRoleCount - 1)) / static_cast<f32>(kRoleCount);
-    const f32 bottom_reserve = 130.0f; // the blurb + BACK / START under the cards
-    const f32 card_h = glm::clamp(h - top - bottom_reserve - 24.0f, 220.0f, 330.0f);
+    const f32 bottom_reserve = 130.0f; // the blurb + BACK / NEXT under the cards
+    const f32 card_h = glm::clamp(h - top - bottom_reserve - 24.0f, 240.0f, 370.0f);
     const f32 cy = top + 24.0f;
     for (int i = 0; i < kRoleCount; ++i) {
         const auto role = static_cast<PlayerRole>(i);
@@ -507,6 +681,14 @@ void ClientApp::build_class(f32 w, f32 h) {
         card.tag = tags[i];
         card.hp = std::format("{} HP", static_cast<int>(role_stats(role).max_health));
         card.weapon = hints[i];
+        std::string starts;
+        for (u8 a = 0; a < kAbilityCount; ++a) {
+            if (skill_node(role, a).tier == 0) {
+                starts += starts.empty() ? "" : " + ";
+                starts += ability_def(role, a).name;
+            }
+        }
+        card.starts = starts;
         card.color = role_color(role);
         card.selected = static_cast<int>(role_) == i;
         card.on_click = [this, i] {
@@ -524,15 +706,242 @@ void ClientApp::build_class(f32 w, f32 h) {
     blurb.bounds = ui::Rect{0.0f, cy + card_h + 22.0f, w, 22.0f};
     blurb.color = ui::theme().text;
 
-    // BACK + START.
+    // BACK + NEXT.
     const f32 bw = 200.0f, bh = 52.0f, bgap = 16.0f;
     const f32 by = cy + card_h + 62.0f;
-    auto& back = ui_.root().add<ui::Button>("BACK", [this] { show_screen(Screen::Main); });
+    auto& back = ui_.root().add<ui::Button>("BACK", [this] {
+        creating_ = false;
+        if (!roster_.heroes.empty()) {
+            select_hero(roster_.selected);
+        }
+        show_screen(roster_.heroes.empty() ? Screen::Main : Screen::Heroes);
+    });
     back.bounds = ui::Rect{(w - bw * 2.0f - bgap) * 0.5f, by, bw, bh};
-    auto& start = ui_.root().add<ui::Button>(pending_host_local_ ? "START" : "JOIN",
-                                             [this] { enter_game(pending_host_local_, pending_host_ip_); });
-    start.primary = true;
-    start.bounds = ui::Rect{(w - bw * 2.0f - bgap) * 0.5f + bw + bgap, by, bw, bh};
+    auto& next = ui_.root().add<ui::Button>("NEXT", [this] {
+        hero_.role = role_;
+        show_screen(Screen::Customise); // step 2: name + look
+    });
+    next.primary = true;
+    next.bounds = ui::Rect{(w - bw * 2.0f - bgap) * 0.5f + bw + bgap, by, bw, bh};
+}
+
+void ClientApp::build_heroes(f32 w, f32 h) {
+    confirm_delete_ = confirm_delete_ && !roster_.heroes.empty();
+    if (!roster_.heroes.empty() && hero_index_ < 0) {
+        select_hero(roster_.selected);
+    }
+    rebuild_preview();
+
+    // The roster lives in a panel on the right (the chosen hero stands on the turntable to its left).
+    constexpr f32 pw = 430.0f;
+    const ui::Rect card{w - pw - 44.0f, h * 0.05f, pw, h * 0.9f};
+    auto& panel = ui_.root().add<ui::Panel>();
+    panel.bounds = card;
+    customise_panel_ = card;
+    const f32 x = card.x + 22.0f;
+    const f32 cwid = card.w - 44.0f;
+    auto& head = panel.add<ui::Label>("HEROES", 24.0f);
+    head.heading();
+    head.bounds = ui::Rect{x, card.y + 20.0f, cwid, 30.0f};
+    // The screen title sits over the turntable, left of the roster panel.
+    {
+        const f32 big = std::clamp(card.x * 0.085f, 30.0f, 60.0f);
+        auto& title = ui_.root().add<ui::Label>("CHOOSE YOUR HERO", big, ui::TextAlign::Center);
+        title.heading();
+        title.bounds = ui::Rect{0.0f, h * 0.06f, card.x, big};
+        const f32 ow = std::min(card.x * 0.6f, big * 7.0f);
+        ui_.root().add<Ornament>().bounds = ui::Rect{(card.x - ow) * 0.5f, h * 0.06f + big + 12.0f, ow, 12.0f};
+    }
+
+    // Buttons pinned to the foot: JOIN + HOST, EDIT + DELETE, BACK.
+    const f32 bh = 46.0f, bgap = 10.0f;
+    const f32 half = (cwid - bgap) * 0.5f;
+    const f32 foot = card.y + card.h - 22.0f;
+    const f32 row3 = foot - bh;
+    const f32 row2 = row3 - bgap - bh;
+    const f32 row1 = row2 - bgap - bh;
+    const bool any = !roster_.heroes.empty();
+
+    // The hero cards, sized to share the space above the buttons.
+    const usize n = roster_.heroes.size();
+    const bool can_add = n < kMaxHeroes;
+    const usize slots = n + (can_add ? 1u : 0u);
+    const f32 list_top = card.y + 62.0f;
+    const f32 list_bot = row1 - 16.0f;
+    const f32 cgap = 8.0f;
+    const f32 ch = std::min(86.0f, (list_bot - list_top - cgap * static_cast<f32>(slots - 1)) / static_cast<f32>(std::max<usize>(slots, 1)));
+    f32 y = list_top;
+    for (usize i = 0; i < n; ++i) {
+        const Hero& hh = roster_.heroes[i];
+        auto& hc = panel.add<HeroCard>();
+        hc.bounds = ui::Rect{x, y, cwid, ch};
+        hc.name = hh.name;
+        hc.sub = std::format("LEVEL {}  {}  -  {}", hh.level(), role_name(hh.role), race_name(hh.appearance.race));
+        const u8 step = std::min<u8>(hh.progress.journey, kJourneySteps);
+        hc.note = step >= kJourneySteps ? std::string{"JOURNEY COMPLETE - THE ROAD GOES ON"}
+                                        : std::format("JOURNEY: {}", journey_step(step).title);
+        hc.color = player_color(hh.color);
+        hc.accent = role_color(hh.role);
+        hc.xp_frac = level_progress(hh.progress.xp);
+        hc.selected = static_cast<int>(i) == roster_.selected;
+        const PlayerRole hr = hh.role;
+        hc.icon = [this, hr](ui::DrawList& dl, Vec2 c, f32 r) {
+            draw_ability_icon(dl, hr, 0, c.x, c.y, r, Vec4{glm::mix(role_color(hr), Vec3{1.0f}, 0.15f), 1.0f});
+        };
+        hc.on_click = [this, i] {
+            select_hero(static_cast<int>(i));
+            confirm_delete_ = false;
+            rebuild_ui();
+        };
+        y += ch + cgap;
+    }
+    if (can_add) {
+        auto& nc = panel.add<HeroCard>();
+        nc.bounds = ui::Rect{x, y, cwid, std::min(ch, 64.0f)};
+        nc.is_new = true;
+        nc.name = "FORGE A NEW HERO";
+        nc.sub = any ? "A FRESH START - LEVEL 1, TWO STARTING SKILLS" : "EVERY LEGEND STARTS SOMEWHERE";
+        nc.on_click = [this] { begin_new_hero(); };
+    }
+
+    auto& join = panel.add<ui::Button>("JOIN", [this] { show_screen(Screen::Join); });
+    join.bounds = ui::Rect{x, row1, half, bh};
+    join.enabled = any;
+    auto& host = panel.add<ui::Button>("HOST", [this] { enter_game(true, "127.0.0.1"); });
+    host.primary = true;
+    host.bounds = ui::Rect{x + half + bgap, row1, half, bh};
+    host.enabled = any;
+    auto& edit = panel.add<ui::Button>("EDIT LOOK", [this] {
+        creating_ = false;
+        show_screen(Screen::Customise);
+    });
+    edit.bounds = ui::Rect{x, row2, half, bh};
+    edit.enabled = any;
+    auto& del = panel.add<ui::Button>(confirm_delete_ ? "REALLY DELETE?" : "DELETE", [this] {
+        if (!confirm_delete_) {
+            confirm_delete_ = true; // ask once more - a hero's whole journey is at stake
+            rebuild_ui();
+            return;
+        }
+        confirm_delete_ = false;
+        if (roster_.selected >= 0 && roster_.selected < static_cast<int>(roster_.heroes.size())) {
+            roster_.heroes.erase(roster_.heroes.begin() + roster_.selected);
+            roster_.selected = std::max(0, roster_.selected - 1);
+            save_roster(roster_);
+        }
+        hero_index_ = -1;
+        if (!roster_.heroes.empty()) {
+            select_hero(roster_.selected);
+        }
+        rebuild_ui();
+    });
+    del.bounds = ui::Rect{x + half + bgap, row2, half, bh};
+    del.enabled = any;
+    panel.add<ui::Button>("BACK", [this] {
+             confirm_delete_ = false;
+             show_screen(Screen::Main);
+         }).bounds = ui::Rect{x, row3, cwid, bh};
+
+    // A nameplate under the turntable: the chosen hero's name in their colour.
+    if (any) {
+        const Hero& hh = roster_.heroes[static_cast<usize>(roster_.selected)];
+        auto& nm = ui_.root().add<ui::Label>(hh.name, 30.0f, ui::TextAlign::Center);
+        nm.bounds = ui::Rect{0.0f, h - 96.0f, card.x, 34.0f};
+        nm.face = ui::FontFace::Display;
+        nm.color = Vec4{glm::mix(player_color(hh.color), Vec3{1.0f}, 0.35f), 1.0f};
+        auto& sub = ui_.root().add<ui::Label>(
+            std::format("LEVEL {} {}  -  {} RAIDERS FELLED  -  {} WAGONS DELIVERED", hh.level(), role_name(hh.role),
+                        hh.progress.kills, hh.progress.deliveries),
+            12.0f, ui::TextAlign::Center);
+        sub.bounds = ui::Rect{0.0f, h - 56.0f, card.x, 16.0f};
+        sub.color = ui::theme().text_muted;
+        sub.face = ui::FontFace::Bold;
+        sub.tracking = 0.12f;
+    } else {
+        auto& hint = ui_.root().add<ui::Label>("FORGE YOUR FIRST HERO TO BEGIN", 20.0f, ui::TextAlign::Center);
+        hint.bounds = ui::Rect{0.0f, h * 0.5f, card.x, 24.0f};
+        hint.color = ui::theme().text_muted;
+    }
+}
+
+void ClientApp::select_hero(int index) {
+    if (roster_.heroes.empty()) {
+        hero_index_ = -1;
+        return;
+    }
+    index = std::clamp(index, 0, static_cast<int>(roster_.heroes.size()) - 1);
+    roster_.selected = index;
+    hero_index_ = index;
+    hero_ = roster_.heroes[static_cast<usize>(index)];
+    tidy_bar(hero_);
+    role_ = hero_.role;
+    appearance_ = hero_.appearance;
+    equip_loadout_.outfit_tint = hero_.outfit_tint;
+    equip_loadout_.weapon_index = hero_.weapon_index;
+    for (usize i = 0; i < kAbilitySlots; ++i) {
+        bar_[i] = hero_.bar[i];
+    }
+    rebuild_preview();
+}
+
+void ClientApp::begin_new_hero() {
+    creating_ = true;
+    confirm_delete_ = false;
+    hero_index_ = -1;
+    role_ = PlayerRole::Knight;
+    hero_ = make_hero(role_);
+    hero_.name.clear(); // typed on the next screen (a default is offered)
+    // A colour none of the other heroes wear, so a couch co-op roster reads distinct.
+    for (u8 c = 0; c < kPlayerColorCount; ++c) {
+        bool used = false;
+        for (const Hero& o : roster_.heroes) {
+            used = used || o.color == c;
+        }
+        if (!used) {
+            hero_.color = c;
+            break;
+        }
+    }
+    appearance_ = CharacterAppearance{};
+    equip_loadout_.outfit_tint = hero_.outfit_tint;
+    equip_loadout_.weapon_index = 0;
+    show_screen(Screen::Class);
+}
+
+void ClientApp::commit_hero() {
+    const bool fresh = hero_index_ < 0;
+    if (fresh) {
+        // A new hero starts its kit + bar for the class chosen in step 1.
+        const std::string name = hero_.name;
+        const u8 color = hero_.color;
+        hero_ = make_hero(role_);
+        hero_.name = name;
+        hero_.color = color;
+    }
+    // Trim the name; fall back to a fitting default.
+    while (!hero_.name.empty() && hero_.name.back() == ' ') {
+        hero_.name.pop_back();
+    }
+    if (hero_.name.empty()) {
+        hero_.name = default_hero_name(role_, roster_.heroes.size());
+    }
+    hero_.role = role_;
+    hero_.appearance = appearance_;
+    hero_.outfit_tint = equip_loadout_.outfit_tint;
+    hero_.weapon_index = equip_loadout_.weapon_index;
+    tidy_bar(hero_);
+    if (fresh) {
+        if (roster_.heroes.size() >= kMaxHeroes) {
+            roster_.heroes.pop_back(); // full roster: the newest replaces the last slot
+        }
+        roster_.heroes.push_back(hero_);
+        hero_index_ = static_cast<int>(roster_.heroes.size()) - 1;
+    } else if (hero_index_ < static_cast<int>(roster_.heroes.size())) {
+        roster_.heroes[static_cast<usize>(hero_index_)] = hero_;
+    }
+    roster_.selected = hero_index_;
+    save_roster(roster_);
+    select_hero(hero_index_);
 }
 
 void ClientApp::apply_resolution(usize idx) {

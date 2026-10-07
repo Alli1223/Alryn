@@ -68,6 +68,7 @@ add_library(alryn STATIC
     Alryn/Game/GameManager.cpp
     Alryn/Game/Contracts.cpp
     Alryn/Game/Abilities.cpp
+    Alryn/Game/Progress.cpp
     # ---- Combat ------------------------------------------------------------
     Alryn/Combat/SiegeMode.cpp
     # ---- Net ---------------------------------------------------------------

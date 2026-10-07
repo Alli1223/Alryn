@@ -735,6 +735,9 @@ TEST_CASE("Village: decorative props don't spawn on the roads") {
                 if (!decorative && !fountain) {
                     continue;
                 }
+                if (p.category == PropCategory::Decor && p.variant == kDecorBunting) {
+                    continue; // pennant bunting hangs ~4 m overhead with no collider - it may span a street
+                }
                 ++decor_seen;
                 const f32 d = roads::distance(p.position.x, p.position.z, seed);
                 const f32 need = fountain ? roads::road_half_width + 2.0f : roads::road_half_width;

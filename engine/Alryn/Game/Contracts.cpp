@@ -405,6 +405,10 @@ void GameServer::generate_offers() {
         if (dist > 420.0f) {
             difficulty = std::min<u8>(3u, static_cast<u8>(difficulty + 1u));
         }
+        if (progression_) {
+            // A green party isn't sent down the deadliest roads: danger is capped by the best level.
+            difficulty = std::min(difficulty, max_danger_for_level(party_level()));
+        }
         Wagon wg;
         wg.id = detail::tree_hash(static_cast<int>(origin->vseed), static_cast<int>(dest.vseed),
                                   6161u) | 1u;
@@ -924,6 +928,7 @@ void GameServer::update_wagon(Timestep dt, const DensitySampler& density) {
         money_ += static_cast<u32>(
                       std::lround(base * frac * intact * rush * fresh * streak * convoy * unscathed)) +
                   kill_bounty(contract_kills_);
+        award_delivery(w.difficulty, rdist); // XP for the whole party + the journey record
         contract_outcome_ = 1;
         contract_phase_ = ContractPhase::Settle;
         settle_timer_ = kSettleSeconds;
@@ -1911,6 +1916,11 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
     // raider (health beaten to zero) also spills its purse straight into the shared wallet - a
     // self-spent sapper (alive=false with health intact) pays nothing; its satchel went up with it.
     u32 loot = 0;
+    for (const Enemy& e : ambush_) {
+        if (e.health <= 0.0f) {
+            award_kill(e.position, e.kind); // XP for every hero near the fight (+ the journey tally)
+        }
+    }
     contract_kills_ += static_cast<u32>(std::erase_if(ambush_, [&loot](const Enemy& e) {
         if (e.alive && e.health > 0.0f) {
             return false;

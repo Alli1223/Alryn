@@ -41,7 +41,7 @@ Vec3 interp_edge(const IVec3& ga, f32 va, const Vec3& pa, const IVec3& gb, f32 v
 } // namespace
 
 MeshData polygonize(const VoxelField& field, const IVec3& cell_min, const IVec3& cell_max, f32 iso,
-                    const ColorFn& colorize) {
+                    const ColorFn& colorize, const PaveFn& pave) {
     MeshData mesh;
 
     // Emits one triangle, orienting the flat normal toward air (away from solid).
@@ -58,10 +58,19 @@ MeshData polygonize(const VoxelField& field, const IVec3& cell_min, const IVec3&
             std::swap(p1, p2);
         }
         const Vec3 color = colorize(centroid, normal);
+        // Paving is sampled PER VERTEX (not per face like the colour) so the cobbled area's edge
+        // interpolates smoothly across the triangles instead of stair-stepping along them. Only
+        // faces whose centre is paved pay for the extra samples.
+        f32 s0 = 0.0f, s1 = 0.0f, s2 = 0.0f;
+        if (pave && pave(centroid, normal) > 0.0f) {
+            s0 = -pave(p0, normal);
+            s1 = -pave(p1, normal);
+            s2 = -pave(p2, normal);
+        }
         const auto base = static_cast<u32>(mesh.vertices.size());
-        mesh.vertices.push_back({p0, normal, color});
-        mesh.vertices.push_back({p1, normal, color});
-        mesh.vertices.push_back({p2, normal, color});
+        mesh.vertices.push_back({p0, normal, color, s0});
+        mesh.vertices.push_back({p1, normal, color, s1});
+        mesh.vertices.push_back({p2, normal, color, s2});
         mesh.indices.push_back(base);
         mesh.indices.push_back(base + 1);
         mesh.indices.push_back(base + 2);

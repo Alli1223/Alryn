@@ -89,10 +89,14 @@ void render_world(test::OffscreenRenderer& r, u32 seed, const Vec2& focus, f32 r
             VoxelField field(IVec3{cv + 1, yv + 1, cv + 1}, voxel, origin);
             field.fill([&](const Vec3& wp) { return density(wp); });
             const MeshData terrain = mc::polygonize(
-                field, IVec3{0}, field.cell_count(), 0.0f, [&](const Vec3& p, const Vec3& n) {
+                field, IVec3{0}, field.cell_count(), 0.0f,
+                [&](const Vec3& p, const Vec3& n) {
                     const f32 up = glm::clamp(n.y, 0.0f, 1.0f);
                     Vec3 c = roads::tint_surface(worldgen::surface_color(p, n, seed), p, up, seed);
                     return town_path_tint(c, p, up, seed);
+                },
+                [&](const Vec3& p, const Vec3& n) {
+                    return town_pave_amount(p, glm::clamp(n.y, 0.0f, 1.0f), seed);
                 });
             add(terrain, at(Vec3{0.0f}));
             add(build_vegetation(cx, cz, cw, seed), at(Vec3{0.0f}));

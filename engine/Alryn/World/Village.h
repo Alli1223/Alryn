@@ -682,9 +682,116 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
         occ.emplace_back(lp, 0.6f);
     }
 
-    // Streets are plain worn-EARTH roads (coloured into the terrain by town_path_amount /
-    // town_path_tint), like the reference towns. (The old flagstone path-tile props were a single
-    // repeated mesh, so they read as an ugly grid of identical square cobble patches - removed.)
+    // Streets are cobbled (mesh.frag lays procedural setts over town_pave_amount) on top of the
+    // worn-earth street tint (town_path_tint), which shows through as the joints. (The old flagstone
+    // path-tile props were a single repeated mesh that read as a grid of identical patches - removed.)
+
+    // ---- Civic dressing: the touches that make a town feel lived in --------------------------
+    // Heraldic BANNERS ring the plaza between its lanterns, strung together with pennant BUNTING;
+    // a NOTICE BOARD of contracts stands at the plaza's edge; flower-sellers' CARTS and BENCHES line
+    // the streets; FLOWER BARRELS sit by the doors; and every gate is flanked by a pair of banners.
+    // Everything is checked against the same occupancy / street / road rules as the rest of the
+    // town, so nothing lands in the wagon's way.
+    const u8 town_banner = detail::hash01(detail::tree_hash(vid, 5, 9100u)) < 0.5f ? kDecorBannerRed
+                                                                                  : kDecorBannerBlue;
+    {
+        constexpr int kPlazaPoles = 6;
+        const f32 pr = detail::kMarketHalf + 6.2f; // the plaza lantern ring (banners sit between lanterns)
+        std::array<Vec2, kPlazaPoles> pole{};
+        std::array<bool, kPlazaPoles> placed{};
+        for (int i = 0; i < kPlazaPoles; ++i) {
+            const f32 a = TwoPi * (static_cast<f32>(i) + 0.5f) / static_cast<f32>(kPlazaPoles) + 0.4f;
+            const Vec2 bp = v.center + Vec2{std::cos(a), std::sin(a)} * pr;
+            if (occupied(bp, 0.6f) || in_river(bp.x, bp.y) || on_road(bp.x, bp.y) ||
+                on_street(bp.x, bp.y, kStreetClear)) {
+                continue;
+            }
+            const Vec2 face = glm::normalize(v.center - bp); // the banner faces into the plaza
+            push(PropCategory::Decor, town_banner, bp.x, bp.y, std::atan2(face.x, face.y));
+            occ.emplace_back(bp, 0.6f);
+            pole[i] = bp;
+            placed[i] = true;
+        }
+        // Bunting strung pole to pole round the plaza (overhead - it never blocks anything).
+        for (int i = 0; i < kPlazaPoles; ++i) {
+            const int j = (i + 1) % kPlazaPoles;
+            if (!placed[i] || !placed[j]) {
+                continue;
+            }
+            const Vec2 d = pole[j] - pole[i];
+            const f32 len = glm::length(d);
+            if (len < 3.0f || len > 22.0f) {
+                continue;
+            }
+            const Vec2 mid = (pole[i] + pole[j]) * 0.5f;
+            push(PropCategory::Decor, kDecorBunting, mid.x, mid.y, std::atan2(-d.y, d.x), len);
+        }
+    }
+    // The notice board: at the plaza's edge, facing the market (where the contracts are posted).
+    for (int i = 0; i < 36; ++i) {
+        const f32 a = TwoPi * static_cast<f32>(i % 12) / 12.0f + detail::hash01(detail::tree_hash(vid, 6, 9101u)) * TwoPi;
+        const f32 rr = detail::kMarketHalf + 7.6f + 2.2f * static_cast<f32>(i / 12); // widen the search
+        const Vec2 np = v.center + Vec2{std::cos(a), std::sin(a)} * rr;
+        if (occupied(np, 1.1f) || in_river(np.x, np.y) || off_road(np.x, np.y) || on_street(np.x, np.y, 3.9f)) {
+            continue;
+        }
+        const Vec2 face = glm::normalize(v.center - np);
+        push(PropCategory::Decor, kDecorNoticeBoard, np.x, np.y, std::atan2(face.x, face.y));
+        occ.emplace_back(np, 1.1f);
+        break;
+    }
+    // A flower-seller's cart or two near the plaza.
+    for (int i = 0, carts = 0; i < 24 && carts < 2; ++i) {
+        const f32 a = TwoPi * detail::hash01(detail::tree_hash(vid, i, 9102u));
+        const f32 rr = detail::kMarketHalf + 7.0f + 4.0f * detail::hash01(detail::tree_hash(vid, i, 9103u));
+        const Vec2 cp = v.center + Vec2{std::cos(a), std::sin(a)} * rr;
+        if (occupied(cp, 1.3f) || in_river(cp.x, cp.y) || off_road(cp.x, cp.y) || on_street(cp.x, cp.y, 4.2f)) {
+            continue;
+        }
+        push(PropCategory::Decor, kDecorFlowerCart, cp.x, cp.y, detail::hash01(detail::tree_hash(vid, i, 9104u)) * TwoPi);
+        occ.emplace_back(cp, 1.3f);
+        ++carts;
+    }
+    // Each gate is flanked (just inside the wall) by a pair of the town's banners.
+    for (const detail::VillageGate& g : gates) {
+        Vec2 radial = g.pos - v.center;
+        radial = glm::length(radial) > 1e-3f ? glm::normalize(radial) : Vec2{0.0f, 1.0f};
+        const Vec2 tangent{-radial.y, radial.x};
+        for (const f32 side : {-1.0f, 1.0f}) {
+            const Vec2 bp = g.pos - radial * 4.5f + tangent * (side * std::max(g.half + 0.9f, kStreetClear + 0.4f));
+            if (occupied(bp, 0.6f) || in_river(bp.x, bp.y) || on_road(bp.x, bp.y) ||
+                on_street(bp.x, bp.y, kStreetClear)) {
+                continue;
+            }
+            push(PropCategory::Decor, town_banner, bp.x, bp.y, std::atan2(-radial.x, -radial.y)); // face into town
+            occ.emplace_back(bp, 0.6f);
+        }
+    }
+    // Benches along the streets, set between the lanterns and facing the street.
+    for (int s = 0; s < nstreets; ++s) {
+        Vec2 dir = streets[s].b - streets[s].a;
+        const f32 len = glm::length(dir);
+        if (len < 9.0f) {
+            continue;
+        }
+        dir /= len;
+        const Vec2 nrm{-dir.y, dir.x};
+        const int n = static_cast<int>(len / 8.5f);
+        for (int k = 0; k < n; ++k) {
+            if (detail::hash01(detail::tree_hash(vid, s * 31 + k, 9105u)) > 0.55f) {
+                continue; // not every gap gets one
+            }
+            const f32 side = (k % 2 == 0) ? -1.0f : 1.0f; // opposite the lantern of this stretch
+            const Vec2 bp = streets[s].a + dir * ((static_cast<f32>(k) + 0.5f) * 8.5f) + nrm * side * 4.3f;
+            if (glm::length(bp - v.center) < detail::kMarketHalf + 3.0f || occupied(bp, 1.0f) ||
+                in_river(bp.x, bp.y) || off_road(bp.x, bp.y) || on_street(bp.x, bp.y, 3.8f)) {
+                continue;
+            }
+            const Vec2 face = nrm * (-side); // the seat looks out over the street
+            push(PropCategory::Decor, kDecorBench, bp.x, bp.y, std::atan2(face.x, face.y));
+            occ.emplace_back(bp, 1.0f);
+        }
+    }
 
     // Greenery: planters ringing the plaza + bushes scattered on open interior ground.
     // Like the plaza lanterns, the planter ring sits OUTSIDE the ring road (the old 11 m
@@ -754,6 +861,24 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
         push(PropCategory::Decor, stored[detail::tree_hash(vid, static_cast<int>(hi), 8102u) % 5u],
              dp.x, dp.y, detail::hash01(detail::tree_hash(vid, static_cast<int>(hi), 8103u)) * TwoPi);
         occ.emplace_back(dp, 0.8f);
+    }
+
+    // Flower barrels by ~40% of the front doors (the goods piles took the other side of the door).
+    for (usize hi = 0; hi < plots.size(); ++hi) {
+        if (detail::hash01(detail::tree_hash(vid, static_cast<int>(hi), 8150u)) > 0.4f) {
+            continue;
+        }
+        const detail::HousePlot& h = plots[hi];
+        const Vec2 front{std::sin(h.yaw), std::cos(h.yaw)};
+        const Vec2 along{front.y, -front.x};
+        const Vec2 e = PropLibrary::house_half_extents(h.variant);
+        const Vec2 fp = h.pos + front * (e.y + 0.6f) - along * (e.x * 0.62f);
+        if (occupied(fp, 0.45f) || on_avenue(fp, 0.45f) || in_river(fp.x, fp.y) || off_road(fp.x, fp.y)) {
+            continue;
+        }
+        push(PropCategory::Decor, kDecorFlowerBarrel, fp.x, fp.y,
+             detail::hash01(detail::tree_hash(vid, static_cast<int>(hi), 8151u)) * TwoPi);
+        occ.emplace_back(fp, 0.45f);
     }
 
     // Fenced cottage gardens: a little post-and-rail plot beside ~a third of the houses (on the
@@ -941,6 +1066,51 @@ inline f32 town_path_amount(const Vec3& p, f32 up, u32 seed) {
     const f32 band = glm::smoothstep(hw + 0.7f, hw - 0.5f, best);
     const f32 gentle = glm::smoothstep(0.55f, 0.8f, up);
     return band * gentle;
+}
+
+// COBBLED ground in and around a town (0..1): the market plaza, the street network (ring road, gate
+// avenues, spokes) and the inter-town road where it runs through the town - fading out a few metres
+// past the walls, so the cobbles spill out of each gate and peter out into the dirt road. The terrain
+// mesher stores this per vertex (mc::PaveFn) and mesh.frag lays procedural cobblestones over it, on top
+// of the packed-earth street tint below (which shows through as the joints between the stones).
+inline f32 town_pave_amount(const Vec3& p, f32 up, u32 seed) {
+    if (p.y < worldgen::water_level + 0.4f) {
+        return 0.0f;
+    }
+    const f32 gentle = glm::smoothstep(0.55f, 0.8f, up); // flat-ish ground only (no cobbled cliffs)
+    if (gentle <= 0.0f) {
+        return 0.0f;
+    }
+    const auto v = worldgen::village_containing(p.x, p.z, seed, 10.0f);
+    if (!v) {
+        return 0.0f;
+    }
+    const Vec2 q{p.x, p.z};
+    const Vec2 d = q - v->center;
+    const f32 dist = glm::length(d);
+    const f32 r = worldgen::town_radius(*v, std::atan2(d.y, d.x), seed);
+    const f32 town = glm::smoothstep(r + 9.0f, r - 1.0f, dist); // runs out past the gates
+    if (town <= 0.0f) {
+        return 0.0f;
+    }
+    // The market plaza: a broad cobbled square under the stalls.
+    f32 pave = glm::smoothstep(detail::kMarketHalf + 2.0f, detail::kMarketHalf, dist);
+    // The street network (the same lines the houses face + the dirt tint follows).
+    if (dist < r + 1.0f) {
+        const auto gates = detail::village_gate_points(*v, seed);
+        std::array<detail::Street, 20> streets;
+        const int ns = detail::town_streets(*v, seed, gates, streets);
+        f32 best = 1e30f;
+        for (int s = 0; s < ns; ++s) {
+            best = std::min(best, detail::point_seg_dist(q, streets[s].a, streets[s].b));
+        }
+        constexpr f32 hw = 2.2f; // the street half-width (matches town_path_amount)
+        pave = std::max(pave, glm::smoothstep(hw + 0.5f, hw - 0.5f, best));
+    }
+    // The real inter-town road, through the town and out of its gates.
+    const f32 rd = roads::distance(p.x, p.z, seed);
+    pave = std::max(pave, glm::smoothstep(roads::road_half_width + 0.45f, roads::road_half_width - 0.55f, rd));
+    return pave * town * gentle;
 }
 
 // Overlays the town's dirt streets onto a base terrain colour (applied while meshing, like

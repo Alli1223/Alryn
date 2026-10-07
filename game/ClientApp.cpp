@@ -72,6 +72,27 @@ void ClientApp::on_init() {
         day_seconds_ = std::max(daynight::min_day_seconds, static_cast<f32>(std::atof(d)));
     }
     marker_.create(renderer_->device(), primitives::cube(1.0f, Vec3{1.0f, 0.85f, 0.2f}));
+    {
+        // The identity ring: a flat annulus (white - tinted per player at draw time), a hair thick.
+        MeshData ring;
+        constexpr int kSeg = 48;
+        constexpr f32 r0 = 0.56f, r1 = 0.70f, th = 0.025f;
+        auto quad = [&](const Vec3& a, const Vec3& b, const Vec3& c, const Vec3& d, const Vec3& n) {
+            const u32 base = static_cast<u32>(ring.vertices.size());
+            for (const Vec3& p : {a, b, c, d}) {
+                ring.vertices.push_back({p, n, Vec3{1.0f}});
+            }
+            ring.indices.insert(ring.indices.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
+        };
+        for (int i = 0; i < kSeg; ++i) {
+            const f32 a0 = TwoPi * static_cast<f32>(i) / kSeg, a1 = TwoPi * static_cast<f32>(i + 1) / kSeg;
+            const Vec3 d0{std::cos(a0), 0.0f, std::sin(a0)}, d1{std::cos(a1), 0.0f, std::sin(a1)};
+            const Vec3 up{0.0f, th, 0.0f};
+            quad(d0 * r0 + up, d1 * r0 + up, d1 * r1 + up, d0 * r1 + up, Vec3{0.0f, 1.0f, 0.0f}); // top
+            quad(d0 * r1, d0 * r1 + up, d1 * r1 + up, d1 * r1, d0);                                 // outer lip
+        }
+        ring_mesh_.create(renderer_->device(), ring);
+    }
     vehicle_meshes_.resize(vehicle_type_count());
     for (u8 i = 0; i < vehicle_type_count(); ++i) {
         vehicle_meshes_[i].create(renderer_->device(), vehicle_type(i).body());
@@ -181,12 +202,26 @@ void ClientApp::on_init() {
     // ALRYN_SCREEN=<name> opens a given screen for scripted runs (paired with ALRYN_SHOT, a
     // screenshot of it). The menu screens stay in the menu; the in-game ones (pause / skills /
     // wardrobe / map) are opened by enter_game.
+    // The saved heroes: adopt the last one played (or a default Knight for a first launch / scripted
+    // run - it only joins the roster once the player forges it).
+    roster_ = load_roster();
+    if (!roster_.heroes.empty()) {
+        select_hero(roster_.selected);
+    } else {
+        hero_ = make_hero(role_);
+        hero_.name = "HERO";
+        for (usize i = 0; i < kAbilitySlots; ++i) {
+            bar_[i] = hero_.bar[i];
+        }
+    }
+
     static constexpr std::pair<std::string_view, Screen> kMenuScreens[] = {
         {"main", Screen::Main},           {"join", Screen::Join},   {"settings", Screen::Settings},
-        {"customise", Screen::Customise}, {"class", Screen::Class},
+        {"customise", Screen::Customise}, {"class", Screen::Class}, {"heroes", Screen::Heroes},
     };
     for (const auto& [name, screen] : kMenuScreens) {
         if (dev_screen() == name) {
+            creating_ = screen == Screen::Class || (screen == Screen::Customise && roster_.heroes.empty());
             show_screen(screen);
             return;
         }
@@ -221,6 +256,26 @@ void ClientApp::enter_game(bool host_local, std::string host) {
             host_local_ = false;
         }
     }
+    // The game plays by the full progression rules: skills are learned in the tree, contract danger
+    // grows with the party's level. (A bare GameServer is a sandbox for the tests + tools.)
+    if (host_local_) {
+        std::lock_guard<std::mutex> lock(server_mutex_);
+        local_server_.set_progression(true);
+    }
+    // Fresh session bookkeeping for the hero: the server must adopt our save before we trust (and
+    // save) what it reports back.
+    restore_acked_ = false;
+    last_level_seen_ = 0;
+    last_journey_seen_ = 255;
+    levelup_fx_ = journey_fx_ = 0.0f;
+    session_time_ = 0.0f;
+    hero_save_cd_ = 5.0f;
+    live_progress_ = hero_.progress;
+    live_level_ = hero_.level();
+    live_color_ = hero_.color;
+    for (usize i = 0; i < kAbilitySlots; ++i) {
+        bar_[i] = hero_.bar[i];
+    }
     if (!client_.connect(host_, kPort)) {
         ALRYN_ERROR("Could not reach server at {}:{}", host_, kPort);
     }
@@ -244,6 +299,8 @@ void ClientApp::enter_game(bool host_local, std::string host) {
         skills_open_ = true;
     } else if (dev_screen() == "wardrobe") {
         wardrobe_open_ = true;
+    } else if (dev_screen() == "journal") {
+        journal_open_ = true;
     } else if (dev_screen() == "pause") {
         enter_pause();
     }
@@ -294,6 +351,7 @@ void ClientApp::return_to_menu() {
         renderer_->device().wait_idle();
     }
     paused_ = false;
+    sync_hero_progress(true); // bank the session's progress before the snapshot goes away
     client_.disconnect();
     stop_local_server();
     terrain_.reset();
@@ -306,8 +364,9 @@ void ClientApp::return_to_menu() {
     mesh_graveyard_.clear();
     have_snapshot_ = false;
     my_id_ = 0;
+    restore_acked_ = false;
     state_ = AppState::Menu;
-    show_screen(Screen::Main);
+    show_screen(roster_.heroes.empty() ? Screen::Main : Screen::Heroes);
 }
 
 void ClientApp::on_update(Timestep dt) {
@@ -340,11 +399,22 @@ void ClientApp::on_update(Timestep dt) {
                     snapshot_ = e.snapshot;
                     have_snapshot_ = true;
                     // Adopt the local player's authoritative upgrade ranks (packed 2 bits/ability) for
-                    // the skills-tree UI + the max-Aegis cast behaviour + local cast VFX.
+                    // the skills-tree UI + the max-Aegis cast behaviour + local cast VFX, and their live
+                    // progression (XP, learned skills, journey) for the HUD + the saved hero.
                     for (const net::PlayerState& p : snapshot_.players) {
                         if (p.id == my_id_) {
                             for (u8 a = 0; a < kAbilityCount; ++a) {
                                 ability_rank_[a] = static_cast<u8>((p.ability_ranks >> (2 * a)) & 0x3u);
+                            }
+                            live_progress_ = p.progress;
+                            live_level_ = p.level;
+                            live_color_ = p.color;
+                            // The server has adopted our saved hero once it reports at least what we
+                            // brought (it may have reset a forged loadout, but never the XP).
+                            if (!restore_acked_ && p.progress.xp >= hero_.progress.xp &&
+                                p.progress.owned_tier >= hero_.progress.owned_tier &&
+                                p.progress.kills >= hero_.progress.kills) {
+                                restore_acked_ = true;
                             }
                             break;
                         }
@@ -390,7 +460,7 @@ void ClientApp::on_update(Timestep dt) {
                 }
             }
         }
-        if (paused_ || map_open_ || skills_open_) {
+        if (paused_ || overlay_open()) {
             aim_valid_ = false; // no dig-marker while a menu / overlay is up
         } else {
             update_aim();
@@ -416,6 +486,8 @@ void ClientApp::on_update(Timestep dt) {
         tick_mesh_graveyard(); // free retired NPC body meshes once their frames-in-flight have passed
         update_gates(dt);
         update_feedback(dt);
+        update_progress_fx(dt); // level-up / journey celebrations + the hero's autosave
+        update_town_arrival(dt); // "you have arrived in <town>" as the player walks into one
         update_debug(dt);
         update_ropes(dt);
         update_deer(dt);
@@ -427,7 +499,7 @@ void ClientApp::on_update(Timestep dt) {
     } else if (renderer_ != nullptr) {
         apply_gamepad(dt); // controller drives the main-menu focus navigation (in-game path is above)
         renderer_->set_sky_color(menu_sky_); // calm backdrop behind the menu
-        if (current_screen_ != Screen::Customise) {
+        if (!menu_shows_preview()) {
             update_menu_scene(dt); // the live town the menus float over
         } else {
             preview_turn_ += dt.seconds * 0.6f; // slow turntable
@@ -498,6 +570,7 @@ void ClientApp::on_render() {
     draw_auras();
     draw_shields();
     draw_bubbles();
+    draw_player_rings(); // each player's identity-colour ring at their feet
     draw_buffs();
     draw_particles();
     draw_spell_fx();     // beams, rune sigils, falling meteors, the Mage's combo orbs
@@ -617,9 +690,12 @@ void ClientApp::on_render() {
     if (wardrobe_open_) {
         draw_wardrobe();
     }
+    if (journal_open_) {
+        draw_journal();
+    }
     }
 
-    if (state_ == AppState::Menu && current_screen_ == Screen::Customise) {
+    if (state_ == AppState::Menu && menu_shows_preview()) {
         draw_preview();
     } else if (state_ == AppState::Menu) {
         draw_menu_scene();
@@ -631,6 +707,9 @@ void ClientApp::on_render() {
 void ClientApp::on_shutdown() {
     // Frees GPU resources while the device is still alive; wait for any
     // in-flight frame to finish first so nothing is freed mid-use.
+    if (state_ == AppState::Playing) {
+        sync_hero_progress(true); // quitting mid-session still banks the hero's progress
+    }
     if (renderer_ != nullptr) {
         renderer_->device().wait_idle();
     }
@@ -669,6 +748,7 @@ void ClientApp::on_shutdown() {
         set->clear();
     }
     marker_.destroy();
+    ring_mesh_.destroy();
     for (Mesh& vm : vehicle_meshes_) {
         vm.destroy();
     }
@@ -1018,6 +1098,16 @@ void ClientApp::update_visuals(Timestep dt) {
         if (p.shield > 0 && v.last_shield == 0) {
             combat_text(p.position, "WARDED!", Vec4{0.6f, 0.82f, 1.0f, 1.0f});
         }
+        // A teammate levelling up gets a golden call-out + a burst of sparks over their head (ours
+        // gets the full banner in the HUD). Ignored for a moment after they appear: the server adopting
+        // a joining hero's save jumps their level, which isn't a level-up.
+        v.seen += dt.seconds;
+        if (!is_local && v.last_level != 0 && p.level > v.last_level && v.seen > 3.0f) {
+            combat_text(p.position, "LEVEL UP!", Vec4{1.0f, 0.84f, 0.38f, 1.0f}, 26.0f);
+            emit_burst(p.position + Vec3{0.0f, 1.2f, 0.0f}, Vec4{1.0f, 0.84f, 0.4f, 1.0f}, 36, 3.5f, 0.9f, 0.13f,
+                       1, 4.0f, 3.0f);
+        }
+        v.last_level = p.level;
         v.last_buffs = p.buffs;
         v.last_shield = p.shield;
         v.animator.update(v.speed, dt, v.heading);

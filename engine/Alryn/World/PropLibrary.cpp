@@ -213,6 +213,45 @@ void lit_window(MeshData& op, MeshData& em, const Vec3& ctr, const Vec3& across,
     fq(-hw - fb, hw + fb, -hh - fb, -hh);   // bottom rail
     fq(-hw - fb, -hw, -hh - fb, hh + fb);   // left jamb
     fq(hw, hw + fb, -hh - fb, hh + fb);     // right jamb
+
+    // About half the windows carry a FLOWER BOX on the sill: a little planked trough proud of the
+    // wall, spilling greenery and a mix of bright blooms - the lived-in, storybook-town touch.
+    const u32 wseed = static_cast<u32>(std::lround(ctr.x * 37.0f) * 73856093) ^
+                      static_cast<u32>(std::lround(ctr.y * 41.0f) * 19349663) ^
+                      static_cast<u32>(std::lround(ctr.z * 43.0f) * 83492791);
+    if (hashf(wseed) < 0.55f) {
+        static const Vec3 blooms[5] = {{0.78f, 0.16f, 0.18f}, {0.86f, 0.70f, 0.18f}, {0.58f, 0.30f, 0.70f},
+                                       {0.82f, 0.80f, 0.74f}, {0.86f, 0.40f, 0.56f}};
+        const Vec3 box_col{0.40f, 0.27f, 0.15f};
+        const Vec3 leaf{0.26f, 0.48f, 0.20f};
+        const f32 bw = hw + fb + 0.04f;   // half-width along the wall
+        const f32 by0 = -hh - fb - 0.2f;  // under the sill
+        const f32 by1 = -hh - fb - 0.02f;
+        const f32 bo = 0.24f;             // how far it stands out from the wall
+        auto boxq = [&](f32 c0, f32 c1, f32 u0, f32 u1, f32 o0, f32 o1, const Vec3& col) {
+            // An axis-free little box in the window's (across, up, outward) frame.
+            const Vec3 p000 = ctr + across * c0 + up * u0 + outward * o0;
+            const Vec3 a = across * (c1 - c0), u = up * (u1 - u0), o = outward * (o1 - o0);
+            const Vec3 mid = p000 + (a + u + o) * 0.5f;
+            const Vec3 P[8] = {p000, p000 + a, p000 + a + o, p000 + o, p000 + u, p000 + a + u, p000 + a + o + u, p000 + o + u};
+            const int F[6][4] = {{0, 1, 2, 3}, {4, 5, 6, 7}, {0, 1, 5, 4}, {3, 2, 6, 7}, {0, 3, 7, 4}, {1, 2, 6, 5}};
+            for (const auto& f : F) {
+                emit_tri(op, P[f[0]], P[f[1]], P[f[2]], mid, col);
+                emit_tri(op, P[f[0]], P[f[2]], P[f[3]], mid, col);
+            }
+        };
+        boxq(-bw, bw, by0, by1, 0.02f, bo, box_col);                        // the trough
+        boxq(-bw + 0.04f, bw - 0.04f, by1, by1 + 0.07f, 0.06f, bo - 0.04f, leaf); // a bed of leaves
+        const int n = std::max(3, static_cast<int>(bw / 0.11f));
+        for (int i = 0; i < n; ++i) {
+            const f32 t = -bw + 0.08f + (2.0f * bw - 0.16f) * (static_cast<f32>(i) + 0.5f) / static_cast<f32>(n);
+            const f32 ht = 0.08f + 0.1f * hashf(wseed + static_cast<u32>(i) * 7u);
+            const f32 oo = 0.08f + 0.1f * hashf(wseed + static_cast<u32>(i) * 13u);
+            boxq(t - 0.035f, t + 0.035f, by1, by1 + ht, oo, oo + 0.06f, leaf * 0.9f); // stem + leaves
+            const Vec3 bc = blooms[(wseed / 7u + static_cast<u32>(i) * 3u) % 5u];
+            boxq(t - 0.05f, t + 0.05f, by1 + ht, by1 + ht + 0.07f, oo - 0.01f, oo + 0.08f, bc); // the bloom
+        }
+    }
 }
 
 // A stepped-shingle (or thatch) gable roof over a [-w,w]x[-d,d] footprint, into `shell`. For the
@@ -528,6 +567,54 @@ void add_handcart(MeshData& m, const Vec3& c) {
                 {c.x - 0.18f + static_cast<f32>(i) * 0.28f, c.y + 0.66f, c.z + 0.55f}, logc * (0.9f + 0.2f * hashf(i + 2u)));
     }
 }
+// An oriented square-section beam from `a` to `b` (half-thickness `r`) - ropes, poles, braces that
+// don't run along an axis.
+void add_beam(MeshData& m, const Vec3& a, const Vec3& b, f32 r, const Vec3& color) {
+    const Vec3 d = b - a;
+    const f32 len = glm::length(d);
+    if (len < 1e-4f) {
+        return;
+    }
+    const Vec3 f = d / len;
+    const Vec3 ref = std::abs(f.y) < 0.9f ? Vec3{0.0f, 1.0f, 0.0f} : Vec3{1.0f, 0.0f, 0.0f};
+    const Vec3 s = glm::normalize(glm::cross(f, ref)) * r;
+    const Vec3 u = glm::normalize(glm::cross(s, f)) * r;
+    const Vec3 P[8] = {a - s - u, a + s - u, a + s + u, a - s + u, b - s - u, b + s - u, b + s + u, b - s + u};
+    const Vec3 mid = (a + b) * 0.5f;
+    const int F[6][4] = {{0, 1, 2, 3}, {4, 5, 6, 7}, {0, 1, 5, 4}, {1, 2, 6, 5}, {2, 3, 7, 6}, {3, 0, 4, 7}};
+    for (const auto& q : F) {
+        emit_tri(m, P[q[0]], P[q[1]], P[q[2]], mid, color);
+        emit_tri(m, P[q[0]], P[q[2]], P[q[3]], mid, color);
+    }
+}
+
+// A string of pennant BUNTING from `a` to `b`, sagging `sag` metres in the middle: a dark cord with
+// double-sided triangular flags in festive colours hanging off it every ~0.55 m.
+void add_bunting(MeshData& m, const Vec3& a, const Vec3& b, f32 sag) {
+    static const Vec3 flags[5] = {{0.70f, 0.14f, 0.14f}, {0.84f, 0.68f, 0.18f}, {0.18f, 0.32f, 0.66f},
+                                  {0.20f, 0.50f, 0.22f}, {0.82f, 0.80f, 0.74f}};
+    const Vec3 cord{0.2f, 0.15f, 0.1f};
+    auto at = [&](f32 t) { return glm::mix(a, b, t) - Vec3{0.0f, sag * (1.0f - (2.0f * t - 1.0f) * (2.0f * t - 1.0f)), 0.0f}; };
+    constexpr int segs = 10;
+    for (int i = 0; i < segs; ++i) {
+        add_beam(m, at(static_cast<f32>(i) / segs), at(static_cast<f32>(i + 1) / segs), 0.016f, cord);
+    }
+    const f32 len = glm::length(b - a);
+    const int n = std::max(3, static_cast<int>(len / 0.55f));
+    Vec3 side = glm::cross(glm::normalize(b - a), Vec3{0.0f, 1.0f, 0.0f});
+    side = glm::length(side) > 1e-4f ? glm::normalize(side) : Vec3{0.0f, 0.0f, 1.0f};
+    const f32 hw = 0.4f * len / static_cast<f32>(n) * 0.5f / std::max(len, 1e-3f); // half-width in t
+    for (int i = 0; i < n; ++i) {
+        const f32 t = (static_cast<f32>(i) + 0.5f) / static_cast<f32>(n);
+        const Vec3 p0 = at(t - hw * 1.6f), p1 = at(t + hw * 1.6f);
+        const Vec3 tip = at(t) - Vec3{0.0f, 0.36f, 0.0f};
+        const Vec3 col = flags[static_cast<u32>(i) % 5u];
+        const Vec3 c = (p0 + p1 + tip) / 3.0f;
+        emit_tri(m, p0, p1, tip, c - side, col);        // both faces: it's cloth
+        emit_tri(m, p0, p1, tip, c + side, col * 0.9f);
+    }
+}
+
 // A patch of irregular flagstones laid on the ground around `c` (jittered flat slabs).
 void add_flagstones(MeshData& m, const Vec3& c, f32 r) {
     const Vec3 s{0.58f, 0.58f, 0.6f};
@@ -1999,6 +2086,41 @@ PropDef PropLibrary::build_market() {
     hay(-3.6f, 3.4f);
     hay(-2.9f, 3.7f);
 
+    // Market-day dressing: a tall banner pole at each corner of the stall square (crimson + royal
+    // blue alternating, gold finials), with pennant BUNTING strung from the top of the market cross
+    // out to every pole and round the square between them - a festive canopy high over the stalls.
+    {
+        constexpr f32 cp = 5.5f;   // corner pole offset (clear of the stalls + the well)
+        constexpr f32 top = 4.5f;  // pole height
+        const Vec3 gold{0.80f, 0.62f, 0.24f};
+        const Vec3 cloths2[2] = {{0.60f, 0.12f, 0.12f}, {0.16f, 0.26f, 0.58f}};
+        const Vec3 corners[4] = {{cp, 0.0f, cp}, {-cp, 0.0f, cp}, {-cp, 0.0f, -cp}, {cp, 0.0f, -cp}};
+        for (int i = 0; i < 4; ++i) {
+            const Vec3& c = corners[i];
+            add_box(m, {c.x - 0.18f, 0.0f, c.z - 0.18f}, {c.x + 0.18f, 0.32f, c.z + 0.18f}, stone); // footing
+            add_box(m, {c.x - 0.07f, 0.0f, c.z - 0.07f}, {c.x + 0.07f, top, c.z + 0.07f}, dark);   // pole
+            add_box(m, {c.x - 0.07f, top, c.z - 0.07f}, {c.x + 0.07f, top + 0.22f, c.z + 0.07f}, gold);
+            // A pennon hanging from the pole, facing out from the square's centre.
+            const Vec3 out = glm::normalize(Vec3{c.x, 0.0f, c.z});
+            const Vec3 side{-out.z, 0.0f, out.x};
+            const Vec3 a0 = c + Vec3{0.0f, top - 0.15f, 0.0f}, a1 = c + Vec3{0.0f, top - 1.45f, 0.0f};
+            const Vec3 tipp = c + side * 1.0f + Vec3{0.0f, top - 0.8f, 0.0f};
+            emit_tri(m, a0, a1, tipp, c + out * 0.5f + Vec3{0.0f, top - 0.8f, 0.0f}, cloths2[i % 2]);
+            emit_tri(m, a0, a1, tipp, c - out * 0.5f + Vec3{0.0f, top - 0.8f, 0.0f}, cloths2[i % 2] * 0.9f);
+            BoxCollider pc;
+            pc.center = c;
+            pc.half_extents = Vec2{0.18f, 0.18f};
+            pc.height = 1.2f;
+            def.colliders.push_back(pc);
+        }
+        const Vec3 crown{0.0f, 3.62f, 0.0f}; // under the market cross's cap
+        for (int i = 0; i < 4; ++i) {
+            const Vec3 pole_top = corners[i] + Vec3{0.0f, top - 0.05f, 0.0f};
+            add_bunting(m, crown, pole_top, 0.32f);                                         // spoke
+            add_bunting(m, pole_top, corners[(i + 1) % 4] + Vec3{0.0f, top - 0.05f, 0.0f}, 0.6f); // rim
+        }
+    }
+
     def.parts.push_back({std::move(m), PropLayer::Opaque});
     BoxCollider base; // the market cross blocks the very centre
     base.half_extents = Vec2{1.5f, 1.5f};
@@ -2429,6 +2551,157 @@ PropDef PropLibrary::build_decor(int variant) {
             }
             collider(0.85f, 0.62f, 0.85f);
             break;
+        case kDecorBench: { // a wooden street bench: seat along x, back to -z (sitters face +z)
+            def.name = "bench";
+            const Vec3 plank = wood * 1.12f;
+            add_box(m, {-0.85f, 0.42f, -0.2f}, {0.85f, 0.48f, -0.01f}, plank);        // seat planks
+            add_box(m, {-0.85f, 0.42f, 0.01f}, {0.85f, 0.48f, 0.2f}, plank * 0.94f);
+            for (f32 ex : {-0.7f, 0.7f}) {
+                add_box(m, {ex - 0.06f, 0.0f, -0.17f}, {ex + 0.06f, 0.42f, 0.17f}, dark);  // leg slab
+                add_box(m, {ex - 0.05f, 0.42f, -0.25f}, {ex + 0.05f, 0.95f, -0.17f}, dark); // back post
+                add_box(m, {ex - 0.06f, 0.6f, -0.2f}, {ex + 0.06f, 0.66f, 0.18f}, dark);    // armrest
+            }
+            add_box(m, {-0.85f, 0.64f, -0.26f}, {0.85f, 0.73f, -0.2f}, plank * 0.95f); // back rail
+            add_box(m, {-0.85f, 0.82f, -0.26f}, {0.85f, 0.93f, -0.2f}, plank);         // top rail
+            collider(0.85f, 0.26f, 0.5f);
+            break;
+        }
+        case kDecorFlowerCart: { // a flower-seller's handcart heaped with bright blooms
+            def.name = "flower_cart";
+            static const Vec3 blooms[6] = {{0.80f, 0.16f, 0.18f}, {0.88f, 0.72f, 0.18f}, {0.58f, 0.30f, 0.72f},
+                                           {0.84f, 0.82f, 0.76f}, {0.88f, 0.42f, 0.58f}, {0.92f, 0.50f, 0.16f}};
+            add_box(m, {-0.62f, 0.42f, -0.42f}, {0.62f, 0.54f, 0.42f}, wood);              // bed
+            add_box(m, {-0.62f, 0.54f, -0.42f}, {0.62f, 0.78f, -0.36f}, wood * 0.9f);      // sides
+            add_box(m, {-0.62f, 0.54f, 0.36f}, {0.62f, 0.78f, 0.42f}, wood * 0.9f);
+            add_box(m, {0.56f, 0.54f, -0.42f}, {0.62f, 0.78f, 0.42f}, wood * 0.9f);
+            add_box(m, {-0.62f, 0.54f, -0.42f}, {-0.56f, 0.78f, 0.42f}, wood * 0.9f);
+            for (f32 sz : {-0.48f, 0.48f}) { // two spoked wheels
+                add_box(m, {-0.16f, 0.02f, sz - 0.05f}, {0.16f, 0.5f, sz + 0.05f}, dark);
+                add_box(m, {-0.24f, 0.1f, sz - 0.05f}, {0.24f, 0.42f, sz + 0.05f}, dark);
+            }
+            add_box(m, {-1.3f, 0.5f, -0.3f}, {-0.62f, 0.56f, -0.24f}, dark); // handles
+            add_box(m, {-1.3f, 0.5f, 0.24f}, {-0.62f, 0.56f, 0.3f}, dark);
+            add_box(m, {-0.58f, 0.0f, -0.05f}, {-0.5f, 0.42f, 0.05f}, dark);  // prop leg
+            const Vec3 leaf{0.27f, 0.50f, 0.21f};
+            add_box(m, {-0.56f, 0.54f, -0.36f}, {0.56f, 0.74f, 0.36f}, leaf * 0.85f); // a mound of greenery
+            for (int i = 0; i < 18; ++i) {
+                const f32 fx = -0.5f + 1.0f * hashf(static_cast<u32>(i) * 17u + 3u);
+                const f32 fz = -0.3f + 0.6f * hashf(static_cast<u32>(i) * 29u + 11u);
+                const f32 fy = 0.74f + 0.12f * hashf(static_cast<u32>(i) * 5u + 7u);
+                add_box(m, {fx - 0.06f, fy - 0.04f, fz - 0.06f}, {fx + 0.06f, fy + 0.06f, fz + 0.06f},
+                        blooms[static_cast<u32>(i) % 6u]);
+            }
+            collider(0.7f, 0.5f, 0.8f);
+            break;
+        }
+        case kDecorBannerRed:
+        case kDecorBannerBlue: { // a tall pole hung with a swallow-tailed heraldic banner
+            def.name = "banner";
+            const bool red = (variant % static_cast<int>(kDecorVariants)) == kDecorBannerRed;
+            const Vec3 cloth = red ? Vec3{0.60f, 0.12f, 0.12f} : Vec3{0.16f, 0.26f, 0.58f};
+            const Vec3 gold{0.80f, 0.62f, 0.24f};
+            add_box(m, {-0.07f, 0.0f, -0.07f}, {0.07f, 4.2f, 0.07f}, dark);             // pole
+            add_box(m, {-0.13f, 0.0f, -0.13f}, {0.13f, 0.3f, 0.13f}, stone);             // stone footing
+            add_box(m, {-0.5f, 3.86f, -0.04f}, {0.5f, 3.94f, 0.04f}, dark);             // crossbar
+            add_box(m, {-0.06f, 4.2f, -0.06f}, {0.06f, 4.42f, 0.06f}, gold);             // finial
+            add_box(m, {-0.42f, 2.15f, 0.06f}, {0.42f, 3.86f, 0.1f}, cloth);             // the banner
+            add_box(m, {-0.44f, 3.68f, 0.05f}, {0.44f, 3.78f, 0.11f}, gold);             // gold top band
+            add_box(m, {-0.36f, 2.15f, 0.05f}, {-0.3f, 3.68f, 0.11f}, gold * 0.92f);     // side trims
+            add_box(m, {0.3f, 2.15f, 0.05f}, {0.36f, 3.68f, 0.11f}, gold * 0.92f);
+            // A gold lozenge emblem in the middle, on both faces of the cloth.
+            for (const f32 sz : {0.115f, 0.045f}) {
+                const Vec3 T{0.0f, 3.25f, sz}, B{0.0f, 2.75f, sz}, L{-0.2f, 3.0f, sz}, R{0.2f, 3.0f, sz};
+                const Vec3 inside{0.0f, 3.0f, 0.08f}; // the cloth's mid-plane: normals face away from it
+                emit_tri(m, T, R, B, inside, gold);
+                emit_tri(m, T, B, L, inside, gold);
+            }
+            // The swallow-tail: two hanging points below the banner.
+            for (f32 sx : {-1.0f, 1.0f}) {
+                const Vec3 a{sx * 0.42f, 2.15f, 0.08f}, b{0.0f, 2.15f, 0.08f}, tip{sx * 0.24f, 1.7f, 0.08f};
+                emit_tri(m, a, b, tip, Vec3{sx * 0.2f, 1.9f, 0.0f}, cloth * 0.92f);
+                emit_tri(m, a, b, tip, Vec3{sx * 0.2f, 1.9f, 0.3f}, cloth * 0.92f);
+            }
+            collider(0.14f, 0.14f, 2.0f);
+            break;
+        }
+        case kDecorNoticeBoard: { // the town notice board: posts, a shingled hood, pinned notices
+            def.name = "notice_board";
+            const Vec3 parch{0.80f, 0.74f, 0.58f};
+            for (f32 ex : {-0.82f, 0.82f}) {
+                add_box(m, {ex - 0.08f, 0.0f, -0.08f}, {ex + 0.08f, 2.3f, 0.08f}, dark); // posts
+            }
+            add_box(m, {-0.76f, 0.75f, -0.05f}, {0.76f, 1.95f, 0.05f}, wood);           // the board
+            add_box(m, {-0.8f, 0.7f, -0.07f}, {0.8f, 0.78f, 0.07f}, dark);              // frame
+            add_box(m, {-0.8f, 1.93f, -0.07f}, {0.8f, 2.0f, 0.07f}, dark);
+            // A little two-slope shingle hood keeping the rain off.
+            const Vec3 roofc{0.36f, 0.22f, 0.14f};
+            const Vec3 below{0.0f, 1.6f, 0.0f};
+            emit_tri(m, {-1.0f, 2.3f, 0.45f}, {1.0f, 2.3f, 0.45f}, {1.0f, 2.62f, 0.0f}, below, roofc);
+            emit_tri(m, {-1.0f, 2.3f, 0.45f}, {1.0f, 2.62f, 0.0f}, {-1.0f, 2.62f, 0.0f}, below, roofc);
+            emit_tri(m, {-1.0f, 2.3f, -0.45f}, {1.0f, 2.3f, -0.45f}, {1.0f, 2.62f, 0.0f}, below, roofc * 0.9f);
+            emit_tri(m, {-1.0f, 2.3f, -0.45f}, {1.0f, 2.62f, 0.0f}, {-1.0f, 2.62f, 0.0f}, below, roofc * 0.9f);
+            // Pinned notices (contracts, bounties, a wanted poster) on the front face.
+            const f32 notes[6][4] = {{-0.66f, 1.45f, 0.26f, 0.36f}, {-0.3f, 1.5f, 0.24f, 0.3f},
+                                     {0.08f, 1.38f, 0.3f, 0.42f},  {0.46f, 1.5f, 0.22f, 0.3f},
+                                     {-0.52f, 0.9f, 0.3f, 0.36f},  {0.2f, 0.88f, 0.34f, 0.34f}};
+            for (int i = 0; i < 6; ++i) {
+                const f32* n = notes[i];
+                const Vec3 pc = parch * (0.9f + 0.18f * hashf(static_cast<u32>(i) * 3u + 1u));
+                add_box(m, {n[0], n[1], 0.05f}, {n[0] + n[2], n[1] + n[3], 0.07f}, pc);
+                add_box(m, {n[0] + n[2] * 0.42f, n[1] + n[3] - 0.07f, 0.065f},
+                        {n[0] + n[2] * 0.58f, n[1] + n[3] - 0.03f, 0.085f}, Vec3{0.62f, 0.12f, 0.1f}); // wax seal
+                for (int ln = 0; ln < 3; ++ln) { // inked lines
+                    const f32 ly = n[1] + n[3] * (0.25f + 0.18f * static_cast<f32>(ln));
+                    add_box(m, {n[0] + 0.04f, ly, 0.068f}, {n[0] + n[2] - 0.05f, ly + 0.02f, 0.075f},
+                            Vec3{0.22f, 0.18f, 0.14f});
+                }
+            }
+            collider(0.9f, 0.12f, 2.0f);
+            break;
+        }
+        case kDecorFlowerBarrel: { // a half-barrel planter overflowing with blooms
+            def.name = "flower_barrel";
+            static const Vec3 blooms[5] = {{0.80f, 0.16f, 0.18f}, {0.88f, 0.72f, 0.18f}, {0.58f, 0.30f, 0.72f},
+                                           {0.84f, 0.82f, 0.76f}, {0.88f, 0.42f, 0.58f}};
+            belled_barrel(m, Vec3{0.0f}, 0.34f, 0.5f, wood, dark);
+            const Vec3 leaf{0.26f, 0.5f, 0.2f};
+            add_box(m, {-0.28f, 0.5f, -0.28f}, {0.28f, 0.62f, 0.28f}, leaf * 0.85f);
+            for (int i = 0; i < 9; ++i) {
+                const f32 a = static_cast<f32>(i) * 2.399f;
+                const f32 rr = 0.08f + 0.17f * hashf(static_cast<u32>(i) * 11u + 5u);
+                const f32 fx = std::cos(a) * rr, fz = std::sin(a) * rr;
+                const f32 ht = 0.66f + 0.14f * hashf(static_cast<u32>(i) * 7u + 2u);
+                add_box(m, {fx - 0.03f, 0.6f, fz - 0.03f}, {fx + 0.03f, ht, fz + 0.03f}, leaf);
+                add_box(m, {fx - 0.06f, ht, fz - 0.06f}, {fx + 0.06f, ht + 0.08f, fz + 0.06f}, blooms[i % 5]);
+            }
+            collider(0.34f, 0.34f, 0.5f);
+            break;
+        }
+        case kDecorBunting: { // a sagging string of pennants along local x (-0.5..0.5), stretched to span
+            def.name = "bunting";
+            static const Vec3 flags[5] = {{0.70f, 0.14f, 0.14f}, {0.84f, 0.68f, 0.18f}, {0.18f, 0.32f, 0.66f},
+                                          {0.20f, 0.50f, 0.22f}, {0.82f, 0.80f, 0.74f}};
+            constexpr f32 top = 3.92f, sag = 0.55f;
+            constexpr int segs = 16;
+            auto rope_y = [&](f32 x) { return top - sag * (1.0f - 4.0f * x * x); };
+            for (int i = 0; i < segs; ++i) {
+                const f32 x0 = -0.5f + static_cast<f32>(i) / segs, x1 = -0.5f + static_cast<f32>(i + 1) / segs;
+                const f32 y = (rope_y(x0) + rope_y(x1)) * 0.5f;
+                add_box(m, {x0, y - 0.018f, -0.018f}, {x1, y + 0.018f, 0.018f}, dark);
+            }
+            constexpr int pennants = 15;
+            for (int i = 0; i < pennants; ++i) {
+                const f32 xc = -0.5f + (static_cast<f32>(i) + 0.5f) / pennants;
+                const f32 hwid = 0.42f / pennants;
+                const f32 y = rope_y(xc);
+                const Vec3 a{xc - hwid, rope_y(xc - hwid), 0.0f}, b{xc + hwid, rope_y(xc + hwid), 0.0f};
+                const Vec3 tip{xc, y - 0.42f, 0.0f};
+                const Vec3 col = flags[static_cast<u32>(i) % 5u];
+                emit_tri(m, a, b, tip, Vec3{xc, y - 0.2f, -1.0f}, col); // both faces (it's a cloth)
+                emit_tri(m, a, b, tip, Vec3{xc, y - 0.2f, 1.0f}, col * 0.9f);
+            }
+            break; // no collider - it hangs well overhead
+        }
         default: // 7: a cluster of produce sacks + a basket
             def.name = "sacks";
             add_box(m, {-0.3f, 0.0f, -0.24f}, {0.3f, 0.46f, 0.24f}, Vec3{0.66f, 0.58f, 0.40f});

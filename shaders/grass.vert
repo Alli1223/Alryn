@@ -26,6 +26,7 @@ layout(location = 0) out vec3 vWorldNormal;
 layout(location = 1) out vec3 vColor;
 layout(location = 2) out vec4 vShadowCoord;
 layout(location = 3) out vec3 vWorldPos;
+layout(location = 4) out float vPave; // shared with mesh.frag: plants are never paved
 
 void main() {
     vec3 p = inPosition;
@@ -57,4 +58,5 @@ void main() {
     vColor = inColor;
     vShadowCoord = pc.lightVP * worldPos;
     vWorldPos = worldPos.xyz;
+    vPave = 0.0;
 }

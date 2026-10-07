@@ -30,6 +30,9 @@
 #include <Alryn/World/Village.h>
 
 #include "GameConfig.h"
+#include "Profile.h"
+
+#include <Alryn/Game/Progression.h>
 
 #include <algorithm>
 #include <array>
@@ -86,7 +89,7 @@ protected:
     void settings_back() { show_screen(paused_ ? Screen::Pause : Screen::Main); }
 
     // ---- Menu construction --------------------------------------------------
-    enum class Screen { Main, Join, Settings, Customise, Class, Pause };
+    enum class Screen { Main, Join, Settings, Customise, Class, Pause, Heroes };
 
     Vec2 pointer_pos() {
         if (Input* in = input()) {
@@ -102,10 +105,22 @@ protected:
     }
 
     void menu_escape() {
-        if (current_screen_ == Screen::Main) {
-            close();
-        } else {
-            show_screen(Screen::Main);
+        switch (current_screen_) {
+            case Screen::Main: close(); break;
+            case Screen::Customise: // step back through hero creation, or out of editing
+                if (creating_) {
+                    show_screen(Screen::Class);
+                } else {
+                    select_hero(hero_index_);
+                    show_screen(Screen::Heroes);
+                }
+                break;
+            case Screen::Class:
+                creating_ = false;
+                show_screen(roster_.heroes.empty() ? Screen::Main : Screen::Heroes);
+                break;
+            case Screen::Join: show_screen(Screen::Heroes); break;
+            default: show_screen(Screen::Main); break;
         }
     }
 
@@ -141,6 +156,26 @@ protected:
     // "on joining"). Selecting a class re-lays the screen to highlight it; START enters the game
     // with the pending host/join intent recorded when this screen was opened.
     void build_class(f32 w, f32 h);
+
+    // ---- Saved heroes (game/Profile.h) ------------------------------------------------------
+    // The hero-select screen: the roster as cards (pick one, or forge a new hero), the chosen hero on
+    // the turntable, and EDIT / DELETE / JOIN / HOST. The spine of the menu flow:
+    //   Main -> Heroes -> (new hero: Class -> Customise) -> Host / Join -> in game.
+    void build_heroes(f32 w, f32 h);
+    void select_hero(int index);  // adopt roster hero `index` as the active hero (class, look, colour, bar)
+    void begin_new_hero();        // start forging a hero (Class screen, then Customise)
+    void commit_hero();           // store the active hero's look in the roster (adding it if new) + save
+    // Pull the local player's live progression (from the snapshot, once the server has restored our
+    // hero) into the active hero; saves every few seconds, or now with `force_save`.
+    void sync_hero_progress(bool force_save);
+    // The menu screens that show the hero turntable instead of the town backdrop.
+    bool menu_shows_preview() const {
+        return current_screen_ == Screen::Customise || current_screen_ == Screen::Heroes;
+    }
+    // What the local hero can use right now (starters + learned) and their level - live from the
+    // server once it has adopted our saved hero, else from the saved hero itself.
+    u8 known_mask() const;
+    u8 hero_level() const;
 
     // Re-dress the customise turntable avatar for the current look / role / colour pick: the same
     // skinned body, outfit, attachments and simulated cloth as in game.
@@ -265,6 +300,8 @@ private:
         u8 last_health = 255;   // previous snapshot health % (255 = unseen) - a drop can cut cloth
         u8 last_buffs = 0;      // previous co-op buff bits - a rising edge pops floating combat text
         u8 last_shield = 0;     // previous Aegis strength - a fresh ward pops "WARDED!"
+        u8 last_level = 0;      // previous networked level - a rise pops "LEVEL UP!" over them
+        f32 seen = 0.0f;        // seconds this visual has existed (a join-time restore isn't a level-up)
         SkinnedMesh body_skin;  // continuous body geometry + bone weights (built with the model)
         Mesh body_mesh;         // dynamic GPU mesh, re-skinned from the posed joints every frame
         SkinnedMesh outfit_skin; // continuous worn equipment (armoured/clothed limbs, torso, skirt)
@@ -632,6 +669,30 @@ private:
     // The role's signature accent colour (also tints the ability bar + icons).
     static Vec3 role_color(PlayerRole role);
 
+    // ---- Identity + progression HUD ----------------------------------------------------------
+    // A soft ring in every player's identity colour at their feet (3D, with the scene) - the quickest
+    // way to tell who is who in a scrum.
+    void draw_player_rings();
+    // Name plates over the other players (name + level in their colour, a health sliver), and arrows
+    // at the screen edge pointing to teammates who are off-screen.
+    void draw_nameplates(ui::DrawList& draw, f32 W, f32 H);
+    // Party frames down the left edge: each teammate's colour, class crest, name, level and health.
+    void draw_party_frames(ui::DrawList& draw, f32 W, f32 H, f32 ts);
+    // Level-up + journey-step celebrations (edge-triggered from the snapshot) and their banners.
+    void update_progress_fx(Timestep dt);
+    void draw_progress_fx(ui::DrawList& draw, f32 W, f32 H);
+    // Skill tree: ask the server to learn ability `code` (1..7) or raise talent (8 + t). Held a few
+    // ticks so the server sees a rising edge even if a packet drops; it spends one point per press.
+    void request_learn(u8 code);
+    // The journey log (J): the hero's record and every journey goal - done, current (with progress)
+    // and still ahead - with their rewards. The linear campaign at a glance.
+    void draw_journal();
+    // Guides a new hero to their next goal in the world: while the journey asks them to find work /
+    // set out, the nearest contract wagon gets a bobbing gold marker (and an edge pointer when it's
+    // off-screen). Also announces each town as the player walks into it.
+    void draw_journey_guide(ui::DrawList& draw, f32 W, f32 H);
+    void update_town_arrival(Timestep dt);
+
     // The three role abilities (keys 1/2/3) as a polished bottom-centre bar: a backing
     // panel, one rounded slot each with a vector icon, a key badge, the name, and a radial
     // cooldown wipe (a dark overlay that drains as the ability recovers + the seconds left).
@@ -827,6 +888,30 @@ private:
     u8 ability_rank_[kAbilityCount] = {};            // local player's current-role upgrade ranks (snapshot)
     u8 pending_upgrade_ = 0;                          // ability index+1 to buy-upgrade (sent while held)
     int upgrade_hold_ = 0;                            // ticks left to hold pending_upgrade_ (rising-edge buy)
+    u8 pending_learn_ = 0;                            // skill-tree learn request (see request_learn)
+    int learn_hold_ = 0;                              // ticks left to hold pending_learn_
+    ui::Rect skill_learn_rects_[kAbilityCount] = {};  // tree LEARN-button rects (from draw_skills)
+    ui::Rect talent_rects_[kTalentCount] = {};        // talent "+" button rects (from draw_skills)
+    int skill_hover_ = -1;                            // ability node under the cursor (detail card)
+
+    // ---- Heroes + live progression ----
+    Roster roster_;                 // the saved heroes (loaded on init)
+    Hero hero_;                     // the active hero (being played, edited or forged)
+    int hero_index_ = -1;           // roster slot hero_ came from (-1 = a new, unsaved hero)
+    bool creating_ = false;         // the Class -> Customise screens are forging a new hero
+    bool confirm_delete_ = false;   // DELETE was pressed once - the next press deletes
+    bool restore_acked_ = false;    // the server has adopted our saved hero (live progress is trusted)
+    f32 hero_save_cd_ = 0.0f;       // seconds until the next autosave of the hero's progress
+    f32 session_time_ = 0.0f;       // seconds played this session (folded into the hero on save)
+    net::HeroProgress live_progress_{}; // the local player's progression from the latest snapshot
+    u8 live_level_ = 1;
+    u8 live_color_ = 0;
+    u8 last_level_seen_ = 0;        // previous level (0 = not seen yet) - an increase celebrates
+    u8 last_journey_seen_ = 255;    // previous journey step (255 = not seen yet)
+    f32 levelup_fx_ = 0.0f;         // level-up banner timer (counts down)
+    f32 journey_fx_ = 0.0f;         // journey-step banner timer
+    u8 journey_fx_step_ = 0;        // the step that just completed
+    f32 objective_bottom_ = 0.0f;   // screen y under the HUD's objective card (the journey toast hangs there)
 
     // Pending host/join intent recorded when the Class screen opens; START there enters the game.
     bool pending_host_local_ = true;
@@ -984,6 +1069,7 @@ private:
     std::vector<ClothCollider> cloth_colliders_; // reused buffer: a character's posed cloth colliders
     std::vector<std::pair<int, Mesh>> mesh_graveyard_; // retired NPC body meshes, freed after a few frames
     Mesh marker_;
+    Mesh ring_mesh_; // a flat unit annulus (r 0.56..0.70) - each player's identity ring at their feet
     Mesh water_mesh_;
     Mesh bridge_mesh_stone_; // unit stone arch bridge (x:-0.5..0.5), stretched per river crossing
     Mesh bridge_mesh_wood_;  // unit wooden plank bridge (Bridge.kind picks stone vs wood)
@@ -1021,6 +1107,13 @@ private:
     bool map_open_ = false;  // full-screen map overlay (M)
     bool skills_open_ = false; // full-screen skills tree overlay (K)
     bool wardrobe_open_ = false; // gear / wardrobe overlay (U): buy tiers, recolour, change weapon
+    bool journal_open_ = false;  // the journey log overlay (J): every goal, its reward + the hero's record
+    // Any of the full-screen overlays (map / skills / gear / journal) is up - world input is frozen.
+    bool overlay_open() const { return map_open_ || skills_open_ || wardrobe_open_ || journal_open_; }
+    void close_overlays() { map_open_ = skills_open_ = wardrobe_open_ = journal_open_ = false; }
+    u32 town_vseed_ = 0;            // the town the local player stands in (0 = out on the roads)
+    f32 town_banner_ = 0.0f;        // "you have arrived" banner timer
+    std::string town_banner_name_;  // the town it announces
     u8 pending_buy_ = 0;       // shop: the gear tier we're trying to buy up to (sent in PlayerInput.buy)
     u8 pending_buy_rig_ = 0;   // shop: the wagon-rig level we're trying to buy up to (PlayerInput.buy_rig)
     ui::Rect wardrobe_buy_rect_ = {};        // the "buy upgrade" button (from draw_wardrobe)

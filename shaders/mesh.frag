@@ -4,6 +4,7 @@ layout(location = 0) in vec3 vWorldNormal;
 layout(location = 1) in vec3 vColor;
 layout(location = 2) in vec4 vShadowCoord;
 layout(location = 3) in vec3 vWorldPos;
+layout(location = 4) in float vPave; // 0..1 cobblestone paving weight (terrain in towns)
 
 layout(location = 0) out vec4 outColor;
 
@@ -235,6 +236,60 @@ float cloudShadow(vec3 wpos) {
     float cloud = smoothstep(edge, edge + 0.22, n);
     return 1.0 - cloud * (0.32 + 0.26 * cover);
 }
+// --- Procedural cobblestones ------------------------------------------------------------------
+// Town streets + plazas are paved with rounded setts laid over the packed-earth street colour: a
+// jittered Voronoi tiling (each cell one stone), so the pattern needs no UVs and runs seamlessly over
+// the terrain whatever way a street turns. Each stone gets its own tone, a domed normal (so the low
+// sun picks out every cobble), and earth/moss in the joints; where the paving thins out at its edge
+// whole stones drop out at random, so the cobbles fray into the dirt rather than ending on a line.
+vec2 hash22(vec2 p) {
+    vec3 q = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+    q += dot(q, q.yzx + 33.33);
+    return fract((q.xx + q.yz) * q.zy);
+}
+struct Cobble {
+    vec2 id;     // the stone's cell (for per-stone variation)
+    vec2 offset; // fragment position relative to the stone centre (cells)
+    float edge;  // distance to the nearest joint (cells; 0 at the joint)
+};
+Cobble cobbleAt(vec2 p) {
+    vec2 ip = floor(p);
+    vec2 fp = fract(p);
+    // Pass 1: the nearest stone centre.
+    float d1 = 8.0;
+    vec2 best = vec2(0.0), bestR = vec2(0.0);
+    for (int j = -1; j <= 1; ++j) {
+        for (int i = -1; i <= 1; ++i) {
+            vec2 g = vec2(float(i), float(j));
+            vec2 r = g + 0.12 + 0.76 * hash22(ip + g) - fp;
+            float d = dot(r, r);
+            if (d < d1) {
+                d1 = d;
+                best = ip + g;
+                bestR = r;
+            }
+        }
+    }
+    // Pass 2: the true distance to the nearest Voronoi edge (the joint).
+    float edge = 8.0;
+    vec2 bg = best - ip;
+    for (int j = -2; j <= 2; ++j) {
+        for (int i = -2; i <= 2; ++i) {
+            vec2 g = bg + vec2(float(i), float(j));
+            vec2 r = g + 0.12 + 0.76 * hash22(ip + g) - fp;
+            vec2 dr = r - bestR;
+            if (dot(dr, dr) > 1e-5) {
+                edge = min(edge, dot(0.5 * (bestR + r), normalize(dr)));
+            }
+        }
+    }
+    Cobble c;
+    c.id = best;
+    c.offset = -bestR;
+    c.edge = edge;
+    return c;
+}
+
 // Soft radial vignette to pull the eye in and darken the frame edges (cinematic framing).
 float vignette() {
     if (lights.screen.x < 1.0) {
@@ -249,6 +304,46 @@ void main() {
     vec3 N = normalize(vWorldNormal);
     vec3 L = normalize(pc.sun.xyz);
     float intensity = pc.sun.w;            // 0 at night .. 1 at noon
+
+    // Cobblestones: decide the stone/joint mix + the stone's own colour and domed normal up front, so
+    // the lighting below picks the relief up for free.
+    float stone = 0.0;     // 0 = no paving here (or a joint), 1 = the top of a stone
+    float joint = 0.0;     // 1 inside a joint between stones
+    vec3 stoneCol = vec3(0.0);
+    // (The stone-space coordinate + its screen derivative are taken OUTSIDE the branch below:
+    // derivatives are undefined in non-uniform control flow, and the paving edge is exactly that.)
+    // A gentle drift in stone size across a town keeps the setts from reading as one stamp.
+    float cobbleSize = mix(0.30, 0.40, vnoise(vWorldPos.xz * 0.05));
+    vec2 sp = vWorldPos.xz / cobbleSize;
+    float px = length(fwidth(sp));
+    if (vPave > 0.02) {
+        Cobble cb = cobbleAt(sp);
+        float h = hash22(cb.id * 1.37 + 4.1).x;
+        float h2 = hash22(cb.id * 2.11 + 9.7).y;
+        // Fade the pattern out where a stone shrinks to a couple of pixels (no shimmer at a distance).
+        float detail = 1.0 - smoothstep(0.18, 0.55, px);
+        // Fraying edge: each stone appears once the paving weight passes its own threshold.
+        float present = smoothstep(h * 0.55 + 0.2, h * 0.55 + 0.32, vPave);
+        float gap = 0.075 + 0.05 * h2;                         // joint half-width (cells)
+        float aa = max(px * 0.75, 0.01);
+        float top = smoothstep(gap - aa, gap + aa, cb.edge);   // 0 in the joint .. 1 on the stone
+        stone = present * mix(1.0, top, detail);
+        joint = present * (1.0 - top) * detail;
+        // Each stone's tone: warm-grey granite with a few darker / sandier / bluish ones mixed in.
+        // (Kept well below the blow-out range: the ACES + warm grade turns bright albedo cream.)
+        vec3 granite = vec3(0.355, 0.345, 0.335);
+        vec3 tones = mix(vec3(0.80, 0.80, 0.80), vec3(1.12, 1.07, 1.0), h);
+        if (h2 > 0.82) tones *= vec3(0.84, 0.88, 0.96);      // the odd cool slate
+        if (h2 < 0.12) tones *= vec3(1.08, 0.98, 0.82);      // the odd sandy one
+        float grain = 0.92 + 0.16 * vnoise(vWorldPos.xz * 9.0 + cb.id); // speckled granite
+        stoneCol = granite * tones * grain;
+        // Worn smooth on top, darker toward the joint (mud + shade).
+        stoneCol *= mix(0.78, 1.0, smoothstep(0.0, 0.35, cb.edge));
+        // A domed normal: tilt away from the stone centre, more toward its rim.
+        float rim = clamp(length(cb.offset) * 1.6, 0.0, 1.0);
+        vec3 tilt = vec3(cb.offset.x, 0.0, cb.offset.y) * (0.55 + 0.6 * rim) * detail * stone;
+        N = normalize(N + tilt);
+    }
     vec3 sunCol = pc.sunColor.rgb;
 
     float ndotl = max(dot(N, L), 0.0);
@@ -276,6 +371,15 @@ void main() {
                      : 1.0; // screen size unset (headless tests) -> AO off
 
     vec3 base = vColor * pc.tint.rgb;
+    if (vPave > 0.02) {
+        // Joints: dark packed earth (only a hint of whatever ground lies under the paving), with moss
+        // creeping into them in the odd damp patch; stone tops: the stone's own colour.
+        vec3 jointCol = mix(vec3(0.20, 0.165, 0.125), vColor * 0.5, 0.15);
+        float moss = smoothstep(0.62, 0.8, vnoise(vWorldPos.xz * 0.45));
+        jointCol = mix(jointCol, vec3(0.16, 0.22, 0.11), 0.6 * moss);
+        base = mix(base, jointCol, joint);
+        base = mix(base, stoneCol * pc.tint.rgb, stone);
+    }
     // Rain-soaked world (extra.z): upward faces darken + cool while wet, like real
     // drenched earth and stone. Puddle sheen is layered on after lighting, below.
     float wet = lights.extra.z;
@@ -294,6 +398,9 @@ void main() {
     if (wet > 0.01) {
         float pud = smoothstep(0.60, 0.72, fbm(vWorldPos.xz * 0.35)) *
                     smoothstep(0.93, 0.995, N.y) * wet;
+        // Rain pools in the joints between the cobbles first, and wet stone tops glisten.
+        pud = max(pud, joint * wet * 0.85);
+        pud = max(pud, stone * wet * 0.25);
         if (pud > 0.001) {
             vec3 V = normalize(lights.camPos.xyz - vWorldPos);
             float fres = pow(1.0 - max(dot(N, V), 0.0), 2.0);

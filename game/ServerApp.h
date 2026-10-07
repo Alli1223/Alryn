@@ -25,6 +25,7 @@ protected:
             close();
             return;
         }
+        server_.set_progression(true); // learned skills + level-gated contract danger (see GameServer)
         ALRYN_INFO("Dedicated server listening on port {} (world seed {}) - Ctrl+C to stop.", kPort,
                    seed);
     }

@@ -14,6 +14,8 @@ add_executable(alryn_game
     ClientAppVfx.cpp
     ClientAppSpellFx.cpp
     ClientAppHud.cpp
+    ClientAppProgress.cpp
+    Profile.cpp
 )
 
 target_link_libraries(alryn_game PRIVATE alryn)

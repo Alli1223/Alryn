@@ -328,6 +328,28 @@ std::vector<f32> fanfare() {
     return b;
 }
 
+// A level-up: a quick rising major arpeggio (C E G C') with a bell overtone, then a held shimmer.
+std::vector<f32> level_up() {
+    const usize n = samples(1.3f);
+    std::vector<f32> b(n);
+    Osc a;
+    Osc c;
+    Osc s;
+    const f32 notes[4] = {523.25f, 659.25f, 784.0f, 1046.5f}; // C5 E5 G5 C6
+    for (usize i = 0; i < n; ++i) {
+        const f32 t = static_cast<f32>(i) * dt();
+        const int note = std::min(static_cast<int>(t / 0.11f), 3);
+        const f32 nt = t - 0.11f * static_cast<f32>(note);
+        const f32 f = notes[note];
+        const f32 tail = note == 3 ? decay(nt, 2.6f) : decay(nt, 9.0f);
+        const f32 shimmer = 0.18f * s.sine(2093.0f + 6.0f * std::sin(t * 30.0f)) * attack_env(t, 0.3f) *
+                            decay(std::max(t - 0.33f, 0.0f), 2.2f);
+        b[i] = (a.sine(f) + 0.4f * c.sine(f * 3.0f)) * attack_env(nt, 0.006f) * tail * 0.7f + shimmer;
+    }
+    normalise(b, 0.7f);
+    return b;
+}
+
 // A short dry tick for the UI.
 std::vector<f32> ui_click() {
     const usize n = samples(0.05f);
@@ -360,6 +382,7 @@ std::vector<f32> render_sfx(SfxId id) {
         case SfxId::Thunder: return thunder();
         case SfxId::Fanfare: return fanfare();
         case SfxId::UiClick: return ui_click();
+        case SfxId::LevelUp: return level_up();
     }
     return {};
 }

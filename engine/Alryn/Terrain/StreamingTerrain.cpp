@@ -77,10 +77,14 @@ StreamingTerrain::GenResult StreamingTerrain::generate(const GenRequest& req) co
     res.trees = scatter_trees(req.cx, req.cz, chunk_world_, seed);
     res.props = scatter_props(req.cx, req.cz, chunk_world_, seed);
     res.terrain = mc::polygonize(
-        *res.field, IVec3{0}, res.field->cell_count(), 0.0f, [seed](const Vec3& p, const Vec3& n) {
+        *res.field, IVec3{0}, res.field->cell_count(), 0.0f,
+        [seed](const Vec3& p, const Vec3& n) {
             const f32 up = glm::clamp(n.y, 0.0f, 1.0f);
             Vec3 c = roads::tint_surface(worldgen::surface_color(p, n, seed), p, up, seed);
             return town_path_tint(c, p, up, seed); // dirt paths between houses + market
+        },
+        [seed](const Vec3& p, const Vec3& n) { // cobbled streets + plaza (laid in mesh.frag)
+            return town_pave_amount(p, glm::clamp(n.y, 0.0f, 1.0f), seed);
         });
     res.vegetation = build_vegetation(req.cx, req.cz, chunk_world_, seed);
     return res;
@@ -127,6 +131,9 @@ void StreamingTerrain::mesh_chunk(Chunk& chunk, const vk::Device& device) {
             const f32 up = glm::clamp(normal.y, 0.0f, 1.0f);
             Vec3 c = roads::tint_surface(worldgen::surface_color(pos, normal, seed), pos, up, seed);
             return town_path_tint(c, pos, up, seed);
+        },
+        [seed](const Vec3& pos, const Vec3& normal) {
+            return town_pave_amount(pos, glm::clamp(normal.y, 0.0f, 1.0f), seed);
         });
     retire_mesh(std::move(chunk.mesh)); // defer deleting the old mesh (may be in flight)
     chunk.mesh = Mesh{};

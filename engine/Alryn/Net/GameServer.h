@@ -6,6 +6,7 @@
 #include <Alryn/Core/Types.h>
 #include <Alryn/Game/Contract.h>
 #include <Alryn/Game/GameManager.h>
+#include <Alryn/Game/Progression.h>
 #include <Alryn/Game/Roles.h>
 #include <Alryn/Net/NetServer.h>
 #include <Alryn/Net/Protocol.h>
@@ -17,6 +18,7 @@
 
 #include <algorithm>
 #include <optional>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -73,11 +75,36 @@ public:
             return ability_rank[static_cast<u8>(role) * kAbilityCount + (ability % kAbilityCount)];
         }
 
+        // --- Progression (Game/Progression.h; see Game/Progress.cpp) ---
+        u8 color = 0;                       // identity colour (first free on join; a free preference is honoured)
+        std::string name;                   // sanitised display name
+        u32 xp = 0;                         // experience (level is derived)
+        u8 level = 1;
+        u8 known[kRoleCount] = {};          // abilities LEARNED per role (the starter kit is implied)
+        u8 talents[kRoleCount] = {};        // packed talent ranks per role
+        u8 journey = 0;                     // current JourneyGoal step
+        u16 kills = 0;                      // lifetime raiders felled (shared credit)
+        u16 deliveries = 0;                 // lifetime wagons delivered
+        u8 best_danger = 0;                 // highest contract danger delivered
+        bool restored = false;              // the client's saved hero has been adopted
+        bool spawned = false;               // has had its first full heal (at its real max health)
+        u8 prev_learn = 0;                  // last tick's input.learn, for rising-edge learn dedupe
+        // Everything this player can use in their current role: the starter kit + what they learned.
+        u8 known_mask() const {
+            return static_cast<u8>(known[static_cast<u8>(role)] | starter_mask(role));
+        }
+        u8 talent_mask() const { return talents[static_cast<u8>(role)]; }
+        // Cooldown multiplier from the race passive and the FOCUS talent.
+        f32 cooldown_mult() const {
+            return race_combat(input.appearance.race).cooldown_mult * talent_cooldown_mult(talent_mask());
+        }
+
         // Multiplier applied to this player's outgoing damage (Empower buff x kill-momentum rampage x
-        // the weapon tier bonus).
+        // the weapon tier bonus x the level + MIGHT talent growth).
         f32 outgoing_mult() const {
             return (damage_boost_timer > 0.0f ? kDamageBoostMult : 1.0f) * rampage_mult() *
-                   equipment_bonus(equipment).damage_mult;
+                   equipment_bonus(equipment).damage_mult * level_damage_mult(level) *
+                   talent_damage_mult(talent_mask());
         }
         // RAMPAGE: kill momentum. 1.0 at 0 stacks (idle/default), so it never perturbs an idle player.
         f32 rampage_mult() const { return 1.0f + kRampagePerStack * static_cast<f32>(rampage_stacks); }
@@ -186,6 +213,16 @@ public:
     bool running() const { return server_.running(); }
 
     void tick(Timestep dt);
+
+    // --- Progression rules (Game/Progression.h) ---
+    // With progression ON (the game turns it on; a bare server is a sandbox for tests + tools) a hero
+    // can only cast what they have LEARNED in the skill tree, a contract's danger is capped by the
+    // party's best level, and gold rank upgrades need the ability learned first. XP, levels, talents
+    // and the journey are tracked either way.
+    void set_progression(bool on) { progression_ = on; }
+    bool progression() const { return progression_; }
+    // Grant `xp` to one player (journey rewards, tests). Levels are re-derived.
+    void grant_xp(net::PlayerId id, u32 xp);
 
     // --- Debug / testing hooks (driven by the client's debug overlay on a listen server) ---
     // Godmode: all players + the active cargo wagon ignore incoming damage.
@@ -320,6 +357,16 @@ private:
     // After the cart moves, carry any player standing on top along with it (delta = this tick's move).
     void carry_top_riders(const Vec2& delta, const VehicleType& vt);
     void update_ambush(Timestep dt, const DensitySampler& density); // ambushers + player combat
+    // --- Progression (Game/Progress.cpp) ---
+    void assign_color(net::PlayerId id);              // the first identity colour no one else has
+    void sync_identity(net::PlayerId id, ServerPlayer& player); // name + colour preference, each tick
+    void restore_hero(ServerPlayer& player);          // adopt the client's saved hero (once per join)
+    void update_progression(Timestep dt);             // learn requests + the journey, each tick
+    void award_xp(ServerPlayer& player, u32 xp);      // add XP, re-derive the level
+    // Every player within kXpShareRadius of a felled raider shares its XP (+ the journey kill tally).
+    void award_kill(const Vec3& where, u8 kind);
+    void award_delivery(u8 difficulty, f32 route_length); // every player: XP + the journey record
+    u8 party_level() const;                           // the best level in the party (contract gating)
     // --- Roles, weapons & abilities (Game/Abilities.cpp) ---
     void sync_player_role(ServerPlayer& player); // adopt the chosen role each tick (stats/speed)
     void update_abilities(Timestep dt, const DensitySampler& density); // tick cooldowns + cast
@@ -406,6 +453,7 @@ private:
     f32 time_of_day_ = 0.30f; // day/night clock (0..1), advanced each tick
     f32 day_seconds_ = 120.0f;
     net::MatchOutcome outcome_ = net::MatchOutcome::Ongoing;
+    bool progression_ = false;     // skill-tree gating + level-capped contract danger (see set_progression)
     bool debug_god_ = false;       // debug: players + active wagon ignore damage
     bool debug_no_ambush_ = false; // debug: no wagon ambushes spawn
     u8 houses_standing_ = 0;

@@ -12,6 +12,7 @@ layout(location = 0) in vec3 vWorldNormal;
 layout(location = 1) in vec3 vColor;
 layout(location = 2) in vec4 vShadowCoord;
 layout(location = 3) in vec3 vWorldPos;
+layout(location = 4) in float vPave; // shared mesh.vert output (cobble paving); always 0 for foliage
 
 layout(location = 0) out vec4 outColor;
 
@@ -279,5 +280,7 @@ void main() {
     // Blended foliage also softens its alpha toward the hole (ignored by the opaque
     // vegetation pipeline, where the dither discard does the work).
     float alpha = pc.tint.a * (1.0 - peek * 0.85);
-    outColor = vec4(col, alpha);
+    // vPave is always 0 here (only terrain is paved) - this no-op use keeps it in the shader interface,
+    // which the optimizer would otherwise strip (a mesh.vert -> foliage.frag location mismatch).
+    outColor = vec4(col * (1.0 + 0.001 * vPave), alpha);
 }

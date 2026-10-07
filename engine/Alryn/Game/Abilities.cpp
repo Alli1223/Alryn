@@ -6,6 +6,7 @@
 // (players_ / ambush_ / projectiles_) lives on GameServer.
 
 #include <Alryn/Core/Log.h>
+#include <Alryn/Game/Progression.h>
 #include <Alryn/Game/Roles.h>
 #include <Alryn/Net/GameServer.h>
 
@@ -27,11 +28,14 @@ void GameServer::sync_player_role(ServerPlayer& player) {
     const f32 hp_bonus = equipment_bonus(player.equipment).health_add; // armour adds max health
 
     const auto requested = static_cast<PlayerRole>(player.input.role % kRoleCount);
-    if (requested != player.role) {
-        player.role = requested;
-        player.health = role_stats(requested).max_health + hp_bonus; // a fresh kit starts whole
+    const bool swapped = requested != player.role;
+    player.role = requested;
+    // Max health: the role's pool + armour, grown by the hero's level and the VITALITY talent.
+    player.max_health = (role_stats(player.role).max_health + hp_bonus) * level_health_mult(player.level) *
+                        talent_health_mult(player.talent_mask());
+    if (swapped) {
+        player.health = player.max_health; // a fresh kit starts whole
     }
-    player.max_health = role_stats(player.role).max_health + hp_bonus;
     player.health = std::min(player.health, player.max_health);
     // Race passives layer on the role: an Elf strides + springs, a Dwarf is stocky.
     const RaceCombat rc = race_combat(player.input.appearance.race);
@@ -80,7 +84,7 @@ void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
             worldgen::inside_village(pp.x, pp.z, seed, 6.0f)) {
             const u8 ab = static_cast<u8>(pl.input.upgrade - 1);
             u8& rk = pl.ability_rank[static_cast<u8>(pl.role) * kAbilityCount + ab];
-            if (rk < ability_max_rank(pl.role, ab)) {
+            if (rk < ability_max_rank(pl.role, ab) && (!progression_ || knows(pl.known_mask(), ab))) {
                 const u32 price = ability_upgrade_price(static_cast<u8>(rk + 1));
                 if (money_ >= price) {
                     money_ -= price;
@@ -122,6 +126,9 @@ void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
         const u8 slot = static_cast<u8>(ability_one - 1); // ability index (into ability_def)
         if (pl.ability_cd[slot] > 0.0f) {
             continue; // still cooling down
+        }
+        if (progression_ && !knows(pl.known_mask(), slot)) {
+            continue; // not learned yet in the skill tree
         }
 
         const Vec3 origin = pl.controller.position() + Vec3{0.0f, 0.9f, 0.0f};
@@ -419,9 +426,8 @@ void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
                 break; // the Mage casts via combos (input.spell -> update_spells), not the hotbar
         }
 
-        // Men's race passive: quicker cooldowns (the client mirrors this on the ability bar).
-        pl.ability_cd[slot] =
-            ability_def(pl.role, slot).cooldown * race_combat(pl.input.appearance.race).cooldown_mult;
+        // Men's race passive + the FOCUS talent: quicker cooldowns (the client mirrors this on the bar).
+        pl.ability_cd[slot] = ability_def(pl.role, slot).cooldown * pl.cooldown_mult();
         pl.cast_fx = ability_one; // echoed in the snapshot so every client plays the cast VFX
     }
 
@@ -628,9 +634,12 @@ void GameServer::update_spells(Timestep dt, const DensitySampler& density) {
         if (sp == SpellId::None || pl.spell_cd > 0.0f) {
             continue;
         }
+        if (progression_ && !knows(pl.known_mask(), spell_required_ability(sp))) {
+            continue; // that element / signature spell isn't learned yet
+        }
         cast_spell(pl, id, sp);
-        // Men's race passive shortens spell cooldowns too (a human Mage chains combos quicker).
-        pl.spell_cd = spell_cooldown(sp) * race_combat(pl.input.appearance.race).cooldown_mult;
+        // Men's race passive (+ FOCUS) shortens spell cooldowns too (a human Mage chains combos quicker).
+        pl.spell_cd = spell_cooldown(sp) * pl.cooldown_mult();
         pl.cast_fx = pl.input.spell; // echoed in the snapshot so clients play the spell VFX
     }
     update_walls(dt);

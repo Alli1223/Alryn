@@ -6,6 +6,7 @@
 #include <Alryn/Core/Types.h>
 #include <Alryn/Net/ByteBuffer.h>
 
+#include <string>
 #include <vector>
 
 namespace alryn::net {
@@ -19,6 +20,23 @@ enum class MessageType : u8 {
     Snapshot = 3,     // server -> client: authoritative world state
     PlayerLeft = 4,   // server -> client: a player disconnected
     Deform = 5,       // server -> client: authoritative terrain edit
+};
+
+// A hero's persistent progression (Game/Progression.h): the client's saved hero carries it in to a
+// server on joining (PlayerInput.restore), and the server echoes the live values back in PlayerState
+// so the client can save them as they grow.
+struct HeroProgress {
+    u32 xp = 0;
+    u8 known = 0;       // learned-ability bitmask for the hero's role (the starters are implied)
+    u8 talents = 0;     // packed talent ranks (2 bits each)
+    u8 journey = 0;     // current JourneyGoal step
+    u8 owned_tier = 0;  // highest gear tier owned
+    u16 ranks = 0;      // packed 2-bit ability upgrade ranks (current role)
+    u16 kills = 0;      // lifetime raiders felled
+    u16 deliveries = 0; // lifetime wagons delivered
+    u8 best_danger = 0; // highest contract danger delivered
+
+    bool operator==(const HeroProgress&) const = default;
 };
 
 // Client -> server: what the player wants to do this tick. The server is
@@ -55,6 +73,12 @@ struct PlayerInput {
                                     // Held a few ticks; the server buys ONE rank on the rising edge, in a town.
     bool toss = false;              // Ally Toss combo: hurl the nearest teammate toward `aim` (one-shot press)
     bool channel = false;          // Cleric Power Conduit combo: channel a heal+damage beam to an ally (held)
+    u8 color_pref = 255;            // preferred identity colour (index; 255 = no preference)
+    std::string name;               // the hero's display name (the server sanitises + clamps it)
+    u8 learn = 0;                   // skill tree: 1..7 = learn ability (index + 1), 8..10 = raise talent
+                                    // (8 + t). Held a few ticks; the server spends ONE point per rising edge.
+    bool restore = false;           // `progress` holds the saved hero (adopted once, on joining)
+    HeroProgress progress;
 };
 
 struct PlayerState {
@@ -79,6 +103,10 @@ struct PlayerState {
     u32 link = 0;                   // Power Conduit: id of the ally this player is channelling to (0 = none)
     Vec3 cast_aim{0.0f};            // where `cast` was aimed (only on the wire while cast != 0) -> remote
                                     // clients land the Meteor / sky strike / spell beams on the right spot
+    u8 color = 0;                   // identity colour (ring, name plate, party frame, map pin)
+    u8 level = 1;                   // character level (name plates / party frames)
+    std::string name;               // display name
+    HeroProgress progress;          // live progression (the owner's client saves it + draws its HUD)
 };
 
 // A live enemy, broadcast each tick so clients can render + animate it.

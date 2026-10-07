@@ -9,10 +9,14 @@ void ClientApp::cast_ability(u8 ability) {
     if (ability >= kAbilityCount || ability_cd_[ability] > 0.0f) {
         return;
     }
+    if (!knows(known_mask(), ability)) {
+        combat_text(local_feet(), "NOT LEARNED - SKILLS [K]", Vec4{0.85f, 0.8f, 0.7f, 1.0f}, 16.0f);
+        return; // the server would refuse it too
+    }
     pending_ability_ = static_cast<u8>(ability + 1); // the wire carries the ability index + 1
-    // Mirror the server's cooldown, including the race passive (Men cool down quicker).
-    ability_cd_[ability] =
-        ability_def(role_, ability).cooldown * race_combat(appearance_.race).cooldown_mult;
+    // Mirror the server's cooldown, including the race passive (Men cool down quicker) + FOCUS.
+    ability_cd_[ability] = ability_def(role_, ability).cooldown * race_combat(appearance_.race).cooldown_mult *
+                           talent_cooldown_mult(live_progress_.talents);
     spawn_ability_vfx(role_, ability, local_feet(), face_yaw_, aim_valid_ ? aim_ : local_feet(),
                       ability_rank_[ability]);
     if (Audio* a = audio()) {
@@ -80,9 +84,14 @@ void ClientApp::cast_mage_spell(SpellId sp) {
     if (sp == SpellId::None || mage_cd_ > 0.0f) {
         return; // nothing queued, or still cooling down
     }
+    if (!knows(known_mask(), spell_required_ability(sp))) {
+        combat_text(local_feet(), "NOT LEARNED - SKILLS [K]", Vec4{0.85f, 0.8f, 0.7f, 1.0f}, 16.0f);
+        return;
+    }
     pending_spell_ = static_cast<u8>(sp);
-    // Mirror the server cooldown (incl. the race passive) for the HUD + to gate spam.
-    mage_cd_ = spell_cooldown(sp) * race_combat(appearance_.race).cooldown_mult;
+    // Mirror the server cooldown (incl. the race passive + FOCUS) for the HUD + to gate spam.
+    mage_cd_ = spell_cooldown(sp) * race_combat(appearance_.race).cooldown_mult *
+               talent_cooldown_mult(live_progress_.talents);
     if (Audio* a = audio()) { // each spell speaks at its own pitch
         a->play(SfxId::CastMagic, 0.85f, 0.8f + 0.07f * static_cast<f32>(sp));
     }
@@ -102,10 +111,13 @@ u8 ClientApp::resolve_combo() const {
             default: ++n; break;
         }
     }
-    return static_cast<u8>(spell_for_combo(f, w, e, n));
+    return static_cast<u8>(spell_for_combo_known(f, w, e, n, known_mask())); // only what's learned
 }
 
 void ClientApp::equip_ability(u8 ability) {
+    if (role_ == PlayerRole::Mage || !knows(known_mask(), ability)) {
+        return; // only learned skills go on the bar (the Mage's keys are its elements)
+    }
     // Already on the bar? clicking again unequips it (clears that slot).
     for (int& slot : bar_) {
         if (slot == static_cast<int>(ability)) {
@@ -123,6 +135,17 @@ void ClientApp::equip_ability(u8 ability) {
     bar_[kAbilitySlots - 1] = static_cast<int>(ability);
 }
 
+void ClientApp::request_learn(u8 code) {
+    if (code == 0) {
+        return;
+    }
+    pending_learn_ = code;
+    learn_hold_ = 8; // hold a few ticks so the server sees a rising edge even if a packet drops
+    if (Audio* a = audio()) {
+        a->play(SfxId::CastMagic, 0.6f, 1.25f);
+    }
+}
+
 void ClientApp::request_ability_upgrade(u8 ability) {
     if (ability >= kAbilityCount || ability_max_rank(role_, ability) == 0 ||
         ability_rank_[ability] >= ability_max_rank(role_, ability)) {
@@ -130,22 +153,6 @@ void ClientApp::request_ability_upgrade(u8 ability) {
     }
     pending_upgrade_ = static_cast<u8>(ability + 1); // wire carries the ability index + 1
     upgrade_hold_ = 8; // hold a few ticks so the server sees a rising edge even if a packet drops
-}
-
-void ClientApp::skills_click(const Vec2& p) {
-    // UPGRADE buttons take priority (they overlap the row's equip hit-box).
-    for (u8 a = 0; a < kAbilityCount; ++a) {
-        if (in_rect(p, skill_upgrade_rects_[a])) {
-            request_ability_upgrade(a);
-            return;
-        }
-    }
-    for (u8 a = 0; a < kAbilityCount; ++a) {
-        if (in_rect(p, skill_node_rects_[a])) {
-            equip_ability(a);
-            return;
-        }
-    }
 }
 
 void ClientApp::apply_debug_flags() {
@@ -252,7 +259,7 @@ void ClientApp::on_event(Event& event) {
         dispatcher.dispatch<KeyPressedEvent>([&](KeyPressedEvent& e) {
             if (e.key() == key::M) {
                 map_open_ = !map_open_;
-                skills_open_ = wardrobe_open_ = false;
+                skills_open_ = wardrobe_open_ = journal_open_ = false;
                 if (map_open_) { // open centred on the player at the default zoom
                     const Vec3 f = local_feet();
                     map_center_ = Vec2{f.x, f.z};
@@ -264,13 +271,19 @@ void ClientApp::on_event(Event& event) {
             }
             if (e.key() == key::K) {
                 skills_open_ = !skills_open_;
-                map_open_ = wardrobe_open_ = false;
+                map_open_ = wardrobe_open_ = journal_open_ = false;
                 consumed = true;
                 return true;
             }
             if (e.key() == key::U) {
                 wardrobe_open_ = !wardrobe_open_;
-                map_open_ = skills_open_ = false;
+                map_open_ = skills_open_ = journal_open_ = false;
+                consumed = true;
+                return true;
+            }
+            if (e.key() == key::J) {
+                journal_open_ = !journal_open_;
+                map_open_ = skills_open_ = wardrobe_open_ = false;
                 consumed = true;
                 return true;
             }
@@ -285,8 +298,8 @@ void ClientApp::on_event(Event& event) {
                 consumed = true;
                 return true;
             }
-            if ((map_open_ || skills_open_ || wardrobe_open_) && e.key() == key::Escape) {
-                map_open_ = skills_open_ = wardrobe_open_ = false;
+            if (overlay_open() && e.key() == key::Escape) {
+                close_overlays();
                 consumed = true;
                 return true;
             }
@@ -305,7 +318,7 @@ void ClientApp::on_event(Event& event) {
                 return true;
             });
         }
-        if (map_open_ || skills_open_ || wardrobe_open_ || consumed) {
+        if (overlay_open() || consumed) {
             return;
         }
     }
@@ -385,7 +398,9 @@ void ClientApp::on_event(Event& event) {
             if (casting_ && !e.is_repeat()) {
                 const int el = key_to_element(e.key());
                 if (el >= 0) {
-                    if (combo_n_ < kMaxCombo) {
+                    if (!knows(known_mask(), static_cast<u8>(el))) {
+                        combat_text(local_feet(), "ELEMENT NOT LEARNED", Vec4{0.8f, 0.7f, 1.0f, 1.0f}, 16.0f);
+                    } else if (combo_n_ < kMaxCombo) {
                         combo_[combo_n_++] = static_cast<u8>(el);
                     }
                     return true; // swallow the element key while building a combo
@@ -396,6 +411,11 @@ void ClientApp::on_event(Event& event) {
                 (e.key() == key::Digit1 || e.key() == key::Digit2 || e.key() == key::Digit3 ||
                  e.key() == key::Digit4)) {
                 const int el = e.key() - key::Digit1; // 0 Fire / 1 Water / 2 Earth / 3 Nature
+                if (!knows(known_mask(), static_cast<u8>(el))) {
+                    combat_text(local_feet(), "ELEMENT NOT LEARNED - SKILLS [K]", Vec4{0.8f, 0.7f, 1.0f, 1.0f},
+                                16.0f);
+                    return true;
+                }
                 int f = el == 0, w = el == 1, ea = el == 2, n = el == 3;
                 cast_mage_spell(spell_for_combo(f, w, ea, n));
                 return true;
@@ -501,9 +521,9 @@ void ClientApp::apply_gamepad(Timestep dt) {
 
     // The full-screen overlays (map / skills / wardrobe) aren't focus-navigable lists - the pad just
     // closes them (the same B/Back that opened them).
-    if (state_ == AppState::Playing && (map_open_ || skills_open_ || wardrobe_open_)) {
+    if (state_ == AppState::Playing && overlay_open()) {
         if (pressed(pad::B) || pressed(pad::Back)) {
-            map_open_ = skills_open_ = wardrobe_open_ = false;
+            close_overlays();
         }
         return;
     }
@@ -549,7 +569,7 @@ void ClientApp::apply_gamepad(Timestep dt) {
     // In-game: Back opens the map; Start opens the pause menu.
     if (pressed(pad::Back)) {
         map_open_ = true;
-        skills_open_ = wardrobe_open_ = false;
+        skills_open_ = wardrobe_open_ = journal_open_ = false;
         const Vec3 f = local_feet();
         map_center_ = Vec2{f.x, f.z};
         map_zoom_ = 1.0f;
@@ -587,7 +607,7 @@ void ClientApp::apply_gamepad(Timestep dt) {
         }
         if (role_ == PlayerRole::Mage) {
             const int f = i == 0, w = i == 1, e = i == 2, n = i == 3;
-            cast_mage_spell(spell_for_combo(f, w, e, n));
+            cast_mage_spell(spell_for_combo_known(f, w, e, n, known_mask()));
         } else {
             cast_bar_slot(i);
         }
@@ -608,7 +628,7 @@ void ClientApp::send_input() {
     if (!client_.connected()) {
         return;
     }
-    if (paused_ || map_open_ || skills_open_) {
+    if (paused_ || overlay_open()) {
         blocking_ = false; // drop the guard if a release got swallowed by a menu/overlay
         drag_slot_ = -1;   // and cancel any in-progress action-bar drag
         casting_ = false;  // and cancel a half-woven Mage spell
@@ -626,7 +646,7 @@ void ClientApp::send_input() {
     // that would otherwise leak through to movement).
     // A Mage holding Ctrl stands still to weave a spell (W/A/S/D are queuing elements, not moving).
     if (Input* in = input();
-        in != nullptr && !paused_ && !map_open_ && !skills_open_ && !casting_) {
+        in != nullptr && !paused_ && !overlay_open() && !casting_) {
         if (in->key_down(key::W)) { move += cam_fwd; throttle += 1.0f; }
         if (in->key_down(key::S)) { move -= cam_fwd; throttle -= 1.0f; }
         if (in->key_down(key::D)) { move += cam_right; steer += 1.0f; } // rein right
@@ -655,7 +675,7 @@ void ClientApp::send_input() {
         swing_face_lock_ = 0.3f;
     }
     bool aimed = locked;
-    if (!locked && !paused_ && !map_open_ && !skills_open_ && !wardrobe_open_) {
+    if (!locked && !paused_ && !overlay_open()) {
         if (using_gamepad_) {
             const Vec2 rs = input() != nullptr ? input()->right_stick() : Vec2{0.0f};
             if (glm::length(rs) > 0.15f) {
@@ -735,6 +755,21 @@ void ClientApp::send_input() {
         if (--upgrade_hold_ <= 0) {
             pending_upgrade_ = 0;
         }
+    }
+    // Skill-tree learning: held the same way (the server spends one point per rising edge).
+    if (learn_hold_ > 0) {
+        packet.learn = pending_learn_;
+        if (--learn_hold_ <= 0) {
+            pending_learn_ = 0;
+        }
+    }
+    // Who we are: the hero's name + preferred colour, and - until the server has adopted it - the
+    // saved hero's progression (sent each tick so a dropped packet can't lose it; adopted once).
+    packet.name = hero_.name;
+    packet.color_pref = hero_.color;
+    if (!restore_acked_) {
+        packet.restore = true;
+        packet.progress = hero_.progress;
     }
     client_.send_input(packet);
     pending_ability_ = 0;

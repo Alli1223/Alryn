@@ -13,13 +13,17 @@ namespace mc {
 
 // Per-vertex colour from world position + (flat) face normal.
 using ColorFn = std::function<Vec3(const Vec3& world_pos, const Vec3& normal)>;
+// Per-vertex PAVING weight (0..1) from world position + face normal. Stored in the vertex's spare
+// `sway` channel as a NEGATIVE value (terrain never sways; vegetation's sway is >= 0), where mesh.vert
+// picks it up so mesh.frag can lay procedural cobblestones over town streets + plazas.
+using PaveFn = std::function<f32(const Vec3& world_pos, const Vec3& normal)>;
 
 // Extracts the isosurface of `field` over cells [cell_min, cell_max) into
 // flat-shaded MeshData (unique vertices per triangle, per-face normals oriented
 // toward air). Uses marching tetrahedra (Kuhn 6-tet decomposition), which is
 // watertight by construction and produces the faceted low-poly look.
 MeshData polygonize(const VoxelField& field, const IVec3& cell_min, const IVec3& cell_max, f32 iso,
-                    const ColorFn& colorize);
+                    const ColorFn& colorize, const PaveFn& pave = {});
 
 } // namespace mc
 } // namespace alryn

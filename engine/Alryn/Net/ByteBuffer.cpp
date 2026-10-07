@@ -1,6 +1,8 @@
 #include <Alryn/Net/ByteBuffer.h>
 
+#include <algorithm>
 #include <bit>
+#include <cstddef>
 
 namespace alryn::net {
 
@@ -27,6 +29,12 @@ void ByteWriter::write_vec3(const Vec3& v) {
     write_f32(v.x);
     write_f32(v.y);
     write_f32(v.z);
+}
+
+void ByteWriter::write_string(std::string_view s) {
+    const usize n = std::min<usize>(s.size(), 255u);
+    write_u8(static_cast<u8>(n));
+    data_.insert(data_.end(), s.begin(), s.begin() + static_cast<std::ptrdiff_t>(n));
 }
 
 bool ByteReader::require(usize n) {
@@ -67,6 +75,16 @@ u32 ByteReader::read_u32() {
 
 f32 ByteReader::read_f32() {
     return std::bit_cast<f32>(read_u32());
+}
+
+std::string ByteReader::read_string() {
+    const usize n = read_u8();
+    if (!require(n)) {
+        return {};
+    }
+    std::string s(reinterpret_cast<const char*>(data_ + pos_), n);
+    pos_ += n;
+    return s;
 }
 
 Vec3 ByteReader::read_vec3() {
