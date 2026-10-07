@@ -124,6 +124,8 @@ TEST_CASE("Net: message serialization round-trips") {
     snapshot.bubbles.push_back({Vec3{20.0f, 0.5f, -3.0f}, 4.5f, 200}); // a Cleric max-Aegis dome
     snapshot.players[1].ability_ranks = 0x0025u; // ability0 rank1, ability1 rank1, ability2 rank2
     snapshot.players[1].link = 1u;               // Power Conduit: player 2 is channelling to player 1
+    snapshot.players[1].cast_aim = Vec3{9.0f, 1.5f, -4.0f}; // where that cast was aimed
+    snapshot.players[0].cast_aim = Vec3{3.0f, 3.0f, 3.0f};  // not casting -> never sent
     ByteWriter ws;
     write(ws, snapshot);
     ByteReader rs(ws.bytes(), ws.size());
@@ -156,6 +158,9 @@ TEST_CASE("Net: message serialization round-trips") {
     CHECK(decoded.enemies[0].status == 1); // chilled status round-trips
     CHECK(decoded.enemies[1].status == 0);
     CHECK(decoded.players[1].link == 1u);  // Power Conduit beam target round-trips
+    CHECK(decoded.players[1].cast_aim.x == doctest::Approx(9.0f)); // a cast's aim round-trips...
+    CHECK(decoded.players[1].cast_aim.z == doctest::Approx(-4.0f));
+    CHECK(decoded.players[0].cast_aim.x == doctest::Approx(0.0f)); // ...an idle player's isn't sent
     CHECK(decoded.time_of_day == doctest::Approx(0.625f));
     CHECK(decoded.weather == 180);
     CHECK(decoded.outcome == static_cast<u8>(MatchOutcome::Lost));

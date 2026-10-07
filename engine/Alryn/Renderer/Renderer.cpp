@@ -177,6 +177,15 @@ struct CompositePush {
     Vec4 screen;    // xy = target resolution (px)
 };
 
+// Must match the push_constant block in sprite.vert / sprite.frag.
+struct SpritePush {
+    Mat4 view_proj;
+    Vec4 cam_pos;   // xyz = camera position (world)
+    Vec4 cam_right; // xyz = camera right axis (world)
+    Vec4 cam_up;    // xyz = camera up axis (world)
+    Vec4 params;    // xy = projection terms P22/P32 (depth -> metres), zw = framebuffer size (px)
+};
+
 // Must match the push_constant block in sky.frag.
 struct SkyPush {
     Vec4 zenith;      // rgb
@@ -420,6 +429,24 @@ bool Renderer::create_pipelines() {
     glow.additive = true;
     glow.depth_write = false;
     if (!pipeline_glow_.create(device_, glow)) {
+        return false;
+    }
+
+    // Additive VFX sprites (particles, flares, beams): instanced camera-facing quads, depth-tested
+    // but not written, reading the camera depth prepass (set 0 binding 4) to fade softly where a
+    // sprite meets the ground instead of slicing through it.
+    vk::PipelineConfig sprites;
+    sprites.vertex_spv = shader_path("sprite.vert.spv").string();
+    sprites.fragment_spv = shader_path("sprite.frag.spv").string();
+    sprites.color_format = swapchain_.format();
+    sprites.depth_format = kDepthFormat;
+    sprites.push_constant_size = sizeof(SpritePush);
+    sprites.cull_mode = VK_CULL_MODE_NONE;
+    sprites.additive = true;
+    sprites.depth_write = false;
+    sprites.instance_vec4s = 3;
+    sprites.descriptor_set_layout = shadow_set_layout_;
+    if (!pipeline_sprites_.create(device_, sprites)) {
         return false;
     }
 
@@ -971,6 +998,7 @@ bool Renderer::begin_frame() {
 
     vkResetFences(device_.handle(), 1, &frame.in_flight);
     draw_items_.clear();
+    sprites_.clear();
     ui_items_.clear();
     ui_tile_data_.clear();
     ui_tile_batches_.clear();
@@ -1343,6 +1371,7 @@ void Renderer::record_main_pass(VkCommandBuffer cmd) {
         item.mesh->bind(cmd);
         item.mesh->draw(cmd);
     }
+    record_sprites(cmd); // additive VFX on top (after the glow layer - order among additives is moot)
     vkCmdEndRendering(cmd);
     // Hand the scene texture to the post pass (bloom bright-pass + composite read it).
     vk::image_barrier(cmd, scene_color_.handle(), VK_IMAGE_ASPECT_COLOR_BIT,
@@ -1351,6 +1380,49 @@ void Renderer::record_main_pass(VkCommandBuffer cmd) {
                       VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
                       VK_ACCESS_SHADER_READ_BIT);
+}
+
+// The frame's VFX sprites in ONE instanced draw. The instance data rides a host-visible per-frame
+// vertex buffer, grown on demand (the frame's fence was waited in begin_frame, so re-creating is
+// safe). The sprite layout differs from the mesh pipelines' (its own push block), so set 0 - the
+// same per-frame set, for the depth prepass at binding 4 - is re-bound against it.
+void Renderer::record_sprites(VkCommandBuffer cmd) {
+    if (sprites_.empty() || !pipeline_sprites_.valid()) {
+        return;
+    }
+    FrameSync& frame = frames_[frame_index_];
+    const VkDeviceSize needed = sprites_.size() * sizeof(SpriteInstance);
+    if (!frame.sprites.valid() || frame.sprites.size() < needed) {
+        frame.sprites.destroy();
+        // 1.5x headroom so a growing fight doesn't re-create the buffer every frame.
+        if (!frame.sprites.create(device_, needed + needed / 2, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+            return; // allocation failed - skip the VFX, keep the frame
+        }
+    }
+    frame.sprites.upload(sprites_.data(), needed);
+
+    pipeline_sprites_.bind(cmd);
+    current_pipeline_ = pipeline_sprites_.handle();
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_sprites_.layout(), 0, 1,
+                            &frame.shadow_set, 0, nullptr);
+    const Mat4 inv_view = glm::inverse(view_);
+    const VkExtent2D ext = swapchain_.extent();
+    SpritePush push{};
+    push.view_proj = projection_ * view_;
+    push.cam_pos = Vec4{camera_position_, 0.0f};
+    push.cam_right = Vec4{Vec3{inv_view[0]}, 0.0f};
+    push.cam_up = Vec4{Vec3{inv_view[1]}, 0.0f};
+    push.params = Vec4{projection_[2][2], projection_[3][2], static_cast<f32>(ext.width),
+                       static_cast<f32>(ext.height)};
+    vkCmdPushConstants(cmd, pipeline_sprites_.layout(),
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(SpritePush),
+                       &push);
+    VkBuffer vbuf = frame.sprites.handle();
+    const VkDeviceSize voff = 0;
+    vkCmdBindVertexBuffers(cmd, 0, 1, &vbuf, &voff);
+    vkCmdDraw(cmd, 6, static_cast<u32>(sprites_.size()), 0, 0);
 }
 
 // Pass 2b: bloom (bright-pass + two box-blur ping-pongs), god rays (a radial march of
@@ -1684,6 +1756,13 @@ void Renderer::draw_glow(const Mesh& mesh, const Mat4& model, const Vec4& tint) 
     submit(mesh, model, tint, Layer::Glow);
 }
 
+void Renderer::draw_sprite(const Vec3& a, const Vec3& b, f32 radius, const Vec4& color, f32 core) {
+    if (!frame_active_ || sprites_.size() >= kMaxSprites || color.a <= 0.0f || radius <= 0.0f) {
+        return;
+    }
+    sprites_.push_back({Vec4{a, radius}, Vec4{b, core}, color});
+}
+
 void Renderer::draw_transparent(const Mesh& mesh, const Mat4& model, const Vec4& tint,
                                 bool peek_dissolve) {
     submit(mesh, model, tint, Layer::Foliage, peek_dissolve ? 1.0f : 0.0f);
@@ -1844,6 +1923,7 @@ void Renderer::on_shutdown() {
     pipeline_water_.destroy();
     pipeline_emissive_.destroy();
     pipeline_glow_.destroy();
+    pipeline_sprites_.destroy();
     pipeline_vegetation_.destroy();
     pipeline_shadow_.destroy();
     pipeline_prepass_.destroy();

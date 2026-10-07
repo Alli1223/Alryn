@@ -500,6 +500,7 @@ void ClientApp::on_render() {
     draw_bubbles();
     draw_buffs();
     draw_particles();
+    draw_spell_fx();     // beams, rune sigils, falling meteors, the Mage's combo orbs
     draw_deer();         // ambient wildlife grazing in the meadows
     draw_fish();         // ambient fish swimming in nearby water (opaque - the water tints them)
     draw_surf();         // foam waves lapping along the nearby shoreline
@@ -515,47 +516,42 @@ void ClientApp::on_render() {
     terrain_->for_each_prop([&](const PropInstance& p) { draw_prop(p); });
 
     // Projectiles (server-simulated). kind 0 = thrown rock (grey sphere), 1 =
-    // enemy arrow (a slim dark bolt).
+    // enemy arrow (a slim dark bolt). Spell bolts are blazing glow-sprite orbs that light the
+    // ground they fly over; once one has burst on landing (projectile_spent) its resting body
+    // is hidden rather than left glowing on the ground.
     if (have_snapshot_) {
+        // A spell orb: a white-hot core, a coloured halo flickering round it, a short comet tail
+        // back along its flight, and a travelling light.
+        auto orb = [&](const net::ProjectileState& pr, const Vec3& core, const Vec3& halo, f32 r,
+                       f32 light) {
+            const f32 flick = 0.9f + 0.1f * std::sin(elapsed_ * 31.0f + pr.position.x * 3.0f);
+            renderer_->draw_sprite(pr.position, r, Vec4{core, 1.5f}, 1.0f);
+            renderer_->draw_sprite(pr.position, r * 2.6f, Vec4{halo, 0.5f * flick}, 0.0f);
+            renderer_->draw_sprite(pr.position, pr.position - pr.dir * (r * 4.0f), r * 0.9f,
+                                   Vec4{halo, 0.45f}, 0.3f);
+            fx_light(pr.position, halo, light * flick, 8.0f);
+        };
         for (const net::ProjectileState& pr : snapshot_.projectiles) {
-            if (pr.kind == 4) { // cleric arcane bolt: a violet glowing orb + halo
-                renderer_->draw_emissive(shape_sphere_,
-                                         glm::translate(Mat4{1.0f}, pr.position) *
-                                             glm::scale(Mat4{1.0f}, Vec3{0.26f}),
-                                         Vec4{0.72f, 0.5f, 1.0f, 1.0f});
-                renderer_->draw_glow(shape_sphere_,
-                                     glm::translate(Mat4{1.0f}, pr.position) *
-                                         glm::scale(Mat4{1.0f}, Vec3{0.6f}),
-                                     Vec4{0.6f, 0.4f, 1.0f, 0.5f});
-            } else if (pr.kind == 2) { // cleric holy bolt: a bright glowing mote
-                renderer_->draw_emissive(shape_sphere_,
-                                         glm::translate(Mat4{1.0f}, pr.position) *
-                                             glm::scale(Mat4{1.0f}, Vec3{0.3f}),
-                                         Vec4{0.6f, 1.0f, 0.78f, 1.0f});
-            } else if (pr.kind == 5) { // Mage fireball: a blazing orange orb + glow
-                renderer_->draw_emissive(shape_sphere_,
-                                         glm::translate(Mat4{1.0f}, pr.position) *
-                                             glm::scale(Mat4{1.0f}, Vec3{0.34f}),
-                                         Vec4{1.0f, 0.55f, 0.18f, 1.0f});
-                renderer_->draw_glow(shape_sphere_,
-                                     glm::translate(Mat4{1.0f}, pr.position) *
-                                         glm::scale(Mat4{1.0f}, Vec3{0.85f}),
-                                     Vec4{1.0f, 0.45f, 0.15f, 0.55f});
-            } else if (pr.kind == 6) { // Mage frost bolt: a pale cyan shard + glow
-                renderer_->draw_emissive(shape_sphere_,
-                                         glm::translate(Mat4{1.0f}, pr.position) *
-                                             glm::scale(Mat4{1.0f}, Vec3{0.28f}),
-                                         Vec4{0.6f, 0.86f, 1.0f, 1.0f});
-                renderer_->draw_glow(shape_sphere_,
-                                     glm::translate(Mat4{1.0f}, pr.position) *
-                                         glm::scale(Mat4{1.0f}, Vec3{0.6f}),
-                                     Vec4{0.5f, 0.8f, 1.0f, 0.45f});
-            } else if (pr.kind == 7) { // Mage boulder: a tumbling grey rock
+            if (pr.kind != 7 && projectile_spent(pr)) {
+                continue; // a spell bolt that already burst where it landed
+            }
+            if (pr.kind == 4) { // cleric arcane bolt: a violet orb
+                orb(pr, Vec3{0.88f, 0.72f, 1.0f}, Vec3{0.6f, 0.4f, 1.0f}, 0.28f, 2.0f);
+            } else if (pr.kind == 2) { // cleric holy bolt: a radiant mint-gold orb
+                orb(pr, Vec3{0.9f, 1.0f, 0.88f}, Vec3{0.5f, 1.0f, 0.72f}, 0.34f, 2.4f);
+            } else if (pr.kind == 5) { // Mage fireball: a blazing orange orb
+                orb(pr, Vec3{1.0f, 0.75f, 0.35f}, Vec3{1.0f, 0.42f, 0.12f}, 0.42f, 3.0f);
+            } else if (pr.kind == 6) { // Mage frost bolt: a pale cyan orb
+                orb(pr, Vec3{0.8f, 0.95f, 1.0f}, Vec3{0.4f, 0.72f, 1.0f}, 0.32f, 2.2f);
+            } else if (pr.kind == 7) { // Mage boulder: a tumbling grey rock wreathed in amber
                 renderer_->draw(shape_sphere_,
                                 glm::translate(Mat4{1.0f}, pr.position) *
                                     glm::rotate(Mat4{1.0f}, elapsed_ * 6.0f, Vec3{0.3f, 1.0f, 0.2f}) *
                                     glm::scale(Mat4{1.0f}, Vec3{0.45f}),
                                 Vec4{0.4f, 0.37f, 0.34f, 1.0f});
+                if (!projectile_spent(pr)) {
+                    renderer_->draw_sprite(pr.position, 0.55f, Vec4{1.0f, 0.7f, 0.35f, 0.35f}, 0.0f);
+                }
             } else if (pr.kind == 1 || pr.kind == 3) {
                 // An arrow: orient the long (local +Z) axis along its travel direction so it
                 // always points the way it flies (and the way it's stuck in on landing).
@@ -573,6 +569,7 @@ void ClientApp::on_render() {
             }
         }
     }
+    draw_fx_lights(); // every spell light gathered above (bolts, beams, shields, auras, flashes)
 
     if (aim_valid_) {
         renderer_->draw(marker_, glm::translate(Mat4{1.0f}, aim_) *

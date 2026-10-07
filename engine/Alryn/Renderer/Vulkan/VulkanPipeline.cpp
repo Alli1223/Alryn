@@ -5,6 +5,7 @@
 #include <Alryn/Renderer/Vulkan/VulkanCommon.h>
 #include <Alryn/Renderer/Vulkan/VulkanDevice.h>
 
+#include <algorithm>
 #include <fstream>
 #include <utility>
 #include <vector>
@@ -66,27 +67,27 @@ bool Pipeline::create(const Device& device, const PipelineConfig& config) {
 
     const auto binding = Vertex::binding_description();
     const auto attributes = Vertex::attribute_descriptions();
-    // Instanced flat-tile input: one binding advancing PER INSTANCE, carrying the
-    // tile's rect (px) and colour - the vertex shader emits the quad's corners itself.
+    // Instanced input: one binding advancing PER INSTANCE, carrying N vec4s - the flat tile's
+    // rect (px) + colour, or a VFX sprite's ends + colour - the vertex shader emits the quad's
+    // corners itself.
+    const u32 instance_vec4s = config.instance_tiles ? 2u : std::min(config.instance_vec4s, 4u);
     VkVertexInputBindingDescription tile_binding{};
     tile_binding.binding = 0;
-    tile_binding.stride = 2 * 4 * sizeof(f32); // vec4 rect + vec4 colour
+    tile_binding.stride = instance_vec4s * 4 * sizeof(f32);
     tile_binding.inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
-    VkVertexInputAttributeDescription tile_attributes[2]{};
-    tile_attributes[0].location = 0; // rect
-    tile_attributes[0].binding = 0;
-    tile_attributes[0].format = VK_FORMAT_R32G32B32A32_SFLOAT;
-    tile_attributes[0].offset = 0;
-    tile_attributes[1].location = 1; // colour
-    tile_attributes[1].binding = 0;
-    tile_attributes[1].format = VK_FORMAT_R32G32B32A32_SFLOAT;
-    tile_attributes[1].offset = 4 * sizeof(f32);
+    VkVertexInputAttributeDescription tile_attributes[4]{};
+    for (u32 i = 0; i < instance_vec4s; ++i) {
+        tile_attributes[i].location = i;
+        tile_attributes[i].binding = 0;
+        tile_attributes[i].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+        tile_attributes[i].offset = i * 4 * sizeof(f32);
+    }
     VkPipelineVertexInputStateCreateInfo vertex_input{};
     vertex_input.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    if (config.instance_tiles) {
+    if (instance_vec4s > 0) {
         vertex_input.vertexBindingDescriptionCount = 1;
         vertex_input.pVertexBindingDescriptions = &tile_binding;
-        vertex_input.vertexAttributeDescriptionCount = 2;
+        vertex_input.vertexAttributeDescriptionCount = instance_vec4s;
         vertex_input.pVertexAttributeDescriptions = tile_attributes;
     } else if (!config.vertexless) {
         vertex_input.vertexBindingDescriptionCount = 1;

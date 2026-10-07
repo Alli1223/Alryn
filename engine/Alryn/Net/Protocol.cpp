@@ -132,6 +132,9 @@ void write(ByteWriter& w, const Snapshot& s) {
         w.write_u8(p.owned_tier);
         w.write_u16(p.ability_ranks);
         w.write_u32(p.link);
+        if (p.cast != 0) {
+            w.write_vec3(p.cast_aim); // only the tick a cast fires, so idle players cost nothing extra
+        }
     }
     w.write_u16(static_cast<u16>(s.projectiles.size()));
     for (const ProjectileState& pr : s.projectiles) {
@@ -261,6 +264,9 @@ bool read(ByteReader& r, Snapshot& s) {
         p.owned_tier = r.read_u8();
         p.ability_ranks = r.read_u16();
         p.link = r.read_u32();
+        if (p.cast != 0) {
+            p.cast_aim = r.read_vec3();
+        }
         s.players.push_back(p);
     }
     const u16 proj_count = r.read_u16();

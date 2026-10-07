@@ -191,6 +191,8 @@ alryn_compile_shaders(alryn SHADERS
     ${CMAKE_SOURCE_DIR}/shaders/water.frag
     ${CMAKE_SOURCE_DIR}/shaders/shadow.vert
     ${CMAKE_SOURCE_DIR}/shaders/emissive.frag
+    ${CMAKE_SOURCE_DIR}/shaders/sprite.vert
+    ${CMAKE_SOURCE_DIR}/shaders/sprite.frag
     ${CMAKE_SOURCE_DIR}/shaders/grass.vert
     ${CMAKE_SOURCE_DIR}/shaders/ui.vert
     ${CMAKE_SOURCE_DIR}/shaders/ui.frag

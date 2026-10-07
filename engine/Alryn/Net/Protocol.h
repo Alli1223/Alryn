@@ -77,6 +77,8 @@ struct PlayerState {
     u16 ability_ranks = 0;          // packed 2-bit upgrade rank per ability of THIS player's current
                                     // role (ability i in bits 2i..2i+1) -> the owner's skills tree + VFX
     u32 link = 0;                   // Power Conduit: id of the ally this player is channelling to (0 = none)
+    Vec3 cast_aim{0.0f};            // where `cast` was aimed (only on the wire while cast != 0) -> remote
+                                    // clients land the Meteor / sky strike / spell beams on the right spot
 };
 
 // A live enemy, broadcast each tick so clients can render + animate it.

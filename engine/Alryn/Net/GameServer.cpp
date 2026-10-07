@@ -335,7 +335,8 @@ void GameServer::tick(Timestep dt) {
                                     static_cast<u8>(player.carrying ? 1 : 0),
                                     static_cast<u8>(player.role), player.cast_fx, action, shield,
                                     buffs, player.hit_fx, player.input.appearance, player.equipment,
-                                    player.owned_tier, ranks, player.conduit_target});
+                                    player.owned_tier, ranks, player.conduit_target,
+                                    player.input.aim});
     }
     snapshot.projectiles.reserve(projectiles_.size());
     for (const Projectile& pr : projectiles_) {

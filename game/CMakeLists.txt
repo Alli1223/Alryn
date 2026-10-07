@@ -12,6 +12,7 @@ add_executable(alryn_game
     ClientAppWorld.cpp
     ClientAppWagons.cpp
     ClientAppVfx.cpp
+    ClientAppSpellFx.cpp
     ClientAppHud.cpp
 )
 

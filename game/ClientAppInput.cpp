@@ -13,7 +13,8 @@ void ClientApp::cast_ability(u8 ability) {
     // Mirror the server's cooldown, including the race passive (Men cool down quicker).
     ability_cd_[ability] =
         ability_def(role_, ability).cooldown * race_combat(appearance_.race).cooldown_mult;
-    spawn_ability_vfx(role_, ability, local_feet(), face_yaw_, aim_valid_ ? aim_ : local_feet());
+    spawn_ability_vfx(role_, ability, local_feet(), face_yaw_, aim_valid_ ? aim_ : local_feet(),
+                      ability_rank_[ability]);
     if (Audio* a = audio()) {
         // A role-flavoured cast: mends chime, the War Horn blows, arrows twang, the rest shimmer
         // (pitch varies by slot so each ability has its own voice).
@@ -45,17 +46,21 @@ void ClientApp::cast_ability(u8 ability) {
     } else if (role_ == PlayerRole::Hunter && ability == 2) {
         dash_fx_ = kDashDuration;
     } else if (role_ == PlayerRole::Cleric && ability == 3 && ability_rank_[3] >= kMaxAbilityRank) {
-        // Max-rank Aegis: a big protective DOME snaps up around the caster - a rising ring + a
-        // radiant column so the ranged-blocking bubble reads instantly (the dome itself is networked).
+        // Max-rank Aegis: a big protective DOME snaps up around the caster - a great sigil, a rising
+        // ring, a column of light + a curtain of motes along its edge so the ranged-blocking bubble
+        // reads instantly (the dome itself is networked).
         const Vec3 feet = local_feet();
-        emit_ring(feet, Vec4{0.55f, 0.8f, 1.0f, 0.95f}, 40, kAegisBubbleRadius * 1.5f, 0.7f, 0.2f);
-        emit_burst(feet + Vec3{0.0f, 1.0f, 0.0f}, Vec4{0.6f, 0.85f, 1.0f, 0.95f}, 30, 5.0f, 0.7f, 0.16f,
+        glyph(feet, kAegisBubbleRadius, Vec4{0.55f, 0.85f, 1.0f, 1.0f}, 1.4f, 6);
+        emit_ring(feet, Vec4{0.55f, 0.8f, 1.0f, 0.95f}, 56, kAegisBubbleRadius * 1.5f, 0.7f, 0.2f);
+        emit_burst(feet + Vec3{0.0f, 1.0f, 0.0f}, Vec4{0.6f, 0.85f, 1.0f, 0.95f}, 40, 5.0f, 0.7f, 0.16f,
                    1, 3.0f);
-        for (int i = 0; i < 22; ++i) {
+        beam(feet + Vec3{0.0f, 12.0f, 0.0f}, feet, Vec4{0.6f, 0.85f, 1.0f, 0.8f}, 0.4f, 0.8f, 2);
+        for (int i = 0; i < 40; ++i) {
             const f32 ang = frand(0.0f, TwoPi);
             emit(feet + Vec3{std::cos(ang), 0.1f, std::sin(ang)} * (kAegisBubbleRadius * 0.9f),
                  Vec3{0.0f, frand(2.5f, 5.0f), 0.0f}, Vec4{0.7f, 0.9f, 1.0f, 0.9f}, 0.8f, 0.13f, 1, -1.0f);
         }
+        flash_light(feet + Vec3{0.0f, 2.0f, 0.0f}, Vec3{0.5f, 0.8f, 1.0f}, 5.0f, 14.0f, 0.8f);
     }
 }
 
@@ -78,28 +83,13 @@ void ClientApp::cast_mage_spell(SpellId sp) {
     pending_spell_ = static_cast<u8>(sp);
     // Mirror the server cooldown (incl. the race passive) for the HUD + to gate spam.
     mage_cd_ = spell_cooldown(sp) * race_combat(appearance_.race).cooldown_mult;
-    spawn_primary_vfx();           // a cast flourish at the staff
-    if (Audio* a = audio()) {      // each spell speaks at its own pitch
+    if (Audio* a = audio()) { // each spell speaks at its own pitch
         a->play(SfxId::CastMagic, 0.85f, 0.8f + 0.07f * static_cast<f32>(sp));
     }
-    // Projectile spells (fireball/frost/boulder) are visible as the projectile; give the INSTANT
-    // ones (meteor / heal bloom / empower) a burst so the cast reads.
+    // The cast sigil, beams and the spell's own effect (a Meteor streaks down onto the aim).
     const Vec3 feet = local_feet();
-    if (sp == SpellId::Meteor && aim_valid_) {
-        emit_ring(aim_, Vec4{1.0f, 0.4f, 0.1f, 0.95f}, 30, kMeteorRadius * 1.4f, 0.6f, 0.2f);
-        emit_burst(aim_ + Vec3{0.0f, 0.3f, 0.0f}, Vec4{1.0f, 0.55f, 0.15f, 1.0f}, 32, 7.0f, 0.6f,
-                   0.18f, 1, 2.5f);
-    } else if (sp == SpellId::HealBloom) {
-        emit_ring(feet, Vec4{0.5f, 1.0f, 0.6f, 0.9f}, 24, kHealBloomRadius * 0.5f, 0.7f, 0.16f);
-        for (int i = 0; i < 16; ++i) {
-            emit(feet + rand_dir() * frand(0.3f, 1.5f), Vec3{0.0f, frand(1.5f, 3.0f), 0.0f},
-                 Vec4{0.5f, 1.0f, 0.6f, 0.9f}, 0.8f, 0.12f, 1, -1.0f);
-        }
-    } else if (sp == SpellId::Empower) {
-        emit_ring(feet, Vec4{1.0f, 0.5f, 0.2f, 0.9f}, 24, kHealBloomRadius * 0.5f, 0.7f, 0.16f);
-        emit_burst(feet + Vec3{0.0f, 0.5f, 0.0f}, Vec4{1.0f, 0.6f, 0.25f, 0.9f}, 16, 3.0f, 0.7f,
-                   0.13f, 1, 1.5f);
-    }
+    const Vec3 facing{std::cos(face_yaw_), 0.0f, std::sin(face_yaw_)};
+    spawn_spell_vfx(sp, feet, face_yaw_, aim_valid_ ? aim_ : feet + facing * 8.0f);
 }
 
 u8 ClientApp::resolve_combo() const {

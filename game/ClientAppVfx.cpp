@@ -20,23 +20,25 @@ void ClientApp::spawn_primary_vfx() {
     }
     if (role_ == PlayerRole::Hunter) {
         emit(hand, Vec3{0.0f}, Vec4{0.85f, 1.0f, 0.7f, 1.0f}, 0.12f, 0.3f, 1); // bow flash
-        for (int i = 0; i < 9; ++i) {
+        for (int i = 0; i < 12; ++i) {
             emit(hand, dir * frand(4.0f, 9.0f) + rand_dir() * 1.0f,
                  Vec4{0.7f, 1.0f, 0.65f, 0.9f}, 0.3f, 0.1f, 1);
         }
+        flash_light(hand, Vec3{0.7f, 1.0f, 0.6f}, 1.2f, 5.0f, 0.15f);
     } else if (role_ == PlayerRole::Cleric) {
         // Arcane motes gather + burst forward in violet.
         emit(hand, Vec3{0.0f}, Vec4{0.7f, 0.45f, 1.0f, 1.0f}, 0.18f, 0.42f, 1);
-        for (int i = 0; i < 16; ++i) {
+        for (int i = 0; i < 20; ++i) {
             const Vec3 v = dir * frand(2.5f, 7.0f) + rand_dir() * 1.6f;
             emit(hand + rand_dir() * 0.25f, v, Vec4{0.78f, 0.5f, 1.0f, 0.95f}, 0.45f, 0.12f, 1);
         }
+        flash_light(hand, Vec3{0.65f, 0.45f, 1.0f}, 2.0f, 6.0f, 0.25f);
     }
 }
 
-void ClientApp::emit(const Vec3& pos, const Vec3& vel, const Vec4& color, f32 life, f32 size, u8 style, f32 gravity, f32 drag) {
+bool ClientApp::emit(const Vec3& pos, const Vec3& vel, const Vec4& color, f32 life, f32 size, u8 style, f32 gravity, f32 drag) {
     if (particles_.size() > vfx::max_particles) {
-        return; // hard cap so a busy fight can't run away with the pool
+        return false; // hard cap so a busy fight can't run away with the pool
     }
     Particle p;
     p.pos = pos;
@@ -49,6 +51,14 @@ void ClientApp::emit(const Vec3& pos, const Vec3& vel, const Vec4& color, f32 li
     p.gravity = gravity;
     p.drag = drag;
     particles_.push_back(p);
+    return true;
+}
+
+void ClientApp::emit_ember(const Vec3& pos, const Vec3& vel, const Vec3& hot, const Vec3& cool, f32 life,
+                           f32 size, f32 gravity, f32 alpha) {
+    if (emit(pos, vel, Vec4{hot, alpha}, life, size, 1, gravity)) {
+        particles_.back().tail = cool;
+    }
 }
 
 void ClientApp::emit_burst(const Vec3& center, const Vec4& color, int n, f32 speed, f32 life, f32 size, u8 style, f32 up, f32 gravity) {
@@ -90,37 +100,99 @@ void ClientApp::update_particles(Timestep dt) {
     }
     std::erase_if(particles_, [](const Particle& p) { return p.life <= 0.0f; });
 
-    // Glowing trails behind in-flight holy bolts / arrows.
+    // Beams, sigils and light flashes age out; meteors fall (shedding embers) and burst on arrival.
+    for (Beam& b : beams_) {
+        b.life -= s;
+        b.age += s;
+    }
+    std::erase_if(beams_, [](const Beam& b) { return b.life <= 0.0f; });
+    for (Glyph& g : glyphs_) {
+        g.life -= s;
+    }
+    std::erase_if(glyphs_, [](const Glyph& g) { return g.life <= 0.0f; });
+    for (FlashLight& f : flash_lights_) {
+        f.life -= s;
+    }
+    std::erase_if(flash_lights_, [](const FlashLight& f) { return f.life <= 0.0f; });
+    const Vec3 ember_hot{1.0f, 0.86f, 0.45f};
+    const Vec3 ember_cool{0.75f, 0.12f, 0.04f};
+    for (usize i = 0; i < meteors_.size(); ++i) {
+        MeteorFx& m = meteors_[i];
+        m.t += s;
+        const f32 k = glm::clamp(m.t / m.dur, 0.0f, 1.0f);
+        const Vec3 p = glm::mix(m.from, m.to, k * k);
+        const Vec3 back = glm::normalize(m.from - m.to);
+        for (int e = 0; e < 4; ++e) {
+            emit_ember(p + rand_dir() * 0.35f, back * frand(2.0f, 5.0f) + rand_dir() * 1.2f, ember_hot,
+                       ember_cool, frand(0.35f, 0.6f), frand(0.25f, 0.45f), 0.0f);
+        }
+        if (m.t >= m.dur) {
+            meteor_impact(m.to);
+        }
+    }
+    std::erase_if(meteors_, [](const MeteorFx& m) { return m.t >= m.dur; });
+    track_projectiles(); // a spell bolt that vanished / landed bursts where it struck
+    update_shields(dt);  // Aegis pop-in / hit flash / shatter
+
+    // Glowing trails behind in-flight bolts / arrows.
     if (have_snapshot_) {
         for (const net::ProjectileState& pr : snapshot_.projectiles) {
-            if (pr.kind == 2) {
-                emit(pr.position, rand_dir() * 0.3f, Vec4{0.55f, 1.0f, 0.8f, 0.9f}, 0.4f, 0.16f, 1);
+            if (projectile_spent(pr)) {
+                continue; // already burst where it landed
+            }
+            const Vec3 back = -pr.dir;
+            if (pr.kind == 2) { // holy bolt: mint motes + golden sparkles
+                emit(pr.position, rand_dir() * 0.3f, Vec4{0.55f, 1.0f, 0.8f, 0.9f}, 0.45f, 0.16f, 1);
+                emit(pr.position + rand_dir() * 0.2f, back * 2.0f + rand_dir() * 0.6f,
+                     Vec4{1.0f, 0.92f, 0.6f, 0.9f}, 0.35f, 0.07f, 1);
             } else if (pr.kind == 4) { // arcane bolt: a swirling violet trail
                 emit(pr.position, rand_dir() * 0.5f, Vec4{0.72f, 0.45f, 1.0f, 0.95f}, 0.45f, 0.15f, 1);
+                emit(pr.position + rand_dir() * 0.18f, back * 1.0f, Vec4{0.88f, 0.75f, 1.0f, 0.8f}, 0.3f,
+                     0.07f, 1);
+            } else if (pr.kind == 5) { // fireball: a roaring tail of embers
+                for (int e = 0; e < 3; ++e) {
+                    emit_ember(pr.position + rand_dir() * 0.15f,
+                               back * frand(1.0f, 3.0f) + rand_dir() * 0.8f + Vec3{0.0f, 0.6f, 0.0f},
+                               ember_hot, ember_cool, frand(0.3f, 0.55f), frand(0.18f, 0.32f), -1.0f);
+                }
+            } else if (pr.kind == 6) { // frost bolt: icy motes + glittering shards
+                emit(pr.position + rand_dir() * 0.1f, back * 1.0f + rand_dir() * 0.5f,
+                     Vec4{0.7f, 0.9f, 1.0f, 0.8f}, 0.45f, 0.13f, 1, 0.5f);
+                emit(pr.position + rand_dir() * 0.2f, rand_dir() * 0.6f, Vec4{0.92f, 0.98f, 1.0f, 1.0f}, 0.3f,
+                     0.05f, 1, 2.0f);
+            } else if (pr.kind == 7) { // boulder: an amber shimmer of the earth magic hurling it
+                emit(pr.position + rand_dir() * 0.3f, back * 1.0f + rand_dir() * 0.4f,
+                     Vec4{0.95f, 0.7f, 0.35f, 0.45f}, 0.35f, 0.12f, 1);
             } else if (pr.kind == 3) {
                 emit(pr.position, Vec3{0.0f}, Vec4{0.85f, 0.95f, 0.7f, 0.5f}, 0.25f, 0.07f, 1);
             }
         }
         // Motes rising out of each ground aura, tinted by its kind (heal = gentle, drifting;
-        // consecration = flickering holy-fire that climbs faster).
+        // consecration = flickering holy-fire embers that climb faster and cool as they rise).
         for (const net::AuraState& a : snapshot_.auras) {
             const AuraProps props = aura_props(static_cast<AuraKind>(a.kind));
             const bool fire = static_cast<AuraKind>(a.kind) == AuraKind::Consecration;
-            for (int i = 0; i < (fire ? 3 : 2); ++i) {
+            for (int i = 0; i < (fire ? 4 : 3); ++i) {
                 const f32 ang = frand(0.0f, TwoPi);
-                const f32 rr = frand(0.0f, a.radius);
-                const Vec3 p = a.position + Vec3{std::cos(ang) * rr, 0.05f, std::sin(ang) * rr};
-                const f32 rise = fire ? frand(1.4f, 3.0f) : frand(0.9f, 2.0f);
-                emit(p, Vec3{0.0f, rise, 0.0f}, Vec4{props.color, 0.88f}, fire ? 0.5f : 0.8f,
-                     fire ? 0.13f : 0.1f, 1, fire ? -1.4f : -0.8f);
+                const f32 rr = a.radius * std::sqrt(frand());
+                const Vec3 p = a.position + Vec3{std::cos(ang) * rr, 0.1f, std::sin(ang) * rr};
+                if (fire) {
+                    emit_ember(p, Vec3{0.0f, frand(1.4f, 3.2f), 0.0f}, Vec3{1.0f, 0.85f, 0.45f},
+                               Vec3{0.9f, 0.3f, 0.08f}, frand(0.45f, 0.7f), 0.15f, -1.4f, 0.9f);
+                } else {
+                    emit(p, Vec3{0.0f, frand(0.9f, 2.0f), 0.0f}, Vec4{props.color, 0.88f}, 0.9f, 0.11f, 1,
+                         -0.8f);
+                }
             }
         }
-        // Shimmer sparkles orbiting each Aegis shield bubble.
+        // Shimmer sparkles skating over each Aegis bubble's surface.
         auto sparkle = [&](const Vec3& feet, f32 strength) {
             if (strength > 0.02f) {
-                const Vec3 d = rand_dir();
-                emit(feet + Vec3{0.0f, 1.0f, 0.0f} + d * 1.15f, d * 0.2f,
-                     Vec4{0.6f, 0.85f, 1.0f, 0.8f * strength}, 0.4f, 0.08f, 1);
+                for (int i = 0; i < 2; ++i) {
+                    const Vec3 d = rand_dir();
+                    emit(feet + Vec3{0.0f, 0.95f, 0.0f} + d * vfx::shield_radius, d * 0.2f,
+                         Vec4{0.65f, 0.9f, 1.0f, 0.85f * strength}, 0.45f, 0.08f, 1);
+                }
             }
         };
         for (const net::PlayerState& p : snapshot_.players) {
@@ -129,6 +201,13 @@ void ClientApp::update_particles(Timestep dt) {
         for (const net::VillagerState& v : snapshot_.villagers) {
             sparkle(v.position, static_cast<f32>(v.shield) / 255.0f);
         }
+        // Motes of light drifting up inside each max-Aegis dome.
+        for (const net::BubbleState& b : snapshot_.bubbles) {
+            const f32 ang = frand(0.0f, TwoPi);
+            const f32 rr = b.radius * 0.9f * std::sqrt(frand());
+            emit(b.position + Vec3{std::cos(ang) * rr, 0.1f, std::sin(ang) * rr},
+                 Vec3{0.0f, frand(0.6f, 1.4f), 0.0f}, Vec4{0.6f, 0.88f, 1.0f, 0.7f}, 1.4f, 0.1f, 1, -0.2f);
+        }
     }
 }
 
@@ -136,29 +215,32 @@ void ClientApp::draw_auras() {
     if (renderer_ == nullptr || !have_snapshot_) {
         return;
     }
-    const f32 night = 1.0f - sun_intensity_;
     for (const net::AuraState& a : snapshot_.auras) {
-        const AuraProps props = aura_props(static_cast<AuraKind>(a.kind));
+        const AuraKind kind = static_cast<AuraKind>(a.kind);
+        const AuraProps props = aura_props(kind);
         const f32 r = a.radius;
+        const f32 breathe = 0.85f + 0.15f * std::sin(elapsed_ * 3.0f + a.position.x);
+        // (shape_sphere_ is unit-DIAMETER, so a radius-r disc scales by 2r.)
         renderer_->draw_glow(shape_sphere_,
                              glm::translate(Mat4{1.0f}, a.position + Vec3{0.0f, 0.08f, 0.0f}) *
-                                 glm::scale(Mat4{1.0f}, Vec3{r, 0.1f, r}),
-                             Vec4{props.color, 0.32f}); // ground disc
+                                 glm::scale(Mat4{1.0f}, Vec3{r * 2.0f, 0.1f, r * 2.0f}),
+                             Vec4{props.color, 0.2f * breathe}); // ground disc
         renderer_->draw_glow(shape_sphere_,
                              glm::translate(Mat4{1.0f}, a.position + Vec3{0.0f, 0.3f, 0.0f}) *
-                                 glm::scale(Mat4{1.0f}, Vec3{r * 0.95f, r * 0.5f, r * 0.95f}),
-                             Vec4{props.color, 0.1f}); // soft dome
-        // A gentle (unshadowed) light so the aura illuminates the ground at night.
-        if (props.light > 0.0f && night > 0.12f) {
-            Renderer::SpotLight sl;
-            sl.position = a.position + Vec3{0.0f, 2.0f, 0.0f};
-            sl.direction = Vec3{0.0f, -1.0f, 0.0f};
-            sl.color = props.color * (props.light * night);
-            sl.range = r * 2.4f;
-            sl.cone_outer_cos = std::cos(glm::radians(75.0f));
-            sl.cone_inner_cos = std::cos(glm::radians(45.0f));
-            sl.cast_shadow = false;
-            renderer_->add_light(sl);
+                                 glm::scale(Mat4{1.0f}, Vec3{r * 1.9f, r * 0.7f, r * 1.9f}),
+                             Vec4{props.color, 0.05f}); // soft dome
+        // A slowly turning rune circle marks the zone: a full sigil for the holy / healing ground,
+        // a plain shimmering ring for the Hunter's caltrops.
+        if (kind == AuraKind::Hazard) {
+            sprite_circle(a.position + Vec3{0.0f, 0.12f, 0.0f}, Vec3{1.0f, 0.0f, 0.0f}, Vec3{0.0f, 0.0f, 1.0f},
+                          r, 40, 0.06f, Vec4{props.color, 0.45f * breathe}, 0.6f);
+        } else {
+            draw_glyph(a.position, r, props.color, 0.7f * breathe, kind == AuraKind::Heal ? 5 : 6,
+                       elapsed_ * 0.35f);
+        }
+        // It lights its surroundings day or night (strongest in the dark - see draw_fx_lights).
+        if (props.light > 0.0f) {
+            fx_light(a.position + Vec3{0.0f, 1.2f, 0.0f}, props.color, props.light * breathe, r * 2.2f);
         }
     }
 }
@@ -167,26 +249,53 @@ void ClientApp::draw_shields() {
     if (renderer_ == nullptr || !have_snapshot_) {
         return;
     }
-    const f32 pulse = 1.0f + 0.04f * std::sin(elapsed_ * 6.0f);
-    auto bubble = [&](const Vec3& feet, f32 strength) {
+    auto bubble = [&](u64 key, const Vec3& feet, f32 strength) {
         if (strength <= 0.02f) {
             return;
         }
-        const Vec3 c = feet + Vec3{0.0f, 1.0f, 0.0f};
-        const f32 rad = 1.15f * pulse;
-        renderer_->draw_glow(shape_sphere_,
-                             glm::translate(Mat4{1.0f}, c) * glm::scale(Mat4{1.0f}, Vec3{rad}),
-                             Vec4{0.45f, 0.7f, 1.0f, 0.16f * strength});
+        f32 age = 1.0f;
+        f32 hit = 0.0f;
+        if (const auto it = shield_fx_.find(key); it != shield_fx_.end()) {
+            age = it->second.age;
+            hit = it->second.hit;
+        }
+        // Pops up with an overshoot (ease-out-back), then breathes gently.
+        const f32 t = glm::clamp(age / 0.35f, 0.0f, 1.0f) - 1.0f;
+        const f32 pop = std::max(1.0f + 2.70158f * t * t * t + 1.70158f * t * t, 0.05f);
+        const f32 R = vfx::shield_radius * pop * (1.0f + 0.02f * std::sin(elapsed_ * 4.0f + feet.x));
+        const Vec3 c = feet + Vec3{0.0f, 0.95f, 0.0f};
+        const f32 glow = 0.55f + 0.45f * strength + hit; // brighter while strong, flashing when struck
+        const Vec3 tint = glm::mix(Vec3{0.45f, 0.75f, 1.0f}, Vec3{0.85f, 0.95f, 1.0f}, hit);
+        // A faceted translucent shell + a faint additive inner glow (shape_sphere_ is unit-DIAMETER).
         renderer_->draw_transparent(shape_sphere_,
-                                    glm::translate(Mat4{1.0f}, c) *
-                                        glm::scale(Mat4{1.0f}, Vec3{rad * 1.02f}),
-                                    Vec4{0.55f, 0.8f, 1.0f, 0.13f * strength});
+                                    glm::translate(Mat4{1.0f}, c) * glm::scale(Mat4{1.0f}, Vec3{R * 2.0f}),
+                                    Vec4{tint, 0.06f + 0.06f * strength + 0.12f * hit});
+        renderer_->draw_glow(shape_sphere_,
+                             glm::translate(Mat4{1.0f}, c) * glm::scale(Mat4{1.0f}, Vec3{R * 1.96f}),
+                             Vec4{tint, 0.04f + 0.03f * strength + 0.15f * hit});
+        sphere_rim(c, R, tint, glow, 40, 0.06f);
+        // Two gyroscope rings sweeping round the shell.
+        for (int k = 0; k < 2; ++k) {
+            const f32 spin = elapsed_ * (k == 0 ? 0.9f : -0.7f) + static_cast<f32>(key % 97u) * 0.37f;
+            const f32 tilt = k == 0 ? 0.5f : -0.9f;
+            const Vec3 n = glm::normalize(
+                Vec3{std::cos(spin) * std::sin(tilt), std::cos(tilt), std::sin(spin) * std::sin(tilt)});
+            const Vec3 a = glm::normalize(glm::cross(n, Vec3{1.0f, 0.0f, 0.0f}));
+            sprite_circle(c, a, glm::cross(n, a), R * 1.005f, 32, 0.035f, Vec4{tint, 0.22f * glow}, 0.8f);
+        }
+        // A halo where the bubble meets the ground.
+        const f32 h = c.y - feet.y;
+        if (R > h) {
+            sprite_circle(feet + Vec3{0.0f, 0.1f, 0.0f}, Vec3{1.0f, 0.0f, 0.0f}, Vec3{0.0f, 0.0f, 1.0f},
+                          std::sqrt(R * R - h * h), 32, 0.08f, Vec4{tint, 0.45f * glow}, 0.4f);
+        }
+        fx_light(c, Vec3{0.45f, 0.75f, 1.0f}, 1.4f * strength + 2.5f * hit, 6.5f);
     };
     for (const net::PlayerState& p : snapshot_.players) {
-        bubble(p.position, static_cast<f32>(p.shield) / 255.0f);
+        bubble(static_cast<u64>(p.id), p.position, static_cast<f32>(p.shield) / 255.0f);
     }
     for (const net::VillagerState& v : snapshot_.villagers) {
-        bubble(v.position, static_cast<f32>(v.shield) / 255.0f);
+        bubble((u64{1} << 32) | static_cast<u64>(v.id), v.position, static_cast<f32>(v.shield) / 255.0f);
     }
 }
 
@@ -194,34 +303,36 @@ void ClientApp::draw_bubbles() {
     if (renderer_ == nullptr || !have_snapshot_) {
         return;
     }
+    // The same glassy shell as the per-ally bubbles at full dome size, plus a slowly turning
+    // geodesic cage and a great sigil where it meets the ground.
     for (const net::BubbleState& b : snapshot_.bubbles) {
         const f32 strength = static_cast<f32>(b.strength) / 255.0f;
         const Vec3 c = b.position + Vec3{0.0f, 1.0f, 0.0f};
-        const f32 r = b.radius * (1.0f + 0.03f * std::sin(elapsed_ * 4.0f));
-        // A large translucent protective shell + a soft additive inner glow (brighter while intact),
-        // then a bright ground ring marking its footprint. The dome tests depth but doesn't occlude.
+        const f32 R = b.radius * (1.0f + 0.015f * std::sin(elapsed_ * 3.0f));
+        const Vec3 tint{0.5f, 0.8f, 1.0f};
+        const f32 glow = 0.5f + 0.5f * strength;
         renderer_->draw_transparent(shape_sphere_,
-                                    glm::translate(Mat4{1.0f}, c) * glm::scale(Mat4{1.0f}, Vec3{r}),
-                                    Vec4{0.45f, 0.72f, 1.0f, 0.09f + 0.10f * strength});
+                                    glm::translate(Mat4{1.0f}, c) * glm::scale(Mat4{1.0f}, Vec3{R * 2.0f}),
+                                    Vec4{0.45f, 0.72f, 1.0f, 0.05f + 0.07f * strength});
         renderer_->draw_glow(shape_sphere_,
-                             glm::translate(Mat4{1.0f}, c) * glm::scale(Mat4{1.0f}, Vec3{r * 0.99f}),
-                             Vec4{0.5f, 0.8f, 1.0f, 0.07f + 0.06f * strength});
-        renderer_->draw_glow(shape_sphere_,
-                             glm::translate(Mat4{1.0f}, b.position + Vec3{0.0f, 0.05f, 0.0f}) *
-                                 glm::scale(Mat4{1.0f}, Vec3{r, 0.05f, r}),
-                             Vec4{0.6f, 0.85f, 1.0f, 0.26f * strength});
-        // Shimmer sparkles orbiting the dome's equator - a faceted, energised read.
-        const f32 a = elapsed_ * 1.3f;
-        for (int i = 0; i < 6; ++i) {
-            const f32 ang = a + TwoPi * static_cast<f32>(i) / 6.0f;
-            const f32 yy = 1.0f + (r * 0.55f) * std::sin(ang * 1.7f + b.position.x);
-            const Vec3 p =
-                b.position + Vec3{std::cos(ang) * r * 0.95f, glm::clamp(yy, 0.2f, r * 1.4f),
-                                  std::sin(ang) * r * 0.95f};
-            renderer_->draw_emissive(shape_sphere_,
-                                     glm::translate(Mat4{1.0f}, p) * glm::scale(Mat4{1.0f}, Vec3{0.06f}),
-                                     Vec4{0.7f, 0.92f, 1.0f, 1.0f});
+                             glm::translate(Mat4{1.0f}, c) * glm::scale(Mat4{1.0f}, Vec3{R * 1.98f}),
+                             Vec4{tint, 0.03f + 0.04f * strength});
+        sphere_rim(c, R, tint, glow, 72, 0.1f);
+        for (int m = 0; m < 6; ++m) { // meridians, turning slowly
+            const f32 a = elapsed_ * 0.15f + Pi * static_cast<f32>(m) / 6.0f;
+            sprite_circle(c, Vec3{std::cos(a), 0.0f, std::sin(a)}, Vec3{0.0f, 1.0f, 0.0f}, R, 40, 0.035f,
+                          Vec4{tint, 0.12f * glow}, 0.7f);
         }
+        for (const f32 lat : {0.35f, 0.7f}) { // latitude bands above the ground
+            const f32 y = R * lat;
+            sprite_circle(c + Vec3{0.0f, y, 0.0f}, Vec3{1.0f, 0.0f, 0.0f}, Vec3{0.0f, 0.0f, 1.0f},
+                          std::sqrt(R * R - y * y), 48, 0.035f, Vec4{tint, 0.12f * glow}, 0.7f);
+        }
+        const f32 h = c.y - b.position.y;
+        if (R > h) {
+            draw_glyph(b.position, std::sqrt(R * R - h * h), tint, 0.55f * glow, 6, elapsed_ * 0.2f);
+        }
+        fx_light(b.position + Vec3{0.0f, 2.0f, 0.0f}, tint, 2.2f * glow, R * 2.2f);
     }
 }
 
@@ -232,12 +343,19 @@ void ClientApp::draw_particles() {
     for (const Particle& p : particles_) {
         const f32 t = glm::clamp(p.life / p.max_life, 0.0f, 1.0f);
         const f32 sz = p.size * (0.35f + 0.65f * t);
-        const Mat4 m = glm::translate(Mat4{1.0f}, p.pos) * glm::scale(Mat4{1.0f}, Vec3{sz});
-        const Vec4 col{Vec3{p.color}, p.color.a * t};
+        // Embers cool from their hot colour toward `tail` as they age.
+        const Vec3 rgb = p.tail.x >= 0.0f ? glm::mix(p.tail, Vec3{p.color}, t) : Vec3{p.color};
+        const Vec4 col{rgb, p.color.a * t};
         if (p.style == 1) {
-            renderer_->draw_glow(shape_sphere_, m, col);
+            // A soft glow sprite (wider than the old sphere - the halo falls off to its rim) that
+            // smears into a short streak along its velocity when it's moving fast (sparks).
+            const f32 speed = glm::length(p.vel);
+            const Vec3 tail = speed > 2.5f ? p.vel * std::min(0.04f, 1.0f / speed) : Vec3{0.0f};
+            renderer_->draw_sprite(p.pos, p.pos - tail, sz * 1.25f, col, 0.55f);
         } else {
-            renderer_->draw_emissive(shape_sphere_, m, col);
+            renderer_->draw_emissive(shape_sphere_,
+                                     glm::translate(Mat4{1.0f}, p.pos) * glm::scale(Mat4{1.0f}, Vec3{sz}),
+                                     col);
         }
     }
 }
@@ -635,9 +753,11 @@ void ClientApp::draw_surf() {
     }
 }
 
-void ClientApp::spawn_ability_vfx(PlayerRole role, u8 slot, const Vec3& feet, f32 yaw, const Vec3& aim) {
+void ClientApp::spawn_ability_vfx(PlayerRole role, u8 slot, const Vec3& feet, f32 yaw, const Vec3& aim,
+                                  u8 rank) {
     const Vec3 chest = feet + Vec3{0.0f, 1.0f, 0.0f};
     const Vec3 facing{std::cos(yaw), 0.0f, std::sin(yaw)};
+    const Vec3 staff = feet + Vec3{0.0f, 1.45f, 0.0f} + facing * 0.45f; // a raised staff-head / hand
     Vec3 to_aim = aim - chest;
     to_aim.y = 0.0f;
     const Vec3 fwd = glm::length(to_aim) > 0.3f ? glm::normalize(to_aim) : facing;
@@ -657,101 +777,225 @@ void ClientApp::spawn_ability_vfx(PlayerRole role, u8 slot, const Vec3& feet, f3
             emit(p, Vec3{-std::sin(a), 0.15f, std::cos(a)} * tang, col, 0.5f, 0.14f, 1);
         }
     };
+    // Every other player within `r` of the caster (the allies a group ability links to).
+    auto for_allies = [&](f32 r, auto&& fn) {
+        if (!have_snapshot_) {
+            return;
+        }
+        for (const net::PlayerState& p : snapshot_.players) {
+            const f32 d = glm::length(p.position - feet);
+            if (d > 0.5f && d <= r) {
+                fn(p);
+            }
+        }
+    };
+    // The most wounded player within `radius` of `from` below `below` % health, skipping `skip` -
+    // who a Cleric's mend lands on (the server picks the same way, the caster included).
+    auto most_hurt = [&](const Vec3& from, f32 radius, const std::vector<u32>& skip,
+                         int below) -> const net::PlayerState* {
+        const net::PlayerState* best = nullptr;
+        int worst = below;
+        if (have_snapshot_) {
+            for (const net::PlayerState& p : snapshot_.players) {
+                if (glm::length(p.position - from) > radius ||
+                    std::find(skip.begin(), skip.end(), p.id) != skip.end()) {
+                    continue;
+                }
+                if (static_cast<int>(p.health) < worst) {
+                    worst = static_cast<int>(p.health);
+                    best = &p;
+                }
+            }
+        }
+        return best;
+    };
     switch (role) {
         case PlayerRole::Knight:
             if (slot == 0) { // Shield Bash: a steel shockwave punched forward + a ground impact ring
                 const Vec3 c = chest + fwd * 1.2f;
                 emit(c, Vec3{0.0f}, Vec4{0.95f, 0.98f, 1.0f, 1.0f}, 0.2f, 0.85f, 1);
-                emit_ring(c - Vec3{0.0f, 0.9f, 0.0f}, Vec4{0.8f, 0.88f, 1.0f, 0.9f}, 20, 5.0f, 0.4f, 0.15f);
-                for (int i = 0; i < 32; ++i) {
+                emit_ring(c - Vec3{0.0f, 0.9f, 0.0f}, Vec4{0.8f, 0.88f, 1.0f, 0.9f}, 26, 5.0f, 0.4f, 0.15f);
+                for (int i = 0; i < 44; ++i) {
                     const f32 a = yaw + frand(-0.7f, 0.7f);
                     const Vec3 d{std::cos(a), frand(0.0f, 0.6f), std::sin(a)};
                     emit(c, d * frand(7.0f, 14.0f), Vec4{0.82f, 0.9f, 1.0f, 0.95f}, 0.42f, 0.17f, 1, 6.0f);
                 }
-            } else if (slot == 1 || slot == 5) { // Bulwark / Rally: a golden dome + a rising light column
-                emit_ring(feet, Vec4{1.0f, 0.85f, 0.4f, 0.95f}, 26, 3.2f, 0.6f, 0.17f);
-                pillar(Vec4{1.0f, 0.82f, 0.32f, 0.9f}, 20, 0.7f, 4.5f);
+                flash_light(c, Vec3{0.8f, 0.88f, 1.0f}, 3.5f, 8.0f, 0.25f);
+            } else if (slot == 1 || slot == 5) { // Bulwark / Rally: a golden sigil + a rising light column
+                glyph(feet, 1.6f, Vec4{1.0f, 0.82f, 0.36f, 1.0f}, 1.0f, 6);
+                emit_ring(feet, Vec4{1.0f, 0.85f, 0.4f, 0.95f}, 30, 3.2f, 0.6f, 0.17f);
+                pillar(Vec4{1.0f, 0.82f, 0.32f, 0.9f}, 26, 0.7f, 4.5f);
                 emit(chest, Vec3{0.0f}, Vec4{1.0f, 0.9f, 0.5f, 1.0f}, 0.22f, 0.7f, 1);
-            } else if (slot == 2) { // Consecration: a holy-fire ring + flame columns erupt from the ground
-                emit_ring(feet, Vec4{1.0f, 0.72f, 0.28f, 0.95f}, 34, kConsecrationRadius * 1.6f, 0.6f, 0.2f);
-                for (int k = 0; k < 8; ++k) {
-                    const f32 a = TwoPi * static_cast<f32>(k) / 8.0f;
-                    const Vec3 base = feet + Vec3{std::cos(a), 0.0f, std::sin(a)} * (kConsecrationRadius * 0.8f);
-                    emit(base, Vec3{0.0f, frand(3.0f, 5.0f), 0.0f}, Vec4{1.0f, 0.55f, 0.18f, 0.95f}, 0.6f, 0.2f, 1, -1.5f);
+                if (slot == 5) { // Rally: golden mending links to every ally in reach
+                    for_allies(kHealRadius, [&](const net::PlayerState& p) {
+                        beam(chest + Vec3{0.0f, 0.4f, 0.0f}, p.position + Vec3{0.0f, 1.0f, 0.0f},
+                             Vec4{1.0f, 0.85f, 0.4f, 0.9f}, 0.06f, 0.5f, 0, 40.0f);
+                    });
                 }
-                pillar(Vec4{1.0f, 0.6f, 0.2f, 0.9f}, 16, kConsecrationRadius * 0.7f, 3.0f);
-            } else if (slot == 4) { // Whirlwind: two counter-swirling steel rings sweep around the knight
-                swirl(Vec4{0.88f, 0.92f, 1.0f, 0.95f}, 18, kWhirlwindRadius * 1.1f, 0.7f, 7.0f);
-                swirl(Vec4{0.8f, 0.86f, 1.0f, 0.9f}, 14, kWhirlwindRadius * 0.7f, 1.2f, -6.0f);
+                flash_light(chest, Vec3{1.0f, 0.82f, 0.4f}, 3.5f, 8.0f, 0.5f);
+            } else if (slot == 2) { // Consecration: a holy-fire sigil + flame columns erupt from the ground
+                glyph(feet, kConsecrationRadius, Vec4{1.0f, 0.65f, 0.25f, 1.0f}, 1.0f, 6);
+                emit_ring(feet, Vec4{1.0f, 0.72f, 0.28f, 0.95f}, 34, kConsecrationRadius * 1.6f, 0.6f, 0.2f);
+                for (int k = 0; k < 10; ++k) {
+                    const f32 a = TwoPi * static_cast<f32>(k) / 10.0f;
+                    const Vec3 base = feet + Vec3{std::cos(a), 0.0f, std::sin(a)} * (kConsecrationRadius * 0.8f);
+                    for (int j = 0; j < 3; ++j) {
+                        emit_ember(base + Vec3{0.0f, 0.15f, 0.0f},
+                                   Vec3{frand(-0.3f, 0.3f), frand(3.0f, 5.5f), frand(-0.3f, 0.3f)},
+                                   Vec3{1.0f, 0.88f, 0.5f}, Vec3{0.9f, 0.3f, 0.08f}, frand(0.5f, 0.7f), 0.22f,
+                                   -1.5f);
+                    }
+                }
+                pillar(Vec4{1.0f, 0.6f, 0.2f, 0.9f}, 20, kConsecrationRadius * 0.7f, 3.0f);
+                flash_light(feet + Vec3{0.0f, 1.5f, 0.0f}, Vec3{1.0f, 0.6f, 0.22f}, 5.0f, 12.0f, 0.7f);
+            } else if (slot == 4) { // Whirlwind: three counter-swirling steel rings sweep round the knight
+                swirl(Vec4{0.88f, 0.92f, 1.0f, 0.95f}, 22, kWhirlwindRadius * 1.1f, 0.7f, 7.0f);
+                swirl(Vec4{0.8f, 0.86f, 1.0f, 0.9f}, 18, kWhirlwindRadius * 0.7f, 1.2f, -6.0f);
+                swirl(Vec4{0.95f, 0.97f, 1.0f, 0.8f}, 16, kWhirlwindRadius * 0.9f, 1.0f, 9.0f);
                 emit(chest, Vec3{0.0f}, Vec4{0.9f, 0.95f, 1.0f, 1.0f}, 0.16f, 0.5f, 1);
+                flash_light(chest, Vec3{0.85f, 0.9f, 1.0f}, 2.5f, 7.0f, 0.3f);
             } else if (slot == 3) { // Taunt: a red warcry shockwave + upward embers + a ground glyph
+                glyph(feet, 2.0f, Vec4{1.0f, 0.3f, 0.22f, 1.0f}, 0.8f, 5);
                 emit(chest, Vec3{0.0f}, Vec4{1.0f, 0.35f, 0.25f, 1.0f}, 0.2f, 0.8f, 1);
-                emit_ring(feet, Vec4{1.0f, 0.3f, 0.25f, 0.95f}, 28, 8.0f, 0.55f, 0.19f);
-                pillar(Vec4{1.0f, 0.4f, 0.28f, 0.9f}, 16, 0.8f, 3.5f);
+                emit_ring(feet, Vec4{1.0f, 0.3f, 0.25f, 0.95f}, 32, 8.0f, 0.55f, 0.19f);
+                emit_ring(feet, Vec4{1.0f, 0.5f, 0.3f, 0.8f}, 22, 4.5f, 0.7f, 0.16f);
+                pillar(Vec4{1.0f, 0.4f, 0.28f, 0.9f}, 20, 0.8f, 3.5f);
+                flash_light(chest, Vec3{1.0f, 0.3f, 0.22f}, 3.5f, 9.0f, 0.45f);
             } else { // Guardian Leap: a golden launch burst + a shield flare
-                emit_ring(feet, Vec4{1.0f, 0.86f, 0.42f, 0.95f}, 24, 4.0f, 0.5f, 0.16f);
-                emit_burst(chest, Vec4{1.0f, 0.9f, 0.5f, 0.95f}, 22, 6.0f, 0.5f, 0.15f, 1, 4.0f);
+                emit_ring(feet, Vec4{1.0f, 0.86f, 0.42f, 0.95f}, 28, 4.0f, 0.5f, 0.16f);
+                emit_burst(chest, Vec4{1.0f, 0.9f, 0.5f, 0.95f}, 28, 6.0f, 0.5f, 0.15f, 1, 4.0f);
+                flash_light(chest, Vec3{1.0f, 0.85f, 0.45f}, 3.5f, 8.0f, 0.4f);
             }
             break;
         case PlayerRole::Hunter:
             if (slot == 2) { // Dash: a green speed-burst behind + a forward launch streak
-                emit_burst(feet + Vec3{0.0f, 0.4f, 0.0f}, Vec4{0.6f, 1.0f, 0.6f, 0.9f}, 22, -4.5f, 0.5f, 0.13f, 1);
-                for (int i = 0; i < 16; ++i) {
+                emit_burst(feet + Vec3{0.0f, 0.4f, 0.0f}, Vec4{0.6f, 1.0f, 0.6f, 0.9f}, 26, -4.5f, 0.5f, 0.13f, 1);
+                for (int i = 0; i < 20; ++i) {
                     emit(chest - facing * frand(0.0f, 1.0f), -facing * frand(2.0f, 6.0f),
                          Vec4{0.7f, 1.0f, 0.7f, 0.8f}, 0.4f, 0.12f, 1);
                 }
+                flash_light(chest, Vec3{0.6f, 1.0f, 0.6f}, 1.8f, 6.0f, 0.3f);
             } else if (slot == 5) { // Caltrops: a scatter ring + little spikes flung up at the aim
-                emit_ring(aim, Vec4{0.9f, 0.82f, 0.3f, 0.9f}, 24, kHazardRadius * 1.3f, 0.5f, 0.13f);
-                for (int i = 0; i < 16; ++i) {
+                emit_ring(aim, Vec4{0.9f, 0.82f, 0.3f, 0.9f}, 28, kHazardRadius * 1.3f, 0.5f, 0.13f);
+                for (int i = 0; i < 20; ++i) {
                     emit(aim + Vec3{frand(-0.6f, 0.6f), 0.1f, frand(-0.6f, 0.6f)},
                          Vec3{frand(-1.0f, 1.0f), frand(2.0f, 4.0f), frand(-1.0f, 1.0f)},
                          Vec4{0.9f, 0.85f, 0.35f, 0.9f}, 0.5f, 0.1f, 1, 8.0f);
                 }
+                flash_light(aim + Vec3{0.0f, 0.6f, 0.0f}, Vec3{0.9f, 0.8f, 0.35f}, 1.8f, 6.0f, 0.3f);
+            } else if (slot == 6) { // War Horn: rolling waves of sound in green-gold + a rallying light
+                for (int k = 0; k < 3; ++k) {
+                    emit_ring(feet + Vec3{0.0f, 0.3f * static_cast<f32>(k), 0.0f},
+                              Vec4{0.7f, 1.0f, 0.5f, 0.85f - 0.2f * static_cast<f32>(k)}, 36,
+                              kHasteRadius * (0.6f + 0.3f * static_cast<f32>(k)), 0.7f, 0.16f);
+                }
+                emit_burst(chest, Vec4{0.85f, 1.0f, 0.55f, 0.9f}, 20, 3.5f, 0.6f, 0.13f, 1, 2.0f);
+                glyph(feet, 1.8f, Vec4{0.6f, 1.0f, 0.5f, 0.9f}, 0.9f, 5);
+                flash_light(chest, Vec3{0.6f, 1.0f, 0.5f}, 3.0f, 10.0f, 0.6f);
             } else { // Power / Volley / Multishot / Piercing: a bright muzzle flash + spray along the shot
                 const Vec3 c = chest + fwd * 0.8f;
                 emit(c, Vec3{0.0f}, Vec4{0.85f, 1.0f, 0.7f, 1.0f}, 0.15f, 0.5f, 1);
                 const bool wide = slot == 1 || slot == 4; // Volley / Multishot fan wider
                 const f32 spread = wide ? 0.45f : (slot == 3 ? 0.06f : 0.15f); // Piercing = tight line
-                for (int i = 0; i < (wide ? 26 : 14); ++i) {
+                for (int i = 0; i < (wide ? 32 : 18); ++i) {
                     const f32 a = std::atan2(fwd.z, fwd.x) + frand(-spread, spread);
                     emit(c, Vec3{std::cos(a), frand(-0.1f, 0.2f), std::sin(a)} * frand(6.0f, 13.0f),
                          Vec4{0.72f, 1.0f, 0.6f, 0.9f}, 0.35f, 0.12f, 1);
                 }
+                if (!wide) { // the heavy single shots tear a short glowing wake through the air
+                    beam(c, c + fwd * 5.0f, Vec4{0.75f, 1.0f, 0.6f, 0.9f}, 0.05f, 0.2f, 0, 70.0f);
+                }
+                flash_light(c, Vec3{0.7f, 1.0f, 0.6f}, 2.0f, 6.0f, 0.2f);
             }
             break;
         case PlayerRole::Cleric:
-            if (slot == 1) { // Sanctuary: a wide radiant ring + a tall column of light
-                emit_ring(feet, Vec4{0.6f, 1.0f, 0.8f, 0.95f}, 34, 6.0f, 0.8f, 0.2f);
-                pillar(Vec4{0.72f, 1.0f, 0.86f, 0.9f}, 30, 1.4f, 4.5f);
-            } else if (slot == 2 || slot == 5) { // Smite / Judgement: a holy flash + a beam down at the aim
-                const Vec3 c = chest + fwd * 0.8f;
-                emit(c, Vec3{0.0f}, Vec4{0.9f, 1.0f, 0.92f, 1.0f}, 0.22f, 0.7f, 1);
-                for (int i = 0; i < 16; ++i) { // a descending pillar of light onto the aim point
-                    emit(aim + Vec3{frand(-0.3f, 0.3f), frand(2.0f, 4.5f), frand(-0.3f, 0.3f)},
-                         Vec3{0.0f, -frand(5.0f, 9.0f), 0.0f}, Vec4{0.85f, 1.0f, 0.9f, 0.95f}, 0.4f, 0.13f, 1);
-                }
-                emit_ring(aim, Vec4{0.8f, 1.0f, 0.88f, 0.9f}, 14, 3.0f, 0.35f, 0.13f);
-            } else if (slot == 3) { // Aegis: a cyan ward flare (the max-rank dome burst is played by cast_ability)
-                emit(chest, Vec3{0.0f}, Vec4{0.55f, 0.85f, 1.0f, 1.0f}, 0.22f, 0.6f, 1);
-                emit_ring(feet, Vec4{0.5f, 0.8f, 1.0f, 0.9f}, 22, 3.2f, 0.5f, 0.15f);
-                emit_burst(chest, Vec4{0.6f, 0.9f, 1.0f, 0.9f}, 16, 2.8f, 0.6f, 0.13f, 1, 1.6f);
-            } else if (slot == 4) { // Renew: a lingering heal aura laid at the feet (green ground ring)
-                emit_ring(feet, Vec4{0.5f, 1.0f, 0.65f, 0.9f}, 26, kHealAuraRadius * 1.2f, 0.7f, 0.16f);
-                pillar(Vec4{0.6f, 1.0f, 0.72f, 0.85f}, 18, kHealAuraRadius * 0.7f, 2.6f);
-            } else if (slot == 6) { // Empower: a fiery co-op blessing burst
-                emit_ring(feet, Vec4{1.0f, 0.55f, 0.22f, 0.9f}, 22, 3.0f, 0.6f, 0.15f);
-                emit_burst(chest, Vec4{1.0f, 0.65f, 0.3f, 0.9f}, 18, 3.0f, 0.6f, 0.14f, 1, 2.0f);
-            } else { // Heal: gentle motes rising around the caster
-                for (int i = 0; i < 22; ++i) {
-                    emit(feet + Vec3{frand(-0.5f, 0.5f), frand(0.1f, 0.4f), frand(-0.5f, 0.5f)},
+            if (slot == 0) {
+                // HEAL: a shaft of light from the sky onto whoever it mends, plus a ray from the staff
+                // when that's an ally; at max rank the mend CHAINS on - crackling arcs hop to the next
+                // wounded allies in reach.
+                const net::PlayerState* tgt = most_hurt(feet, kHealRadius, {}, 101);
+                const Vec3 at = tgt != nullptr ? tgt->position : feet;
+                beam(at + Vec3{0.0f, 9.0f, 0.0f}, at, Vec4{0.6f, 1.0f, 0.75f, 0.85f}, 0.18f, 0.6f, 2);
+                for (int i = 0; i < 26; ++i) {
+                    emit(at + Vec3{frand(-0.5f, 0.5f), frand(0.1f, 0.4f), frand(-0.5f, 0.5f)},
                          Vec3{frand(-0.3f, 0.3f), frand(1.8f, 3.4f), frand(-0.3f, 0.3f)},
                          Vec4{0.55f, 1.0f, 0.7f, 0.9f}, 0.8f, 0.12f, 1, -1.2f);
                 }
-                emit_ring(feet, Vec4{0.55f, 1.0f, 0.7f, 0.8f}, 16, 2.0f, 0.5f, 0.13f);
+                emit_ring(at, Vec4{0.55f, 1.0f, 0.7f, 0.8f}, 20, 2.0f, 0.5f, 0.13f);
+                if (tgt != nullptr && glm::length(tgt->position - feet) > 0.5f) {
+                    beam(staff, at + Vec3{0.0f, 1.0f, 0.0f}, Vec4{0.6f, 1.0f, 0.7f, 1.0f}, 0.07f, 0.5f, 0, 45.0f);
+                }
+                if (rank >= kMaxAbilityRank && tgt != nullptr) {
+                    std::vector<u32> healed{tgt->id};
+                    const net::PlayerState* from = tgt;
+                    for (int hop = 0; hop < kChainHealBounces; ++hop) {
+                        const net::PlayerState* next = most_hurt(from->position, kChainHealRadius, healed, 100);
+                        if (next == nullptr) {
+                            break; // no wounded ally left in reach - the chain fizzles
+                        }
+                        beam(from->position + Vec3{0.0f, 1.0f, 0.0f}, next->position + Vec3{0.0f, 1.0f, 0.0f},
+                             Vec4{0.7f, 1.0f, 0.6f, 0.9f}, 0.06f, 0.6f, 1);
+                        emit_burst(next->position + Vec3{0.0f, 0.9f, 0.0f}, Vec4{0.6f, 1.0f, 0.7f, 0.9f}, 12,
+                                   2.5f, 0.6f, 0.12f, 1, 1.5f);
+                        healed.push_back(next->id);
+                        from = next;
+                    }
+                }
+                flash_light(at + Vec3{0.0f, 1.0f, 0.0f}, Vec3{0.55f, 1.0f, 0.7f}, 3.0f, 8.0f, 0.6f);
+            } else if (slot == 1) { // Sanctuary: a wide sigil, a radiant ring, a great column + links
+                glyph(feet, 2.6f, Vec4{0.6f, 1.0f, 0.8f, 1.0f}, 1.2f, 6);
+                emit_ring(feet, Vec4{0.6f, 1.0f, 0.8f, 0.95f}, 48, 8.0f, 0.8f, 0.2f);
+                pillar(Vec4{0.72f, 1.0f, 0.86f, 0.9f}, 36, 1.4f, 4.5f);
+                beam(feet + Vec3{0.0f, 12.0f, 0.0f}, feet, Vec4{0.7f, 1.0f, 0.85f, 0.8f}, 0.45f, 0.9f, 2);
+                for_allies(kHealRadius, [&](const net::PlayerState& p) {
+                    beam(staff, p.position + Vec3{0.0f, 1.0f, 0.0f}, Vec4{0.65f, 1.0f, 0.8f, 0.9f}, 0.06f, 0.6f,
+                         0, 45.0f);
+                    emit_burst(p.position + Vec3{0.0f, 0.9f, 0.0f}, Vec4{0.65f, 1.0f, 0.8f, 0.9f}, 14, 2.5f, 0.6f,
+                               0.12f, 1, 1.5f);
+                });
+                flash_light(feet + Vec3{0.0f, 2.0f, 0.0f}, Vec3{0.6f, 1.0f, 0.8f}, 5.0f, 14.0f, 1.0f);
+            } else if (slot == 2 || slot == 5) { // Smite / Judgement: a pillar of holy light strikes the aim
+                const bool judge = slot == 5;
+                emit(staff, Vec3{0.0f}, Vec4{0.9f, 1.0f, 0.92f, 1.0f}, 0.22f, 0.7f, 1);
+                beam(aim + Vec3{0.0f, 14.0f, 0.0f}, aim, Vec4{0.85f, 1.0f, 0.9f, 1.0f}, judge ? 0.3f : 0.2f, 0.5f, 2);
+                glyph(aim, judge ? 1.8f : 1.3f, Vec4{0.85f, 1.0f, 0.88f, 0.9f}, 0.6f, judge ? 8 : 6);
+                for (int i = 0; i < 20; ++i) { // motes raining down the pillar onto the aim point
+                    emit(aim + Vec3{frand(-0.3f, 0.3f), frand(2.0f, 4.5f), frand(-0.3f, 0.3f)},
+                         Vec3{0.0f, -frand(5.0f, 9.0f), 0.0f}, Vec4{0.85f, 1.0f, 0.9f, 0.95f}, 0.4f, 0.13f, 1);
+                }
+                emit_ring(aim, Vec4{0.8f, 1.0f, 0.88f, 0.9f}, 18, 3.0f, 0.35f, 0.13f);
+                flash_light(aim + Vec3{0.0f, 1.0f, 0.0f}, Vec3{0.75f, 1.0f, 0.85f}, judge ? 5.0f : 3.5f, 10.0f,
+                            0.5f);
+            } else if (slot == 3) { // Aegis: a cyan ward flare (the bubble itself pops in update_shields)
+                emit(staff, Vec3{0.0f}, Vec4{0.55f, 0.85f, 1.0f, 1.0f}, 0.22f, 0.6f, 1);
+                glyph(feet, 1.5f, Vec4{0.55f, 0.85f, 1.0f, 1.0f}, 0.8f, 6);
+                emit_burst(chest, Vec4{0.6f, 0.9f, 1.0f, 0.9f}, 20, 2.8f, 0.6f, 0.13f, 1, 1.6f);
+                flash_light(chest, Vec3{0.5f, 0.8f, 1.0f}, 3.0f, 8.0f, 0.4f);
+            } else if (slot == 4) { // Renew: a lingering heal aura laid at the feet (it draws its own sigil)
+                emit_ring(feet, Vec4{0.5f, 1.0f, 0.65f, 0.9f}, 30, kHealAuraRadius * 1.2f, 0.7f, 0.16f);
+                pillar(Vec4{0.6f, 1.0f, 0.72f, 0.85f}, 24, kHealAuraRadius * 0.7f, 2.6f);
+                flash_light(feet + Vec3{0.0f, 1.0f, 0.0f}, Vec3{0.5f, 1.0f, 0.65f}, 3.0f, 10.0f, 0.6f);
+            } else { // Empower: a crackling fiery link to the ally it blesses (or a blaze on yourself)
+                const net::PlayerState* ally = nullptr;
+                f32 best = kEmpowerRange;
+                for_allies(kEmpowerRange, [&](const net::PlayerState& p) {
+                    const f32 d = glm::length(p.position - feet);
+                    if (d < best) {
+                        best = d;
+                        ally = &p;
+                    }
+                });
+                const Vec3 at = ally != nullptr ? ally->position : feet;
+                if (ally != nullptr) {
+                    beam(staff, at + Vec3{0.0f, 1.0f, 0.0f}, Vec4{1.0f, 0.6f, 0.22f, 1.0f}, 0.08f, 0.6f, 1);
+                }
+                emit_ring(at, Vec4{1.0f, 0.55f, 0.22f, 0.9f}, 26, 3.0f, 0.6f, 0.15f);
+                emit_burst(at + Vec3{0.0f, 1.0f, 0.0f}, Vec4{1.0f, 0.65f, 0.3f, 0.9f}, 24, 3.0f, 0.6f, 0.14f, 1, 2.0f);
+                flash_light(at + Vec3{0.0f, 1.0f, 0.0f}, Vec3{1.0f, 0.6f, 0.22f}, 3.5f, 8.0f, 0.5f);
             }
             break;
         case PlayerRole::Mage:
-            break; // Mage spells have their own VFX (spawn_spell_vfx); the hotbar only queues elements
+            break; // Mage spells play spawn_spell_vfx (the hotbar only queues elements)
     }
 }
 
@@ -760,15 +1004,16 @@ void ClientApp::update_ability_vfx(Timestep dt) {
     if (bulwark_fx_ > 0.0f) { // a golden shield dome orbiting the local Knight
         bulwark_fx_ -= dt.seconds;
         const f32 a = elapsed_ * 5.0f;
-        for (int i = 0; i < 3; ++i) {
-            const f32 ang = a + TwoPi * static_cast<f32>(i) / 3.0f;
+        for (int i = 0; i < 4; ++i) {
+            const f32 ang = a + TwoPi * static_cast<f32>(i) / 4.0f;
             emit(feet + Vec3{std::cos(ang) * 0.9f, 0.9f + 0.4f * std::sin(a * 0.7f), std::sin(ang) * 0.9f},
-                 Vec3{0.0f}, Vec4{1.0f, 0.82f, 0.35f, 0.7f}, 0.25f, 0.13f, 1);
+                 Vec3{0.0f}, Vec4{1.0f, 0.82f, 0.35f, 0.7f}, 0.3f, 0.13f, 1);
         }
+        fx_light(feet + Vec3{0.0f, 1.0f, 0.0f}, Vec3{1.0f, 0.82f, 0.4f}, 1.2f, 5.0f);
     }
     if (dash_fx_ > 0.0f) { // a green speed-trail behind the local Hunter
         dash_fx_ -= dt.seconds;
-        emit(feet + Vec3{0.0f, 0.5f, 0.0f}, Vec3{0.0f}, Vec4{0.6f, 1.0f, 0.6f, 0.6f}, 0.3f, 0.12f, 1);
+        emit(feet + Vec3{0.0f, 0.5f, 0.0f}, Vec3{0.0f}, Vec4{0.6f, 1.0f, 0.6f, 0.6f}, 0.35f, 0.12f, 1);
     }
     // Cleric heal channel (right mouse held): mirror the server's charge for a charge bar +
     // gathering VFX; a burst of green motes converges on the staff, and on a full charge it
@@ -776,13 +1021,16 @@ void ClientApp::update_ability_vfx(Timestep dt) {
     if (role_ == PlayerRole::Cleric && blocking_) {
         heal_charge_fx_ += dt.seconds;
         const Vec3 head = feet + Vec3{0.0f, 1.5f, 0.0f};
-        for (int i = 0; i < 3; ++i) {
+        const f32 charge = glm::clamp(heal_charge_fx_ / kHealChargeTime, 0.0f, 1.0f);
+        for (int i = 0; i < 4; ++i) {
             const Vec3 from = head + rand_dir() * frand(1.0f, 2.2f);
             emit(from, (head - from) * frand(2.0f, 4.0f), Vec4{0.5f, 1.0f, 0.7f, 0.9f}, 0.4f, 0.1f, 1);
         }
+        fx_light(head, Vec3{0.5f, 1.0f, 0.7f}, 0.5f + 2.0f * charge, 4.0f + 3.0f * charge);
         if (heal_charge_fx_ >= kHealChargeTime) {
-            emit_ring(feet, Vec4{0.5f, 1.0f, 0.7f, 0.95f}, 28, 5.0f, 0.7f, 0.18f);
-            emit_burst(feet + Vec3{0.0f, 0.3f, 0.0f}, Vec4{0.6f, 1.0f, 0.8f, 0.9f}, 20, 3.0f, 0.8f, 0.14f, 1, 2.0f);
+            emit_ring(feet, Vec4{0.5f, 1.0f, 0.7f, 0.95f}, 32, 5.0f, 0.7f, 0.18f);
+            emit_burst(feet + Vec3{0.0f, 0.3f, 0.0f}, Vec4{0.6f, 1.0f, 0.8f, 0.9f}, 24, 3.0f, 0.8f, 0.14f, 1, 2.0f);
+            flash_light(head, Vec3{0.5f, 1.0f, 0.7f}, 4.0f, 10.0f, 0.6f);
             heal_charge_fx_ = 0.0f;
         }
     } else {
@@ -799,9 +1047,17 @@ void ClientApp::update_ability_vfx(Timestep dt) {
             continue; // already played for this snapshot
         }
         ability_fx_tick_[p.id] = snapshot_.tick;
+        // Where they aimed rides along with the cast (fall back to just ahead of them).
         const Vec3 facing{std::cos(p.yaw), 0.0f, std::sin(p.yaw)};
-        spawn_ability_vfx(static_cast<PlayerRole>(p.role % kRoleCount),
-                          static_cast<u8>(p.cast - 1), p.position, p.yaw, p.position + facing);
+        const Vec3 aim = glm::length(p.cast_aim) > 0.01f ? p.cast_aim : p.position + facing * 6.0f;
+        const auto role = static_cast<PlayerRole>(p.role % kRoleCount);
+        if (role == PlayerRole::Mage) {
+            spawn_spell_vfx(static_cast<SpellId>(p.cast), p.position, p.yaw, aim); // a Mage casts a SpellId
+        } else {
+            const u8 slot = static_cast<u8>(p.cast - 1);
+            spawn_ability_vfx(role, slot, p.position, p.yaw, aim,
+                              static_cast<u8>((p.ability_ranks >> (2 * slot)) & 0x3u));
+        }
     }
 }
 
@@ -831,20 +1087,34 @@ void ClientApp::draw_buffs() {
         }
         const Vec3 feet = (p.seated != 0 && aw != nullptr) ? attach_to_wagon(*aw, p.position)
                                                            : p.position;
-        if ((p.buffs & 1u) != 0u) { // empowered: a fiery ring + rising embers
+        if ((p.buffs & 1u) != 0u) { // empowered: a fiery ring + rising embers + a warm glow
             renderer_->draw_glow(shape_cylinder_,
                                  glm::translate(Mat4{1.0f}, feet + Vec3{0.0f, 0.06f, 0.0f}) *
                                      glm::scale(Mat4{1.0f}, Vec3{1.15f, 0.05f, 1.15f}),
                                  Vec4{1.0f, 0.45f, 0.15f, 0.5f * pulse});
+            sprite_circle(feet + Vec3{0.0f, 0.12f, 0.0f}, Vec3{1.0f, 0.0f, 0.0f}, Vec3{0.0f, 0.0f, 1.0f}, 0.65f,
+                          20, 0.05f, Vec4{1.0f, 0.55f, 0.2f, 0.6f * pulse}, 0.7f);
+            const f32 a = frand(0.0f, TwoPi);
+            emit_ember(feet + Vec3{std::cos(a) * 0.6f, 0.15f, std::sin(a) * 0.6f},
+                       Vec3{0.0f, frand(1.5f, 2.8f), 0.0f}, Vec3{1.0f, 0.8f, 0.4f}, Vec3{0.85f, 0.2f, 0.05f},
+                       0.5f, 0.1f, -0.8f);
+            fx_light(feet + Vec3{0.0f, 0.8f, 0.0f}, Vec3{1.0f, 0.5f, 0.18f}, 0.9f * pulse, 4.0f);
         }
-        if ((p.buffs & 2u) != 0u) { // hasted: a green ring
+        if ((p.buffs & 2u) != 0u) { // hasted: a green ring + wind streaks whipping round the legs
             renderer_->draw_glow(shape_cylinder_,
                                  glm::translate(Mat4{1.0f}, feet + Vec3{0.0f, 0.13f, 0.0f}) *
                                      glm::scale(Mat4{1.0f}, Vec3{0.92f, 0.05f, 0.92f}),
                                  Vec4{0.4f, 1.0f, 0.45f, 0.5f * pulse});
+            for (int k = 0; k < 2; ++k) {
+                const f32 a0 = elapsed_ * 7.0f + Pi * static_cast<f32>(k);
+                const f32 y = 0.35f + 0.25f * static_cast<f32>(k);
+                const Vec3 p0 = feet + Vec3{std::cos(a0) * 0.55f, y, std::sin(a0) * 0.55f};
+                const Vec3 p1 = feet + Vec3{std::cos(a0 + 0.9f) * 0.55f, y, std::sin(a0 + 0.9f) * 0.55f};
+                renderer_->draw_sprite(p0, p1, 0.05f, Vec4{0.6f, 1.0f, 0.6f, 0.55f}, 0.4f);
+            }
         }
     }
-    // Power Conduit: a glowing beam from a channelling Cleric to the ally it heals + empowers.
+    // Power Conduit: an arcane ray from a channelling Cleric to the ally it heals + empowers.
     for (const net::PlayerState& p : snapshot_.players) {
         if (p.link == 0) {
             continue;
@@ -863,11 +1133,8 @@ void ClientApp::draw_buffs() {
         const Vec3 b = target->position + Vec3{0.0f, 1.0f, 0.0f}; // the ally's chest
         const f32 len = glm::length(b - a);
         if (len > 0.1f) {
-            renderer_->draw_glow(shape_box_,
-                                 glm::translate(Mat4{1.0f}, (a + b) * 0.5f) * orient_to(b - a) *
-                                     glm::scale(Mat4{1.0f}, Vec3{0.1f, 0.1f, len}),
-                                 Vec4{0.5f, 1.0f, 0.72f, 0.5f * pulse});
-            for (int i = 0; i < 2; ++i) { // motes flowing along the beam toward the ally
+            draw_ray(a, b, Vec3{0.5f, 1.0f, 0.72f}, 0.07f, 0.75f + 0.25f * pulse, static_cast<f32>(p.id));
+            for (int i = 0; i < 3; ++i) { // motes flowing along the beam toward the ally
                 emit(glm::mix(a, b, frand()), (b - a) * 0.35f, Vec4{0.62f, 1.0f, 0.78f, 0.9f}, 0.3f,
                      0.1f, 1);
             }

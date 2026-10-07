@@ -29,6 +29,9 @@ struct PipelineConfig {
     // Per-INSTANCE vertex input of two vec4s (rect px + colour) instead of alryn::Vertex:
     // the instanced flat-tile UI path (world-map raster), one quad per instance.
     bool instance_tiles = false;
+    // Generic per-INSTANCE vertex input of N vec4s (locations 0..N-1, N <= 4) instead of
+    // alryn::Vertex: the instanced additive VFX sprite path, one quad per instance.
+    u32 instance_vec4s = 0;
     bool depth_only = false;  // no fragment shader / colour attachment (shadow pass)
     bool depth_bias = false;  // slope-scaled depth bias (shadow pass, fights acne)
     f32 depth_bias_constant = 1.25f;

@@ -379,7 +379,8 @@ private:
     void draw_combat_text(ui::DrawList& draw, f32 W, f32 H);
 
     // ---- Particle VFX ------------------------------------------------------------
-    void emit(const Vec3& pos, const Vec3& vel, const Vec4& color, f32 life, f32 size,
+    // Spawns one particle; false if the pool is full (it was dropped).
+    bool emit(const Vec3& pos, const Vec3& vel, const Vec4& color, f32 life, f32 size,
               u8 style = 0, f32 gravity = 0.0f, f32 drag = 1.6f);
 
     // A spray of `n` motes from `center`, biased upward by `up` (m/s), with random speed.
@@ -395,7 +396,61 @@ private:
     // mover's speed) scales the count + height.
     void emit_splash(const Vec3& at, f32 intensity);
 
+    // A glowing mote that starts `hot` and cools toward `cool` as it ages (fire embers, sparks).
+    void emit_ember(const Vec3& pos, const Vec3& vel, const Vec3& hot, const Vec3& cool, f32 life,
+                    f32 size, f32 gravity = -1.0f, f32 alpha = 0.95f);
+
+    // Ages particles, beams, meteors, glyphs + flash lights; tracks the networked spell bolts (so a
+    // vanishing one bursts on impact) and the Aegis shields (pop-in / hit / break animation).
     void update_particles(Timestep dt);
+
+    // ---- Spell lights -------------------------------------------------------------------
+    // A transient omni light (an impact flash, a spell burst) fading out over `life` seconds.
+    void flash_light(const Vec3& pos, const Vec3& color, f32 strength, f32 range, f32 life);
+    // A light for THIS frame only (a bolt in flight, a beam, a shield, an aura).
+    void fx_light(const Vec3& pos, const Vec3& color, f32 strength, f32 range);
+    // Hands the frame's VFX lights to the renderer (nearest the player first, capped so the town's
+    // lanterns keep their share), scaled so spells light the dark but still tint the ground by day.
+    void draw_fx_lights();
+
+    // ---- Beams, glyphs + meteors --------------------------------------------------------
+    // A magical beam from `a` to `b`. `style`: 0 = an arcane ray wrapped in twin spiralling strands,
+    // 1 = a crackling jagged arc, 2 = a pillar of light striking down from `a` (the sky) onto `b`.
+    // `grow` > 0 makes the head race out from `a` at that speed (m/s) instead of appearing at once.
+    void beam(const Vec3& a, const Vec3& b, const Vec4& color, f32 width, f32 life, u8 style = 0,
+              f32 grow = 0.0f);
+    // A glowing rune circle on the ground (a cast sigil): twin rings, a `points`-pointed star and
+    // orbiting rune marks, scaling in and spinning while it fades over `life` seconds.
+    void glyph(const Vec3& center, f32 radius, const Vec4& color, f32 life, int points = 6);
+    // Draws one rune circle at `intensity` (shared by the timed glyphs and the ground auras).
+    void draw_glyph(const Vec3& center, f32 radius, const Vec3& color, f32 intensity, int points,
+                    f32 spin);
+    // A glowing circle of streak sprites in the plane spanned by `u`/`v` (rings, shield rims).
+    // `shimmer` (0..1) runs bright bands around it.
+    void sprite_circle(const Vec3& c, const Vec3& u, const Vec3& v, f32 radius, int segs, f32 width,
+                       const Vec4& color, f32 shimmer = 0.0f);
+    // Traces a sphere's silhouette (the circle it shows the camera) in light: a fresnel-style rim
+    // that makes a translucent shell read as a glassy bubble from any angle.
+    void sphere_rim(const Vec3& c, f32 radius, const Vec3& color, f32 intensity, int segs, f32 width);
+    // An arcane ray: soft halo + white-hot core + twin strands spiralling around it.
+    void draw_ray(const Vec3& a, const Vec3& b, const Vec3& color, f32 width, f32 intensity, f32 phase);
+    // A crackling lightning-like arc that re-jitters many times a second.
+    void draw_arc(const Vec3& a, const Vec3& b, const Vec3& color, f32 width, f32 intensity, u32 seed);
+    // Draws the live beams, glyphs, falling meteors and the local Mage's orbiting combo orbs.
+    void draw_spell_fx();
+    void meteor_impact(const Vec3& at);
+
+    // The burst where a networked spell bolt struck (or came to rest), by projectile kind.
+    void projectile_impact(u8 kind, const Vec3& at);
+    void track_projectiles();
+    // True if a spell bolt has already burst on landing (its resting body is hidden, not drawn).
+    bool projectile_spent(const net::ProjectileState& pr) const;
+    // Aegis shield animation state per shielded player / villager (pop-in, hit flash, shatter).
+    void update_shields(Timestep dt);
+
+    // The Mage spell VFX (cast sigil, beams, the spell itself) for whoever cast it: the local player
+    // on the keypress, remote Mages from the snapshot's `cast` + `cast_aim`.
+    void spawn_spell_vfx(SpellId spell, const Vec3& feet, f32 yaw, const Vec3& aim);
 
     // The glowing ground disc + soft dome of each ground aura, plus a soft light at night so the
     // aura lights its surroundings. Colour comes from the shared aura_props table (data-driven, so
@@ -403,13 +458,14 @@ private:
     // in update_particles. Drawn additively so it brightens the ground without occluding.
     void draw_auras();
 
-    // The Aegis protective bubble around any shielded player / NPC: a softly pulsing translucent
-    // shell + an additive glow, brighter while the shield is strong. (Shimmer motes orbit it from
-    // update_particles.)
+    // The Aegis protective bubble around any shielded player / NPC: a large faceted shell with a
+    // glowing fresnel-style rim, gyroscope rings and a ground halo, lighting its surroundings. It pops
+    // in with an overshoot, flashes when it soaks a blow and shatters when spent (update_shields).
     void draw_shields();
 
-    // A Cleric's max-Aegis DOME (Snapshot.bubbles): a large translucent protective shell + additive
-    // glow + a rim of shimmer, brighter while intact - the ranged-blocking bubble the party shelters in.
+    // A Cleric's max-Aegis DOME (Snapshot.bubbles): a huge shell with a shimmering rim, a slowly
+    // turning geodesic cage, a rune ring where it meets the ground and its own light - the
+    // ranged-blocking bubble the party shelters in.
     void draw_bubbles();
 
     // Co-op buff auras under empowered (fiery ring) / hasted (green ring) players, so allies can
@@ -430,8 +486,10 @@ private:
     void draw_ambient_life();
 
     // The showy burst for an ability cast, played for whoever cast it (the local player on
-    // keypress for instant feel; remote players when the snapshot reports their `cast`).
-    void spawn_ability_vfx(PlayerRole role, u8 slot, const Vec3& feet, f32 yaw, const Vec3& aim);
+    // keypress for instant feel; remote players when the snapshot reports their `cast`). `rank` is
+    // the caster's upgrade rank for it (a max-rank Heal chains its beams on to more allies).
+    void spawn_ability_vfx(PlayerRole role, u8 slot, const Vec3& feet, f32 yaw, const Vec3& aim,
+                           u8 rank = 0);
 
     // Decays the local buff auras (emitting trailing motes while active) and plays cast VFX
     // for remote players from the snapshot's `cast` field (deduped by tick so each fires once).
@@ -789,9 +847,78 @@ private:
         f32 gravity = 0.0f;
         f32 drag = 1.6f;
         Vec4 color{1.0f};
-        u8 style = 0; // 0 = emissive, 1 = additive glow
+        Vec3 tail{-1.0f}; // colour it cools toward as it ages (x < 0 = keeps `color`)
+        u8 style = 0; // 0 = emissive, 1 = additive glow sprite (streaks along its velocity)
     };
     std::vector<Particle> particles_;
+
+    // Spell lights: timed flashes, plus the per-frame sources gathered while updating + drawing.
+    struct FlashLight {
+        Vec3 pos{0.0f};
+        Vec3 color{1.0f};
+        f32 strength = 1.0f;
+        f32 range = 6.0f;
+        f32 life = 0.3f;
+        f32 max_life = 0.3f;
+    };
+    struct FxLight {
+        Vec3 pos{0.0f};
+        Vec3 color{1.0f}; // already scaled by strength
+        f32 range = 6.0f;
+    };
+    std::vector<FlashLight> flash_lights_;
+    std::vector<FxLight> frame_fx_lights_;
+
+    struct Beam {
+        Vec3 a{0.0f};
+        Vec3 b{0.0f};
+        Vec4 color{1.0f};
+        f32 width = 0.1f;
+        f32 life = 0.4f;
+        f32 max_life = 0.4f;
+        f32 grow = 0.0f; // head speed (m/s); 0 = full length at once
+        f32 age = 0.0f;
+        u8 style = 0;
+        u32 seed = 0;
+    };
+    std::vector<Beam> beams_;
+    struct Glyph {
+        Vec3 center{0.0f};
+        f32 radius = 1.0f;
+        Vec4 color{1.0f};
+        f32 life = 0.8f;
+        f32 max_life = 0.8f;
+        f32 spin = 0.0f; // starting angle, so stacked sigils don't line up
+        int points = 6;
+    };
+    std::vector<Glyph> glyphs_;
+    // A Meteor in flight: a blazing rock streaking down out of the sky onto `to`.
+    struct MeteorFx {
+        Vec3 from{0.0f};
+        Vec3 to{0.0f};
+        f32 t = 0.0f;
+        f32 dur = 0.45f;
+    };
+    std::vector<MeteorFx> meteors_;
+    // Networked spell bolts carry no id, so they're matched snapshot-to-snapshot by kind + nearness;
+    // one that vanishes (struck) or stops dead (landed) bursts where it was.
+    struct ProjectileTrack {
+        Vec3 pos{0.0f};
+        Vec3 dir{0.0f, 0.0f, 1.0f};
+        u8 kind = 0;
+        bool seen = false;
+        bool resting = false;
+    };
+    std::vector<ProjectileTrack> proj_tracks_;
+    u32 proj_track_tick_ = 0;
+    struct ShieldFx {
+        f32 age = 0.0f;  // seconds since the ward went up (drives the pop-in)
+        f32 hit = 0.0f;  // flash when it soaks a blow (decays)
+        u8 last = 0;     // previous networked strength
+        u32 stamp = 0;   // last update that saw it (for pruning)
+    };
+    std::unordered_map<u64, ShieldFx> shield_fx_; // keyed (0 << 32 | player id) / (1 << 32 | villager id)
+    u32 shield_stamp_ = 0;
     std::vector<FloatText> float_texts_; // live floating combat labels (aged in update_feedback)
     u32 fx_rng_ = 0x9e3779b9u;
     f32 frand();

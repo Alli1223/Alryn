@@ -126,6 +126,16 @@ public:
     void draw_emissive(const Mesh& mesh, const Mat4& model, const Vec4& tint = Vec4{1.0f});
     // Additive self-lit geometry (light shafts from windows). tint.a = intensity.
     void draw_glow(const Mesh& mesh, const Mat4& model, const Vec4& tint);
+    // A soft additive glow sprite for VFX (particles, flares, beams). With `a == b` it is a round
+    // camera-facing billboard of radius `radius`; otherwise a capsule-shaped streak from `a` to `b`
+    // (beams, sparks, motion-stretched motes) that turns about its own axis to face the camera.
+    // `color.a` is the intensity and `core` (0..1) adds a hot, white-shifted centre. Sprites fade
+    // softly where they meet opaque geometry (no hard seam on the ground) and the whole frame's
+    // worth is batched into ONE instanced draw, so thousands cost about as much as a few meshes.
+    void draw_sprite(const Vec3& a, const Vec3& b, f32 radius, const Vec4& color, f32 core = 0.5f);
+    void draw_sprite(const Vec3& p, f32 radius, const Vec4& color, f32 core = 0.5f) {
+        draw_sprite(p, p, radius, color, core);
+    }
 
     // ---- 2D UI overlay (screen-space, drawn last over the 3D scene) ----------
     // Pixel coordinates: origin top-left, +x right, +y down, matching the window.
@@ -197,6 +207,13 @@ private:
         f32 peek = 0.0f; // foliage only: 1 = obeys the camera->player peek dissolve (canopy)
     };
 
+    // One additive VFX sprite (matches the per-instance input of sprite.vert).
+    struct SpriteInstance {
+        Vec4 a_radius; // xyz = start, w = radius (m)
+        Vec4 b_core;   // xyz = end, w = hot-core strength 0..1
+        Vec4 color;    // rgb colour, a = intensity
+    };
+
     // One screen-space UI primitive (matches the ui.* push-constant block).
     using UIDrawCmd = UIPrim;
 
@@ -220,6 +237,7 @@ private:
         vk::Image light_atlas;                   // spot-light shadow atlas (tiled)
         vk::Buffer light_ubo;                    // per-frame spot-light data
         vk::Buffer ui_tiles;                     // per-frame instanced UI tile data (grown on demand)
+        vk::Buffer sprites;                      // per-frame instanced VFX sprite data (grown on demand)
         VkDescriptorSet shadow_set = VK_NULL_HANDLE;
     };
 
@@ -231,6 +249,7 @@ private:
     static constexpr u32 kMaxPointLights = 48; // extra lights that illuminate without shadows
     static constexpr u32 kAtlasSize = 2048;    // 2x2 tiles of 1024 (kMaxLights)
     static constexpr u32 kAtlasTiles = 2;      // per axis
+    static constexpr usize kMaxSprites = 16384; // VFX sprites per frame (one instanced draw)
 
     bool create_depth();
     bool create_ssao_targets();     // prepass depth + AO images (recreated on resize)
@@ -251,6 +270,7 @@ private:
     void record_light_atlas_pass(VkCommandBuffer cmd);
     void record_ssao_pass(VkCommandBuffer cmd); // depth prepass -> raw AO -> blurred AO
     void record_main_pass(VkCommandBuffer cmd);
+    void record_sprites(VkCommandBuffer cmd);   // the frame's VFX sprites, one instanced draw
     void record_post_pass(VkCommandBuffer cmd); // bloom + god rays -> composite to swapchain
     void record_ui_pass(VkCommandBuffer cmd);
 
@@ -280,6 +300,7 @@ private:
     vk::Pipeline pipeline_water_;
     vk::Pipeline pipeline_emissive_;
     vk::Pipeline pipeline_glow_;
+    vk::Pipeline pipeline_sprites_; // instanced additive VFX sprites (soft particles + beams)
     vk::Pipeline pipeline_vegetation_;
     vk::Pipeline pipeline_shadow_;
     vk::Pipeline pipeline_prepass_;   // camera depth prepass (feeds SSAO)
@@ -318,6 +339,7 @@ private:
     std::vector<FrameSync> frames_;
     std::vector<VkSemaphore> render_finished_; // one per swapchain image
     std::vector<DrawItem> draw_items_;         // deferred draws for the current frame
+    std::vector<SpriteInstance> sprites_;      // VFX sprites for the current frame
     std::vector<UIDrawCmd> ui_items_;          // deferred 2D UI primitives (drawn last)
     std::vector<UITile> ui_tile_data_;         // all tiles submitted this frame (batch ranges)
     std::vector<UITileBatch> ui_tile_batches_; // instanced tile batches, in submission order

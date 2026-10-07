@@ -88,9 +88,12 @@ inline constexpr f32 default_day_seconds = 120.0f; // length of a full cycle
 inline constexpr f32 min_day_seconds = 5.0f;       // clamp for ALRYN_DAY_SECONDS
 } // namespace daynight
 
-// Client-side particle pool (ability VFX, projectile trails).
+// Client-side particle pool (ability VFX, projectile trails). Glow motes render as instanced
+// sprites (one draw for the lot), so the pool can be generous.
 namespace vfx {
-inline constexpr usize max_particles = 1400; // hard cap so a busy fight can't run away
+inline constexpr usize max_particles = 4000; // hard cap so a busy fight can't run away
+inline constexpr usize max_lights = 14;      // spell lights per frame (lanterns keep the rest)
+inline constexpr f32 shield_radius = 1.75f;  // the Aegis bubble around a warded player / NPC
 } // namespace vfx
 
 // Dynamic lighting cull radii: only sources near the player are submitted at night,
