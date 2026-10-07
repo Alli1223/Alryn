@@ -4,6 +4,7 @@
 #include <Alryn/Character/SkinnedMesh.h>
 #include <Alryn/Core/Math.h>
 
+#include <array>
 #include <cmath>
 #include <initializer_list>
 #include <utility>
@@ -15,7 +16,25 @@
 // bend at the joints once posed.
 namespace alryn::skinbuild {
 
-using Weights = std::initializer_list<std::pair<int, f32>>;
+// A short list of (bone, weight) influences. A VALUE type on purpose: this used to be a
+// std::initializer_list, whose backing array dies with the full-expression that created it - so the
+// lists kept in a std::vector<Weights> (the torso + hat lofts) dangled, and GCC builds read garbage
+// bone indices out of them (mangled skinning on Linux; MSVC's stack layout happened to hide it).
+struct Weights {
+    static constexpr int kCapacity = 8; // more than kMaxInfluences: set_w skips zero weights first
+    std::array<std::pair<int, f32>, kCapacity> items{};
+    int count = 0;
+
+    Weights(std::initializer_list<std::pair<int, f32>> list) { // implicit: call sites pass {{bone, w}, ...}
+        for (const auto& p : list) {
+            if (count < kCapacity) {
+                items[static_cast<usize>(count++)] = p;
+            }
+        }
+    }
+    const std::pair<int, f32>* begin() const { return items.data(); }
+    const std::pair<int, f32>* end() const { return items.data() + count; }
+};
 
 // Set (and normalise) up to kMaxInfluences bone weights on a vertex.
 inline void set_w(SkinVertex& sv, const Weights& w) {
