@@ -764,6 +764,80 @@ TEST_CASE("Village: decorative props don't spawn on the roads") {
     CHECK(decor_on_street == 0); // nothing decorative encroaches on a town street's dirt band
 }
 
+// Houses stand on uneven town ground (the natural land rises/falls ~0.4 m across a typical
+// footprint), which used to bury the ground floor under the slope and grow grass up through it.
+// height() levels a flat pad under every house at its own base height, and no vegetation grows
+// indoors - so the floor is always visible.
+TEST_CASE("Village: the ground is levelled flat under every house, with no grass indoors") {
+    const u32 seed = 4242u;
+    int towns_checked = 0;
+    int houses_seen = 0;
+    int unlevel = 0;          // interior samples off the house's base height
+    f32 natural_relief = 0.0f; // the largest natural-land deviation under a house (for meaning)
+    std::optional<PropInstance> sample_house;
+    for (int cz = -6; cz <= 6 && towns_checked < 4; ++cz) {
+        for (int cx = -6; cx <= 6 && towns_checked < 4; ++cx) {
+            const auto v = worldgen::village_at(cx, cz, seed);
+            if (!v) {
+                continue;
+            }
+            ++towns_checked;
+            for (const PropInstance& p : village_props(*v, seed)) {
+                if (p.category != PropCategory::House) {
+                    continue;
+                }
+                ++houses_seen;
+                if (!sample_house && p.variant < kHouseVariants) {
+                    sample_house = p;
+                }
+                CHECK(worldgen::under_building(p.position.x, p.position.z, seed));
+                // Sample the floor inside the walls (house-local -> world: translate * rotateY(yaw)).
+                const Vec2 e = PropLibrary::house_half_extents(p.variant);
+                const f32 cs = std::cos(p.yaw);
+                const f32 sn = std::sin(p.yaw);
+                for (int j = 0; j <= 6; ++j) {
+                    for (int i = 0; i <= 6; ++i) {
+                        const f32 lx = glm::mix(-e.x + 0.2f, e.x - 0.2f, static_cast<f32>(i) / 6.0f);
+                        const f32 lz = glm::mix(-e.y + 0.2f, e.y - 0.2f, static_cast<f32>(j) / 6.0f);
+                        const f32 wx = p.position.x + lx * cs + lz * sn;
+                        const f32 wz = p.position.z - lx * sn + lz * cs;
+                        if (std::abs(worldgen::height(wx, wz, seed) - p.position.y) > 0.01f) {
+                            ++unlevel;
+                        }
+                        natural_relief = std::max(
+                            natural_relief, std::abs(worldgen::base_height(wx, wz, seed) - p.position.y));
+                    }
+                }
+            }
+        }
+    }
+    REQUIRE(towns_checked > 0);
+    REQUIRE(houses_seen > 0);
+    CHECK(natural_relief > 0.2f); // the land really is uneven under the houses...
+    CHECK(unlevel == 0);          // ...but every floor stands on level ground
+
+    // No grass / flowers bake inside a house: every vegetation vertex in the chunks around one
+    // stays outside its walls.
+    REQUIRE(sample_house.has_value());
+    constexpr f32 cw = 16.0f;
+    const int hx = static_cast<int>(std::floor(sample_house->position.x / cw));
+    const int hz = static_cast<int>(std::floor(sample_house->position.z / cw));
+    int verts = 0;
+    int indoors = 0;
+    for (int dz = -1; dz <= 1; ++dz) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            for (const Vertex& vx : build_vegetation(hx + dx, hz + dz, cw, seed).vertices) {
+                ++verts;
+                if (worldgen::under_building(vx.position.x, vx.position.z, seed, -0.2f)) {
+                    ++indoors;
+                }
+            }
+        }
+    }
+    CHECK(verts > 0);    // the town green around it does grow grass
+    CHECK(indoors == 0); // but none of it inside a house
+}
+
 // The streaming terrain meshes a fixed vertical band per column; the surface must never rise above
 // it, or a tall mountain lifts the (still-solid) density ground above the last meshed chunk and you
 // walk up an invisible floor. height() is capped to max_terrain_height (which sits below the band).

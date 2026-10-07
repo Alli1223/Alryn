@@ -52,7 +52,10 @@ add_library(alryn STATIC
     Alryn/UI/Widgets.cpp
     Alryn/UI/DrawList.cpp
     Alryn/UI/UIContext.cpp
+    Alryn/UI/Font.cpp
+    ${CMAKE_CURRENT_BINARY_DIR}/generated/EmbeddedFonts.cpp
     # ---- Terrain -----------------------------------------------------------
+    Alryn/Terrain/WorldGen.cpp
     Alryn/Terrain/VoxelField.cpp
     Alryn/Terrain/MarchingTetra.cpp
     Alryn/Terrain/Terrain.cpp
@@ -78,6 +81,14 @@ add_library(alryn STATIC
 
 add_library(Alryn::alryn ALIAS alryn)
 
+# The UI fonts (SIL Open Font License; see assets/fonts/OFL-*.txt), compiled into the
+# engine so the game ships them inside the executable. Generated at configure time; see
+# the source list above.
+alryn_embed_files(${CMAKE_CURRENT_BINARY_DIR}/generated/EmbeddedFonts.cpp
+    kFontDisplay   ${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/Cinzel-Bold.ttf
+    kFontBody      ${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/AlegreyaSans-Medium.ttf
+    kFontBodyBold  ${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/AlegreyaSans-ExtraBold.ttf)
+
 target_include_directories(alryn PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>)
 
@@ -97,6 +108,7 @@ target_link_libraries(alryn
     PRIVATE
         glfw
         enet
-        miniaudio_impl)
+        miniaudio_impl
+        stb_truetype_impl)
 
 alryn_set_warnings(alryn)

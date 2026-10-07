@@ -213,6 +213,22 @@ bool ClientApp::abilitybar_release(const Vec2& p) {
 void ClientApp::on_event(Event& event) {
     EventDispatcher dispatcher{event};
 
+    // F12 saves a screenshot from anywhere (menus, game, overlays).
+    dispatcher.dispatch<KeyPressedEvent>([&](KeyPressedEvent& e) {
+        if (e.key() != key::F12 || renderer_ == nullptr) {
+            return false;
+        }
+        const auto dir = executable_dir() / "screenshots";
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        const auto now = std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now());
+        renderer_->request_screenshot((dir / std::format("alryn_{:%Y%m%d_%H%M%S}.png", now)).string());
+        return true;
+    });
+    if (event.handled) {
+        return;
+    }
+
     // (Window resizes are handled in on_update once the swapchain has the new
     // size, so the menu relayout reads the correct extent.)
 
@@ -637,7 +653,36 @@ void ClientApp::send_input() {
         }
         jump = jump || in->pad_down(pad::A); // A jumps
     }
-    if (glm::length(move) > 0.01f) {
+    // Face where we're aiming: toward the mouse cursor's spot on the ground, or along a
+    // deflected right stick on a controller - otherwise the way we walk. The server takes this
+    // yaw as the swing's attack cone (and for the shield bash / standing dodge), so the sword
+    // always slashes toward the cursor. A cursor right on top of the player holds the facing.
+    // A sword swing holds the facing it was struck with for a moment, so a flick of the mouse
+    // mid-swing doesn't smear the slash round; the click itself always re-aims.
+    swing_face_lock_ = std::max(0.0f, swing_face_lock_ - frame_dt_);
+    const bool locked = swing_face_lock_ > 0.0f && !pending_attack_;
+    if (pending_attack_) {
+        swing_face_lock_ = 0.3f;
+    }
+    bool aimed = locked;
+    if (!locked && !paused_ && !map_open_ && !skills_open_ && !wardrobe_open_) {
+        if (using_gamepad_) {
+            const Vec2 rs = input() != nullptr ? input()->right_stick() : Vec2{0.0f};
+            if (glm::length(rs) > 0.15f) {
+                const Vec3 d = cam_fwd * (-rs.y) + cam_right * rs.x;
+                face_yaw_ = std::atan2(d.z, d.x);
+                aimed = true;
+            }
+        } else if (aim_valid_) {
+            const Vec3 feet = local_feet();
+            const Vec2 to{aim_.x - feet.x, aim_.z - feet.z};
+            if (glm::length(to) > 0.3f) {
+                face_yaw_ = std::atan2(to.y, to.x);
+            }
+            aimed = true;
+        }
+    }
+    if (!aimed && glm::length(move) > 0.01f) {
         face_yaw_ = std::atan2(move.z, move.x); // face the way we walk
     }
 
@@ -661,6 +706,14 @@ void ClientApp::send_input() {
     // accepted (your vote). Drop a stale vote if its offer is gone (town changed).
     const bool offering = snapshot_.contract_phase == static_cast<u8>(ContractPhase::Offer);
     near_wagon_ = offering ? nearest_offer_in_range() : 0;
+    // ALRYN_SCREEN=contract / haul (scripted screenshots): show / accept the first offer from anywhere.
+    if (offering && !snapshot_.wagons.empty()) {
+        if (dev_screen() == "contract" && near_wagon_ == 0) {
+            near_wagon_ = snapshot_.wagons.front().id;
+        } else if (dev_screen() == "haul" && selected_wagon_ == 0) {
+            selected_wagon_ = snapshot_.wagons.front().id;
+        }
+    }
     if (selected_wagon_ != 0 && (!offering || !wagon_offered(selected_wagon_))) {
         selected_wagon_ = 0;
     }

@@ -39,6 +39,7 @@ inline constexpr KeyCode W = 87, A = 65, S = 83, D = 68, E = 69, F = 70, G = 71,
                          M = 77, U = 85, C = 67, V = 86, Space = 32, Escape = 256;
 inline constexpr KeyCode Digit1 = 49, Digit2 = 50, Digit3 = 51, Digit4 = 52;
 inline constexpr KeyCode F1 = 290, F2 = 291, F3 = 292, F4 = 293; // debug overlay + its toggles
+inline constexpr KeyCode F12 = 301;                               // save a screenshot
 inline constexpr KeyCode Ctrl = 341, CtrlR = 345; // GLFW left/right control - Mage cast modifier
 inline constexpr bool is_ctrl(KeyCode k) { return k == Ctrl || k == CtrlR; }
 inline constexpr KeyCode LeftShift = 340, RightShift = 344; // GLFW shift - dodge roll

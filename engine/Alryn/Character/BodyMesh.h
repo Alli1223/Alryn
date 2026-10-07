@@ -6,8 +6,9 @@
 namespace alryn {
 
 // Material/colour zones for a skinned mesh, resolved to colours from the CharacterPalette at skin
-// time. Mirrors BoneColor 1:1 (same order) so the body and the skinned outfit (OutfitMesh) share one
-// resolver: Skin/Shirt/Pants/Hair are the base body; Primary/Accent/Metal/Dark/Glow are equipment.
+// time. The first ten mirror BoneColor 1:1 (same order) so the body and the skinned outfit (OutfitMesh)
+// share one resolver: Skin/Shirt/Pants/Hair are the base body; Primary/Accent/Metal/Dark/Glow are
+// equipment. The rest are skinned-garment shades derived from the palette (no BoneColor twin).
 enum class BodyMaterial : u8 {
     Skin = 0,
     Shirt = 1,
@@ -19,7 +20,22 @@ enum class BodyMaterial : u8 {
     Metal = 7,
     Dark = 8,
     Glow = 9,
+    PrimaryShade = 10, // the cloth colour in shadow - quilting lines, a lining, an under-layer
+    Linen = 11,        // undyed linen (a coif, a shirt, a priest's alb)
+    Straw = 12,        // woven straw (a sun hat)
+    Mail = 13,         // riveted mail: the steel, darkened by its rings
+    Leather = 14,      // a lighter tan leather (boots, belts) beside the dark straps
 };
+
+// The body's torso cross-sections, shared by the body and the outfit builder so garments follow the
+// same chest / waist / hip shape: `t` runs pelvis joint (0) -> neck base (1); half-width `rx`, half-
+// depth `rz` and a forward offset `dz` (chest out, seat back), all in metres for this character.
+struct TorsoRing {
+    f32 t, rx, rz, dz;
+};
+std::vector<TorsoRing> torso_profile(const CharacterModel& model);
+// The profile's cross-section at any t, interpolated between its rings (clamped at the ends).
+TorsoRing torso_ring_at(const std::vector<TorsoRing>& profile, f32 t);
 
 // Resolves a body/outfit material id to a colour from the palette. Shared by the client + the headless
 // preview so the skinned body and outfit colour identically.

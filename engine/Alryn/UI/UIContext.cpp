@@ -34,8 +34,10 @@ void UIContext::render(Renderer& renderer) {
         if (focus_index_ < static_cast<int>(f.size())) {
             const Rect& b = f[static_cast<usize>(focus_index_)]->bounds;
             constexpr f32 pad = 4.0f;
-            draw_list.outline(Vec4{b.x - pad, b.y - pad, b.w + 2.0f * pad, b.h + 2.0f * pad},
-                              theme().accent_hover, 2.5f, 9.0f);
+            const Vec4 ring{b.x - pad, b.y - pad, b.w + 2.0f * pad, b.h + 2.0f * pad};
+            const Vec4 glow = theme().accent_hover;
+            draw_list.shadow(ring, 9.0f, 10.0f, Vec4{glow.r, glow.g, glow.b, 0.30f});
+            draw_list.outline(ring, glow, 2.5f, 9.0f);
         }
     }
 }

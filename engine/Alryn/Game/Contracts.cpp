@@ -1403,21 +1403,13 @@ void GameServer::carry_top_riders(const Vec2& delta, const VehicleType& vt) {
     if (glm::length(delta) < 1e-5f) {
         return;
     }
-    const f32 deck = active_.position.y + vt.deck_height();
-    const Vec2 fp = vt.footprint();
-    const Vec2 fwd{std::cos(active_.yaw), std::sin(active_.yaw)};
-    const Vec2 right{-std::sin(active_.yaw), std::cos(active_.yaw)};
     for (auto& [id, pl] : players_) {
         if (id == tower_ || id == pilot_ || riders_.count(id) != 0u) {
             continue;
         }
         const Vec3 pp = pl.controller.position();
-        const Vec2 rel{pp.x - active_.position.x, pp.z - active_.position.z};
-        if (std::abs(glm::dot(rel, fwd)) > fp.x + 0.25f || std::abs(glm::dot(rel, right)) > fp.y + 0.25f) {
-            continue; // not over the bed
-        }
-        if (pp.y < deck - 0.45f || pp.y > deck + 1.2f) {
-            continue; // not standing on the deck (on the ground beside it, or airborne above)
+        if (!on_deck(vt, active_.position, active_.yaw, pp)) {
+            continue; // on the ground beside it, airborne above, or not over the bed
         }
         pl.controller.set_position(pp + Vec3{delta.x, 0.0f, delta.y});
     }

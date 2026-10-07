@@ -113,6 +113,13 @@ public:
 // The registry of one instance per type, indexed by Wagon::type.
 const std::vector<std::unique_ptr<VehicleType>>& vehicle_types();
 const VehicleType& vehicle_type(u8 i);
+
+// True if `feet` stands ON TOP of a cart's bed: over its footprint (+ `slack` at the rails) and near
+// its deck height (not on the ground beside it, nor high in the air above it). `cart` is the cart's
+// origin and `yaw` its heading (forward = (cos, sin) in world xz). Shared by the server, which carries
+// deck riders along with the moving cart, and the client, which measures a deck rider's stride against
+// the deck - so they stand still on a rolling wagon instead of walking on the spot.
+bool on_deck(const VehicleType& vt, const Vec3& cart, f32 yaw, const Vec3& feet, f32 slack = 0.25f);
 inline u8 vehicle_type_count() { return static_cast<u8>(vehicle_types().size()); }
 
 // Horse meshes (the puller for carriages): a body (no legs) + a single leg drawn x4 and

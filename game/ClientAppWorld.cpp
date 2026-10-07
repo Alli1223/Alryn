@@ -553,9 +553,11 @@ void ClientApp::draw_prop(const PropInstance& p) {
     // Fade a house roof when the local player is inside its footprint.
     bool inside = false;
     if (gp.footprint.x > 0.0f) {
+        // Into the house's local frame: the mesh is drawn rotateY(yaw), so undo it with rotateY(-yaw)
+        // (which in xz is a standard 2D rotation by +yaw).
         const Vec3 rel = local_feet() - p.position;
-        const f32 cs = std::cos(-p.yaw);
-        const f32 sn = std::sin(-p.yaw);
+        const f32 cs = std::cos(p.yaw);
+        const f32 sn = std::sin(p.yaw);
         const Vec2 lp{rel.x * cs - rel.z * sn, rel.x * sn + rel.z * cs};
         inside = std::abs(lp.x) < gp.footprint.x + 0.4f && std::abs(lp.y) < gp.footprint.y + 0.4f &&
                  rel.y > -1.5f && rel.y < gp.wall_height + 2.0f;
@@ -709,8 +711,9 @@ ClientApp::PlayerVisual& ClientApp::ensure_villager_visual(u32 id,
         v.outfit_skin = build_outfit_mesh(v.model, OutfitKind::Plate, eq);
         setup_noble_cape(v);
     } else {
-        // Generic peasant garb (a belted tunic + trousers + cap), with a little per-NPC variety.
-        eq.outfit_tint = static_cast<u8>(id % 4u);
+        // Generic peasant garb (a belted tunic + hose + headwear), varied per NPC: the tint's bits pick
+        // the tunic, the headwear (hood / coif / straw hat / bare) and the hood's dye.
+        eq.outfit_tint = static_cast<u8>((id * 2654435761u) >> 26);
         apply_outfit(v.model, OutfitKind::Peasant, eq);
         v.body_skin = build_body_mesh(v.model);
         v.outfit_skin = build_outfit_mesh(v.model, OutfitKind::Peasant, eq);
@@ -733,7 +736,7 @@ void ClientApp::draw_villagers() {
         const bool seated = vl.kind == 3 || vl.kind == 4;
         const net::WagonState* aw = seated ? active_wagon() : nullptr;
         const Vec3 seat = (aw != nullptr) ? attach_to_wagon(*aw, vl.position) : vl.position;
-        const Vec3 base = seated ? seat - Vec3{0.0f, 0.42f, 0.0f} : vl.position;
+        const Vec3 base = seated ? seat - Vec3{0.0f, seat_drop(v.model), 0.0f} : vl.position;
         Mat4 root = glm::translate(Mat4{1.0f}, base) *
                     glm::rotate(Mat4{1.0f}, HalfPi - vl.yaw, Vec3{0.0f, 1.0f, 0.0f});
         if (!seated) {
@@ -757,7 +760,7 @@ void ClientApp::draw_villagers() {
         if (vl.kind == 4) {
             // The noble's grand crimson cape (simulated cloth) at the joint frames; tint {1} keeps
             // it red rather than gilding it like the plate.
-            draw_cloth(v, root, v.model.joint_matrices(root, pose), Vec3{1.0f});
+            draw_cloth(v, root, v.model.joint_matrices(root, pose), Vec3{1.0f}, base.y);
         }
         if (vl.kind == 1) {
             draw_held_spear(v.model, mats);

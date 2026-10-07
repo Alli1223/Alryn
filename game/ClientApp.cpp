@@ -35,25 +35,36 @@ void ClientApp::on_init() {
         window()->set_cursor_captured(false); // free cursor for click-to-dig
     }
 
-    // Medieval restyle of the shared UI theme: stained dark wood panels framed in aged
-    // gold, with warm parchment text - an illuminated-manuscript feel for the menus.
+    // Medieval restyle of the shared UI theme: stained dark wood panels bound in aged gold,
+    // warm parchment text and Roman-capital gold headings - an illuminated-manuscript feel,
+    // shared by the menus, the HUD and the in-game overlays.
     // (The theme is mutable by design so games can restyle; see UI/Theme.h.)
     {
         ui::Theme& th = ui::theme();
-        th.panel = Vec4{0.13f, 0.10f, 0.07f, 0.96f};
-        th.panel_border = Vec4{0.74f, 0.56f, 0.28f, 0.55f};
-        th.overlay = Vec4{0.04f, 0.03f, 0.02f, 0.62f};
-        th.text = Vec4{0.94f, 0.88f, 0.74f, 1.0f};
-        th.text_muted = Vec4{0.70f, 0.61f, 0.46f, 1.0f};
-        th.accent = Vec4{0.78f, 0.57f, 0.24f, 1.0f};
-        th.accent_hover = Vec4{0.93f, 0.73f, 0.36f, 1.0f};
-        th.button = Vec4{0.22f, 0.16f, 0.10f, 1.0f};
-        th.button_hover = Vec4{0.31f, 0.23f, 0.14f, 1.0f};
-        th.button_press = Vec4{0.16f, 0.11f, 0.07f, 1.0f};
-        th.track = Vec4{0.24f, 0.18f, 0.11f, 1.0f};
-        th.knob = Vec4{0.86f, 0.73f, 0.46f, 1.0f};
-        th.radius = 7.0f;
+        th.panel = Vec4{0.17f, 0.125f, 0.085f, 0.97f};
+        th.panel_bottom = Vec4{0.095f, 0.07f, 0.048f, 0.97f};
+        th.panel_border = Vec4{0.80f, 0.61f, 0.31f, 0.75f};
+        th.overlay = Vec4{0.03f, 0.02f, 0.015f, 0.62f};
+        th.shadow = Vec4{0.0f, 0.0f, 0.0f, 0.55f};
+        th.text = Vec4{0.96f, 0.91f, 0.79f, 1.0f};
+        th.text_muted = Vec4{0.75f, 0.66f, 0.50f, 1.0f};
+        th.text_shadow = Vec4{0.05f, 0.03f, 0.01f, 0.75f};
+        th.title = Vec4{1.0f, 0.90f, 0.60f, 1.0f};
+        th.title_bottom = Vec4{0.82f, 0.56f, 0.22f, 1.0f};
+        th.accent = Vec4{0.80f, 0.59f, 0.26f, 1.0f};
+        th.accent_hover = Vec4{0.96f, 0.78f, 0.42f, 1.0f};
+        th.accent_text = Vec4{0.20f, 0.12f, 0.05f, 1.0f};
+        th.button = Vec4{0.20f, 0.145f, 0.095f, 1.0f};
+        th.button_hover = Vec4{0.30f, 0.22f, 0.14f, 1.0f};
+        th.button_press = Vec4{0.14f, 0.10f, 0.065f, 1.0f};
+        th.track = Vec4{0.26f, 0.19f, 0.12f, 1.0f};
+        th.knob = Vec4{0.92f, 0.80f, 0.55f, 1.0f};
+        th.font = ui::FontFace::Body;
+        th.button_font = ui::FontFace::Bold;
+        th.title_font = ui::FontFace::Display;
+        th.radius = 8.0f;
     }
+    ui::load_fonts(*renderer_); // bake the TrueType atlas (falls back to the vector font on failure)
     if (const char* t = std::getenv("ALRYN_TIME")) {
         time_of_day_ = glm::clamp(static_cast<f32>(std::atof(t)), 0.0f, 1.0f);
     }
@@ -167,6 +178,20 @@ void ClientApp::on_init() {
     upload_props(prop_lib_.monuments(), gpu_monuments_);
     upload_props(prop_lib_.watchtowers(), gpu_watchtowers_);
 
+    // ALRYN_SCREEN=<name> opens a given screen for scripted runs (paired with ALRYN_SHOT, a
+    // screenshot of it). The menu screens stay in the menu; the in-game ones (pause / skills /
+    // wardrobe / map) are opened by enter_game.
+    static constexpr std::pair<std::string_view, Screen> kMenuScreens[] = {
+        {"main", Screen::Main},           {"join", Screen::Join},   {"settings", Screen::Settings},
+        {"customise", Screen::Customise}, {"class", Screen::Class},
+    };
+    for (const auto& [name, screen] : kMenuScreens) {
+        if (dev_screen() == name) {
+            show_screen(screen);
+            return;
+        }
+    }
+
     // Skip the menu when launched for scripted/CI runs (--host=... or a fixed
     // frame count); otherwise open the main menu and let the player choose.
     if (auto_start_) {
@@ -179,6 +204,13 @@ void ClientApp::on_init() {
 void ClientApp::enter_game(bool host_local, std::string host) {
     host_ = std::move(host);
     host_local_ = host_local;
+    if (menu_terrain_ != nullptr) {
+        // The menu backdrop's world goes; its meshes may still be in flight.
+        if (renderer_ != nullptr) {
+            renderer_->device().wait_idle();
+        }
+        menu_terrain_.reset();
+    }
     if (host_local_) {
         const u32 seed = world_seed();
         if (local_server_.start(kPort, seed)) {
@@ -204,6 +236,16 @@ void ClientApp::enter_game(bool host_local, std::string host) {
     if (const char* env = std::getenv("ALRYN_OPEN_MAP"); env != nullptr && env[0] == '1') {
         map_open_ = true;
         map_zoom_ = 0.4f;
+    }
+    // ALRYN_SCREEN's in-game screens (see on_init).
+    if (dev_screen() == "map") {
+        map_open_ = true;
+    } else if (dev_screen() == "skills") {
+        skills_open_ = true;
+    } else if (dev_screen() == "wardrobe") {
+        wardrobe_open_ = true;
+    } else if (dev_screen() == "pause") {
+        enter_pause();
     }
 }
 
@@ -364,6 +406,9 @@ void ClientApp::on_update(Timestep dt) {
         update_ability_vfx(dt); // buff auras + remote cast VFX
         update_particles(dt);
         send_input();
+        // Ease the wagons BEFORE the character visuals: a rider standing on the deck measures their
+        // stride against this frame's cart step (see update_visuals).
+        update_wagon_smooth(dt); // ease wagon render positions toward the snapshot (kills jitter)
         update_visuals(dt);
         update_enemy_visuals(dt);
         update_villager_visuals(dt);
@@ -372,7 +417,6 @@ void ClientApp::on_update(Timestep dt) {
         update_gates(dt);
         update_feedback(dt);
         update_debug(dt);
-        update_wagon_smooth(dt); // ease wagon render positions toward the snapshot (kills jitter)
         update_ropes(dt);
         update_deer(dt);
         update_fish(dt);
@@ -383,7 +427,9 @@ void ClientApp::on_update(Timestep dt) {
     } else if (renderer_ != nullptr) {
         apply_gamepad(dt); // controller drives the main-menu focus navigation (in-game path is above)
         renderer_->set_sky_color(menu_sky_); // calm backdrop behind the menu
-        if (current_screen_ == Screen::Customise) {
+        if (current_screen_ != Screen::Customise) {
+            update_menu_scene(dt); // the live town the menus float over
+        } else {
             preview_turn_ += dt.seconds * 0.6f; // slow turntable
             preview_anim_.update(0.0f, dt);     // idle pose
             renderer_->set_sun(glm::normalize(Vec3{0.35f, 0.85f, 0.45f}),
@@ -412,6 +458,12 @@ void ClientApp::on_render() {
     if (renderer_ == nullptr) {
         return;
     }
+    // ALRYN_SHOT=<file.png>: a fixed-length run (alryn_game <frames>) saves its final frame.
+    if (config().max_frames != 0 && frame_count() + 1 == config().max_frames) {
+        if (const char* shot = std::getenv("ALRYN_SHOT"); shot != nullptr && shot[0] != '\0') {
+            renderer_->request_screenshot(shot);
+        }
+    }
     if (state_ == AppState::Playing && terrain_ != nullptr) {
     renderer_->set_camera(camera_);
 
@@ -427,10 +479,10 @@ void ClientApp::on_render() {
                 // Seated riders attach to the cart's tilt + bob so they ride with it.
                 const Vec3 feet =
                     (p.seated != 0 && aw != nullptr) ? attach_to_wagon(*aw, p.position) : p.position;
-                draw_character(it->second, feet, p.yaw, p.seated != 0, static_cast<int>(p.role));
+                draw_character(it->second, feet, display_yaw(p), p.seated != 0, static_cast<int>(p.role));
             }
             if (p.carrying != 0) {
-                draw_carried_good(p.position, p.yaw);
+                draw_carried_good(p.position, display_yaw(p));
             }
         }
     }
@@ -572,6 +624,8 @@ void ClientApp::on_render() {
 
     if (state_ == AppState::Menu && current_screen_ == Screen::Customise) {
         draw_preview();
+    } else if (state_ == AppState::Menu) {
+        draw_menu_scene();
     }
 
     ui_.render(*renderer_); // 2D menu overlay, drawn on top of the scene
@@ -583,9 +637,11 @@ void ClientApp::on_shutdown() {
     if (renderer_ != nullptr) {
         renderer_->device().wait_idle();
     }
+    menu_terrain_.reset();      // the menu backdrop's streamed chunks own GPU meshes
     visuals_.clear();           // PlayerVisuals own dynamic body/outfit GPU meshes (freed via ~Mesh)
     enemy_visuals_.clear();     // EnemyVisuals own a dynamic body mesh
     villager_visuals_.clear();
+    preview_ = PlayerVisual{}; // the customise turntable avatar's body / outfit / cloth meshes
     for (auto& [frames, m] : mesh_graveyard_) {
         m.destroy();
     }
@@ -872,13 +928,28 @@ void ClientApp::update_visuals(Timestep dt) {
     if (!have_snapshot_) {
         return;
     }
+    const net::WagonState* aw = active_wagon();
     for (const net::PlayerState& p : snapshot_.players) {
         PlayerVisual& v = ensure_visual(p.id, p.appearance, p.role, p.equipment);
         f32 measured = 0.0f;
         if (v.has_last && dt.seconds > 0.0001f) {
             Vec3 d = p.position - v.last_pos;
             d.y = 0.0f;
+            // Standing on top of the rolling cart: the server carries deck riders along, so measure
+            // the stride against the DECK, not the ground - a rider stands still on a moving wagon
+            // instead of walking on the spot (and still walks if they stroll about the bed).
+            if (aw != nullptr && p.seated == 0 && on_wagon_deck(*aw, p.position)) {
+                const Vec2 deck = wagon_frame_step(*aw);
+                d -= Vec3{deck.x, 0.0f, deck.y};
+            }
             measured = glm::length(d) / dt.seconds;
+            // How much of the movement runs along the facing (-1 = backpedalling), for the stride
+            // direction. Only frames that actually moved update it (snapshots don't land every frame).
+            if (glm::length(d) > 1e-4f) {
+                const f32 yaw = display_yaw(p);
+                const f32 h = glm::dot(glm::normalize(d), Vec3{std::cos(yaw), 0.0f, std::sin(yaw)});
+                v.heading = glm::mix(v.heading, h, 0.5f);
+            }
         }
         v.speed = glm::mix(v.speed, measured, 0.3f);
         v.last_pos = p.position;
@@ -952,7 +1023,7 @@ void ClientApp::update_visuals(Timestep dt) {
         }
         v.last_buffs = p.buffs;
         v.last_shield = p.shield;
-        v.animator.update(v.speed, dt);
+        v.animator.update(v.speed, dt, v.heading);
     }
     pending_local_swing_ = false;
 }

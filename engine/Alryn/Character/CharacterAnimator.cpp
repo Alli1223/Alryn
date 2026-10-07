@@ -5,7 +5,7 @@
 
 namespace alryn {
 
-void CharacterAnimator::update(f32 speed, Timestep dt) {
+void CharacterAnimator::update(f32 speed, Timestep dt, f32 heading) {
     const f32 dts = dt.seconds;
     if (dts <= 0.0f) {
         return;
@@ -13,12 +13,17 @@ void CharacterAnimator::update(f32 speed, Timestep dt) {
     speed_ = speed;
     const f32 target = glm::clamp(speed / 6.0f, 0.0f, 1.0f); // 6 m/s = full stride
     stride_ += (target - stride_) * std::min(1.0f, dts * 8.0f);
+    // Step backwards when moving mostly against the facing (strafing keeps stepping forward).
+    const f32 target_dir = heading < -0.3f ? -1.0f : 1.0f;
+    dir_ += (target_dir - dir_) * std::min(1.0f, dts * 10.0f);
 
     // Step cadence scales with speed; freeze the phase when essentially idle.
     const f32 cadence = stride_ > 0.1f ? (3.0f + speed * 1.4f) : 0.0f;
-    phase_ += dts * cadence;
+    phase_ += dts * cadence * dir_;
     if (phase_ > TwoPi) {
         phase_ -= TwoPi;
+    } else if (phase_ < 0.0f) {
+        phase_ += TwoPi;
     }
 
     // A slow, always-on phase that gives a standing character a soft breathe/jelly wobble.
@@ -292,8 +297,9 @@ Mat4 CharacterAnimator::body_offset() const {
     const f32 sway = std::sin(ph) * 0.05f * s;
     // A little roll waddle to go with the sway.
     const f32 roll = std::sin(ph) * 0.05f * s;
-    // Lean eagerly into movement (forward = +Z in the model's local frame).
-    const f32 lean = glm::clamp(speed_ / 6.0f, 0.0f, 1.0f) * 0.16f;
+    // Lean eagerly into movement (forward = +Z in the model's local frame); backpedalling only
+    // tips back a touch.
+    const f32 lean = glm::clamp(speed_ / 6.0f, 0.0f, 1.0f) * 0.16f * std::max(dir_, -0.35f);
     // Squash & stretch: squat wide at footfall, stretch tall mid-stride - the jelly bounce.
     const f32 q = std::abs(std::sin(ph));
     const f32 squash = (0.5f - q) * 0.14f * s + breathe * 0.02f * idle;

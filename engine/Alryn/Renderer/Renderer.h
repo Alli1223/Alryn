@@ -12,6 +12,7 @@
 
 #include <vulkan/vulkan.h>
 
+#include <string>
 #include <vector>
 
 namespace alryn {
@@ -133,6 +134,22 @@ public:
                       f32 border = 0.0f, const Vec4& border_color = Vec4{0.0f});
     // A rounded-cap line segment of the given thickness (vector-font strokes, etc.).
     void draw_ui_segment(const Vec2& p0, const Vec2& p1, f32 thickness, const Vec4& color);
+    // The general 2D UI primitive behind draw_ui_rect / draw_ui_segment. Each field feeds the
+    // ui.frag push constants; `params.z` picks the shape (0 rounded rect, 1 segment, 2 radial
+    // gradient, 3 font-atlas glyph) - see ui.frag for what the other fields mean per mode.
+    struct UIPrim {
+        Vec4 rect{0.0f};   // xy = top-left (px), zw = size (px)
+        Vec4 color{1.0f};  // fill (gradient start)
+        Vec4 color2{1.0f}; // gradient end
+        Vec4 params{0.0f}; // x = radius, y = edge softness, z = mode, w = border / half-thickness
+        Vec4 seg{0.0f};    // segment endpoints, or a glyph's atlas uv rect
+        Vec4 border{0.0f}; // border / outline colour
+        Vec4 extra{0.0f};  // glyph: x = px per SDF unit, y = outline px, zw = gradient span
+    };
+    void draw_ui(const UIPrim& prim);
+    // Uploads the UI font's signed-distance-field atlas (one byte per texel) that glyph
+    // primitives sample. Until it's set the atlas is a blank 1x1 texel.
+    void set_ui_font_atlas(const u8* texels, u32 width, u32 height);
     // One flat-colour tile for draw_ui_tiles (the world-map terrain raster).
     struct UITile {
         Vec4 rect{0.0f};  // xy = top-left (px), zw = size (px), in the raster's build-time space
@@ -149,6 +166,8 @@ public:
     void end_frame();
 
     void request_resize() { needs_resize_ = true; }
+    // Saves the next frame, exactly as presented (3D scene + UI), to `path` as a PNG.
+    void request_screenshot(std::string path) { screenshot_path_ = std::move(path); }
     // Switches vsync on/off (recreates the swapchain with the new present mode).
     void set_vsync(bool enabled);
     bool vsync() const { return config_.vsync; }
@@ -179,13 +198,7 @@ private:
     };
 
     // One screen-space UI primitive (matches the ui.* push-constant block).
-    struct UIDrawCmd {
-        Vec4 rect{0.0f};
-        Vec4 color{1.0f};
-        Vec4 params{0.0f};
-        Vec4 seg{0.0f};
-        Vec4 border{0.0f};
-    };
+    using UIDrawCmd = UIPrim;
 
     // One submitted draw_ui_tiles batch: a range of ui_tile_data_ plus its transform and
     // clip, remembering how many UIDrawCmds preceded it so submission order is preserved.
@@ -296,6 +309,10 @@ private:
     VkDescriptorSet bloom_ba_set_ = VK_NULL_HANDLE;  // reads bloom_b_ (blur b -> a)
     VkDescriptorSetLayout composite_set_layout_ = VK_NULL_HANDLE; // 3 samplers
     VkDescriptorSet composite_set_ = VK_NULL_HANDLE; // scene + bloom + rays
+    // The UI font's SDF atlas, sampled by glyph primitives (reuses ssao_set_layout_).
+    vk::Image ui_font_atlas_;
+    VkDescriptorSet ui_font_set_ = VK_NULL_HANDLE;
+    void upload_ui_font_atlas(const u8* texels, u32 width, u32 height);
 
     VkCommandPool command_pool_ = VK_NULL_HANDLE;
     std::vector<FrameSync> frames_;
@@ -311,6 +328,13 @@ private:
     u32 image_index_ = 0;
     bool frame_active_ = false;
     bool needs_resize_ = false;
+
+    // A pending screenshot: the path it goes to, and the readback buffer the UI pass copies
+    // the finished frame into (written out once that frame's commands complete).
+    std::string screenshot_path_;
+    vk::Buffer screenshot_buffer_;
+    bool screenshot_recorded_ = false;
+    void save_screenshot();
 
     Mat4 view_{1.0f};
     Mat4 projection_{1.0f};

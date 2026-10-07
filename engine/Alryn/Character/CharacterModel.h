@@ -58,6 +58,8 @@ struct CharacterPalette {
     Vec3 metal{0.70f, 0.73f, 0.80f};   // steel / plate
     Vec3 dark{0.20f, 0.16f, 0.12f};    // leather, straps, under-layers
     Vec3 glow{0.4f, 0.8f, 1.0f};       // emissive accents (eyes / gems)
+    Vec3 linen{0.78f, 0.74f, 0.64f};   // undyed linen (coifs, shirts, an alb)
+    Vec3 straw{0.76f, 0.62f, 0.34f};   // woven straw (a peasant's sun hat)
 };
 
 // A procedurally-generated low-poly humanoid: a small skeleton of boxes with
@@ -83,9 +85,18 @@ public:
     int bone_index(BonePart part) const;
     // Append an equipment/outfit bone (its `parent` must already exist - parents precede children).
     void add_bone(const Bone& b) { bones_.push_back(b); }
+    // Drop the attachment bones matching `pred` (e.g. hair that would poke through a hood). Safe while
+    // nothing is parented to them: the face/hair features + equipment all parent to the core skeleton.
+    template <typename Pred>
+    void remove_attachments(Pred pred) {
+        std::erase_if(bones_, [&](const Bone& b) { return b.attachment && pred(b); });
+    }
 
     f32 height() const { return height_; }
     f32 eye_height() const { return eye_height_; }
+    // Bind-pose height of the hip (pelvis) joint above the soles - where a seated figure's root sits
+    // relative to the bench it's on.
+    f32 hip_height() const { return bones_.empty() ? 0.7f : bones_.front().joint_offset.y; }
 
     // World-space box transforms for every bone, given the character's root
     // transform and a per-bone pose (rotation at each joint). pose may be shorter

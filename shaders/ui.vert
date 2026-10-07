@@ -2,14 +2,16 @@
 
 // Vertexless 2D UI quad. Emits a screen-space rectangle (the bounding box of the
 // shape being drawn) from gl_VertexIndex; the fragment shader does the actual
-// rounded-rect / capsule SDF so panels, buttons and the vector font all share one
+// rounded-rect / capsule / glyph SDF so panels, buttons and text all share one
 // pipeline. Pixel coordinates have their origin at the top-left of the window.
 layout(push_constant) uniform Push {
     vec4 rect;   // xy = top-left (px), zw = size (px) of the quad to rasterize
     vec4 color;  // fill rgba (straight alpha)
-    vec4 params; // x = corner radius px, y = edge softness px, z = mode (0 rect, 1 segment), w = border/half-thickness px
-    vec4 seg;    // xy = p0, zw = p1 (px) for segment/capsule mode
-    vec4 border; // border rgba (rect mode, when params.w > 0)
+    vec4 params; // x = corner radius px, y = edge softness px, z = mode, w = border/half-thickness px
+    vec4 seg;    // segment p0/p1 (px), or a glyph's atlas uv rect
+    vec4 border; // border / outline rgba
+    vec4 color2; // gradient end rgba
+    vec4 extra;  // mode-specific (see ui.frag)
     vec2 screen; // viewport size in px
 } pc;
 

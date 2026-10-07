@@ -1,5 +1,8 @@
 #include <Alryn/UI/VectorFont.h>
 
+#include <Alryn/UI/Font.h>
+#include <Alryn/UI/Theme.h>
+
 #include <cctype>
 #include <unordered_map>
 
@@ -187,6 +190,10 @@ const Glyph& font_glyph(char c) {
 }
 
 f32 font_text_width(std::string_view text, f32 size) {
+    // Once the TrueType atlas is baked, text draws in the theme's face - measure that.
+    if (fonts().ready()) {
+        return fonts().text_width(theme().font, text, size);
+    }
     f32 w = 0.0f;
     for (char c : text) {
         w += (font_glyph(c).advance + kFontTracking) * size;

@@ -52,6 +52,12 @@ void ClientApp::update_wagon_smooth(Timestep dt) {
     }
 }
 
+bool ClientApp::on_wagon_deck(const net::WagonState& wg, const Vec3& feet) const {
+    // The same test GameServer::carry_top_riders uses, against the SMOOTHED cart position the eased
+    // player positions move in lockstep with.
+    return on_deck(vehicle_type(wg.type), wagon_render_pos(wg), wg.yaw, feet);
+}
+
 void ClientApp::wagon_orient(const net::WagonState& wg, f32 moved, f32& pitch, f32& roll, f32& bob) const {
     const Vec3 rp = wagon_render_pos(wg); // smoothed position - sample the slope + bob phase there
     const f32 cy = std::cos(wg.yaw);

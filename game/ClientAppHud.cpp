@@ -2,8 +2,16 @@
 // (Split out of the single ClientApp class; see ClientApp.h.)
 
 #include "ClientApp.h"
+#include "HudStyle.h"
+
+#include <functional>
 
 namespace alryn::game {
+
+namespace {
+// The world map's raster fills its framed board inset by this much on every side.
+constexpr f32 kMapInset = 8.0f;
+} // namespace
 
 void ClientApp::draw_health_bars() {
     if (renderer_ == nullptr || !have_snapshot_) {
@@ -24,12 +32,17 @@ void ClientApp::draw_health_bars() {
         }
         const f32 sx = (ndc.x * 0.5f + 0.5f) * W;
         const f32 sy = (ndc.y * 0.5f + 0.5f) * H;
-        const f32 bw = glm::clamp(300.0f / clip.w, 16.0f, 48.0f);
-        const f32 bh = 4.5f;
+        const f32 bw = glm::clamp(300.0f / clip.w, 18.0f, 52.0f);
+        const f32 bh = 5.5f;
         frac = glm::clamp(frac, 0.0f, 1.0f);
-        renderer_->draw_ui_rect(Vec4{sx - bw * 0.5f - 1.0f, sy - 1.0f, bw + 2.0f, bh + 2.0f},
-                                Vec4{0.04f, 0.04f, 0.05f, 0.65f}, 1.5f);
-        renderer_->draw_ui_rect(Vec4{sx - bw * 0.5f, sy, bw * frac, bh}, Vec4{col, 0.95f}, 1.0f);
+        // A dark-rimmed pill with a glossy gradient fill (lighter on top), like the HUD gauges.
+        ui::DrawList d{*renderer_};
+        d.rect(Vec4{sx - bw * 0.5f - 1.5f, sy - 1.5f, bw + 3.0f, bh + 3.0f},
+               Vec4{0.05f, 0.03f, 0.02f, 0.8f}, 3.0f);
+        if (frac > 0.0f) {
+            d.gradient(Vec4{sx - bw * 0.5f, sy, std::max(bw * frac, 3.0f), bh},
+                       Vec4{glm::mix(col, Vec3{1.0f}, 0.3f), 1.0f}, Vec4{col * 0.75f, 1.0f}, 2.0f);
+        }
     };
     for (const net::EnemyState& en : snapshot_.enemies) {
         const f32 hgt = en.kind == 2 ? 3.0f : 2.2f;
@@ -67,11 +80,12 @@ void ClientApp::draw_combat_text(ui::DrawList& draw, f32 W, f32 H) {
         const f32 pop = t < 0.12f ? t / 0.12f : 1.0f;             // quick scale-in
         const f32 alpha = t > 0.6f ? 1.0f - (t - 0.6f) / 0.4f : 1.0f; // hold, then fade
         const f32 sz = ft.size * (0.7f + 0.3f * pop);
-        const std::string& s = ft.text;
-        draw.text(Vec2{sp.x - draw.text_width(s, sz) * 0.5f + 1.5f, sp.y + 1.5f}, s, sz,
-                  Vec4{0.0f, 0.0f, 0.0f, 0.55f * alpha}); // a soft drop shadow for contrast
-        draw.text(Vec2{sp.x - draw.text_width(s, sz) * 0.5f, sp.y}, s, sz,
-                  Vec4{Vec3{ft.color}, ft.color.a * alpha});
+        // Punchy outlined capitals with a lighter top, so a call-out pops off the scene.
+        ui::TextStyle st = hud::style(sz, Vec4{glm::mix(Vec3{ft.color}, Vec3{1.0f}, 0.35f), ft.color.a * alpha},
+                                      ui::TextAlign::Center);
+        st.color_bottom = Vec4{Vec3{ft.color} * 0.85f, ft.color.a * alpha};
+        st.outline_width = std::max(1.5f, sz * 0.12f);
+        draw.text(sp, ft.text, st);
     }
 }
 
@@ -94,47 +108,112 @@ void ClientApp::draw_hud() {
     const Vec3 feet = local_feet();
     const u8 phase = snapshot_.contract_phase;
 
-    // Shared party money, top-right.
-    const std::string money = std::format("$ {}", snapshot_.money);
-    draw.text(Vec2{W - draw.text_width(money, ts) - 24.0f, 22.0f}, money, ts,
-              Vec4{0.96f, 0.86f, 0.4f, 1.0f});
-    // A fresh gain (a bandit's spilled purse, a delivery) pops a "+$n" that drifts up + fades.
-    if (money_pulse_ > 0.0f && money_gain_ > 0) {
-        const f32 gs = ts * 0.72f;
-        const std::string gain = std::format("+$ {}", money_gain_);
-        draw.text(Vec2{W - draw.text_width(gain, gs) - 60.0f - ts * 2.0f,
-                       22.0f + (1.0f - money_pulse_) * -14.0f + 4.0f},
-                  gain, gs, Vec4{1.0f, 0.9f, 0.35f, money_pulse_});
+    // Shared party money, top-right: a gold coin + the purse in a dark-wood pill. A fresh gain (a
+    // bandit's spilled purse, a delivery) flashes the pill gold and floats a "+n" up beside it.
+    const f32 margin = 16.0f;
+    const f32 pill_h = ts * 1.9f;
+    {
+        const std::string money = std::format("{}", snapshot_.money);
+        const f32 ms = ts * 1.0f;
+        const f32 pill_w = hud::width(money, ms) + pill_h + ts * 0.9f;
+        const Vec4 pill{W - margin - pill_w, margin, pill_w, pill_h};
+        if (money_pulse_ > 0.0f) {
+            draw.shadow(pill, pill_h * 0.5f, 14.0f, hud::alpha(hud::kGold, 0.45f * money_pulse_));
+        }
+        hud::plaque(draw, pill, 0.86f, pill_h * 0.5f);
+        hud::coin(draw, Vec2{pill.x + pill_h * 0.5f + 2.0f, pill.y + pill_h * 0.5f}, pill_h * 0.33f);
+        hud::text(draw, Vec2{pill.x + pill_h + ts * 0.2f, pill.y + (pill_h - ms) * 0.5f}, money, ms,
+                  hud::kGold);
+        if (money_pulse_ > 0.0f && money_gain_ > 0) {
+            const f32 gs = ts * 0.8f;
+            hud::text(draw,
+                      Vec2{pill.x - ts * 0.5f, pill.y + (pill_h - gs) * 0.5f - (1.0f - money_pulse_) * 14.0f},
+                      std::format("+{}", money_gain_), gs, hud::alpha(hud::kGold, money_pulse_),
+                      ui::TextAlign::Right);
+        }
+        // Clean-delivery streak (perfect full-cargo runs) + its stacking pay bonus, a chip just
+        // left of the purse.
+        if (snapshot_.delivery_streak > 0) {
+            const u32 s = snapshot_.delivery_streak;
+            const int pct = static_cast<int>(std::lround((streak_mult(s) - 1.0f) * 100.0f));
+            const std::string str = std::format("STREAK x{}  +{}%", s, pct);
+            const f32 cs = ts * 0.62f;
+            const f32 cw = hud::width(str, cs) + cs * 1.2f;
+            hud::chip(draw, Vec2{pill.x - cw - (money_pulse_ > 0.0f ? ts * 3.2f : ts * 0.5f),
+                                 pill.y + (pill_h - cs * 1.7f) * 0.5f},
+                      str, cs, hud::kGood);
+        }
     }
     draw_combat_text(draw, W, H); // world-anchored "SHATTER!" / "EMPOWERED!" / "CANNONBALL!" labels
-    // Clean-delivery streak (perfect full-cargo runs) + its stacking pay bonus, just under the wallet.
-    if (snapshot_.delivery_streak > 0) {
-        const u32 s = snapshot_.delivery_streak;
-        const int pct = static_cast<int>(std::lround((streak_mult(s) - 1.0f) * 100.0f));
-        const std::string str = std::format("STREAK x{}  +{}%", s, pct);
-        draw.text(Vec2{W - draw.text_width(str, ts * 0.7f) - 24.0f, 22.0f + ts * 1.15f}, str, ts * 0.7f,
-                  Vec4{0.55f, 0.95f, 0.7f, 1.0f});
-    }
 
     // Always-on corner minimap (hidden while the full M map is open).
     if (!map_open_) {
         draw_minimap(draw, feet, W, H);
     }
 
+    // Top-left objective card: content rows are laid out first, then drawn over a plaque sized to
+    // fit them (so the card always hugs its text, however many status lines are showing).
+    struct Row {
+        f32 h = 0.0f;
+        f32 w = 0.0f;
+        std::function<void(f32 x, f32 y)> paint;
+    };
+    std::vector<Row> rows;
+    auto add_text = [&](std::string s, f32 size, Vec4 col, f32 gap_after = 0.45f) {
+        const f32 w = hud::width(s, size);
+        rows.push_back({size * (1.0f + gap_after), w, [&draw, s = std::move(s), size, col](f32 x, f32 y) {
+                            hud::text(draw, Vec2{x, y}, s, size, col);
+                        }});
+    };
+    auto add_rich = [&](std::string s, f32 size, Vec4 col) {
+        const f32 w = hud::rich_width(s, size);
+        rows.push_back({size * 1.75f, w, [&draw, s = std::move(s), size, col](f32 x, f32 y) {
+                            hud::rich(draw, Vec2{x, y + size * 0.15f}, s, size, col);
+                        }});
+    };
+    auto add_heading = [&](std::string s, f32 size) {
+        const f32 w = hud::heading_width(s, size);
+        rows.push_back({size * 1.55f, w, [&draw, s = std::move(s), size](f32 x, f32 y) {
+                            hud::heading(draw, Vec2{x, y}, s, size);
+                        }});
+    };
+    auto paint_card = [&](f32 min_w) {
+        if (rows.empty()) {
+            return;
+        }
+        const f32 pad = ts * 0.8f;
+        f32 cw = min_w, ch = 0.0f;
+        for (const Row& r : rows) {
+            cw = std::max(cw, r.w);
+            ch += r.h;
+        }
+        hud::plaque(draw, Vec4{margin, margin, cw + pad * 2.0f, ch + pad * 1.6f});
+        f32 y = margin + pad * 0.9f;
+        for (const Row& r : rows) {
+            r.paint(margin + pad, y);
+            y += r.h;
+        }
+    };
+
     if (phase == static_cast<u8>(ContractPhase::Offer)) {
-        draw.text(Vec2{24.0f, 22.0f}, "WALK UP TO A WAGON TO VIEW ITS CONTRACT", ts,
-                  Vec4{0.94f, 0.86f, 0.58f, 1.0f});
+        add_heading("FIND A CONTRACT", ts * 0.95f);
+        add_text("WALK UP TO A WAGON TO VIEW ITS CONTRACT", ts * 0.68f, ui::theme().text, 0.2f);
+        paint_card(0.0f);
         // A small floating tag over every offered wagon so you can see where they are and
-        // pick which to walk to (gold $ reward; the one you're next to is highlighted).
+        // pick which to walk to (gold reward; the one you're next to gets the full panel).
         for (const net::WagonState& wg : snapshot_.wagons) {
             if (wg.id == selected_wagon_ || wg.id == near_wagon_) {
                 continue; // the focused wagon gets the full panel instead
             }
             Vec2 sp;
             if (world_to_screen(wg.position + Vec3{0.0f, 2.6f, 0.0f}, W, H, sp)) {
-                const std::string tag = std::format("$ {}", wg.reward);
-                draw.text(Vec2{sp.x - draw.text_width(tag, ts * 0.7f) * 0.5f, sp.y}, tag, ts * 0.7f,
-                          Vec4{0.9f, 0.82f, 0.45f, 0.95f});
+                const std::string tag = std::format("{}", wg.reward);
+                const f32 gs = ts * 0.72f;
+                const f32 tw = hud::width(tag, gs) + gs * 2.2f;
+                const Vec4 r{sp.x - tw * 0.5f, sp.y - gs * 0.5f, tw, gs * 1.8f};
+                hud::plaque(draw, r, 0.8f, r.w * 0.5f);
+                hud::coin(draw, Vec2{r.x + gs * 0.95f, r.y + r.w * 0.5f}, gs * 0.5f);
+                hud::text(draw, Vec2{r.x + gs * 1.75f, r.y + (r.w - gs) * 0.5f}, tag, gs, hud::kGold);
             }
         }
         // The full contract panel for the focused wagon (the accepted one, else the one in range).
@@ -153,70 +232,74 @@ void ClientApp::draw_hud() {
         const bool vip = vt.bed().wall > 2.0f;
         std::string title = vt.name();
         for (char& c : title) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-        draw.text(Vec2{24.0f, 22.0f},
-                  std::format("{}   $ {}{}   ~{}m",
-                              vip ? std::string{"ESCORT THE NOBLE"}
-                                  : std::format("DELIVER THE {}", title),
-                              wg.reward, manual ? " (manual)" : "", static_cast<int>(dist)),
-                  ts, Vec4{0.94f, 0.86f, 0.58f, 1.0f});
+        add_heading(vip ? std::string{"ESCORT THE NOBLE"} : std::format("DELIVER THE {}", title),
+                    ts * 0.95f);
+        add_text(std::format("{} GOLD   -   ~{} M TO GO{}", wg.reward, static_cast<int>(dist),
+                             manual ? "   -   HAULING BY HAND" : ""),
+                 ts * 0.66f, hud::kGold, 0.55f);
         // Cargo load (pay scales with the share delivered); a VIP haul has no crates to spill.
         const bool short_load = !vip && wg.goods_aboard < wg.goods_total;
         if (vip) {
-            draw.text(Vec2{24.0f, 22.0f + ts * 1.5f}, "VIP - RAIDERS TARGET THE CARRIAGE",
-                      ts * 0.72f, Vec4{1.0f, 0.72f, 0.4f, 1.0f});
+            add_text("VIP - RAIDERS TARGET THE CARRIAGE", ts * 0.62f, hud::kWarn);
         } else {
-            draw.text(Vec2{24.0f, 22.0f + ts * 1.5f},
-                      std::format("GOODS {}/{}", wg.goods_aboard, wg.goods_total), ts * 0.72f,
-                      short_load ? Vec4{0.95f, 0.7f, 0.35f, 1.0f} : Vec4{0.66f, 0.78f, 0.7f, 1.0f});
+            add_text(std::format("GOODS ABOARD  {} / {}", wg.goods_aboard, wg.goods_total), ts * 0.62f,
+                     short_load ? hud::kWarn : ui::theme().text);
         }
-        // Wagon health bar.
+        // Wagon health gauge (green -> red), with a pale trail of recent damage draining away.
         const f32 wf = static_cast<f32>(wg.health) / 255.0f;
-        draw.rect(Vec4{24.0f, 22.0f + ts * 2.6f, 220.0f, 12.0f}, Vec4{0.05f, 0.05f, 0.07f, 0.7f},
-                  3.0f);
-        draw.rect(Vec4{24.0f, 22.0f + ts * 2.6f, 220.0f * std::max(wf, 0.0f), 12.0f},
-                  Vec4{glm::mix(Vec3{0.8f, 0.3f, 0.2f}, Vec3{0.5f, 0.7f, 0.4f}, wf), 0.95f}, 3.0f);
-        // Status + bonus lines, stacked in ONE left column below the health bar with a running y
-        // cursor. (The bonuses used to sit in a fixed right-hand column at x=252, which the wide
-        // status line - "TEND THE CART TO REPAIR IT" - ran straight into, overlapping the text.)
-        f32 oy = 22.0f + ts * 2.6f + 18.0f; // just below the wagon health bar
+        hud_wagon_ghost_ = std::max(wf, hud_wagon_ghost_ - frame_dt_ * 0.35f);
+        {
+            const f32 gw = std::max(ts * 13.0f, 220.0f);
+            const Vec3 wc = glm::mix(Vec3{0.86f, 0.28f, 0.2f}, Vec3{0.45f, 0.78f, 0.36f}, wf);
+            rows.push_back({ts * 1.35f, gw, [&draw, wf, wc, gw, ts, ghost = hud_wagon_ghost_](f32 x, f32 y) {
+                                hud::bar(draw, Vec4{x, y, gw, ts * 0.72f}, wf,
+                                         Vec4{glm::mix(wc, Vec3{1.0f}, 0.25f), 1.0f}, Vec4{wc * 0.7f, 1.0f},
+                                         4, ghost);
+                                hud::text(draw, Vec2{x + gw * 0.5f, y + (ts * 0.72f - ts * 0.5f) * 0.5f},
+                                          std::format("WAGON  {}%", static_cast<int>(std::lround(wf * 100.0f))),
+                                          ts * 0.5f, Vec4{1.0f}, ui::TextAlign::Center);
+                            }});
+        }
         // LAST STAND: a near-wrecked wagon rallies the defenders (ramping their damage) - flag it.
         if (wf > 0.0f && wf < kLastStandThreshold) {
             const int lsb = static_cast<int>(std::lround((last_stand_mult(wf) - 1.0f) * 100.0f));
             const f32 pulse = 0.55f + 0.45f * std::sin(elapsed_ * 9.0f);
-            draw.text(Vec2{24.0f, oy}, std::format("LAST STAND  +{}% DMG", lsb), ts * 0.82f,
-                      Vec4{1.0f, 0.3f + 0.25f * pulse, 0.2f, 1.0f});
-            oy += ts * 1.05f;
+            add_text(std::format("LAST STAND  +{}% DAMAGE", lsb), ts * 0.72f,
+                     Vec4{1.0f, 0.3f + 0.25f * pulse, 0.2f, 1.0f});
         } else if (wf > 0.0f && wf < 0.999f && snapshot_.enemies.empty()) {
             // Damaged + no raiders left: prompt the field-repair (stay near the cart to mend it).
-            draw.text(Vec2{24.0f, oy}, "TEND THE CART TO REPAIR IT", ts * 0.78f,
-                      Vec4{0.55f, 0.9f, 0.65f, 1.0f});
-            oy += ts * 1.05f;
+            add_text("TEND THE CART TO REPAIR IT", ts * 0.66f, hud::kGood);
         }
-        // Intact-delivery bonus: keeping the wagon's health up earns up to +bonus pay on arrival, so
-        // it's worth fighting the ambushers off rather than just outrunning them.
-        const int ibonus = static_cast<int>(std::lround((intact_bonus_mult(wf) - 1.0f) * 100.0f));
-        draw.text(Vec2{24.0f, oy}, std::format("INTACT +{}% PAY", ibonus), ts * 0.62f,
-                  Vec4{glm::mix(Vec3{0.85f, 0.5f, 0.3f}, Vec3{0.6f, 0.86f, 0.5f}, wf), 1.0f});
-        oy += ts * 0.85f;
-        // Rush bonus: delivering fast pays extra (it decays over the route), so there's a real choice -
-        // hurry past the ambushers, or stop and fight for the intact bonus. Approximate client estimate
-        // (route ~ 1.3x the straight line); the server's payout is authoritative.
-        const f32 sld = glm::length(Vec2{wg.dest.x - wg.source.x, wg.dest.z - wg.source.z}) * 1.3f;
-        const int rbonus =
-            static_cast<int>(std::lround((rush_bonus_mult(haul_elapsed_, rush_expected_time(sld)) - 1.0f) * 100.0f));
-        if (rbonus > 0) {
-            draw.text(Vec2{24.0f, oy}, std::format("RUSH +{}% PAY", rbonus), ts * 0.62f,
-                      Vec4{0.95f, 0.78f, 0.42f, 1.0f});
-            oy += ts * 0.85f;
-        }
-        // Kill bounty: a running tally of raiders felled this haul + the bonus it pays on delivery
-        // (so fighting the ambush is rewarded, not just outrunning it).
-        if (snapshot_.contract_kills > 0) {
-            draw.text(Vec2{24.0f, oy},
-                      std::format("BOUNTY $ {}  ({} DOWN)", kill_bounty(snapshot_.contract_kills),
-                                  snapshot_.contract_kills),
-                      ts * 0.62f, Vec4{1.0f, 0.55f, 0.5f, 1.0f});
-            oy += ts * 0.85f;
+        // The pay modifiers as a row of chips: intact-delivery bonus (worth fighting the ambushers
+        // off rather than outrunning them), rush bonus (delivering fast pays extra, decaying over the
+        // route - an approximate client estimate, route ~1.3x the straight line; the server's payout
+        // is authoritative) and the kill bounty for raiders felled this haul.
+        {
+            const int ibonus = static_cast<int>(std::lround((intact_bonus_mult(wf) - 1.0f) * 100.0f));
+            const f32 sld = glm::length(Vec2{wg.dest.x - wg.source.x, wg.dest.z - wg.source.z}) * 1.3f;
+            const int rbonus = static_cast<int>(
+                std::lround((rush_bonus_mult(haul_elapsed_, rush_expected_time(sld)) - 1.0f) * 100.0f));
+            std::vector<std::pair<std::string, Vec4>> chips;
+            chips.emplace_back(std::format("INTACT +{}%", ibonus),
+                               Vec4{glm::mix(Vec3{0.92f, 0.52f, 0.3f}, Vec3{0.6f, 0.88f, 0.5f}, wf), 1.0f});
+            if (rbonus > 0) {
+                chips.emplace_back(std::format("RUSH +{}%", rbonus), hud::kGold);
+            }
+            if (snapshot_.contract_kills > 0) {
+                chips.emplace_back(std::format("BOUNTY {}  ({} DOWN)", kill_bounty(snapshot_.contract_kills),
+                                               snapshot_.contract_kills),
+                                   Vec4{1.0f, 0.6f, 0.52f, 1.0f});
+            }
+            const f32 cs = ts * 0.52f;
+            f32 cw = 0.0f;
+            for (const auto& [s, c] : chips) {
+                cw += hud::width(s, cs) + cs * 1.2f + cs * 0.5f;
+            }
+            rows.push_back({cs * 2.4f, cw, [&draw, chips, cs](f32 x, f32 y) {
+                                for (const auto& [s, c] : chips) {
+                                    x += hud::chip(draw, Vec2{x, y}, s, cs, c) + cs * 0.5f;
+                                }
+                            }});
         }
         // Contextual E hint: righting a flipped cart / handling goods take priority.
         bool carrying = false;
@@ -249,49 +332,50 @@ void ClientApp::draw_hud() {
         } else {
             hint = "[E] haul / ride the wagon";
         }
-        oy += ts * 0.4f; // a small gap before the contextual hint
-        draw.text(Vec2{24.0f, oy}, hint, ts * 0.72f, Vec4{0.66f, 0.78f, 0.7f, 1.0f});
+        for (char& c : hint) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        add_rich(hint, ts * 0.62f, ui::theme().text);
+        paint_card(0.0f);
         // Wheel-off: a prominent centred alert + the re-attach progress bar while someone refits.
         if (wheel_off) {
-            const char* warn = "WHEEL OFF! THE WAGON IS STRANDED";
-            draw.text(Vec2{(W - draw.text_width(warn, ts * 0.95f)) * 0.5f, H * 0.28f}, warn,
-                      ts * 0.95f, Vec4{0.96f, 0.55f, 0.28f, 1.0f});
+            hud::banner(draw, W * 0.5f, H * 0.24f, "WHEEL OFF - THE WAGON IS STRANDED", ts * 0.95f, hud::kWarn);
             const f32 rf = static_cast<f32>(wg.repair) / 255.0f;
             if (rf > 0.01f) {
-                const f32 bw = 260.0f;
-                const f32 bx = (W - bw) * 0.5f, by = H * 0.28f + ts * 1.3f;
-                draw.rect(Vec4{bx, by, bw, 14.0f}, Vec4{0.05f, 0.05f, 0.07f, 0.75f}, 3.0f);
-                draw.rect(Vec4{bx, by, bw * rf, 14.0f}, Vec4{0.55f, 0.8f, 0.45f, 0.95f}, 3.0f);
-                const std::string rt = std::format("RE-ATTACHING  {}%", static_cast<int>(rf * 100.0f));
-                draw.text(Vec2{(W - draw.text_width(rt, ts * 0.6f)) * 0.5f, by + 18.0f}, rt,
-                          ts * 0.6f, Vec4{0.8f, 0.88f, 0.78f, 1.0f});
+                const f32 bw = std::max(260.0f, ts * 14.0f);
+                const f32 bx = (W - bw) * 0.5f, by = H * 0.24f + ts * 2.2f;
+                hud::bar(draw, Vec4{bx, by, bw, ts * 0.7f}, rf, Vec4{0.7f, 0.92f, 0.55f, 1.0f},
+                         Vec4{0.35f, 0.62f, 0.28f, 1.0f});
+                hud::text(draw, Vec2{W * 0.5f, by + ts * 1.05f},
+                          std::format("RE-ATTACHING  {}%", static_cast<int>(rf * 100.0f)), ts * 0.6f,
+                          ui::theme().text, ui::TextAlign::Center);
             }
         } else if (short_load) {
             // Warn when crates have bounced out and aren't recovered (pay is dropping).
-            const char* warn = "CARGO SPILLING - RECOVER THE CRATES";
-            draw.text(Vec2{(W - draw.text_width(warn, ts * 0.9f)) * 0.5f, H * 0.3f}, warn,
-                      ts * 0.9f, Vec4{0.95f, 0.6f, 0.3f, 1.0f});
+            hud::banner(draw, W * 0.5f, H * 0.24f, "CARGO SPILLING - RECOVER THE CRATES", ts * 0.85f,
+                        hud::kWarn);
         }
         draw_dest_arrow(draw, feet, Vec3{wg.dest.x, feet.y, wg.dest.z}, W);
+    } else {
+        paint_card(0.0f);
     }
 
-    // Settle banner.
+    // Settle banner: the haul's outcome, big and centred, in green or red.
     if (snapshot_.contract_outcome != 0) {
         const bool ok = snapshot_.contract_outcome == 1;
-        const char* msg = ok ? "WAGON DELIVERED" : "WAGON LOST";
-        const Vec4 c = ok ? Vec4{0.55f, 0.9f, 0.55f, 1.0f} : Vec4{0.95f, 0.4f, 0.36f, 1.0f};
-        const f32 bs = glm::clamp(H * 0.06f, 28.0f, 76.0f);
-        draw.text(Vec2{(W - draw.text_width(msg, bs)) * 0.5f, H * 0.34f}, msg, bs, c);
+        const f32 bs = glm::clamp(H * 0.055f, 26.0f, 64.0f);
+        hud::banner(draw, W * 0.5f, H * 0.3f, ok ? "WAGON DELIVERED" : "WAGON LOST", bs,
+                    ok ? hud::kGood : hud::kBad);
     }
 
-    // Bottom-left: the health bar, with the role label and the control hints STACKED above it (they
-    // used to be pinned to overlapping y positions, so "KNIGHT" sat on top of "[M] MAP ...").
-    const f32 bw = std::min(320.0f, W * 0.28f);
-    const f32 bh = 18.0f;
-    const f32 x = 24.0f;
-    const f32 y = H - 24.0f - bh;        // health bar
-    const f32 role_y = y - ts * 1.1f;    // role label, a clear line above the bar
-    const f32 controls_y = role_y - ts * 1.1f; // controls hint, above the role label
+    // Bottom-left: the unit frame (role crest + name + health gauge) on a plaque, with the control
+    // hints stacked above it as key-cap rows.
+    const f32 bw = std::min(ts * 15.0f, W * 0.26f);
+    const f32 bh = ts * 0.85f;
+    const f32 frame_pad = ts * 0.65f;
+    const f32 crest = ts * 2.5f;
+    const Vec4 frame{margin, H - margin - (crest + frame_pad * 2.0f),
+                     crest + bw + frame_pad * 3.0f, crest + frame_pad * 2.0f};
+    const f32 x = margin + 2.0f;
+    const f32 controls_y = frame.y - ts * 1.25f;  // [M] / [K] / [U] row, just above the frame
     // CONTEXTUAL co-op prompts: when a teammate is actually in reach the hint NAMES them and
     // brightens, so the combos advertise themselves at the moment they're possible.
     const net::PlayerState* near_ally = nullptr;
@@ -319,15 +403,30 @@ void ClientApp::draw_hud() {
         combo_hint += can_beam ? std::format("   [V] CONDUIT > {}", ally_role()) : "   [V] CONDUIT";
         can_combo = can_combo || can_beam;
     }
-    draw.text(Vec2{x, controls_y - ts * 0.85f}, combo_hint, ts * 0.68f,
-              can_combo ? Vec4{1.0f, 0.9f, 0.5f, 1.0f} : Vec4{0.85f, 0.78f, 0.55f, 0.85f});
-    draw.text(Vec2{x, controls_y}, "[M] MAP    [K] SKILLS    [U] GEAR", ts * 0.72f,
-              Vec4{0.72f, 0.80f, 0.88f, 1.0f});
-    draw.rect(Vec4{x - 3.0f, y - 3.0f, bw + 6.0f, bh + 6.0f}, Vec4{0.05f, 0.05f, 0.07f, 0.7f},
-              5.0f);
-    const Vec3 col = glm::mix(Vec3{0.85f, 0.2f, 0.18f}, Vec3{0.35f, 0.8f, 0.35f}, hp);
-    draw.rect(Vec4{x, y, bw * std::max(hp, 0.0f), bh}, Vec4{col, 0.95f}, 4.0f);
-    draw.text(Vec2{x, role_y}, role_name(role_), ts * 0.72f, Vec4{0.74f, 0.82f, 0.92f, 1.0f});
+    const f32 hs = ts * 0.64f;
+    hud::rich(draw, Vec2{x, controls_y - hs * 2.0f}, combo_hint, hs,
+              can_combo ? hud::kGold : hud::alpha(ui::theme().text, 0.85f));
+    hud::rich(draw, Vec2{x, controls_y}, "[M] MAP   [K] SKILLS   [U] GEAR", hs, ui::theme().text);
+
+    hud::plaque(draw, frame, 0.86f);
+    // The crest: the role's signature icon on a round gold-rimmed boss, in the role's colour.
+    const Vec3 rc = role_color(role_);
+    const Vec2 cc{frame.x + frame_pad + crest * 0.5f, frame.y + frame.w * 0.5f};
+    hud::medallion(draw, cc, crest * 0.5f - 4.0f, Vec4{0.06f, 0.04f, 0.03f, 1.0f});
+    draw_ability_icon(draw, role_, 0, cc.x, cc.y, crest * 0.2f, Vec4{rc, 1.0f});
+    // Name over the health gauge, which trails a pale ghost of recent damage as it drains.
+    const f32 gx = frame.x + frame_pad * 2.0f + crest;
+    const f32 name_s = ts * 0.78f;
+    hud::text(draw, Vec2{gx, frame.y + frame_pad * 0.9f}, role_name(role_), name_s,
+              Vec4{glm::mix(rc, Vec3{1.0f}, 0.45f), 1.0f}, ui::TextAlign::Left, ui::FontFace::Display);
+    hud_hp_ghost_ = std::max(hp, hud_hp_ghost_ - frame_dt_ * 0.45f);
+    const Vec4 gauge{gx, frame.y + frame.w - frame_pad - bh, bw, bh};
+    const Vec3 col = glm::mix(Vec3{0.88f, 0.22f, 0.18f}, Vec3{0.38f, 0.8f, 0.32f}, hp);
+    hud::bar(draw, gauge, hp, Vec4{glm::mix(col, Vec3{1.0f}, 0.25f), 1.0f}, Vec4{col * 0.68f, 1.0f}, 10,
+             hud_hp_ghost_);
+    hud::text(draw, Vec2{gauge.x + gauge.z * 0.5f, gauge.y + (bh - ts * 0.55f) * 0.5f},
+              std::format("{} %", static_cast<int>(std::lround(std::max(hp, 0.0f) * 100.0f))), ts * 0.55f,
+              Vec4{1.0f}, ui::TextAlign::Center);
 
     // Cleric heal-channel charge bar (centre screen while charging the AOE heal).
     if (role_ == PlayerRole::Cleric && heal_charge_fx_ > 0.001f) {
@@ -335,11 +434,10 @@ void ClientApp::draw_hud() {
         const f32 cw = std::min(360.0f, W * 0.32f);
         const f32 cx = (W - cw) * 0.5f;
         const f32 cy = H * 0.62f;
-        draw.rect(Vec4{cx - 3.0f, cy - 3.0f, cw + 6.0f, 18.0f + 6.0f},
-                  Vec4{0.04f, 0.06f, 0.05f, 0.8f}, 5.0f);
-        draw.rect(Vec4{cx, cy, cw * frac, 18.0f}, Vec4{0.45f, 1.0f, 0.7f, 0.95f}, 4.0f);
-        draw.text(Vec2{cx, cy - ts * 0.95f}, "CHANNELLING HEAL...", ts * 0.7f,
-                  Vec4{0.7f, 1.0f, 0.85f, 1.0f});
+        hud::bar(draw, Vec4{cx, cy, cw, ts * 0.8f}, frac, Vec4{0.7f, 1.0f, 0.82f, 1.0f},
+                 Vec4{0.3f, 0.78f, 0.52f, 1.0f}, 5);
+        hud::text(draw, Vec2{W * 0.5f, cy - ts * 1.0f}, "CHANNELLING HEAL...", ts * 0.68f,
+                  Vec4{0.75f, 1.0f, 0.86f, 1.0f}, ui::TextAlign::Center);
     }
 
     // Mage combo casting: while holding Ctrl, show the queued elements + the spell they'll cast,
@@ -349,33 +447,42 @@ void ClientApp::draw_hud() {
                                      {0.4f, 0.65f, 1.0f, 1.0f},
                                      {0.6f, 0.45f, 0.3f, 1.0f},
                                      {0.45f, 0.85f, 0.45f, 1.0f}};
-        const f32 sz = 34.0f, gap = 10.0f;
+        const f32 sz = ts * 1.8f, gap = ts * 0.55f;
         const f32 total = kMaxCombo * sz + (kMaxCombo - 1) * gap;
         const f32 bx = (W - total) * 0.5f;
         const f32 by = H * 0.66f;
-        draw.text(Vec2{(W - draw.text_width("WEAVING SPELL", ts * 0.72f)) * 0.5f, by - ts * 1.4f},
-                  "WEAVING SPELL", ts * 0.72f, Vec4{0.8f, 0.7f, 1.0f, 1.0f});
+        hud::text(draw, Vec2{W * 0.5f, by - ts * 1.4f}, "WEAVING SPELL", ts * 0.68f,
+                  Vec4{0.84f, 0.74f, 1.0f, 1.0f}, ui::TextAlign::Center, ui::FontFace::Display);
+        // Each queued element is a glowing gem in a gold setting; empty sockets wait dark.
         for (int i = 0; i < kMaxCombo; ++i) {
             const f32 sx = bx + static_cast<f32>(i) * (sz + gap);
+            const Vec4 r{sx, by, sz, sz};
             const bool filled = i < combo_n_;
-            const Vec4 c = filled ? ecol[combo_[i] & 3] : Vec4{0.15f, 0.16f, 0.2f, 0.8f};
-            draw.rect(Vec4{sx, by, sz, sz}, c, Vec4{0.7f, 0.6f, 1.0f, filled ? 0.95f : 0.4f}, 2.0f,
-                      6.0f);
+            hud::medallion(draw, Vec2{sx + sz * 0.5f, by + sz * 0.5f}, sz * 0.5f - 4.0f,
+                           Vec4{0.05f, 0.04f, 0.06f, 1.0f});
+            if (filled) {
+                const Vec4 c = ecol[combo_[i] & 3];
+                draw.glow(Vec4{r.x - sz * 0.3f, r.y - sz * 0.3f, sz * 1.6f, sz * 1.6f}, hud::alpha(c, 0.5f),
+                          Vec4{Vec3{c}, 0.0f});
+                const f32 g = sz * 0.3f;
+                draw.gradient(Vec4{r.x + sz * 0.5f - g, r.y + sz * 0.5f - g, g * 2.0f, g * 2.0f},
+                              Vec4{glm::mix(Vec3{c}, Vec3{1.0f}, 0.45f), 1.0f}, Vec4{Vec3{c} * 0.7f, 1.0f}, g);
+            }
         }
         const auto spell = static_cast<SpellId>(resolve_combo());
         const char* sn = spell == SpellId::None ? "..." : spell_name(spell);
-        draw.text(Vec2{(W - draw.text_width(sn, ts * 0.9f)) * 0.5f, by + sz + 8.0f}, sn, ts * 0.9f,
-                  Vec4{0.95f, 0.88f, 1.0f, 1.0f});
-        draw.text(Vec2{(W - draw.text_width("HOLD CTRL + 1-4 / WASD, RELEASE TO CAST", ts * 0.6f)) *
-                           0.5f,
-                       by + sz + 8.0f + ts},
-                  "HOLD CTRL + 1-4 / WASD, RELEASE TO CAST", ts * 0.6f, Vec4{0.6f, 0.6f, 0.7f, 1.0f});
+        hud::text(draw, Vec2{W * 0.5f, by + sz + 10.0f}, sn, ts * 0.88f, Vec4{0.96f, 0.9f, 1.0f, 1.0f},
+                  ui::TextAlign::Center, ui::FontFace::Display);
+        const char* how = "HOLD [CTRL] + [1]-[4] / [WASD], RELEASE TO CAST";
+        hud::rich(draw, Vec2{(W - hud::rich_width(how, ts * 0.52f)) * 0.5f, by + sz + 10.0f + ts * 1.4f}, how,
+                  ts * 0.52f, ui::theme().text_muted);
     } else if (role_ == PlayerRole::Mage) {
         // A standing hint so casting is discoverable (the bar keys do something for the Mage too).
-        const char* hint = "TAP 1-4 TO CAST  -  HOLD CTRL FOR COMBOS (EARTH x3 = WALL, FIRE x2 = METEOR)";
+        const char* hint = "TAP [1]-[4] TO CAST  -  HOLD [CTRL] FOR COMBOS (EARTH X3 = WALL, FIRE X2 = METEOR)";
         const f32 bar_top = H - glm::clamp(H * 0.092f, 56.0f, 84.0f) - 26.0f;
-        draw.text(Vec2{(W - draw.text_width(hint, ts * 0.58f)) * 0.5f, bar_top - ts * 1.4f}, hint,
-                  ts * 0.58f, Vec4{0.7f, 0.62f, 0.85f, 0.9f});
+        const f32 hs2 = ts * 0.5f;
+        hud::rich(draw, Vec2{(W - hud::rich_width(hint, hs2)) * 0.5f, bar_top - ts * 1.5f}, hint, hs2,
+                  Vec4{0.84f, 0.76f, 1.0f, 0.95f});
     }
 
     draw_ability_bar(draw, W, H, ts);
@@ -383,7 +490,10 @@ void ClientApp::draw_hud() {
     // Damage flash: a red wash over the screen when WE take a hit (revived feedback - it pairs
     // with the hit marker below so both giving and taking damage read instantly).
     if (hit_flash_ > 0.001f) {
-        draw.rect(Vec4{0.0f, 0.0f, W, H}, Vec4{0.85f, 0.12f, 0.12f, hit_flash_ * 0.32f});
+        // A red vignette bleeding in from the screen edges (the oversized ellipse puts the corners
+        // inside it), so the hit reads without washing out the fight in the middle.
+        draw.glow(Vec4{-W * 0.3f, -H * 0.3f, W * 1.6f, H * 1.6f}, Vec4{0.85f, 0.1f, 0.08f, 0.0f},
+                  Vec4{0.85f, 0.1f, 0.08f, hit_flash_ * 0.9f}, 0.45f);
     }
     // Hit marker: a crisp screen-centre X that pops + fades whenever one of OUR attacks lands a
     // confirmed hit (any role / any attack). Punchy white, briefly punching outward as it fades.
@@ -522,7 +632,10 @@ void ClientApp::draw_debug(ui::DrawList& draw, f32 H) {
 
 void ClientApp::draw_contract_panel(ui::DrawList& draw, const net::WagonState& wg, bool accepted, f32 W, f32 H, f32 ts, const Vec3& feet) {
     const f32 pw = glm::clamp(W * 0.24f, 280.0f, 380.0f);
-    const f32 ph = ts * 9.6f;
+    // Tall enough for the header, three detail rows, the optional modifier chip, the mode hint
+    // and the buttons.
+    const bool has_mod = contract_modifier(wg.id) != ContractModifier::Standard;
+    const f32 ph = ts * (has_mod ? 12.9f : 11.6f);
     // Anchor beside the wagon on screen; clamp on-screen, fall back to centre if off-camera.
     Vec2 sp;
     Vec2 anchor{(W - pw) * 0.5f, H * 0.26f};
@@ -533,81 +646,104 @@ void ClientApp::draw_contract_panel(ui::DrawList& draw, const net::WagonState& w
     anchor.y = glm::clamp(anchor.y, 12.0f, H - ph - 120.0f);
     const f32 px = anchor.x, py = anchor.y;
 
-    const Vec3 accent{0.96f, 0.86f, 0.45f};
-    draw.rect(Vec4{px, py, pw, ph}, Vec4{0.05f, 0.06f, 0.09f, 0.92f}, Vec4{accent, 0.85f}, 2.0f,
-              10.0f);
-    const f32 ix = px + 18.0f;
+    const ui::Theme& th = ui::theme();
+    // A gold-bound card with a tail pointing down at its wagon.
+    const Vec4 card{px, py, pw, ph};
+    draw.shadow(card, 12.0f, 18.0f, Vec4{0.0f, 0.0f, 0.0f, 0.6f}, Vec2{0.0f, 6.0f});
+    draw.gradient(card, th.panel, th.panel_bottom, 12.0f, th.panel_border, 1.75f);
+    draw.outline(Vec4{px + 5.0f, py + 5.0f, pw - 10.0f, ph - 10.0f}, hud::alpha(th.accent, 0.3f), 1.0f, 8.0f);
+    const f32 ix = px + 20.0f;
+    const f32 right = px + pw - 20.0f;
     f32 iy = py + 16.0f;
 
-    // Heading: bound-for town name. An enclosed (tall-walled) bed carries the NOBLE - the same
-    // rule generate_offers uses for Passengers cargo - and reads as a premium VIP escort.
+    // Heading: the kind of job, then the bound-for town in display capitals. An enclosed
+    // (tall-walled) bed carries the NOBLE - the same rule generate_offers uses for Passengers
+    // cargo - and reads as a premium VIP escort.
     const bool vip = vehicle_type(wg.type).bed().wall > 2.0f;
-    draw.text(Vec2{ix, iy}, vip ? "VIP ESCORT - THE NOBLE'S CARRIAGE" : "CARGO CONTRACT",
-              ts * 0.62f, vip ? Vec4{1.0f, 0.78f, 0.4f, 1.0f} : Vec4{0.7f, 0.75f, 0.82f, 1.0f});
-    iy += ts * 1.2f;
-    draw.text(Vec2{ix, iy}, std::format("TO {}", town_name(Vec3{wg.dest.x, 0.0f, wg.dest.z})),
-              ts * 1.05f, Vec4{0.98f, 0.92f, 0.7f, 1.0f});
-    iy += ts * 1.7f;
+    hud::text(draw, Vec2{ix, iy}, vip ? "VIP ESCORT - THE NOBLE'S CARRIAGE" : "CARGO CONTRACT",
+              ts * 0.56f, vip ? hud::kWarn : th.text_muted);
+    iy += ts * 1.05f;
+    hud::heading(draw, Vec2{ix, iy}, std::format("TO {}", town_name(Vec3{wg.dest.x, 0.0f, wg.dest.z})),
+                 ts * 1.05f);
+    iy += ts * 1.65f;
+    draw.line(Vec2{ix, iy}, Vec2{right, iy}, 1.0f, hud::alpha(th.accent, 0.4f));
+    iy += ts * 0.55f;
 
-    // Distance + danger + pay.
+    // Distance + danger + pay, as label / value rows.
+    auto row_label = [&](const char* label) { hud::text(draw, Vec2{ix, iy}, label, ts * 0.6f, th.text_muted); };
     const f32 dist = glm::length(Vec2{wg.dest.x - feet.x, wg.dest.z - feet.z});
-    draw.text(Vec2{ix, iy}, std::format("DISTANCE   ~{} m", static_cast<int>(dist)), ts * 0.8f,
-              Vec4{0.82f, 0.85f, 0.9f, 1.0f});
-    iy += ts * 1.25f;
+    row_label("DISTANCE");
+    hud::text(draw, Vec2{right, iy - ts * 0.08f}, std::format("~{} M", static_cast<int>(dist)), ts * 0.72f,
+              th.text, ui::TextAlign::Right);
+    iy += ts * 1.2f;
     const char* danger = wg.difficulty <= 1 ? "LOW" : wg.difficulty == 2 ? "MODERATE" : "HIGH";
-    const Vec4 dcol = wg.difficulty <= 1 ? Vec4{0.55f, 0.85f, 0.55f, 1.0f}
-                      : wg.difficulty == 2 ? Vec4{0.95f, 0.8f, 0.4f, 1.0f}
-                                           : Vec4{0.95f, 0.45f, 0.4f, 1.0f};
-    draw.text(Vec2{ix, iy}, std::format("DANGER     {} {}", danger,
-                                        std::string(wg.difficulty, '*')),
-              ts * 0.8f, dcol);
-    iy += ts * 1.25f;
-    draw.text(Vec2{ix, iy}, std::format("PAY        $ {}", wg.reward), ts * 0.9f,
-              Vec4{0.98f, 0.88f, 0.42f, 1.0f});
+    const Vec4 dcol = wg.difficulty <= 1 ? hud::kGood : wg.difficulty == 2 ? hud::kWarn : hud::kBad;
+    row_label("DANGER");
+    {
+        // Danger pips (1..3) left of the rating.
+        const f32 dw = hud::width(danger, ts * 0.72f);
+        const int dd = glm::clamp<int>(wg.difficulty, 1, 3);
+        for (int k = 0; k < 3; ++k) {
+            const f32 pr = ts * 0.22f;
+            const Vec2 pc{right - dw - ts * 0.5f - static_cast<f32>(2 - k) * pr * 2.6f - pr, iy + ts * 0.3f};
+            draw.rect(Vec4{pc.x - pr, pc.y - pr, pr * 2.0f, pr * 2.0f},
+                      k < dd ? dcol : Vec4{0.2f, 0.15f, 0.1f, 0.9f}, pr);
+            draw.outline(Vec4{pc.x - pr, pc.y - pr, pr * 2.0f, pr * 2.0f}, hud::kInk, 1.0f, pr);
+        }
+        hud::text(draw, Vec2{right, iy - ts * 0.08f}, danger, ts * 0.72f, dcol, ui::TextAlign::Right);
+    }
+    iy += ts * 1.2f;
+    row_label("PAY");
+    {
+        const std::string pay = std::format("{}", wg.reward);
+        const f32 pwid = hud::width(pay, ts * 0.9f);
+        hud::coin(draw, Vec2{right - pwid - ts * 0.55f, iy + ts * 0.32f}, ts * 0.36f);
+        hud::text(draw, Vec2{right, iy - ts * 0.2f}, pay, ts * 0.9f, hud::kGold, ui::TextAlign::Right);
+    }
     // A per-contract modifier (derived from the wagon id) - hazardous / bulk / safe runs vary the
     // pay + ambush so the board isn't all the same; standard runs show nothing.
     if (const ContractModifier mod = contract_modifier(wg.id); mod != ContractModifier::Standard) {
-        iy += ts * 1.25f;
+        iy += ts * 1.35f;
         const Vec4 mcol = mod == ContractModifier::Safe   ? Vec4{0.6f, 0.85f, 0.95f, 1.0f}
                           : mod == ContractModifier::Bulk ? Vec4{0.82f, 0.74f, 0.96f, 1.0f}
                                                           : Vec4{0.98f, 0.55f, 0.45f, 1.0f};
-        draw.text(Vec2{ix, iy}, modifier_name(mod), ts * 0.85f, mcol);
+        hud::chip(draw, Vec2{ix, iy - ts * 0.15f}, modifier_name(mod), ts * 0.56f, mcol);
     }
 
     // Mode hint (toggled with H).
-    const char* mode = vote_mode_ == 2 ? "HAUL MANUALLY (+pay)" : "HIRE A DRIVER";
-    draw.text(Vec2{ix, py + ph - ts * 2.9f}, std::format("[H] {}", mode), ts * 0.66f,
-              Vec4{0.66f, 0.78f, 0.7f, 1.0f});
+    const char* mode = vote_mode_ == 2 ? "[H] HAUL MANUALLY (+PAY)" : "[H] HIRE A DRIVER";
+    hud::rich(draw, Vec2{ix, py + ph - ts * 3.05f}, mode, ts * 0.56f, th.text);
 
-    // Buttons.
-    const f32 bw = (pw - 18.0f * 2.0f - 12.0f) * 0.5f;
+    // Buttons: a green-gold ACCEPT plaque (or the vote tally once accepted) and a dark CANCEL.
+    const f32 bw = (pw - 20.0f * 2.0f - 12.0f) * 0.5f;
     const f32 bh = ts * 1.7f;
     const f32 by = py + ph - bh - 14.0f;
+    const Vec2 mouse = pointer_pos();
+    auto button = [&](const ui::Rect& r, const char* label, Vec3 base, Vec4 text_col) {
+        const bool hot = in_rect(mouse, r);
+        const Vec4 rr{r.x, r.y, r.w, r.h};
+        draw.shadow(rr, 7.0f, 5.0f, Vec4{0.0f, 0.0f, 0.0f, 0.55f}, Vec2{0.0f, 2.5f});
+        draw.gradient(rr, Vec4{base * (hot ? 1.45f : 1.25f), 1.0f}, Vec4{base * (hot ? 0.95f : 0.8f), 1.0f}, 7.0f,
+                      hud::alpha(th.accent_hover, hot ? 0.95f : 0.6f), 1.5f);
+        draw.line(Vec2{rr.x + 7.0f, rr.y + 2.0f}, Vec2{rr.x + rr.z - 7.0f, rr.y + 2.0f}, 1.0f,
+                  Vec4{1.0f, 0.95f, 0.85f, 0.18f});
+        hud::text(draw, Vec2{rr.x + rr.z * 0.5f, rr.y + (rr.w - ts * 0.7f) * 0.5f}, label, ts * 0.7f, text_col,
+                  ui::TextAlign::Center);
+    };
     if (accepted) {
         const int total = static_cast<int>(snapshot_.players.size());
-        draw.rect(Vec4{ix, by, bw, bh}, Vec4{0.12f, 0.16f, 0.13f, 0.95f}, 6.0f);
-        draw.text(Vec2{ix + 10.0f, by + bh * 0.5f - ts * 0.34f},
-                  std::format("WAITING {}/{}", wg.votes, total), ts * 0.62f,
-                  Vec4{0.7f, 0.9f, 0.7f, 1.0f});
+        const Vec4 wr{ix, by, bw, bh};
+        draw.gradient(wr, Vec4{0.0f, 0.0f, 0.0f, 0.35f}, Vec4{0.0f, 0.0f, 0.0f, 0.2f}, 7.0f,
+                      hud::alpha(hud::kGood, 0.5f), 1.0f);
+        hud::text(draw, Vec2{wr.x + bw * 0.5f, by + (bh - ts * 0.6f) * 0.5f},
+                  std::format("WAITING  {} / {}", wg.votes, total), ts * 0.6f, hud::kGood, ui::TextAlign::Center);
         cancel_btn_ = ui::Rect{ix + bw + 12.0f, by, bw, bh};
-        draw.rect(Vec4{cancel_btn_.x, cancel_btn_.y, bw, bh}, Vec4{0.22f, 0.12f, 0.12f, 0.95f},
-                  Vec4{0.8f, 0.4f, 0.4f, 0.8f}, 1.5f, 6.0f);
-        draw.text(Vec2{cancel_btn_.x + bw * 0.5f - draw.text_width("CANCEL", ts * 0.7f) * 0.5f,
-                       by + bh * 0.5f - ts * 0.36f},
-                  "CANCEL", ts * 0.7f, Vec4{0.95f, 0.8f, 0.8f, 1.0f});
+        button(cancel_btn_, "CANCEL", Vec3{0.30f, 0.12f, 0.09f}, Vec4{1.0f, 0.86f, 0.8f, 1.0f});
     } else {
         accept_btn_ = ui::Rect{ix, by, bw, bh};
-        draw.rect(Vec4{accept_btn_.x, accept_btn_.y, bw, bh}, Vec4{0.14f, 0.3f, 0.16f, 0.97f},
-                  Vec4{0.5f, 0.9f, 0.5f, 0.95f}, 2.0f, 6.0f);
-        draw.text(Vec2{accept_btn_.x + bw * 0.5f - draw.text_width("ACCEPT", ts * 0.78f) * 0.5f,
-                       by + bh * 0.5f - ts * 0.4f},
-                  "ACCEPT", ts * 0.78f, Vec4{0.85f, 1.0f, 0.85f, 1.0f});
+        button(accept_btn_, "ACCEPT", Vec3{0.20f, 0.32f, 0.13f}, Vec4{0.9f, 1.0f, 0.82f, 1.0f});
         cancel_btn_ = ui::Rect{ix + bw + 12.0f, by, bw, bh};
-        draw.rect(Vec4{cancel_btn_.x, cancel_btn_.y, bw, bh}, Vec4{0.16f, 0.17f, 0.2f, 0.95f},
-                  Vec4{0.6f, 0.62f, 0.66f, 0.8f}, 1.5f, 6.0f);
-        draw.text(Vec2{cancel_btn_.x + bw * 0.5f - draw.text_width("CANCEL", ts * 0.7f) * 0.5f,
-                       by + bh * 0.5f - ts * 0.36f},
-                  "CANCEL", ts * 0.7f, Vec4{0.85f, 0.87f, 0.9f, 1.0f});
+        button(cancel_btn_, "CANCEL", Vec3{0.20f, 0.145f, 0.095f}, th.text);
     }
 }
 
@@ -630,24 +766,29 @@ void ClientApp::draw_ability_bar(ui::DrawList& draw, f32 W, f32 H, f32 ts) {
     const f32 sy = H - slot - pad - 26.0f;
     const f32 x0 = (W - total) * 0.5f;
 
-    // Backing panel.
-    draw.rect(Vec4{x0 - pad, sy - pad, total + pad * 2.0f, slot + pad * 2.0f},
-              Vec4{0.04f, 0.05f, 0.07f, 0.72f}, 10.0f);
+    // Backing plaque, with a stud at each end like a bound strap.
+    const Vec4 back{x0 - pad, sy - pad, total + pad * 2.0f, slot + pad * 2.0f};
+    hud::plaque(draw, back, 0.86f, 12.0f);
+    hud::stud(draw, Vec2{back.x + pad * 0.5f, back.y + back.w * 0.5f}, 3.0f);
+    hud::stud(draw, Vec2{back.x + back.z - pad * 0.5f, back.y + back.w * 0.5f}, 3.0f);
+    const ui::Theme& th = ui::theme();
 
     const f32 r = slot * 0.16f;
+    const f32 ks = slot * 0.17f; // key-cap text size
     f32 sx = x0;
     for (u8 i = 0; i < kAbilitySlots; ++i) {
         ability_slot_rects_[i] = ui::Rect{sx, sy, slot, slot}; // cached for drag hit-testing
         const int a = bar_[i];
         const bool empty = a < 0;
         const bool dragging = drag_slot_ == static_cast<int>(i);
+        const Vec4 sr{sx, sy, slot, slot};
 
         if (empty) {
-            // An empty slot: a dim dashed-looking frame + a faint key badge (drop a skill here).
-            draw.rect(Vec4{sx, sy, slot, slot}, Vec4{0.07f, 0.08f, 0.10f, 0.7f},
-                      Vec4{accent, 0.18f}, 1.5f, r);
-            draw.text(Vec2{sx + 4.0f + slot * 0.08f, sy + 4.0f + slot * 0.04f},
-                      std::format("{}", i + 1), slot * 0.18f, Vec4{accent, 0.4f});
+            // An empty socket: a dark recess + a faded key cap (drop a skill here).
+            draw.gradient(sr, Vec4{0.02f, 0.015f, 0.01f, 0.8f}, Vec4{0.07f, 0.05f, 0.035f, 0.8f}, r,
+                          hud::alpha(th.accent, 0.25f), 1.25f);
+            hud::text(draw, Vec2{sx + slot * 0.5f, sy + (slot - ks * 1.4f) * 0.5f}, std::format("{}", i + 1),
+                      ks * 1.4f, hud::alpha(th.text_muted, 0.4f), ui::TextAlign::Center);
             sx += slot + gap;
             continue;
         }
@@ -662,41 +803,47 @@ void ClientApp::draw_ability_bar(ui::DrawList& draw, f32 W, f32 H, f32 ts) {
         const f32 frac = cd_ref > 0.0f ? glm::clamp(cd_now / cd_ref, 0.0f, 1.0f) : 0.0f;
         const bool ready = frac <= 0.0f;
 
-        // Slot face + an accent border that lights up when the ability is ready.
-        draw.rect(Vec4{sx, sy, slot, slot}, Vec4{0.11f, 0.13f, 0.17f, 0.95f},
-                  Vec4{accent, ready ? 0.95f : 0.28f}, ready ? 2.5f : 1.5f, r);
+        // Slot face: a recessed tile with a soft glow of the role colour behind the icon, in a gold
+        // frame that brightens (with a warm halo) while the ability is ready.
+        if (ready) {
+            draw.shadow(sr, r, 7.0f, hud::alpha(th.accent_hover, 0.35f));
+        }
+        draw.gradient(sr, Vec4{0.13f, 0.095f, 0.065f, 0.97f}, Vec4{0.05f, 0.035f, 0.025f, 0.97f}, r,
+                      ready ? th.accent_hover : hud::alpha(th.accent, 0.45f), ready ? 2.0f : 1.25f);
+        draw.glow(Vec4{sx + slot * 0.12f, sy + slot * 0.12f, slot * 0.76f, slot * 0.76f},
+                  Vec4{accent, ready ? 0.30f : 0.10f}, Vec4{accent, 0.0f});
 
         // Icon, tinted by readiness (centred - the bar is icon-only; names live in the skills tree).
-        const Vec4 icol{ready ? accent : accent * 0.45f, ready ? 1.0f : 0.7f};
-        draw_ability_icon(draw, role_, static_cast<u8>(a), sx + slot * 0.5f, sy + slot * 0.5f,
+        const Vec4 icol{ready ? glm::mix(accent, Vec3{1.0f}, 0.2f) : accent * 0.45f, ready ? 1.0f : 0.7f};
+        draw_ability_icon(draw, role_, static_cast<u8>(a), sx + slot * 0.5f, sy + slot * 0.52f,
                           slot * 0.26f, icol);
 
-        // Cooldown wipe: a dark overlay draining from the top + the seconds remaining.
+        // Cooldown: a dark curtain draining from the top, its edge lit, + the seconds remaining.
         if (!ready) {
-            draw.rect(Vec4{sx, sy, slot, slot * frac}, Vec4{0.02f, 0.02f, 0.03f, 0.62f}, r);
-            const std::string secs = std::format("{:.0f}", std::ceil(cd_now));
-            draw.text(Vec2{sx + slot * 0.5f - draw.text_width(secs, ts) * 0.5f,
-                           sy + slot * 0.5f - ts * 0.5f},
-                      secs, ts, Vec4{0.95f, 0.96f, 1.0f, 0.95f});
+            draw.rect(Vec4{sx, sy, slot, slot * frac}, Vec4{0.02f, 0.015f, 0.01f, 0.66f}, r);
+            draw.line(Vec2{sx + 3.0f, sy + slot * frac}, Vec2{sx + slot - 3.0f, sy + slot * frac}, 1.5f,
+                      hud::alpha(th.accent_hover, 0.7f));
+            hud::text(draw, Vec2{sx + slot * 0.5f, sy + (slot - ts) * 0.5f},
+                      std::format("{:.0f}", std::ceil(cd_now)), ts, Vec4{1.0f, 0.97f, 0.9f, 1.0f},
+                      ui::TextAlign::Center);
         }
         // The slot being click-dragged is dimmed; its icon follows the cursor (drawn below).
         if (dragging) {
-            draw.rect(Vec4{sx, sy, slot, slot}, Vec4{0.03f, 0.04f, 0.05f, 0.6f}, r);
+            draw.rect(sr, Vec4{0.03f, 0.02f, 0.015f, 0.6f}, r);
         }
 
-        // Key badge (top-left).
-        draw.rect(Vec4{sx + 4.0f, sy + 4.0f, slot * 0.26f, slot * 0.26f},
-                  Vec4{accent, 0.9f}, slot * 0.07f);
-        draw.text(Vec2{sx + 4.0f + slot * 0.08f, sy + 4.0f + slot * 0.04f},
-                  std::format("{}", i + 1), slot * 0.18f, Vec4{0.05f, 0.06f, 0.08f, 1.0f});
+        // Its key, as a key cap on the top-left corner.
+        hud::key_cap(draw, Vec2{sx - ks * 0.35f, sy - ks * 0.2f}, std::format("{}", i + 1), ks);
         sx += slot + gap;
     }
 
     // The dragged ability rides under the cursor while reordering.
     if (drag_slot_ >= 0 && bar_[drag_slot_] >= 0) {
         const Vec2 p = pointer_pos();
-        draw.rect(Vec4{p.x - slot * 0.5f, p.y - slot * 0.5f, slot, slot},
-                  Vec4{0.11f, 0.13f, 0.17f, 0.85f}, Vec4{accent, 0.95f}, 2.0f, r);
+        const Vec4 dr{p.x - slot * 0.5f, p.y - slot * 0.5f, slot, slot};
+        draw.shadow(dr, r, 10.0f, Vec4{0.0f, 0.0f, 0.0f, 0.6f}, Vec2{0.0f, 6.0f});
+        draw.gradient(dr, Vec4{0.13f, 0.095f, 0.065f, 0.92f}, Vec4{0.05f, 0.035f, 0.025f, 0.92f}, r,
+                      th.accent_hover, 2.0f);
         draw_ability_icon(draw, role_, static_cast<u8>(bar_[drag_slot_]), p.x, p.y, slot * 0.26f,
                           Vec4{accent, 1.0f});
     }
@@ -890,15 +1037,22 @@ void ClientApp::draw_dest_arrow(ui::DrawList& draw, const Vec3& from, const Vec3
     }
     d = glm::normalize(d);
     const Vec2 perp{-d.y, d.x};
-    const Vec2 c{W * 0.5f, 84.0f};
-    const Vec4 amber{0.98f, 0.78f, 0.32f, 1.0f};
-    const f32 L = 34.0f, hw = 13.0f;
+    // A compass medallion at the top centre whose gold needle points to the destination.
+    const f32 R = 26.0f;
+    const Vec2 c{W * 0.5f, 22.0f + R};
+    hud::medallion(draw, c, R, Vec4{0.07f, 0.05f, 0.035f, 0.95f});
+    const Vec4 gold = hud::kGold;
+    const Vec4 ink{0.05f, 0.03f, 0.015f, 1.0f};
+    const f32 L = R * 0.72f, hw = R * 0.3f;
     const Vec2 tip = c + d * L;
-    draw.line(c - d * L * 0.6f, tip, 6.0f, amber);
-    draw.line(tip, tip - d * hw + perp * hw, 6.0f, amber);
-    draw.line(tip, tip - d * hw - perp * hw, 6.0f, amber);
-    draw.text(Vec2{c.x - draw.text_width("DESTINATION", 16.0f) * 0.5f, c.y + 22.0f},
-              "DESTINATION", 16.0f, amber);
+    for (const auto& [w, col] : {std::pair{7.5f, ink}, std::pair{4.5f, gold}}) { // inked outline, then gold
+        draw.line(c - d * L * 0.55f, tip, w, col);
+        draw.line(tip, tip - d * hw + perp * hw, w, col);
+        draw.line(tip, tip - d * hw - perp * hw, w, col);
+    }
+    hud::stud(draw, c, 3.0f);
+    hud::text(draw, Vec2{c.x, c.y + R + 12.0f}, "DESTINATION", 13.0f, gold, ui::TextAlign::Center,
+              ui::FontFace::Display);
 }
 
 // An always-on corner minimap: a small north-up window around the player showing nearby roads, the
@@ -907,18 +1061,18 @@ void ClientApp::draw_dest_arrow(ui::DrawList& draw, const Vec3& from, const Vec3
 // detailed pannable view.
 void ClientApp::draw_minimap(ui::DrawList& draw, const Vec3& feet, f32 W, f32 H) {
     const f32 sz = glm::clamp(H * 0.2f, 132.0f, 200.0f);
-    const Vec4 box{W - sz - 18.0f, 54.0f, sz, sz}; // top-right, just below the money counter
+    // Top-right, just below the money pill: a round medallion with a "N" marker at the top.
+    const f32 top = 16.0f + glm::clamp(H * 0.026f, 15.0f, 30.0f) * 1.9f + 16.0f;
+    const Vec4 box{W - sz - 22.0f, top, sz, sz};
     const Vec2 c{box.x + sz * 0.5f, box.y + sz * 0.5f};
     constexpr f32 mm_radius = 120.0f; // world metres from centre to edge
     const f32 scale = (sz * 0.5f) / mm_radius;
-    draw.rect(box, Vec4{0.04f, 0.05f, 0.07f, 0.62f}, Vec4{0.72f, 0.62f, 0.4f, 0.8f}, 2.0f, 8.0f);
+    hud::medallion(draw, c, sz * 0.5f, Vec4{0.13f, 0.15f, 0.1f, 0.78f});
+    draw.glow(Vec4{box.x, box.y, sz, sz}, Vec4{0.36f, 0.42f, 0.24f, 0.35f}, Vec4{0.0f, 0.0f, 0.0f, 0.55f});
 
     const Vec2 pxz{feet.x, feet.z};
     auto to_mm = [&](Vec2 wxz) { return c + Vec2{(wxz.x - pxz.x) * scale, (wxz.y - pxz.y) * scale}; };
-    auto inside = [&](const Vec2& p) {
-        return p.x >= box.x + 3.0f && p.x <= box.x + sz - 3.0f && p.y >= box.y + 3.0f &&
-               p.y <= box.y + sz - 3.0f;
-    };
+    auto inside = [&](const Vec2& p) { return glm::length(p - c) <= sz * 0.5f - 4.0f; };
 
     if (world_seed_ != 0) {
         for (const roads::Segment& s : roads::gather(pxz, mm_radius, world_seed_)) {
@@ -945,15 +1099,23 @@ void ClientApp::draw_minimap(ui::DrawList& draw, const Vec3& feet, f32 W, f32 H)
     }
     // The player at centre + a heading tick.
     const Vec2 fwd{std::cos(face_yaw_), std::sin(face_yaw_)};
-    draw.line(c, c + fwd * 11.0f, 2.5f, Vec4{0.9f, 0.95f, 1.0f, 1.0f});
-    draw.rect(Vec4{c.x - 3.0f, c.y - 3.0f, 6.0f, 6.0f}, Vec4{0.95f, 0.97f, 1.0f, 1.0f}, 3.0f);
+    draw.line(c, c + fwd * 12.0f, 4.5f, Vec4{0.05f, 0.03f, 0.02f, 0.9f});
+    draw.line(c, c + fwd * 11.0f, 2.5f, Vec4{1.0f, 0.97f, 0.9f, 1.0f});
+    draw.rect(Vec4{c.x - 4.5f, c.y - 4.5f, 9.0f, 9.0f}, Vec4{0.05f, 0.03f, 0.02f, 0.9f}, 4.5f);
+    draw.rect(Vec4{c.x - 3.0f, c.y - 3.0f, 6.0f, 6.0f}, Vec4{1.0f, 0.97f, 0.9f, 1.0f}, 3.0f);
+    // North, on the rim.
+    const Vec2 n{c.x, box.y + 2.0f};
+    draw.rect(Vec4{n.x - 9.0f, n.y - 9.0f, 18.0f, 18.0f}, Vec4{0.08f, 0.05f, 0.03f, 1.0f}, 9.0f);
+    draw.outline(Vec4{n.x - 9.0f, n.y - 9.0f, 18.0f, 18.0f}, hud::kGold, 1.5f, 9.0f);
+    hud::text(draw, Vec2{n.x, n.y - 5.5f}, "N", 11.0f, hud::kGold, ui::TextAlign::Center,
+              ui::FontFace::Display);
 }
 
 void ClientApp::rebuild_map_raster(const Vec4& panel, f32 ppm) {
     map_tiles_.clear();
     const Vec2 mc{panel.x + panel.z * 0.5f, panel.y + panel.w * 0.5f};
-    const f32 top = panel.y + 38.0f, left = panel.x + 5.0f;
-    const f32 right = panel.x + panel.z - 5.0f, bot = panel.y + panel.w - 5.0f;
+    const f32 top = panel.y + kMapInset, left = panel.x + kMapInset;
+    const f32 right = panel.x + panel.z - kMapInset, bot = panel.y + panel.w - kMapInset;
     // Raster an overscan margin beyond the visible area, so draw_map's screen-space transform
     // can pan / gently zoom the cached raster between rebuilds without exposing bare panel at
     // the edges (the visible window is scissored back to the panel).
@@ -1010,7 +1172,9 @@ void ClientApp::rebuild_map_raster(const Vec4& panel, f32 ppm) {
                 map_center_.x + (rx0 + (static_cast<f32>(i) + 0.5f) * cell - mc.x) / ppm;
             const f32 wz =
                 map_center_.y + (ry0 + (static_cast<f32>(j) + 0.5f) * cell - mc.y) / ppm;
-            hgrid[static_cast<usize>(j) * gw + i] = worldgen::height(wx, wz, seed);
+            // The natural land (the map has no use for the levelled house pads, and skipping
+            // them keeps the raster from building town layouts across the whole view).
+            hgrid[static_cast<usize>(j) * gw + i] = worldgen::base_height(wx, wz, seed);
         }
     });
 
@@ -1080,11 +1244,14 @@ void ClientApp::draw_map() {
     const f32 W = static_cast<f32>(ext.width);
     const f32 H = static_cast<f32>(ext.height);
     ui::DrawList draw{*renderer_};
+    const ui::Theme& th = ui::theme();
 
-    draw.rect(Vec4{0.0f, 0.0f, W, H}, Vec4{0.03f, 0.04f, 0.06f, 0.86f});
+    // The world dimmed behind a framed board; the map raster fills it edge to edge.
+    draw.rect(Vec4{0.0f, 0.0f, W, H}, Vec4{0.02f, 0.015f, 0.01f, 0.8f});
     const f32 mg = std::min(W, H) * map::margin_frac;
     const Vec4 panel{mg, mg, W - 2.0f * mg, H - 2.0f * mg};
-    draw.rect(panel, Vec4{0.07f, 0.08f, 0.10f, 0.98f}, 10.0f);
+    draw.shadow(panel, 14.0f, 28.0f, Vec4{0.0f, 0.0f, 0.0f, 0.7f}, Vec2{0.0f, 10.0f});
+    draw.gradient(panel, th.panel, th.panel_bottom, 14.0f);
 
     const f32 inner = std::min(panel.z, panel.w) * 0.5f - 28.0f;
     const f32 view_world = map::view_world / map_zoom_; // zoom in -> smaller span -> more detail
@@ -1116,22 +1283,16 @@ void ClientApp::draw_map() {
         raster_scale = 1.0f;
         raster_off = Vec2{0.0f};
     }
-    const f32 clip_l = panel.x + 5.0f, clip_t = panel.y + 38.0f;
+    const f32 clip_l = panel.x + kMapInset, clip_t = panel.y + kMapInset;
     renderer_->draw_ui_tiles(map_tiles_, mc, raster_off, raster_scale,
-                             Vec4{clip_l, clip_t, panel.x + panel.z - 5.0f - clip_l,
-                                  panel.y + panel.w - 5.0f - clip_t});
-
-    // Title strip + frame on top of the raster.
-    draw.rect(Vec4{panel.x, panel.y, panel.z, 34.0f}, Vec4{0.06f, 0.07f, 0.10f, 0.96f}, 10.0f);
-    draw.outline(panel, Vec4{0.40f, 0.36f, 0.28f, 1.0f}, 2.0f, 10.0f);
-    draw.text(Vec2{panel.x + 22.0f, panel.y + 18.0f}, "WORLD MAP", 24.0f, Vec4{0.94f, 0.9f, 0.8f, 1.0f});
+                             Vec4{clip_l, clip_t, panel.z - 2.0f * kMapInset, panel.w - 2.0f * kMapInset});
 
     auto to_screen = [&](f32 wx, f32 wz) {
         return Vec2{mc.x + (wx - map_center_.x) * ppm, mc.y + (wz - map_center_.y) * ppm};
     };
     auto in_panel = [&](const Vec2& p, f32 pad = 4.0f) {
-        return p.x > panel.x + pad && p.x < panel.x + panel.z - pad &&
-               p.y > panel.y + 36.0f && p.y < panel.y + panel.w - pad;
+        return p.x > panel.x + kMapInset + pad && p.x < panel.x + panel.z - kMapInset - pad &&
+               p.y > panel.y + kMapInset + pad && p.y < panel.y + panel.w - kMapInset - pad;
     };
 
     // Roads, coloured by the difficulty of the biome each stretch crosses (tan = easy lowland,
@@ -1198,9 +1359,10 @@ void ClientApp::draw_map() {
                 }
             }
             const std::string name = town_name(Vec3{v->center.x, 0.0f, v->center.y});
-            const f32 ns = glm::clamp(r * 0.9f, 12.0f, 18.0f);
-            draw.text(Vec2{c.x - draw.text_width(name, ns) * 0.5f, c.y - r - ns - 3.0f}, name, ns,
-                      is_dest ? Vec4{1.0f, 0.88f, 0.45f, 1.0f} : Vec4{0.96f, 0.92f, 0.82f, 1.0f});
+            const f32 ns = glm::clamp(r * 0.7f, 11.0f, 15.0f);
+            hud::text(draw, Vec2{c.x, c.y - r - ns - 5.0f}, name, ns,
+                      is_dest ? hud::kGold : Vec4{0.98f, 0.94f, 0.84f, 1.0f}, ui::TextAlign::Center,
+                      ui::FontFace::Display);
         }
     }
 
@@ -1238,16 +1400,33 @@ void ClientApp::draw_map() {
         }
     }
 
+    // The frame over the raster's edges: a gold binding, an inset hairline and corner studs.
+    draw.outline(panel, th.panel_border, 2.5f, 14.0f);
+    const Vec4 board{panel.x + kMapInset, panel.y + kMapInset, panel.z - 2.0f * kMapInset,
+                     panel.w - 2.0f * kMapInset};
+    draw.outline(board, Vec4{0.08f, 0.05f, 0.03f, 1.0f}, 2.0f, 6.0f);
+    for (const Vec2& c : {Vec2{board.x, board.y}, Vec2{board.x + board.z, board.y},
+                          Vec2{board.x + board.z, board.y + board.w}, Vec2{board.x, board.y + board.w}}) {
+        hud::stud(draw, c, 4.5f);
+    }
+    // Title cartouche, top-left over the map.
+    {
+        const f32 ts = 26.0f;
+        const f32 tw = hud::heading_width("WORLD MAP", ts);
+        const Vec4 cart{board.x + 14.0f, board.y + 12.0f, tw + 44.0f, ts + 26.0f};
+        hud::plaque(draw, cart, 0.9f);
+        hud::heading(draw, Vec2{cart.x + 22.0f, cart.y + 13.0f}, "WORLD MAP", ts);
+    }
+
     // Legend (bottom-left): map symbols, the road-difficulty key, and the biome palette.
     constexpr int nleg = 14;
-    const f32 lx = panel.x + 16.0f;
-    f32 ly = panel.y + panel.w - 16.0f - static_cast<f32>(nleg) * 18.0f;
-    draw.rect(Vec4{lx - 8.0f, ly - 10.0f, 186.0f, static_cast<f32>(nleg) * 18.0f + 14.0f},
-              Vec4{0.05f, 0.06f, 0.09f, 0.88f}, Vec4{0.3f, 0.28f, 0.22f, 0.8f}, 1.5f, 6.0f);
+    const f32 lx = board.x + 26.0f;
+    f32 ly = board.y + board.w - 22.0f - static_cast<f32>(nleg) * 18.0f;
+    hud::plaque(draw, Vec4{lx - 12.0f, ly - 12.0f, 176.0f, static_cast<f32>(nleg) * 18.0f + 18.0f}, 0.9f);
     auto legend = [&](const Vec4& sw, const char* label, bool ring) {
-        draw.rect(Vec4{lx, ly, 12.0f, 12.0f}, sw, ring ? Vec4{1.0f, 1.0f, 1.0f, 1.0f} : Vec4{0.0f},
-                  ring ? 2.0f : 0.0f, 6.0f);
-        draw.text(Vec2{lx + 20.0f, ly}, label, 13.0f, Vec4{0.86f, 0.86f, 0.9f, 1.0f});
+        draw.rect(Vec4{lx, ly, 12.0f, 12.0f}, sw, ring ? Vec4{1.0f, 1.0f, 1.0f, 1.0f} : hud::kInk,
+                  ring ? 2.0f : 1.0f, 6.0f);
+        hud::text(draw, Vec2{lx + 20.0f, ly + 0.5f}, label, 11.0f, th.text);
         ly += 18.0f;
     };
     legend(Vec4{0.55f, 0.7f, 0.95f, 1.0f}, "YOU", true);
@@ -1265,8 +1444,16 @@ void ClientApp::draw_map() {
     legend(Vec4{0.93f, 0.95f, 0.99f, 1.0f}, "SNOW", false);
     legend(Vec4{0.92f, 0.32f, 0.24f, 1.0f}, "DANGER", false);
 
-    draw.text(Vec2{panel.x + panel.z - 360.0f, panel.y + panel.w - 28.0f},
-              "DRAG TO PAN   SCROLL ZOOM   M / ESC CLOSE", 15.0f, Vec4{0.72f, 0.74f, 0.8f, 1.0f});
+    // Controls, bottom-right, sized to their text so they never run off the frame.
+    {
+        const char* help = "[DRAG] PAN   [SCROLL] ZOOM   [M] / [ESC] CLOSE";
+        const f32 hs = 12.0f;
+        const f32 hw = hud::rich_width(help, hs);
+        const Vec4 hp{board.x + board.z - hw - 40.0f, board.y + board.w - hs * 2.6f - 14.0f, hw + 26.0f,
+                      hs * 2.6f};
+        hud::plaque(draw, hp, 0.9f);
+        hud::rich(draw, Vec2{hp.x + 13.0f, hp.y + (hp.w - hs) * 0.5f}, help, hs, th.text);
+    }
 }
 
 void ClientApp::draw_skills() {
@@ -1280,37 +1467,30 @@ void ClientApp::draw_skills() {
     const ui::Theme& th = ui::theme();
     const Vec3 accent = role_color(role_);
 
-    // Dim the world, then a framed parchment panel (the medieval menu styling).
-    draw.rect(Vec4{0.0f, 0.0f, W, H}, Vec4{0.03f, 0.02f, 0.015f, 0.86f});
-    const f32 mg = std::min(W, H) * 0.08f;
+    // The shared overlay window: the world dimmed behind a studded, gold-bound board.
+    const f32 mg = std::min(W, H) * 0.06f;
     const Vec4 panel{mg, mg, W - 2.0f * mg, H - 2.0f * mg};
-    draw.rect(panel, th.panel, Vec4{accent, 0.7f}, 2.5f, 12.0f);
-
-    // Header: a gold title + the chosen role and its fantasy on the right.
-    const f32 hx = panel.x + 30.0f;
-    f32 hy = panel.y + 24.0f;
-    draw.text(Vec2{hx, hy}, "SKILLS", 34.0f, th.accent_hover);
+    f32 hy = hud::window(draw, W, H, panel, "SKILLS");
+    const f32 hx = panel.x + 34.0f;
+    // The chosen role and its fantasy, right-aligned on the title row.
     const std::string rn = std::format("{}  -  {}", role_name(role_), role_desc(role_));
-    draw.text(Vec2{panel.x + panel.z - draw.text_width(rn, 18.0f) - 30.0f, hy + 10.0f}, rn, 18.0f,
-              Vec4{accent, 1.0f});
-    hy += 52.0f;
+    hud::text(draw, Vec2{panel.x + panel.z - 34.0f, panel.y + 34.0f}, rn, 15.0f,
+              Vec4{glm::mix(accent, Vec3{1.0f}, 0.3f), 1.0f}, ui::TextAlign::Right);
 
-    // Controls reminder (the role's primary / secondary mouse actions).
+    // Controls reminder (the role's primary / secondary mouse actions), as key caps.
     const char* primary = role_ == PlayerRole::Knight  ? "SWORD SWING"
                           : role_ == PlayerRole::Hunter ? "LOOSE AN ARROW"
                                                         : "ARCANE BOLT";
     const char* secondary = role_ == PlayerRole::Knight  ? "RAISE SHIELD (BLOCK)"
                             : role_ == PlayerRole::Cleric ? "CHANNEL HEAL AURA"
                                                           : "BUILD TERRAIN";
-    draw.text(Vec2{hx, hy}, std::format("LEFT CLICK: {}     RIGHT CLICK: {}", primary, secondary),
-              15.0f, th.text_muted);
-    hy += 22.0f;
-    draw.text(Vec2{hx, hy},
-              "CLICK A SKILL TO EQUIP / UNEQUIP  -  DRAG THE ACTION BAR TO REORDER (KEYS 1-4)",
-              15.0f, Vec4{accent, 0.9f});
-    hy += 22.0f;
-    draw.line(Vec2{hx, hy}, Vec2{panel.x + panel.z - 30.0f, hy}, 1.5f, Vec4{accent, 0.4f});
-    hy += 12.0f;
+    hud::rich(draw, Vec2{hx, hy}, std::format("[LEFT CLICK] {}     [RIGHT CLICK] {}", primary, secondary),
+              12.0f, th.text);
+    hy += 24.0f;
+    hud::rich(draw, Vec2{hx, hy},
+              "CLICK A SKILL TO EQUIP / UNEQUIP  -  DRAG THE ACTION BAR TO REORDER ([1]-[4])", 12.0f,
+              th.text_muted);
+    hy += 28.0f;
 
     // The tree: a role crest on the left branches to every ability node (one per row). Each node
     // is clickable to equip/unequip (skills_click hit-tests skill_node_rects_).
@@ -1322,24 +1502,26 @@ void ClientApp::draw_skills() {
     const f32 root_x = panel.x + 58.0f;
     const f32 root_y = (rows_top + rows_bot) * 0.5f;
     const f32 root_r = std::min(icon_box * 0.62f, 44.0f);
-    const Vec4 branch{accent.r, accent.g, accent.b, 0.5f};
+    const Vec4 branch = hud::alpha(th.accent, 0.55f);
 
-    // Branch connectors (drawn first, behind the nodes): an elbow from the crest to each row.
+    // Branch connectors (drawn first, behind the nodes): an inked elbow from the crest to each row.
     for (u8 i = 0; i < kAbilityCount; ++i) {
         const f32 cy = rows_top + (static_cast<f32>(i) + 0.5f) * row_h;
         const f32 midx = (root_x + root_r + node_x) * 0.5f;
-        draw.line(Vec2{root_x + root_r, root_y}, Vec2{midx, root_y}, 2.5f, branch);
-        draw.line(Vec2{midx, root_y}, Vec2{midx, cy}, 2.5f, branch);
-        draw.line(Vec2{midx, cy}, Vec2{node_x, cy}, 2.5f, branch);
+        for (const auto& [w, col] : {std::pair{4.5f, Vec4{0.03f, 0.02f, 0.01f, 0.6f}}, std::pair{2.0f, branch}}) {
+            draw.line(Vec2{root_x + root_r, root_y}, Vec2{midx, root_y}, w, col);
+            draw.line(Vec2{midx, root_y}, Vec2{midx, cy}, w, col);
+            draw.line(Vec2{midx, cy}, Vec2{node_x, cy}, w, col);
+        }
     }
 
-    // The crest: a rounded plate with the role's signature icon and name.
-    draw.rect(Vec4{root_x - root_r, root_y - root_r, root_r * 2.0f, root_r * 2.0f},
-              Vec4{0.16f, 0.12f, 0.08f, 0.98f}, Vec4{accent, 0.95f}, 2.5f, root_r * 0.35f);
-    draw_ability_icon(draw, role_, 0, root_x, root_y - root_r * 0.18f, root_r * 0.5f,
-                      Vec4{accent, 1.0f});
-    draw.text(Vec2{root_x - draw.text_width(role_name(role_), 14.0f) * 0.5f, root_y + root_r * 0.42f},
-              role_name(role_), 14.0f, th.text);
+    // The crest: a round gold-bound boss with the role's signature icon, its name beneath.
+    hud::medallion(draw, Vec2{root_x, root_y}, root_r, Vec4{0.07f, 0.05f, 0.035f, 1.0f});
+    draw.glow(Vec4{root_x - root_r, root_y - root_r, root_r * 2.0f, root_r * 2.0f}, Vec4{accent, 0.3f},
+              Vec4{accent, 0.0f});
+    draw_ability_icon(draw, role_, 0, root_x, root_y, root_r * 0.5f, Vec4{accent, 1.0f});
+    hud::text(draw, Vec2{root_x, root_y + root_r + 12.0f}, role_name(role_), 14.0f, th.text,
+              ui::TextAlign::Center, ui::FontFace::Display);
 
     // One node per ability: icon slot + (when equipped) its hotkey badge, then name, cooldown,
     // description and an equip status. Equipped nodes glow; the whole row is the click target.
@@ -1366,45 +1548,57 @@ void ClientApp::draw_skills() {
 
         // The whole row is clickable to equip / unequip.
         skill_node_rects_[i] = ui::Rect{bx - 6.0f, ry + 3.0f, row_right - bx + 6.0f, row_h - 6.0f};
-        if (equipped) { // a soft highlight band behind an equipped skill
-            draw.rect(Vec4{bx - 6.0f, ry + 3.0f, row_right - bx + 6.0f, row_h - 6.0f},
-                      Vec4{accent.r, accent.g, accent.b, 0.10f}, icon_box * 0.12f);
-        }
+        // Each row is a card; an equipped skill's card is lit gold, the one under the cursor lifts.
+        const Vec4 card{bx - 8.0f, ry + 3.0f, row_right - bx + 12.0f, row_h - 6.0f};
+        const bool hot = in_rect(pointer_pos(), skill_node_rects_[i]);
+        draw.gradient(card, Vec4{1.0f, 0.9f, 0.7f, equipped ? 0.10f : (hot ? 0.07f : 0.035f)},
+                      Vec4{1.0f, 0.9f, 0.7f, equipped ? 0.04f : 0.015f}, 8.0f,
+                      hud::alpha(th.accent, equipped ? 0.55f : (hot ? 0.4f : 0.15f)), 1.0f);
 
-        draw.rect(Vec4{bx, by, icon_box, icon_box}, Vec4{0.11f, 0.13f, 0.17f, 0.96f},
-                  Vec4{accent, equipped ? 0.95f : 0.45f}, equipped ? 2.5f : 1.5f, icon_box * 0.16f);
-        const Vec4 icol{equipped ? accent : accent * 0.6f, 1.0f};
+        const Vec4 ib{bx, by, icon_box, icon_box};
+        if (equipped) {
+            draw.shadow(ib, icon_box * 0.16f, 7.0f, hud::alpha(th.accent_hover, 0.35f));
+        }
+        draw.gradient(ib, Vec4{0.13f, 0.095f, 0.065f, 0.97f}, Vec4{0.05f, 0.035f, 0.025f, 0.97f},
+                      icon_box * 0.16f, equipped ? th.accent_hover : hud::alpha(th.accent, 0.45f),
+                      equipped ? 2.0f : 1.25f);
+        draw.glow(Vec4{bx + icon_box * 0.12f, by + icon_box * 0.12f, icon_box * 0.76f, icon_box * 0.76f},
+                  Vec4{accent, equipped ? 0.28f : 0.1f}, Vec4{accent, 0.0f});
+        const Vec4 icol{equipped ? glm::mix(accent, Vec3{1.0f}, 0.2f) : accent * 0.6f, 1.0f};
         draw_ability_icon(draw, role_, i, bx + icon_box * 0.5f, by + icon_box * 0.5f,
                           icon_box * 0.26f, icol);
-        if (equipped) { // a key badge showing which hotkey (1..4) casts it
-            draw.rect(Vec4{bx + 4.0f, by + 4.0f, icon_box * 0.3f, icon_box * 0.3f},
-                      Vec4{accent, 0.95f}, icon_box * 0.08f);
-            draw.text(Vec2{bx + 4.0f + icon_box * 0.1f, by + 4.0f + icon_box * 0.06f},
-                      std::format("{}", bound + 1), icon_box * 0.19f, Vec4{0.06f, 0.05f, 0.04f, 1.0f});
+        if (equipped) { // a key cap showing which hotkey (1..4) casts it
+            hud::key_cap(draw, Vec2{bx - 6.0f, by - 4.0f}, std::format("{}", bound + 1), icon_box * 0.17f);
         }
 
-        const f32 tx = bx + icon_box + 26.0f;
-        const f32 name_sz = std::min(row_h * 0.24f, 22.0f);
-        f32 ty = cy - name_sz - 8.0f;
-        const Vec4 name_col{equipped ? th.text : Vec4{th.text.r, th.text.g, th.text.b, 0.75f}};
-        const f32 nw = draw.text(Vec2{tx, ty}, ab.name, name_sz, name_col);
-        draw.text(Vec2{tx + nw + 18.0f, ty + name_sz * 0.28f}, std::format("{:.0f}s CD", ab.cooldown),
-                  name_sz * 0.62f, Vec4{accent, 0.85f});
+        const f32 tx = bx + icon_box + 24.0f;
+        const f32 name_sz = std::min(row_h * 0.22f, 20.0f);
+        f32 ty = cy - name_sz - 7.0f;
+        const Vec4 name_col{equipped ? th.text : Vec4{th.text.r, th.text.g, th.text.b, 0.8f}};
+        const f32 nw = hud::text(draw, Vec2{tx, ty}, ab.name, name_sz, name_col, ui::TextAlign::Left,
+                                 ui::FontFace::Display);
+        hud::chip(draw, Vec2{tx + nw + 14.0f, ty + name_sz * 0.5f - name_sz * 0.58f * 0.85f},
+                  std::format("{:.0f}S COOLDOWN", ab.cooldown), name_sz * 0.5f, hud::alpha(th.text_muted, 0.95f));
         // Equip status on the right of the name line.
-        const std::string status = equipped ? std::format("EQUIPPED - KEY {}", bound + 1)
-                                             : "CLICK TO EQUIP";
-        const f32 stsz = name_sz * 0.6f;
-        draw.text(Vec2{row_right - draw.text_width(status, stsz), ty + name_sz * 0.3f}, status, stsz,
-                  equipped ? Vec4{0.6f, 0.9f, 0.6f, 0.95f} : Vec4{accent, 0.7f});
-        ty += name_sz + 8.0f;
-        const f32 desc_sz = std::min(row_h * 0.15f, 15.0f);
+        const std::string status = equipped ? std::format("EQUIPPED  [{}]", bound + 1) : "CLICK TO EQUIP";
+        const f32 stsz = name_sz * 0.56f;
+        hud::rich(draw, Vec2{row_right - hud::rich_width(status, stsz), ty + name_sz * 0.3f}, status, stsz,
+                  equipped ? hud::kGood : hud::alpha(th.accent_hover, 0.8f));
+        ty += name_sz + 9.0f;
+        const f32 desc_sz = std::min(row_h * 0.15f, 14.0f);
         // Upgradeable transformations tease what the final rank buys until it's bought.
         std::string desc{ab.desc};
         if (const char* mx = ability_rank_desc(role_, i);
             mx[0] != '\0' && ability_rank_[i] < kMaxAbilityRank) {
             desc += std::format("  ({})", mx);
         }
-        draw.text(Vec2{tx, ty}, desc, desc_sz, th.text_muted);
+        // Wrapped to stay clear of the upgrade controls on the right (two lines at most).
+        const f32 desc_w = row_right - tx - (ability_max_rank(role_, i) > 0 ? 250.0f : 24.0f);
+        f32 ly = ty;
+        for (const std::string& line : hud::wrap(desc, desc_sz, desc_w)) {
+            draw.text(Vec2{tx, ly}, line, desc_sz, th.text_muted);
+            ly += desc_sz * 1.35f;
+        }
 
         // Upgrade controls for upgradeable abilities: rank pips + a town/gold-gated UPGRADE button.
         skill_upgrade_rects_[i] = ui::Rect{};
@@ -1416,41 +1610,52 @@ void ClientApp::draw_skills() {
             f32 px = row_right - static_cast<f32>(maxr) * (pip + 5.0f);
             const f32 pips_left = px;
             for (u8 k = 0; k < maxr; ++k) {
+                // Rank gems: lit gold for ranks bought, dark sockets for the rest.
                 const bool filled = k < rank;
-                draw.rect(Vec4{px, py, pip, pip},
-                          filled ? Vec4{accent, 0.95f} : Vec4{0.16f, 0.17f, 0.20f, 0.95f},
-                          Vec4{accent, 0.7f}, 1.3f, pip * 0.3f);
+                const Vec4 gr{px, py, pip, pip};
+                if (filled) {
+                    draw.shadow(gr, pip * 0.5f, 4.0f, hud::alpha(th.accent_hover, 0.5f));
+                    draw.gradient(gr, th.accent_hover, hud::shade(th.accent, 0.7f), pip * 0.5f, hud::kInk, 1.0f);
+                } else {
+                    draw.gradient(gr, Vec4{0.03f, 0.02f, 0.015f, 0.95f}, Vec4{0.1f, 0.07f, 0.05f, 0.95f},
+                                  pip * 0.5f, hud::alpha(th.accent, 0.5f), 1.0f);
+                }
                 px += pip + 5.0f;
             }
             if (rank < maxr) {
                 const u32 cost = ability_upgrade_price(static_cast<u8>(rank + 1));
                 const bool can = sk_in_town && snapshot_.money >= cost;
-                const std::string label = std::format("UPGRADE  ${}", cost);
-                const f32 bsz = std::min(row_h * 0.15f, 14.0f);
-                const f32 bw = draw.text_width(label, bsz) + 20.0f;
-                const f32 bh = bsz + 12.0f;
+                const std::string label = std::format("UPGRADE  {}", cost);
+                const f32 bsz = std::min(row_h * 0.15f, 13.0f);
+                const f32 bw = hud::width(label, bsz) + bsz * 3.0f;
+                const f32 bh = bsz + 14.0f;
                 const f32 ubx = pips_left - bw - 12.0f;
                 const f32 uby = py - (bh - pip) * 0.5f;
-                draw.rect(Vec4{ubx, uby, bw, bh},
-                          can ? Vec4{accent.r * 0.42f, accent.g * 0.34f, accent.b * 0.18f, 0.96f}
-                              : Vec4{0.13f, 0.12f, 0.11f, 0.92f},
-                          Vec4{accent, can ? 0.95f : 0.4f}, 1.5f, bh * 0.24f);
-                draw.text(Vec2{ubx + 10.0f, uby + 6.0f}, label, bsz,
-                          can ? Vec4{1.0f, 0.95f, 0.8f, 1.0f} : th.text_muted);
+                const Vec4 ub{ubx, uby, bw, bh};
+                if (can) {
+                    draw.shadow(ub, bh * 0.3f, 6.0f, hud::alpha(th.accent_hover, 0.3f));
+                }
+                draw.gradient(ub, can ? th.accent_hover : Vec4{0.2f, 0.15f, 0.1f, 0.92f},
+                              can ? hud::shade(th.accent, 0.72f) : Vec4{0.12f, 0.09f, 0.06f, 0.92f}, bh * 0.3f,
+                              can ? hud::shade(th.accent, 0.5f) : hud::alpha(th.accent, 0.35f), 1.25f);
+                hud::coin(draw, Vec2{ubx + bsz * 1.0f, uby + bh * 0.5f}, bsz * 0.45f);
+                ui::TextStyle us = hud::style(bsz, can ? th.accent_text : th.text_muted);
+                us.outline = Vec4{0.0f};
+                us.shadow = can ? Vec4{1.0f, 0.9f, 0.6f, 0.35f} : Vec4{0.0f, 0.0f, 0.0f, 0.5f};
+                draw.text(Vec2{ubx + bsz * 1.9f, uby + (bh - bsz) * 0.5f}, label, us);
                 skill_upgrade_rects_[i] = ui::Rect{ubx, uby, bw, bh};
             } else {
-                const std::string mx = "MAX";
-                draw.text(Vec2{pips_left - draw.text_width(mx, pip) - 10.0f, py}, mx, pip,
-                          Vec4{accent, 0.95f});
+                hud::text(draw, Vec2{pips_left - 10.0f, py - 1.0f}, "MAX", pip, hud::kGold, ui::TextAlign::Right);
             }
         }
     }
 
+    const f32 fy = panel.y + panel.w - 34.0f;
+    const f32 cw = hud::rich(draw, Vec2{hx, fy}, "[K] / [ESC] CLOSE", 12.0f, th.text_muted);
     if (!sk_in_town) {
-        draw.text(Vec2{hx + 200.0f, panel.y + panel.w - 30.0f}, "VISIT A TOWN TO BUY UPGRADES", 14.0f,
-                  Vec4{accent, 0.7f});
+        hud::text(draw, Vec2{hx + cw + 30.0f, fy}, "VISIT A TOWN TO BUY UPGRADES", 12.0f,
+                  hud::alpha(th.accent_hover, 0.85f));
     }
-    draw.text(Vec2{hx, panel.y + panel.w - 30.0f}, "K / ESC  CLOSE", 16.0f, th.text_muted);
 }
 
 std::string ClientApp::town_name(const Vec3& c) {
@@ -1484,19 +1689,41 @@ void ClientApp::draw_wardrobe() {
     const ui::Theme& th = ui::theme();
     const Vec3 accent = role_color(role_);
 
-    draw.rect(Vec4{0.0f, 0.0f, W, H}, Vec4{0.03f, 0.02f, 0.015f, 0.86f});
     const f32 pw = std::min(W * 0.62f, 720.0f);
-    const f32 ph = std::min(H * 0.82f, 600.0f);
+    const f32 ph = std::min(H * 0.86f, 620.0f);
     const Vec4 panel{(W - pw) * 0.5f, (H - ph) * 0.5f, pw, ph};
-    draw.rect(panel, th.panel, Vec4{accent, 0.7f}, 2.5f, 12.0f);
-
-    const f32 x = panel.x + 30.0f;
-    f32 y = panel.y + 24.0f;
-    draw.text(Vec2{x, y}, "WARDROBE", 34.0f, th.accent_hover);
-    const std::string money = std::format("$ {}", snapshot_.money);
-    draw.text(Vec2{panel.x + panel.z - draw.text_width(money, 24.0f) - 30.0f, y + 8.0f}, money, 24.0f,
-              th.accent_hover);
-    y += 58.0f;
+    f32 y = hud::window(draw, W, H, panel, "WARDROBE");
+    const f32 x = panel.x + 34.0f;
+    // The party purse on the title row.
+    {
+        const std::string money = std::format("{}", snapshot_.money);
+        const f32 ms = 22.0f;
+        const f32 mw = hud::width(money, ms);
+        const f32 mx = panel.x + panel.z - 34.0f;
+        hud::text(draw, Vec2{mx, panel.y + 30.0f}, money, ms, hud::kGold, ui::TextAlign::Right);
+        hud::coin(draw, Vec2{mx - mw - 18.0f, panel.y + 30.0f + ms * 0.5f}, ms * 0.48f);
+    }
+    // A wardrobe button: a gold plaque when it can be bought, a dimmed board otherwise.
+    const Vec2 mouse = pointer_pos();
+    auto shop_button = [&](const Vec4& btn, const std::string& label, u32 price, bool can) {
+        const bool hot = can && in_rect(mouse, ui::Rect{btn.x, btn.y, btn.z, btn.w});
+        if (can) {
+            draw.shadow(btn, 8.0f, hot ? 12.0f : 6.0f, hud::alpha(th.accent_hover, hot ? 0.45f : 0.25f));
+        }
+        draw.shadow(btn, 8.0f, 5.0f, Vec4{0.0f, 0.0f, 0.0f, 0.5f}, Vec2{0.0f, 3.0f});
+        draw.gradient(btn, can ? hud::shade(th.accent_hover, hot ? 1.08f : 1.0f) : Vec4{0.2f, 0.15f, 0.1f, 0.95f},
+                      can ? hud::shade(th.accent, 0.72f) : Vec4{0.12f, 0.09f, 0.06f, 0.95f}, 8.0f,
+                      can ? hud::shade(th.accent, 0.5f) : hud::alpha(th.accent, 0.35f), 1.5f);
+        ui::TextStyle s = hud::style(16.0f, can ? th.accent_text : th.text_muted);
+        s.outline = Vec4{0.0f};
+        s.shadow = can ? Vec4{1.0f, 0.9f, 0.6f, 0.35f} : Vec4{0.0f, 0.0f, 0.0f, 0.5f};
+        draw.text(Vec2{btn.x + 16.0f, btn.y + (btn.w - 16.0f) * 0.5f}, label, s);
+        const std::string p = std::format("{}", price);
+        s.align = ui::TextAlign::Right;
+        draw.text(Vec2{btn.x + btn.z - 16.0f, btn.y + (btn.w - 16.0f) * 0.5f}, p, s);
+        hud::coin(draw, Vec2{btn.x + btn.z - 16.0f - ui::DrawList::text_width(p, s) - 14.0f, btn.y + btn.w * 0.5f},
+                  8.0f);
+    };
 
     const net::PlayerState* me = local_player();
     const u8 owned = me != nullptr ? me->owned_tier : 0;
@@ -1504,90 +1731,110 @@ void ClientApp::draw_wardrobe() {
     const bool in_town =
         world_seed_ != 0 && worldgen::inside_village(feet.x, feet.z, world_seed_, 6.0f);
 
+    // A section caption: small tracked gold capitals on a hairline rule.
+    const f32 right = panel.x + panel.z - 34.0f;
+    auto section = [&](const char* label) {
+        const f32 lw = hud::text(draw, Vec2{x, y}, label, 12.0f, hud::alpha(th.accent_hover, 0.9f),
+                                 ui::TextAlign::Left, ui::FontFace::Display);
+        draw.line(Vec2{x + lw + 12.0f, y + 6.0f}, Vec2{right, y + 6.0f}, 1.0f, hud::alpha(th.accent, 0.35f));
+        y += 24.0f;
+    };
+
     // Current kit + its stat bonus.
-    draw.text(Vec2{x, y},
+    section("YOUR KIT");
+    hud::text(draw, Vec2{x, y},
               std::format("{}  -  {} KIT", role_name(role_), tier_name(static_cast<EquipmentTier>(owned))),
-              22.0f, Vec4{accent, 1.0f});
-    y += 30.0f;
+              20.0f, Vec4{glm::mix(accent, Vec3{1.0f}, 0.35f), 1.0f}, ui::TextAlign::Left, ui::FontFace::Display);
+    y += 32.0f;
     Equipment cur;
     cur.outfit_tier = owned;
     cur.weapon_tier = owned;
     const EquipBonus eb = equipment_bonus(cur);
-    draw.text(Vec2{x, y},
-              std::format("+{} HP    x{:.2f} DAMAGE    +{:.0f}% ARMOUR", static_cast<int>(eb.health_add),
-                          eb.damage_mult, eb.mitigation_add * 100.0f),
-              15.0f, th.text_muted);
-    y += 36.0f;
+    {
+        f32 cx = x;
+        const f32 cs = 12.0f;
+        cx += hud::chip(draw, Vec2{cx, y}, std::format("+{} HP", static_cast<int>(eb.health_add)), cs, hud::kGood) + 8.0f;
+        cx += hud::chip(draw, Vec2{cx, y}, std::format("X{:.2f} DAMAGE", eb.damage_mult), cs, hud::kWarn) + 8.0f;
+        hud::chip(draw, Vec2{cx, y}, std::format("+{:.0f}% ARMOUR", eb.mitigation_add * 100.0f), cs,
+                  Vec4{0.7f, 0.82f, 0.98f, 1.0f});
+    }
+    y += 42.0f;
 
     // Buy-upgrade button (server gates it on being in a town + affordability; this just requests it).
+    section("SHOP");
     wardrobe_buy_rect_ = ui::Rect{};
     if (static_cast<u8>(owned + 1) < kTierCount) {
         const auto next = static_cast<EquipmentTier>(owned + 1);
         const u32 price = tier_price(next);
         const bool affordable = snapshot_.money >= price;
         const bool can = in_town && affordable;
-        const Vec4 btn{x, y, 340.0f, 46.0f};
+        const Vec4 btn{x, y, std::min(400.0f, right - x), 46.0f};
         wardrobe_buy_rect_ = ui::Rect{btn.x, btn.y, btn.z, btn.w};
-        draw.rect(btn, can ? Vec4{accent * 0.55f, 0.97f} : Vec4{0.2f, 0.18f, 0.16f, 0.9f},
-                  Vec4{accent, can ? 0.95f : 0.3f}, 2.0f, 8.0f);
-        draw.text(Vec2{btn.x + 16.0f, btn.y + 13.0f},
-                  std::format("BUY {} KIT   -   $ {}", tier_name(next), price), 18.0f,
-                  can ? th.text : th.text_muted);
+        shop_button(btn, std::format("BUY {} KIT", tier_name(next)), price, can);
         y += 54.0f;
         const char* hint = !in_town       ? "VISIT A TOWN SHOP TO BUY UPGRADES"
                            : !affordable  ? "NOT ENOUGH GOLD - DELIVER MORE CARGO"
                                           : "NICER LOOK + MORE HEALTH, DAMAGE & ARMOUR";
-        draw.text(Vec2{x, y}, hint, 14.0f, th.text_muted);
-        y += 34.0f;
+        draw.text(Vec2{x + 4.0f, y}, hint, 13.0f, can ? th.text_muted : hud::alpha(hud::kWarn, 0.9f));
+        y += 30.0f;
     } else {
-        draw.text(Vec2{x, y}, "FULLY UPGRADED  -  MASTER GEAR", 18.0f, th.accent_hover);
-        y += 44.0f;
+        hud::text(draw, Vec2{x, y}, "FULLY UPGRADED  -  MASTER GEAR", 17.0f, hud::kGold);
+        y += 40.0f;
     }
 
     // Wagon-RIG upgrade (a money sink): reinforce the cart for more max health + ambush-damage resist.
     if (const u8 rl = snapshot_.rig_level; rl < kMaxRigLevel) {
         const u32 rprice = rig_price(static_cast<u8>(rl + 1));
         const bool rcan = in_town && snapshot_.money >= rprice;
-        const Vec4 btn{x, y, 380.0f, 40.0f};
+        const Vec4 btn{x, y, std::min(400.0f, right - x), 42.0f};
         wardrobe_rig_rect_ = ui::Rect{btn.x, btn.y, btn.z, btn.w};
-        draw.rect(btn, rcan ? Vec4{accent * 0.55f, 0.97f} : Vec4{0.2f, 0.18f, 0.16f, 0.9f},
-                  Vec4{accent, rcan ? 0.95f : 0.3f}, 2.0f, 8.0f);
-        draw.text(Vec2{btn.x + 16.0f, btn.y + 11.0f},
-                  std::format("REINFORCE WAGON  Lv {}   -   $ {}", rl + 1, rprice), 17.0f,
-                  rcan ? th.text : th.text_muted);
-        y += 50.0f;
+        shop_button(btn, std::format("REINFORCE WAGON  LV {}", rl + 1), rprice, rcan);
+        y += 58.0f;
     } else {
         wardrobe_rig_rect_ = ui::Rect{};
-        draw.text(Vec2{x, y}, "WAGON FULLY REINFORCED", 17.0f, th.accent_hover);
+        hud::text(draw, Vec2{x, y}, "WAGON FULLY REINFORCED", 16.0f, hud::kGold);
         y += 34.0f;
     }
 
-    // Recolour swatches (the player's chosen primary colour).
-    draw.text(Vec2{x, y}, "OUTFIT COLOUR", 15.0f, th.text);
-    y += 26.0f;
-    const f32 sw = 46.0f;
+    // Recolour swatches (the player's chosen primary colour), as glazed tiles.
+    section("OUTFIT COLOUR");
+    const f32 sw = 42.0f;
     for (int i = 0; i < 8; ++i) {
-        const Vec4 r{x + static_cast<f32>(i) * (sw + 8.0f), y, sw, sw};
+        const Vec4 r{x + static_cast<f32>(i) * (sw + 10.0f), y, sw, sw};
         wardrobe_swatch_rects_[i] = ui::Rect{r.x, r.y, r.z, r.w};
         const Vec3 c = outfit_tint_of(static_cast<u8>(i));
         const bool sel = equip_loadout_.outfit_tint == static_cast<u8>(i);
-        draw.rect(r, Vec4{c, 1.0f}, Vec4{sel ? Vec3{1.0f} : accent, sel ? 1.0f : 0.4f},
-                  sel ? 3.0f : 1.5f, 6.0f);
+        if (sel) {
+            draw.shadow(r, 7.0f, 8.0f, hud::alpha(th.accent_hover, 0.55f));
+            draw.outline(Vec4{r.x - 3.0f, r.y - 3.0f, r.z + 6.0f, r.w + 6.0f}, th.accent_hover, 2.5f, 9.0f);
+        } else {
+            draw.shadow(r, 7.0f, 3.0f, Vec4{0.0f, 0.0f, 0.0f, 0.5f}, Vec2{0.0f, 1.5f});
+        }
+        draw.gradient(r, Vec4{glm::mix(c, Vec3{1.0f}, 0.18f), 1.0f}, Vec4{c * 0.78f, 1.0f}, 7.0f,
+                      Vec4{0.0f, 0.0f, 0.0f, 0.5f}, 1.0f);
+        draw.line(Vec2{r.x + 6.0f, r.y + 3.0f}, Vec2{r.x + r.z - 6.0f, r.y + 3.0f}, 1.5f,
+                  Vec4{1.0f, 1.0f, 1.0f, 0.22f});
     }
-    y += sw + 28.0f;
+    y += sw + 26.0f;
 
     // Change weapon (cycles the role's options).
+    section("WEAPON");
     const WeaponType wt = role_weapon(static_cast<u8>(role_), equip_loadout_.weapon_index);
-    draw.text(Vec2{x, y}, std::format("WEAPON:   {}", weapon_name(wt)), 18.0f, Vec4{accent, 1.0f});
+    hud::text(draw, Vec2{x, y + 6.0f}, weapon_name(wt), 18.0f, Vec4{glm::mix(accent, Vec3{1.0f}, 0.35f), 1.0f},
+              ui::TextAlign::Left, ui::FontFace::Display);
     wardrobe_weapon_rect_ = ui::Rect{};
     if (role_weapon_count(static_cast<u8>(role_)) > 1) {
-        const Vec4 btn{x + 280.0f, y - 8.0f, 140.0f, 36.0f};
+        const Vec4 btn{x + 240.0f, y - 2.0f, 140.0f, 34.0f};
         wardrobe_weapon_rect_ = ui::Rect{btn.x, btn.y, btn.z, btn.w};
-        draw.rect(btn, Vec4{accent * 0.55f, 0.97f}, Vec4{accent, 0.95f}, 2.0f, 8.0f);
-        draw.text(Vec2{btn.x + 22.0f, btn.y + 9.0f}, "CHANGE", 16.0f, th.text);
+        const bool hot = in_rect(mouse, wardrobe_weapon_rect_);
+        draw.shadow(btn, 8.0f, 5.0f, Vec4{0.0f, 0.0f, 0.0f, 0.5f}, Vec2{0.0f, 3.0f});
+        draw.gradient(btn, hud::shade(th.button_hover, hot ? 1.4f : 1.15f), th.button, 8.0f,
+                      hud::alpha(th.accent, hot ? 0.9f : 0.5f), 1.5f);
+        hud::text(draw, Vec2{btn.x + btn.z * 0.5f, btn.y + (btn.w - 14.0f) * 0.5f}, "CHANGE", 14.0f, th.text,
+                  ui::TextAlign::Center);
     }
 
-    draw.text(Vec2{x, panel.y + panel.w - 34.0f}, "PRESS U OR ESC TO CLOSE", 14.0f, th.text_muted);
+    hud::rich(draw, Vec2{x, panel.y + panel.w - 36.0f}, "[U] / [ESC] CLOSE", 12.0f, th.text_muted);
 }
 
 void ClientApp::wardrobe_click(const Vec2& p) {

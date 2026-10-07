@@ -17,7 +17,10 @@ namespace alryn {
 // data files - it's all derived from the rig.
 class CharacterAnimator {
 public:
-    void update(f32 speed, Timestep dt);
+    // `heading` is how much of the movement is along the way the character faces: 1 walking
+    // forward, -1 straight backwards (a character facing its aim while retreating). Backpedalling
+    // runs the stride in reverse - the feet step back - and trims the forward lean.
+    void update(f32 speed, Timestep dt, f32 heading = 1.0f);
 
     // --- Action layer ---------------------------------------------------------------
     // The locomotion (walk/idle) above is the BASE layer. On top of it the animator can
@@ -68,6 +71,7 @@ private:
     f32 stride_ = 0.0f;    // 0 = idle .. 1 = full walk (eased amplitude)
     f32 wobble_ = 0.0f;    // free-running phase for the always-on idle breathe/jelly
     f32 speed_ = 0.0f;     // latest movement speed (drives the forward lean)
+    f32 dir_ = 1.0f;       // eased stride direction: 1 stepping forward .. -1 stepping back
     f32 swing_t_ = -1.0f;  // swing playback time; < 0 = not swinging
     f32 cast_t_ = -1.0f;   // cast playback time; < 0 = not casting
     bool blocking_ = false; // shield-up held?

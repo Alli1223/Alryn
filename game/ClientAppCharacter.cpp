@@ -239,8 +239,8 @@ void ClientApp::draw_skinned_body(PlayerVisual& v, const Mat4& root, const std::
 }
 
 void ClientApp::draw_character(PlayerVisual& v, const Vec3& feet, f32 yaw, bool seated, int role) {
-    // Seated riders sink onto the bench (the sit pose folds the legs forward).
-    const Vec3 base = seated ? feet - Vec3{0.0f, 0.42f, 0.0f} : feet;
+    // Seated riders sink onto the bench (the sit pose folds the legs forward), the hips just above it.
+    const Vec3 base = seated ? feet - Vec3{0.0f, seat_drop(v.model), 0.0f} : feet;
     Mat4 root = glm::translate(Mat4{1.0f}, base) *
                 glm::rotate(Mat4{1.0f}, HalfPi - yaw, Vec3{0.0f, 1.0f, 0.0f});
     // The blobby squash/sway/lean wobble rides on the root when on foot (not seated).
@@ -268,7 +268,7 @@ void ClientApp::draw_character(PlayerVisual& v, const Vec3& feet, f32 yaw, bool 
         // Weapons attach to the JOINT frames (orientation + position) so they swing with
         // the arm, unlike the box mats whose columns are scaled by box_size.
         const std::vector<Mat4> jmats = v.model.joint_matrices(root, pose);
-        draw_cloth(v, root, jmats, Vec3{1.0f}); // simulated flowing cloth (cape, ...)
+        draw_cloth(v, root, jmats, Vec3{1.0f}, base.y); // simulated flowing cloth (cape, ...)
         const bool staff_user = (r == PlayerRole::Mage || r == PlayerRole::Cleric);
         if (idle_w > 0.5f && staff_user) {
             draw_planted_weapon(v.model, jmats, feet, r, v.equipment); // rest on the planted staff/mace

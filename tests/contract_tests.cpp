@@ -239,6 +239,31 @@ TEST_CASE("Contract: a laden cart tows slower, lightening + quickening as cargo 
     CHECK(load_speed_factor(0, 0) == doctest::Approx(1.0f));
 }
 
+TEST_CASE("Vehicle: on_deck finds a rider standing on the bed, not beside it or high above it") {
+    // Shared by the server (it carries deck riders along with the rolling cart) and the client (a deck
+    // rider's stride is measured against the deck, so they stand still on a moving wagon).
+    for (u8 t = 0; t < vehicle_types().size(); ++t) {
+        const VehicleType& vt = vehicle_type(t);
+        const Vec3 cart{10.0f, 2.0f, -5.0f};
+        const f32 yaw = 0.7f;
+        const Vec2 fwd{std::cos(yaw), std::sin(yaw)};
+        const Vec2 right{-std::sin(yaw), std::cos(yaw)};
+        const Vec2 fp = vt.footprint();
+        auto at = [&](f32 along, f32 across, f32 up) {
+            const Vec2 p = Vec2{cart.x, cart.z} + fwd * along + right * across;
+            return Vec3{p.x, cart.y + up, p.y};
+        };
+        const f32 deck = vt.deck_height();
+        CHECK(on_deck(vt, cart, yaw, at(0.3f, 0.2f, deck)));               // standing on the bed
+        CHECK(on_deck(vt, cart, yaw, at(fp.x + 0.1f, 0.0f, deck)));        // at the tail rail (slack)
+        CHECK(on_deck(vt, cart, yaw, at(0.0f, 0.0f, deck + 0.8f)));        // mid-hop on it
+        CHECK_FALSE(on_deck(vt, cart, yaw, at(fp.x + 0.5f, 0.0f, deck)));  // off the end
+        CHECK_FALSE(on_deck(vt, cart, yaw, at(0.0f, fp.y + 0.5f, deck)));  // off the side
+        CHECK_FALSE(on_deck(vt, cart, yaw, at(0.0f, 0.0f, 0.0f)));         // on the ground, under / by it
+        CHECK_FALSE(on_deck(vt, cart, yaw, at(0.0f, 0.0f, deck + 2.0f)));  // flying high above it
+    }
+}
+
 TEST_CASE("Contract: bigger carts carry more goods, and lost goods cut the pay") {
     CHECK(goods_for_capacity(1) < goods_for_capacity(2));
     CHECK(goods_for_capacity(2) < goods_for_capacity(3));

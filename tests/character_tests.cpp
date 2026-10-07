@@ -174,27 +174,160 @@ TEST_CASE("Character: races reproportion the body and add signature features") {
     CHECK(tallest_skin_feature(elf) > tallest_skin_feature(man) * 1.5f);
 }
 
-TEST_CASE("Character: the cape collar anchors at the shoulders, not the waist") {
-    // Cloaks (ClientAppCloth add_cape / setup_noble_cape) anchor to the HEAD joint + a small offset,
-    // so the collar must sit high on the body and hang from the shoulders. The Torso joint sits at
-    // mid-body (~the waist), so a cape must NOT be anchored there. Guards against the cape regressing
-    // to a waist anchor. Checked in a walk pose (the in-game case), not just bind.
-    CharacterModel model = CharacterModel::create(7u, CharacterAppearance{});
+namespace {
+// A dressed character the way the client builds one: model + outfit attachments, skinned body + outfit,
+// the fitted cloth-collision body and the outfit's flowing cloth pieces.
+struct Dressed {
+    CharacterModel model;
+    SkinnedMesh body, outfit;
+    BodyColliders fit;
+    std::vector<ClothPiece> cloth;
+};
+Dressed dress(u32 seed, const CharacterAppearance& app, OutfitKind kind, const Equipment& eq) {
+    Dressed d{CharacterModel::create(seed, app), {}, {}, {}, {}};
+    apply_outfit(d.model, kind, eq);
+    d.body = build_body_mesh(d.model);
+    d.outfit = build_outfit_mesh(d.model, kind, eq);
+    d.fit = fit_body_colliders(d.model, d.body, d.outfit);
+    d.cloth = outfit_cloth(d.model, kind, eq, d.fit);
+    return d;
+}
+ClothPiece* find_cape(std::vector<ClothPiece>& cloth) {
+    for (ClothPiece& c : cloth) {
+        if (c.ring && !c.closed) {
+            return &c;
+        }
+    }
+    return nullptr;
+}
+// Deepest any (non-anchor) cloth node sits inside a collider it should rest on.
+f32 deepest_penetration(const ClothPiece& c, const std::vector<ClothCollider>& body) {
+    f32 worst = 0.0f;
+    for (const ClothChain& ch : c.chains) {
+        for (usize i = 1; i < ch.pos.size(); ++i) {
+            for (const ClothCollider& k : body) {
+                if ((k.group & c.collide) == 0) {
+                    continue;
+                }
+                const Vec3 ab = k.b - k.a;
+                const f32 l2 = glm::dot(ab, ab);
+                const f32 t = l2 > 1e-10f ? glm::clamp(glm::dot(ch.pos[i] - k.a, ab) / l2, 0.0f, 1.0f) : 0.0f;
+                worst = std::max(worst, k.r - glm::length(ch.pos[i] - (k.a + ab * t)));
+            }
+        }
+    }
+    return worst;
+}
+} // namespace
+
+TEST_CASE("ClothRig: the cape collar anchors at the shoulders, not the waist") {
+    // Cloaks hang from the Torso joint frame at the shoulder line (Character/ClothRig make_cape). The
+    // collar must sit high on the body, not at mid-body (~the waist joint). Checked in a walk pose (the
+    // in-game case), not just bind.
+    Dressed d = dress(7u, CharacterAppearance{}, OutfitKind::Plate, Equipment{3, 3, 0, 0});
+    const ClothPiece* cape = find_cape(d.cloth);
+    REQUIRE(cape != nullptr);
     CharacterAnimator anim;
     for (int i = 0; i < 20; ++i) {
         anim.update(2.5f, Timestep{1.0f / 60.0f});
     }
-    const std::vector<Mat4> jm = model.joint_matrices(Mat4{1.0f}, anim.pose(model));
-    const int head = model.bone_index(BonePart::Head);
-    const int torso = model.bone_index(BonePart::Torso);
-    REQUIRE(head >= 0);
+    const std::vector<Mat4> jm = d.model.joint_matrices(Mat4{1.0f}, anim.pose(d.model));
+    const int torso = d.model.bone_index(BonePart::Torso);
     REQUIRE(torso >= 0);
-    // The exact cape-collar anchor the cloth uses: Head joint * the add_cape centre-panel offset.
-    const Vec3 collar =
-        Vec3{(jm[static_cast<usize>(head)] * glm::translate(Mat4{1.0f}, Vec3{0.0f, 0.05f, -0.30f}))[3]};
+    REQUIRE(cape->anchor == BonePart::Torso);
     const f32 torso_y = jm[static_cast<usize>(torso)][3].y;
-    CHECK(collar.y > model.height() * 0.72f); // the collar is up at the shoulders / neck
-    CHECK(collar.y > torso_y + 0.4f);          // and well above the mid-body (waist) joint
+    for (const Vec3& a : cape->anchor_locals) {
+        const Vec3 collar{jm[static_cast<usize>(torso)] * Vec4{a, 1.0f}};
+        CHECK(collar.y > d.model.height() * 0.68f); // the collar is up at the shoulders / neck
+        CHECK(collar.y > torso_y + 0.4f);           // and well above the mid-body (waist) joint
+        CHECK(collar.z < 0.0f);                      // behind the body (the rig faces +Z)
+    }
+}
+
+TEST_CASE("ClothRig: body colliders fit the worn gear") {
+    const Dressed knight = dress(5u, CharacterAppearance{}, OutfitKind::Plate, Equipment{3, 3, 0, 0});
+    // A bare-headed townsman (tint bits 2-3 = 3: no hood, whose shoulder capelet is broad itself).
+    const Dressed peasant = dress(5u, CharacterAppearance{}, OutfitKind::Peasant, Equipment{0, 0, 12, 0});
+    REQUIRE_FALSE(knight.fit.caps.empty());
+    // Plate (+ pauldrons, gorget) is bulkier than a tunic, so the knight's collision body is broader.
+    CHECK(knight.fit.torso_half_width > peasant.fit.torso_half_width);
+    CHECK(knight.fit.caps.size() > peasant.fit.caps.size()); // the bulky gear adds capsules
+    // Every skinned body vertex sits inside (or on) the fitted shape - the cloth rests ON the body.
+    std::vector<ClothCollider> bind;
+    pose_body_colliders(peasant.fit, peasant.model.joint_matrices(Mat4{1.0f}, {}), bind);
+    usize outside = 0;
+    for (const SkinVertex& v : peasant.body.vertices) {
+        bool in = false;
+        for (const ClothCollider& k : bind) {
+            const Vec3 ab = k.b - k.a;
+            const f32 l2 = glm::dot(ab, ab);
+            const f32 t = l2 > 1e-10f ? glm::clamp(glm::dot(v.position - k.a, ab) / l2, 0.0f, 1.0f) : 0.0f;
+            in = in || glm::length(v.position - (k.a + ab * t)) <= k.r + 1e-3f;
+        }
+        outside += in ? 0u : 1u;
+    }
+    CHECK(outside == 0u);
+}
+
+TEST_CASE("ClothRig: a cape drapes over the walking body without clipping into it") {
+    Dressed d = dress(9u, CharacterAppearance{}, OutfitKind::Plate, Equipment{3, 3, 1, 0});
+    REQUIRE(find_cape(d.cloth) != nullptr);
+    CharacterAnimator anim;
+    std::vector<ClothCollider> body;
+    const f32 dt = 1.0f / 60.0f;
+    f32 worst = 0.0f;
+    f32 yaw = 0.0f;
+    Vec3 at{0.0f};
+    for (int f = 0; f < 240; ++f) {
+        // Walk forward at a brisk pace, weaving (turning), so legs + arms swing into the cloth.
+        anim.update(4.5f, Timestep{dt});
+        yaw += std::sin(static_cast<f32>(f) * 0.05f) * 0.04f;
+        at += Vec3{std::sin(yaw), 0.0f, std::cos(yaw)} * (4.5f * dt);
+        const Mat4 root = glm::translate(Mat4{1.0f}, at) * glm::rotate(Mat4{1.0f}, yaw, Vec3{0.0f, 1.0f, 0.0f}) *
+                          anim.body_offset();
+        const std::vector<Mat4> jm = d.model.joint_matrices(root, anim.pose(d.model));
+        pose_body_colliders(d.fit, jm, body);
+        ClothEnv env;
+        env.wind = Vec3{2.0f, 0.0f, 0.5f};
+        env.dt = dt;
+        env.body = body;
+        env.ground = 0.0f;
+        for (ClothPiece& c : d.cloth) {
+            step_cloth(c, d.model, jm, root, env);
+            if (f > 30) {
+                worst = std::max(worst, deepest_penetration(c, body));
+            }
+        }
+    }
+    // Every node ends each frame resting on (or off) the body surface - never sunk into it.
+    CHECK(worst < 0.02f);
+}
+
+TEST_CASE("ClothRig: a cape whipped through the body by a sudden turn comes back out behind") {
+    Dressed d = dress(3u, CharacterAppearance{}, OutfitKind::Holy, Equipment{3, 3, 2, 0});
+    ClothPiece* cape = find_cape(d.cloth);
+    REQUIRE(cape != nullptr);
+    std::vector<ClothCollider> body;
+    auto run = [&](f32 yaw, int frames) {
+        const Mat4 root = glm::rotate(Mat4{1.0f}, yaw, Vec3{0.0f, 1.0f, 0.0f});
+        const std::vector<Mat4> jm = d.model.joint_matrices(root, {});
+        pose_body_colliders(d.fit, jm, body);
+        ClothEnv env;
+        env.body = body;
+        env.ground = 0.0f;
+        for (int f = 0; f < frames; ++f) {
+            step_cloth(*cape, d.model, jm, root, env);
+        }
+    };
+    run(0.0f, 60); // settle hanging down the back
+    run(Pi, 1);    // snap round 180 degrees in one frame: the hanging cape is now in front of the body
+    run(Pi, 90);
+    // Facing -Z now (yaw = pi turns +Z to -Z), so "behind" is +Z: every node below the collar is there.
+    for (const ClothChain& ch : cape->chains) {
+        for (usize i = 2; i < ch.pos.size(); ++i) {
+            CHECK(ch.pos[i].z > 0.05f);
+        }
+    }
 }
 
 TEST_CASE("BodyMesh: the action overlay deforms the skinned upper body (legs keep the walk)") {
@@ -366,8 +499,8 @@ TEST_CASE("CharacterModel: deterministic generation and valid hierarchy") {
     CHECK(a.palette().skin == b.palette().skin);   // same seed => identical
     CHECK(a.palette().shirt == b.palette().shirt);
     CHECK(a.height() == doctest::Approx(b.height()));
-    CHECK(a.height() > 1.2f); // cute chibi proportions (~1.45 m, big head + short limbs)
-    CHECK(a.height() < 1.7f);
+    CHECK(a.height() > 1.3f); // stylised heroic proportions (~1.6 m, ~5.8 heads)
+    CHECK(a.height() < 1.85f);
 
     // Parents always precede their children (single-pass transform safe).
     for (usize i = 0; i < a.bones().size(); ++i) {

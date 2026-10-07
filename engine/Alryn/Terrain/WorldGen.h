@@ -36,10 +36,13 @@ inline f32 river_amount(f32 x, f32 z, u32 seed) {
 }
 inline bool in_river(f32 x, f32 z, u32 seed) { return river_amount(x, z, seed) > 0.5f; }
 
-// Smooth surface height at (x, z): blends ocean / lowland / big mountain ranges from a
+// The NATURAL surface height at (x, z): blends ocean / lowland / big mountain ranges from a
 // low-frequency "region" field, layers rolling hills + craggy ridge peaks + finer detail on land,
 // then carves winding river channels - a varied landscape with mountains between the valleys.
-inline f32 height(f32 x, f32 z, u32 seed) {
+// This is the land BEFORE anything is built on it: the town layout (village sites, streets, house
+// plots) and the road network are planned from it. Everything that sits on / walks the ground
+// uses height() below instead, which levels this under each town building.
+inline f32 base_height(f32 x, f32 z, u32 seed) {
     const f32 region = noise::fbm2d(x * 0.006f, z * 0.006f, 3, 2.0f, 0.5f, seed + 101u);
     // Land-dominated (only the lowest region is ocean), so the continents are broad + connectable -
     // towns aren't stranded on little islands - with rivers + the odd sea for water variety.
@@ -70,6 +73,17 @@ inline f32 height(f32 x, f32 z, u32 seed) {
     return std::min(h, max_terrain_height);
 }
 
+// The GROUND height at (x, z): base_height() with a flat building pad levelled under every town
+// house (its footprint + yard, at the natural height of its centre), easing back to the natural
+// land over a short skirt - so floors, doorsteps and walls sit on flat ground instead of a slope
+// poking up through them. This is the surface the terrain is meshed from and that players, NPCs,
+// wagons and props stand on. Out of line (Terrain/WorldGen.cpp): it needs the town layout.
+f32 height(f32 x, f32 z, u32 seed);
+
+// True inside the walls of a town building at (x, z) (grown by `margin`) - indoors, where no
+// grass or flowers grow.
+bool under_building(f32 x, f32 z, u32 seed, f32 margin = 0.0f);
+
 inline f32 density(const Vec3& p, u32 seed) {
     return p.y - height(p.x, p.z, seed);
 }
@@ -92,18 +106,19 @@ inline f32 temperature(f32 x, f32 z, u32 seed, f32 h) {
     return glm::clamp(warm - glm::smoothstep(3.0f, 12.0f, h) * 0.55f, 0.0f, 1.0f);
 }
 inline f32 temperature(f32 x, f32 z, u32 seed) {
-    return temperature(x, z, seed, height(x, z, seed));
+    return temperature(x, z, seed, base_height(x, z, seed));
 }
 
 // Roads connecting nearby towns (routed to avoid water) live in Terrain/RoadNetwork.h.
 // The old noise-contour "paths" are gone; road colouring is overlaid while meshing
 // (roads::tint_surface) so this header stays free of the road-network dependency.
 
-// Local terrain slope at (x,z) (how much it tilts over ~1 unit). Shared by the
-// scatters and the road-flatness gate.
+// Local terrain slope at (x,z) (how much it tilts over ~1 unit) of the natural land. Shared by
+// the scatters and the road-flatness gate.
 inline f32 slope(f32 x, f32 z, u32 seed) {
-    const f32 g = height(x, z, seed);
-    return std::abs(height(x + 1.0f, z, seed) - g) + std::abs(height(x, z + 1.0f, seed) - g);
+    const f32 g = base_height(x, z, seed);
+    return std::abs(base_height(x + 1.0f, z, seed) - g) +
+           std::abs(base_height(x, z + 1.0f, seed) - g);
 }
 
 // --- Biomes ---------------------------------------------------------------
@@ -150,7 +165,7 @@ inline Biome classify_biome(f32 h, f32 s, f32 m, f32 t) {
 }
 
 inline Biome biome_at(f32 x, f32 z, u32 seed) {
-    const f32 h = height(x, z, seed);
+    const f32 h = base_height(x, z, seed);
     if (h < water_level + 0.25f) {
         return Biome::Ocean; // cheap early-out before the slope/moisture/temperature samples
     }
@@ -212,13 +227,13 @@ inline std::optional<Village> village_at(int vcx, int vcz, u32 seed) {
     const f32 jz = (detail::hash01(detail::tree_hash(vcx, vcz, salt + 2u)) - 0.5f) * village_cell * 0.3f;
     const f32 cx = (static_cast<f32>(vcx) + 0.5f) * village_cell + jx;
     const f32 cz = (static_cast<f32>(vcz) + 0.5f) * village_cell + jz;
-    const f32 gh = height(cx, cz, seed);
+    const f32 gh = base_height(cx, cz, seed);
     if (gh < water_level + 2.0f || gh > 9.0f) {
         return std::nullopt; // not in a buildable valley (above water, below the mountain slopes)
     }
     for (f32 ox : {-half, 0.0f, half}) {
         for (f32 oz : {-half, 0.0f, half}) {
-            if (std::abs(height(cx + ox, cz + oz, seed) - gh) > 3.6f) {
+            if (std::abs(base_height(cx + ox, cz + oz, seed) - gh) > 3.6f) {
                 return std::nullopt; // not flat enough for a town of this size
             }
         }

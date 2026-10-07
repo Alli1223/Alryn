@@ -9,6 +9,7 @@
 #include <Alryn/Alryn.h>
 
 #include <Alryn/Audio/Audio.h>
+#include <Alryn/Core/Paths.h>
 #include <Alryn/Character/BodyMesh.h>
 #include <Alryn/Character/CharacterAnimator.h>
 #include <Alryn/Character/CharacterModel.h>
@@ -34,8 +35,10 @@
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <filesystem>
 #include <format>
 #include <memory>
 #include <mutex>
@@ -92,6 +95,12 @@ protected:
         return Vec2{0.0f};
     }
 
+    // ALRYN_SCREEN: a screen/overlay to open straight away for scripted screenshot runs.
+    static std::string_view dev_screen() {
+        const char* s = std::getenv("ALRYN_SCREEN");
+        return s != nullptr ? std::string_view{s} : std::string_view{};
+    }
+
     void menu_escape() {
         if (current_screen_ == Screen::Main) {
             close();
@@ -111,7 +120,14 @@ protected:
 
     void build_pause(f32 w, f32 h);
 
-    void add_title(f32 w, f32 h, const char* heading, const char* sub);
+    // A screen's heading block (gold display title, ornament rule, optional subtitle). Returns the
+    // y just below it, so the screen's card can sit underneath.
+    f32 add_title(f32 w, f32 h, const char* heading, const char* sub);
+
+    // The living backdrop behind the menus: a slow camera drift over a real town in a fixed
+    // showcase world at golden hour, streamed locally (no server). Dropped on entering a game.
+    void update_menu_scene(Timestep dt);
+    void draw_menu_scene();
 
     void build_main(f32 w, f32 h);
 
@@ -126,15 +142,9 @@ protected:
     // with the pending host/join intent recorded when this screen was opened.
     void build_class(f32 w, f32 h);
 
-    void rebuild_preview() {
-        preview_model_ = CharacterModel::create(kPreviewSeed, appearance_);
-        // Show the role's full (master) outfit in the chosen colour, so the turntable previews the
-        // class + the colour pick (in-game you start ragged and buy up to this).
-        Equipment eq = equip_loadout_;
-        eq.outfit_tier = 3;
-        eq.weapon_tier = 3;
-        apply_outfit(preview_model_, outfit_kind_for_role(static_cast<u8>(role_)), eq);
-    }
+    // Re-dress the customise turntable avatar for the current look / role / colour pick: the same
+    // skinned body, outfit, attachments and simulated cloth as in game.
+    void rebuild_preview();
 
     void apply_resolution(usize idx);
 
@@ -227,27 +237,11 @@ protected:
     void on_shutdown() override;
 
 private:
-    // A flowing cloth piece on a character: a spring-bone ClothChain simulated in WORLD space (so it
-    // lags with the body's motion), rebuilt into a dynamic mesh each frame. The anchor rides a body
-    // joint; the chain hangs along `hang_local` (the character's local frame). Detachable (phase 3).
-    struct ClothInstance {
-        std::vector<ClothChain> chains;      // 1 = a flat sheet (cape); N = a ring tube (skirt / robe)
-        std::vector<Vec3> anchor_locals;     // per-chain anchor offset (local frame, from `anchor` bone)
-        std::vector<Vec3> hang_locals;       // per-chain rest hang direction (local)
-        Mesh mesh;                           // dynamic, rebuilt from the sim each frame
-        Vec3 color{0.5f};
-        BonePart anchor = BonePart::Torso;   // body joint the piece rides
-        Vec3 side_local{1.0f, 0.0f, 0.0f};   // sheet left-right axis (single-chain sheet only)
-        bool ring = false;                   // multi-chain (cape/skirt via tube builder) vs 1-chain sheet
-        bool closed = true;                  // ring: closed tube (skirt) vs open sheet (cape)
-        int segments = 5;
-        f32 seg = 0.13f;
-        f32 half_width = 0.22f;
-        f32 collide_r = 0.2f; // body collision-cylinder radius for this piece (tight for a back cape,
-                              // wide for a leg skirt) - keeps it OUT of the body so it drapes/rests on it
-        bool inited = false;
-        bool detached = false; // cut / blown off: the chains free-fall in world space, then despawn
-        f32 detach_age = 0.0f; // seconds since detaching (lingers on the ground, then sinks + is removed)
+    // A flowing cloth piece on a character (Character/ClothRig: simulated in WORLD space so it lags
+    // with the body's motion, colliding with the posed body + gear), plus the dynamic mesh rebuilt
+    // from it each frame. Detachable (cut / blown off).
+    struct ClothInstance : ClothPiece {
+        Mesh mesh; // dynamic, rebuilt from the sim each frame
     };
 
     // Cut / blow a cloth piece off a character: free its chains (free-fall) with a velocity kick, so it
@@ -264,6 +258,7 @@ private:
         u8 role = 255;  // PlayerRole the model is built for (255 = none yet -> force a build)
         Vec3 last_pos{0.0f};
         f32 speed = 0.0f;
+        f32 heading = 1.0f;     // movement along the facing (1 forward .. -1 backpedalling), smoothed
         f32 splash_acc = 0.0f;  // distance-through-water accumulator, paces the wading splash VFX
         bool has_last = false;
         u8 last_action = 0;     // to fire a swing once on the rising edge of a networked action
@@ -275,6 +270,7 @@ private:
         SkinnedMesh outfit_skin; // continuous worn equipment (armoured/clothed limbs, torso, skirt)
         Mesh outfit_mesh;        // dynamic GPU mesh for the outfit, re-skinned with the same joints
         std::vector<ClothInstance> cloth; // simulated flowing pieces (cape, skirt, ...)
+        BodyColliders cloth_body;         // body + gear capsules the cloth drapes over (fitted with the model)
     };
 
     // Set up a character's flowing cloth pieces for its role + gear (called when the visual is built).
@@ -282,7 +278,9 @@ private:
     void setup_noble_cape(PlayerVisual& v); // a large flowing red cape for the carriage noble
     // Step + rebuild + draw a character's cloth pieces. World-space sim (anchor from the posed joints,
     // renderer wind), mesh localised to `root` so culling stays correct.
-    void draw_cloth(PlayerVisual& v, const Mat4& root, const std::vector<Mat4>& jmats, const Vec3& tint);
+    // `ground` is the floor height under the feet (where a long hem pools).
+    void draw_cloth(PlayerVisual& v, const Mat4& root, const std::vector<Mat4>& jmats, const Vec3& tint,
+                    f32 ground);
 
     // Skins one continuous SkinnedMesh with `model`'s posed joints (in LOCAL space) into the dynamic GPU
     // mesh `gpu` (created on first use) and draws it at `root` (its model matrix) through the lit
@@ -442,6 +440,9 @@ private:
     // A menacing low-poly look shared by all enemies (dark skin, sharp eyes, spiky
     // hair); a red tint at draw time makes them read as hostile.
     static CharacterAppearance enemy_look();
+    // How far a seated figure's root sits below the bench top: the sit pose folds the thighs level, so
+    // the hips rest just above the seat (whatever the race's leg length).
+    static f32 seat_drop(const CharacterModel& m) { return m.hip_height() - 0.18f; }
 
     // Animate enemies from snapshot deltas, like remote players, and drop visuals
     // for enemies that have died / left the snapshot.
@@ -506,6 +507,9 @@ private:
     // Eases each wagon's render position toward its authoritative snapshot position (called once
     // per frame in on_update, before any wagon drawing). Removes the inter-snapshot jitter.
     void update_wagon_smooth(Timestep dt);
+    // True if `feet` is standing ON TOP of the cart's bed (over its footprint, at deck height) - the
+    // same test the server uses to carry deck riders along with the moving wagon.
+    bool on_wagon_deck(const net::WagonState& wg, const Vec3& feet) const;
 
     // Eases every networked character (players, enemies, villagers) toward its authoritative
     // position/yaw, IN the snapshot itself - so every draw site, VFX and camera path sees the
@@ -633,6 +637,13 @@ private:
     // The left-click primary attack, role-specific - shared by the mouse button and the pad trigger.
     void primary_action();
 
+    // The yaw to draw a player with: ours (unless seated on the wagon) turns with our live aim
+    // straight away rather than waiting on the server's echo; everyone else uses their networked
+    // facing.
+    f32 display_yaw(const net::PlayerState& p) const {
+        return (p.id == my_id_ && p.seated == 0) ? face_yaw_ : p.yaw;
+    }
+
     Vec3 local_feet() const {
         if (have_snapshot_) {
             for (const net::PlayerState& p : snapshot_.players) {
@@ -716,6 +727,9 @@ private:
     UVec2 ui_extent_{0, 0}; // last framebuffer size the menu was laid out for
     std::string host_ip_ = "127.0.0.1";
     Vec3 menu_sky_{0.05f, 0.06f, 0.09f};
+    std::unique_ptr<StreamingTerrain> menu_terrain_; // the menu backdrop's world slice
+    Vec3 menu_focus_{0.0f};                          // the showcase town centre (ground height)
+    f32 menu_cam_t_ = 0.0f;                          // seconds into the backdrop's camera drift
     bool vsync_ = true;
     usize res_index_ = 0;
     int render_distance_ = 4;
@@ -783,7 +797,7 @@ private:
     f32 frand();
     f32 frand(f32 a, f32 b) { return a + (b - a) * frand(); }
     Vec3 rand_dir();
-    CharacterModel preview_model_ = CharacterModel::create(kPreviewSeed, CharacterAppearance{});
+    PlayerVisual preview_; // the customise turntable avatar, dressed exactly as in game (rebuild_preview)
     CharacterAnimator preview_anim_;
     f32 preview_turn_ = 0.6f;
     ui::Rect customise_panel_{}; // the controls card; the preview fills the area left of it
@@ -840,6 +854,7 @@ private:
     Mesh shape_rounded_;
     Mesh shape_quad_; // a flat single-sided up-facing unit quad (shore foam streaks)
     std::vector<Vertex> skin_scratch_; // reused buffer for CPU-skinning a body each frame (no per-frame alloc)
+    std::vector<ClothCollider> cloth_colliders_; // reused buffer: a character's posed cloth colliders
     std::vector<std::pair<int, Mesh>> mesh_graveyard_; // retired NPC body meshes, freed after a few frames
     Mesh marker_;
     Mesh water_mesh_;
@@ -917,6 +932,7 @@ private:
     bool pending_build_ = false;
     bool pending_dodge_ = false;       // dodge-roll this tick (Shift)
     bool pending_local_swing_ = false; // play our own swing animation this frame (left-click)
+    f32 swing_face_lock_ = 0.0f;       // seconds the facing stays on the last sword swing's aim
     bool blocking_ = false;            // Knight holding the shield up (right mouse held)
     bool pending_rally_ = false;
     bool pending_grab_ = false; // one-shot hitch/unhitch the nearest wagon
@@ -1036,6 +1052,8 @@ private:
     bool money_init_ = false;
     u32 money_gain_ = 0;     // size of the latest gain (shown while the pulse lasts)
     f32 money_pulse_ = 0.0f; // "+$n" pop intensity beside the money counter (decays)
+    f32 hud_hp_ghost_ = 1.0f;    // the health gauge's damage trail (drains down to the live value)
+    f32 hud_wagon_ghost_ = 1.0f; // ...and the wagon gauge's
     u8 last_wheel_off_ = 0;  // previous wagon wheel_off flag - the rising edge plays the crack
     u8 last_outcome_ = 0;    // previous contract outcome - an edge plays the fanfare / wreck boom
 

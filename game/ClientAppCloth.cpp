@@ -10,120 +10,15 @@ void ClientApp::setup_cloth(PlayerVisual& v, PlayerRole role, const Equipment& e
         retire_mesh(std::move(c.mesh)); // defer the GPU free past the frames in flight (gear rebuild)
     }
     v.cloth.clear();
-    const int vt = outfit_design_tier(eq.outfit());
-    const CharacterPalette& pal = v.model.palette();
-
-    // A flat cloth sheet (cape / tabard / stole / mantle): one chain hanging off `anchor` (+ local
-    // offset) along `hang`, drawn as a sheet `width` either side of `side`.
-    auto add_sheet = [&](BonePart anchor, const Vec3& anchor_local, const Vec3& hang, const Vec3& side,
-                         int segs, f32 seg, f32 width, const Vec3& color, f32 wind_gain) {
+    // Fit the body + worn gear the cloth collides with (once per build), then dress the role's pieces
+    // (Character/ClothRig::outfit_cloth - capes, robe / surcoat / tunic skirts, stole, mantle).
+    v.cloth_body = fit_body_colliders(v.model, v.body_skin, v.outfit_skin);
+    std::vector<ClothPiece> pieces =
+        outfit_cloth(v.model, outfit_kind_for_role(static_cast<u8>(role)), eq, v.cloth_body);
+    for (ClothPiece& p : pieces) {
         ClothInstance c;
-        c.anchor = anchor;
-        c.ring = false;
-        c.segments = segs;
-        c.seg = seg;
-        c.half_width = width;
-        c.collide_r = 0.3f; // rest on the body+outfit surface (measured ~0.27-0.3 at the torso)
-        c.color = color;
-        c.side_local = side;
-        c.anchor_locals = {anchor_local};
-        c.hang_locals = {hang};
-        c.chains.resize(1);
-        c.chains[0].stiffness = 0.72f;
-        c.chains[0].damping = 0.06f;
-        c.chains[0].wind_gain = wind_gain;
+        static_cast<ClothPiece&>(c) = std::move(p);
         v.cloth.push_back(std::move(c));
-    };
-    auto add_cape = [&](const Vec3& color, f32 wind_gain) {
-        // A proper cloak: a ROW of panels anchored on a shallow ARC across the upper back (an open sheet,
-        // not a single thin strip), standing clear of the body so it drapes over the shoulders + down the
-        // back and never penetrates. Anchors ride just behind the body; the hanging cloth collides out to
-        // collide_r (> the body+gear max ~0.34), so it reads as a cape from every angle.
-        ClothInstance c;
-        c.anchor = BonePart::Head; // rides the neck / shoulder line
-        c.ring = true;             // multi-chain -> tube builder
-        c.closed = false;          // an OPEN sheet across the back, not a closed tube
-        c.segments = 6;
-        c.seg = 0.12f;
-        c.collide_r = 0.36f;       // stand clear of the body + gear so the whole cape rests outside it
-        c.color = color;
-        constexpr int kN = 6;      // panels shoulder-to-shoulder
-        constexpr f32 arc = 0.85f; // half-angle the collar wraps around the back (~49 deg each side)
-        for (int i = 0; i < kN; ++i) {
-            const f32 t = static_cast<f32>(i) / static_cast<f32>(kN - 1); // 0..1, left -> right
-            const f32 ang = glm::mix(-arc, arc, t);
-            const Vec3 dir{std::sin(ang), 0.0f, -std::cos(ang)};               // around the back (-Z behind)
-            c.anchor_locals.push_back(dir * 0.30f + Vec3{0.0f, 0.05f, 0.0f});  // collar arc, just off the body
-            c.hang_locals.push_back(glm::normalize(dir * 0.4f + Vec3{0.0f, -1.0f, 0.0f})); // down + fan out
-            ClothChain ch;
-            ch.stiffness = 0.66f;
-            ch.damping = 0.06f;
-            ch.wind_gain = wind_gain;
-            c.chains.push_back(ch);
-        }
-        v.cloth.push_back(std::move(c));
-    };
-
-    // A flowing robe / surcoat: a ring of chains draped from the UPPER BODY (the shoulder line), not
-    // the waist, drawn as a closed tube down over the torso + legs - so every character's cloth
-    // "starts" at the shoulders like a real robe/cloak rather than spawning at the hips. Anchored to
-    // the Torso bone (it follows the body's lean, not the head) with a y-offset up to the shoulders.
-    auto add_skirt = [&](const Vec3& color, f32 radius, int segs, f32 seg, f32 flare, f32 wind_gain) {
-        ClothInstance c;
-        c.anchor = BonePart::Torso;
-        c.ring = true;
-        c.segments = segs;
-        c.seg = seg;
-        c.collide_r = 0.31f; // wrap just outside the torso + tucked arms
-        c.color = color;
-        constexpr int kN = 8;          // panels around the body
-        constexpr f32 top_y = 0.42f;   // up to the shoulder line above the Torso joint
-        const f32 ring_r = radius + 0.05f; // a touch wider so the collar clears the chest at the shoulders
-        c.chains.resize(kN);
-        for (int i = 0; i < kN; ++i) {
-            const f32 ang = TwoPi * static_cast<f32>(i) / static_cast<f32>(kN);
-            const Vec3 radial{std::sin(ang), 0.0f, std::cos(ang)};
-            c.anchor_locals.push_back(radial * ring_r + Vec3{0.0f, top_y, 0.0f}); // the shoulder ring
-            c.hang_locals.push_back(glm::normalize(radial * flare + Vec3{0.0f, -1.0f, 0.0f})); // down + flared
-            c.chains[static_cast<usize>(i)].stiffness = 0.6f;
-            c.chains[static_cast<usize>(i)].damping = 0.07f;
-            c.chains[static_cast<usize>(i)].wind_gain = wind_gain;
-        }
-        v.cloth.push_back(std::move(c));
-    };
-
-    // Capes on the legendary tier of the cape-wearing roles (paladin / high prophet / beastmaster).
-    if (vt == 2 && (role == PlayerRole::Knight || role == PlayerRole::Cleric)) {
-        add_cape(pal.primary, 1.2f);
-    } else if (vt == 2 && role == PlayerRole::Hunter) {
-        add_cape(pal.dark, 1.5f); // the beastmaster's tattered dark cape
-    }
-    // A flowing cloth garment on every role, now draped from the SHOULDERS (above) - the Mage/Cleric's
-    // long robe, the Knight's surcoat over the plate, the Hunter's tunic. Segment counts are raised
-    // vs the old waist skirt so the hems still reach down from the higher anchor.
-    if (role == PlayerRole::Mage) {
-        add_skirt(pal.primary, 0.17f, 9, 0.15f, 0.34f, 1.0f);
-    } else if (role == PlayerRole::Cleric) {
-        add_skirt(pal.primary, 0.17f, 10, 0.15f, 0.3f, 0.9f);
-    } else if (role == PlayerRole::Knight) {
-        add_skirt(pal.primary, 0.19f, 7, 0.13f, 0.26f, 0.7f); // surcoat from the shoulders to mid-thigh
-    } else if (role == PlayerRole::Hunter) {
-        add_skirt(pal.primary, 0.17f, 6, 0.12f, 0.3f, 0.9f); // a tunic from the shoulders
-    }
-
-    // Minor flowing pieces.
-    const Vec3 X{1.0f, 0.0f, 0.0f};
-    if (role == PlayerRole::Cleric && vt >= 1) {
-        // Priest / prophet stole: two narrow bands hanging from the shoulders down the front.
-        for (f32 ex : {-1.0f, 1.0f}) {
-            add_sheet(BonePart::Torso, Vec3{ex * 0.09f, 0.42f, 0.1f}, Vec3{0.0f, -1.0f, 0.05f}, X, 4,
-                      0.12f, 0.045f, pal.dark, 0.5f);
-        }
-    }
-    if (role == PlayerRole::Hunter && vt == 1) {
-        // Warden's shoulder mantle: a short, wide cape off the upper back, anchored behind the back.
-        add_sheet(BonePart::Head, Vec3{0.0f, -0.02f, -0.26f}, Vec3{0.0f, -1.0f, -0.32f}, X, 3, 0.1f,
-                  0.28f, pal.dark, 1.3f);
     }
 }
 
@@ -132,31 +27,9 @@ void ClientApp::setup_noble_cape(PlayerVisual& v) {
         retire_mesh(std::move(c.mesh)); // defer the GPU free past the frames in flight
     }
     v.cloth.clear();
-    // A grand, oversized crimson cloak: a wide arc of LONG panels off the shoulder line, fuller +
-    // longer than a player cape (8 segments / 7 panels / a wider collar wrap), so it sweeps behind
-    // the noble as the covered wagon rolls.
+    v.cloth_body = fit_body_colliders(v.model, v.body_skin, v.outfit_skin);
     ClothInstance c;
-    c.anchor = BonePart::Head; // rides the neck / shoulder line
-    c.ring = true;
-    c.closed = false; // an open sheet across the back
-    c.segments = 8;   // floor-length (the player cape is 6)
-    c.seg = 0.16f;
-    c.collide_r = 0.4f; // stand clear of the gilded plate
-    c.color = Vec3{0.66f, 0.10f, 0.12f}; // deep noble crimson
-    constexpr int kN = 7;     // a wider, fuller cape than the player's 6 panels
-    constexpr f32 arc = 1.0f; // wraps further around the shoulders (~57 deg each side)
-    for (int i = 0; i < kN; ++i) {
-        const f32 t = static_cast<f32>(i) / static_cast<f32>(kN - 1);
-        const f32 ang = glm::mix(-arc, arc, t);
-        const Vec3 dir{std::sin(ang), 0.0f, -std::cos(ang)};
-        c.anchor_locals.push_back(dir * 0.32f + Vec3{0.0f, 0.08f, 0.0f});
-        c.hang_locals.push_back(glm::normalize(dir * 0.45f + Vec3{0.0f, -1.0f, 0.0f}));
-        ClothChain ch;
-        ch.stiffness = 0.66f;
-        ch.damping = 0.06f;
-        ch.wind_gain = 1.3f;
-        c.chains.push_back(ch);
-    }
+    static_cast<ClothPiece&>(c) = noble_cape(v.model, v.cloth_body);
     v.cloth.push_back(std::move(c));
 }
 
@@ -204,7 +77,7 @@ void ClientApp::update_cloth_triggers() {
 }
 
 void ClientApp::draw_cloth(PlayerVisual& v, const Mat4& root, const std::vector<Mat4>& jmats,
-                           const Vec3& tint) {
+                           const Vec3& tint, f32 ground) {
     if (v.cloth.empty()) {
         return;
     }
@@ -212,48 +85,28 @@ void ClientApp::draw_cloth(PlayerVisual& v, const Mat4& root, const std::vector<
     if (glm::distance(Vec3{root[3]}, camera_.position()) > character::skin_cull_dist) {
         return;
     }
-    // The body as a collision cylinder (feet axis) up to the neck, so attached cloth drapes OVER /
-    // rests ON the body instead of clipping through it or hanging straight down behind it. Each piece
-    // uses its own radius (tight for a back cape against the torso, wide for a skirt around the legs).
-    const Vec3 feet = Vec3{root[3]};
-    const f32 body_top = feet.y + 1.25f; // up to the neck, so a cape rests on the upper back too
-    // Push cloth nodes OUT to radius `r` around the body axis. `r` must be >= the body+outfit surface
-    // (measured ~0.27 at the back, ~0.25 at the legs) so cloth rests ON the body, never inside it.
-    auto collide = [&](Vec3& p, f32 r) {
-        if (p.y < feet.y - 0.05f || p.y > body_top) {
-            return;
-        }
-        const f32 dx = p.x - feet.x, dz = p.z - feet.z;
-        const f32 d2 = dx * dx + dz * dz;
-        if (d2 < r * r && d2 > 1e-6f) {
-            const f32 d = std::sqrt(d2);
-            p.x = feet.x + dx / d * r;
-            p.z = feet.z + dz / d * r;
-        }
-    };
+    if (v.cloth_body.caps.empty()) {
+        v.cloth_body = fit_body_colliders(v.model, v.body_skin, v.outfit_skin); // safety net
+    }
+    // The body as posed THIS frame: capsules over the torso, hips, head, limbs + bulky gear, so attached
+    // cloth rests on the back, drapes over the shoulders and is pushed aside by a striding leg or a
+    // swinging arm instead of clipping through them.
+    pose_body_colliders(v.cloth_body, jmats, cloth_colliders_);
     // World-space wind: a slowly-veering breeze that strengthens with the storminess (weather_amt_).
     const f32 ws = 1.2f + weather_amt_ * 9.0f + 0.8f * std::sin(elapsed_ * 1.7f);
     const f32 wdir = elapsed_ * 0.15f;
     const Vec3 wind = Vec3{std::cos(wdir), 0.0f, std::sin(wdir)} * ws;
+    ClothEnv env;
+    env.wind = wind;
+    env.gravity = 9.5f;
+    env.dt = frame_dt_;
+    env.body = cloth_colliders_;
+    env.ground = ground; // long hems pool on the floor under the feet instead of sinking through it
     const Mat4 inv_root = glm::inverse(root);
-    const Mat3 root_rot{root};
     constexpr f32 kLinger = 6.0f, kSink = 0.8f; // a fallen piece lies on the ground, then sinks + despawns
 
     for (usize ci = 0; ci < v.cloth.size();) {
         ClothInstance& c = v.cloth[ci];
-        const int bi = v.model.bone_index(c.anchor);
-        const Mat4 abone = (bi >= 0) ? jmats[static_cast<usize>(bi)] : root;
-        auto anchor_of = [&](usize k) {
-            return Vec3{(abone * glm::translate(Mat4{1.0f}, c.anchor_locals[k]))[3]};
-        };
-        if (!c.inited) {
-            for (usize k = 0; k < c.chains.size(); ++k) {
-                const Vec3 hang = glm::normalize(root_rot * c.hang_locals[k]);
-                c.chains[k].init(anchor_of(k), hang, c.segments, c.seg, c.half_width);
-            }
-            c.inited = true;
-        }
-
         if (c.detached) {
             c.detach_age += frame_dt_;
             if (c.detach_age > kLinger + kSink) { // despawn the fallen piece
@@ -272,14 +125,7 @@ void ClientApp::draw_cloth(PlayerVisual& v, const Mat4& root, const std::vector<
                 }
             }
         } else {
-            for (usize k = 0; k < c.chains.size(); ++k) {
-                c.chains[k].step(anchor_of(k), wind, 9.5f, frame_dt_);
-                ClothChain& ch = c.chains[k];
-                for (usize i = 1; i < ch.pos.size(); ++i) { // node 0 is the pinned anchor - leave it
-                    collide(ch.pos[i], c.collide_r);
-                    collide(ch.prev[i], c.collide_r);
-                }
-            }
+            step_cloth(c, v.model, jmats, root, env); // seats it on first use, then steps vs the body
         }
 
         // Attached: build the mesh in LOCAL space (relative to root) so it culls correctly + draw at
@@ -298,11 +144,16 @@ void ClientApp::draw_cloth(PlayerVisual& v, const Mat4& root, const std::vector<
             for (ClothChain& ch : local) {
                 localize(ch);
             }
-            build_cloth_tube(local, c.closed, c.color, md);
+            // Attached cloth is built in the character's frame, so its outer faces look away from the
+            // body's own axis (x = z = 0); a fallen piece just faces away from its own middle.
+            const Vec3 body_axis{0.0f};
+            build_cloth_tube(local, c.closed, c.color, md, c.device, c.device_color,
+                             world_space ? nullptr : &body_axis);
         } else {
             ClothChain local = c.chains[0];
             localize(local);
-            build_cloth_mesh(local, glm::normalize(c.side_local), c.color, md);
+            build_cloth_mesh(local, glm::normalize(c.side_local), c.color, md,
+                             world_space ? Vec3{0.0f} : c.drape_local);
         }
         if (!md.indices.empty()) {
             if (!c.mesh.valid()) {

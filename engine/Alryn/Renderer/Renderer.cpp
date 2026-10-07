@@ -8,13 +8,87 @@
 #include <Alryn/Scene/Camera.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <fstream>
 #include <limits>
 #include <numeric>
 
 namespace alryn {
 
 namespace {
+// Writes 8-bit RGB pixels (rows top to bottom) as a PNG. Dependency-free: the image data goes in
+// uncompressed ("stored") deflate blocks, so files are large but any viewer opens them.
+bool write_png(const std::string& path, u32 w, u32 h, const std::vector<u8>& rgb) {
+    static const auto crc_table = [] {
+        std::array<u32, 256> t{};
+        for (u32 n = 0; n < 256; ++n) {
+            u32 c = n;
+            for (int k = 0; k < 8; ++k) {
+                c = (c & 1u) ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+            }
+            t[n] = c;
+        }
+        return t;
+    }();
+    auto be32 = [](std::vector<u8>& v, u32 x) {
+        v.push_back(static_cast<u8>(x >> 24));
+        v.push_back(static_cast<u8>(x >> 16));
+        v.push_back(static_cast<u8>(x >> 8));
+        v.push_back(static_cast<u8>(x));
+    };
+    std::vector<u8> png{0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
+    auto chunk = [&](const char* tag, const std::vector<u8>& body) {
+        be32(png, static_cast<u32>(body.size()));
+        const usize start = png.size();
+        png.insert(png.end(), tag, tag + 4);
+        png.insert(png.end(), body.begin(), body.end());
+        u32 crc = 0xFFFFFFFFu;
+        for (usize i = start; i < png.size(); ++i) {
+            crc = crc_table[(crc ^ png[i]) & 0xFFu] ^ (crc >> 8);
+        }
+        be32(png, crc ^ 0xFFFFFFFFu);
+    };
+    std::vector<u8> ihdr;
+    be32(ihdr, w);
+    be32(ihdr, h);
+    ihdr.insert(ihdr.end(), {8, 2, 0, 0, 0}); // 8-bit, truecolour RGB, no interlace
+    chunk("IHDR", ihdr);
+
+    // Scanlines (filter byte 0 + RGB) wrapped in a zlib stream of stored blocks.
+    std::vector<u8> raw;
+    raw.reserve(static_cast<usize>(h) * (w * 3 + 1));
+    for (u32 y = 0; y < h; ++y) {
+        raw.push_back(0);
+        const auto row = rgb.begin() + static_cast<std::ptrdiff_t>(y) * w * 3;
+        raw.insert(raw.end(), row, row + static_cast<std::ptrdiff_t>(w) * 3);
+    }
+    std::vector<u8> z{0x78, 0x01};
+    for (usize off = 0; off < raw.size();) {
+        const usize n = std::min<usize>(65535, raw.size() - off);
+        z.push_back(off + n >= raw.size() ? 1 : 0); // BFINAL on the last block, type 00 (stored)
+        z.push_back(static_cast<u8>(n));
+        z.push_back(static_cast<u8>(n >> 8));
+        z.push_back(static_cast<u8>(~n));
+        z.push_back(static_cast<u8>(~n >> 8));
+        z.insert(z.end(), raw.begin() + static_cast<std::ptrdiff_t>(off),
+                 raw.begin() + static_cast<std::ptrdiff_t>(off + n));
+        off += n;
+    }
+    u32 a = 1, b = 0; // Adler-32 of the uncompressed data
+    for (u8 c : raw) {
+        a = (a + c) % 65521u;
+        b = (b + a) % 65521u;
+    }
+    be32(z, (b << 16) | a);
+    chunk("IDAT", z);
+    chunk("IEND", {});
+
+    std::ofstream f(path, std::ios::binary);
+    f.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
+    return static_cast<bool>(f);
+}
+
 // Must match the push_constant block in the shaders (256 bytes).
 struct PushConstants {
     Mat4 mvp;
@@ -60,6 +134,8 @@ struct UIPush {
     Vec4 params;
     Vec4 seg;
     Vec4 border;
+    Vec4 color2;
+    Vec4 extra;
     Vec2 screen;
 };
 // Must match the push_constant block in ui_tile.vert.
@@ -431,6 +507,7 @@ bool Renderer::create_pipelines() {
     ui.cull_mode = VK_CULL_MODE_NONE;
     ui.blend = true;
     ui.vertexless = true;
+    ui.descriptor_set_layout = ssao_set_layout_; // one sampler: the font atlas
     if (!pipeline_ui_.create(device_, ui)) {
         return false;
     }
@@ -443,6 +520,7 @@ bool Renderer::create_pipelines() {
     ui_tiles.push_constant_size = sizeof(UITilePush);
     ui_tiles.vertexless = false;
     ui_tiles.instance_tiles = true;
+    ui_tiles.descriptor_set_layout = VK_NULL_HANDLE;
     if (!pipeline_ui_tiles_.create(device_, ui_tiles)) {
         return false;
     }
@@ -512,13 +590,14 @@ bool Renderer::create_shadow_resources() {
 
     VkDescriptorPoolSize pool_sizes[2]{};
     pool_sizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    // per-frame main sets + SSAO inputs (2) + bloom chain inputs (3) + composite (3).
-    pool_sizes[0].descriptorCount = 4 * kFramesInFlight + 8;
+    // per-frame main sets + SSAO inputs (2) + bloom chain inputs (3) + composite (3) + the UI
+    // font atlas (1).
+    pool_sizes[0].descriptorCount = 4 * kFramesInFlight + 9;
     pool_sizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     pool_sizes[1].descriptorCount = kFramesInFlight;
     VkDescriptorPoolCreateInfo pool_info{};
     pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pool_info.maxSets = kFramesInFlight + 6;
+    pool_info.maxSets = kFramesInFlight + 7;
     pool_info.poolSizeCount = 2;
     pool_info.pPoolSizes = pool_sizes;
     ALRYN_VK_CHECK(vkCreateDescriptorPool(device_.handle(), &pool_info, nullptr, &descriptor_pool_));
@@ -639,7 +718,85 @@ bool Renderer::create_sync_and_commands() {
     bloom_ba_set_ = post_sets[4];
     composite_set_ = post_sets[5];
     write_ssao_descriptors();
+
+    // The UI font atlas set, pointing at a blank texel until the game uploads its fonts.
+    VkDescriptorSetAllocateInfo ui_alloc = post_alloc;
+    ui_alloc.descriptorSetCount = 1;
+    ui_alloc.pSetLayouts = &ssao_set_layout_;
+    ALRYN_VK_CHECK(vkAllocateDescriptorSets(device_.handle(), &ui_alloc, &ui_font_set_));
+    const u8 blank = 0;
+    upload_ui_font_atlas(&blank, 1, 1);
     return true;
+}
+
+void Renderer::set_ui_font_atlas(const u8* texels, u32 width, u32 height) {
+    device_.wait_idle(); // the old atlas may still be read by frames in flight
+    upload_ui_font_atlas(texels, width, height);
+}
+
+// (Re)creates the atlas image, copies the texels in through a staging buffer with a one-off
+// command buffer, and points the UI's descriptor at it.
+void Renderer::upload_ui_font_atlas(const u8* texels, u32 width, u32 height) {
+    ui_font_atlas_.destroy();
+    if (!ui_font_atlas_.create(device_, width, height, VK_FORMAT_R8_UNORM,
+                               VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                               VK_IMAGE_ASPECT_COLOR_BIT)) {
+        ALRYN_ERROR("Could not create the UI font atlas ({}x{})", width, height);
+        return;
+    }
+    vk::Buffer staging;
+    const VkDeviceSize bytes = static_cast<VkDeviceSize>(width) * height;
+    if (!staging.create(device_, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+        return;
+    }
+    staging.upload(texels, bytes);
+
+    VkCommandBufferAllocateInfo alloc{};
+    alloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    alloc.commandPool = command_pool_;
+    alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    alloc.commandBufferCount = 1;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    ALRYN_VK_CHECK(vkAllocateCommandBuffers(device_.handle(), &alloc, &cmd));
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    ALRYN_VK_CHECK(vkBeginCommandBuffer(cmd, &begin));
+    vk::image_barrier(cmd, ui_font_atlas_.handle(), VK_IMAGE_ASPECT_COLOR_BIT,
+                      VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                      VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                      VK_ACCESS_TRANSFER_WRITE_BIT);
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {width, height, 1};
+    vkCmdCopyBufferToImage(cmd, staging.handle(), ui_font_atlas_.handle(),
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    vk::image_barrier(cmd, ui_font_atlas_.handle(), VK_IMAGE_ASPECT_COLOR_BIT,
+                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                      VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+    ALRYN_VK_CHECK(vkEndCommandBuffer(cmd));
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cmd;
+    ALRYN_VK_CHECK(vkQueueSubmit(device_.graphics_queue(), 1, &submit, VK_NULL_HANDLE));
+    ALRYN_VK_CHECK(vkQueueWaitIdle(device_.graphics_queue()));
+    vkFreeCommandBuffers(device_.handle(), command_pool_, 1, &cmd);
+
+    VkDescriptorImageInfo info{};
+    info.sampler = ssao_sampler_; // linear, clamp-to-edge
+    info.imageView = ui_font_atlas_.view();
+    info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = ui_font_set_;
+    write.dstBinding = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &info;
+    vkUpdateDescriptorSets(device_.handle(), 1, &write, 0, nullptr);
 }
 
 void Renderer::set_camera(const Camera& camera) {
@@ -1404,10 +1561,15 @@ void Renderer::record_ui_pass(VkCommandBuffer cmd) {
             return drew;
         };
 
-        pipeline_ui_.bind(cmd);
+        auto bind_ui = [&] {
+            pipeline_ui_.bind(cmd);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_ui_.layout(), 0,
+                                    1, &ui_font_set_, 0, nullptr);
+        };
+        bind_ui();
         for (usize i = 0; i < ui_items_.size(); ++i) {
             if (flush_tile_batches(i)) {
-                pipeline_ui_.bind(cmd);
+                bind_ui();
             }
             const UIDrawCmd& item = ui_items_[i];
             UIPush push{};
@@ -1416,6 +1578,8 @@ void Renderer::record_ui_pass(VkCommandBuffer cmd) {
             push.params = item.params;
             push.seg = item.seg;
             push.border = item.border;
+            push.color2 = item.color2;
+            push.extra = item.extra;
             push.screen = screen;
             vkCmdPushConstants(cmd, pipeline_ui_.layout(),
                                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
@@ -1426,10 +1590,68 @@ void Renderer::record_ui_pass(VkCommandBuffer cmd) {
         vkCmdEndRendering(cmd);
     }
 
-    vk::image_barrier(cmd, swapchain_.image(image_index_), VK_IMAGE_ASPECT_COLOR_BIT,
+    // A requested screenshot: copy the finished frame out to a host-visible buffer on the way to
+    // present (end_frame writes it to disk once the frame's commands have completed).
+    const VkImage image = swapchain_.image(image_index_);
+    const VkExtent2D extent = swapchain_.extent();
+    screenshot_recorded_ = false;
+    if (!screenshot_path_.empty() && swapchain_.can_copy_from()) {
+        const VkDeviceSize bytes = static_cast<VkDeviceSize>(extent.width) * extent.height * 4;
+        screenshot_buffer_.destroy();
+        if (screenshot_buffer_.create(device_, bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+            vk::image_barrier(cmd, image, VK_IMAGE_ASPECT_COLOR_BIT,
+                              VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                              VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                              VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                              VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                              VK_ACCESS_TRANSFER_READ_BIT);
+            VkBufferImageCopy region{};
+            region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.imageExtent = {extent.width, extent.height, 1};
+            vkCmdCopyImageToBuffer(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                   screenshot_buffer_.handle(), 1, &region);
+            vk::image_barrier(cmd, image, VK_IMAGE_ASPECT_COLOR_BIT,
+                              VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                              VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                              VK_ACCESS_TRANSFER_READ_BIT, 0);
+            screenshot_recorded_ = true;
+            return;
+        }
+    }
+    vk::image_barrier(cmd, image, VK_IMAGE_ASPECT_COLOR_BIT,
                       VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
                       VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
                       VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, 0);
+}
+
+// Writes the frame the UI pass copied out (call once its commands have completed).
+void Renderer::save_screenshot() {
+    const VkExtent2D extent = swapchain_.extent();
+    const VkFormat fmt = swapchain_.format();
+    const bool bgra = fmt == VK_FORMAT_B8G8R8A8_UNORM || fmt == VK_FORMAT_B8G8R8A8_SRGB;
+    const bool rgba = fmt == VK_FORMAT_R8G8B8A8_UNORM || fmt == VK_FORMAT_R8G8B8A8_SRGB;
+    const auto* px = static_cast<const u8*>(screenshot_buffer_.map());
+    if (px != nullptr && (bgra || rgba)) {
+        std::vector<u8> rgb(static_cast<usize>(extent.width) * extent.height * 3);
+        for (usize i = 0, n = static_cast<usize>(extent.width) * extent.height; i < n; ++i) {
+            rgb[i * 3 + 0] = px[i * 4 + (bgra ? 2 : 0)];
+            rgb[i * 3 + 1] = px[i * 4 + 1];
+            rgb[i * 3 + 2] = px[i * 4 + (bgra ? 0 : 2)];
+        }
+        if (write_png(screenshot_path_, extent.width, extent.height, rgb)) {
+            ALRYN_INFO("Saved screenshot {}", screenshot_path_);
+        } else {
+            ALRYN_ERROR("Could not write screenshot {}", screenshot_path_);
+        }
+    } else {
+        ALRYN_WARN("Screenshot skipped: unsupported swapchain format {}", static_cast<int>(fmt));
+    }
+    screenshot_buffer_.unmap();
+    screenshot_buffer_.destroy();
+    screenshot_path_.clear();
+    screenshot_recorded_ = false;
 }
 
 Vec4 Renderer::world_sphere(const Mesh& mesh, const Mat4& model) {
@@ -1483,9 +1705,16 @@ void Renderer::draw_ui_rect(const Vec4& rect_xywh, const Vec4& color, f32 radius
     UIDrawCmd cmd;
     cmd.rect = rect_xywh;
     cmd.color = color;
+    cmd.color2 = color;
     cmd.params = Vec4{radius, 1.0f, 0.0f /*rect mode*/, border};
     cmd.border = border_color;
     ui_items_.push_back(cmd);
+}
+
+void Renderer::draw_ui(const UIPrim& prim) {
+    if (frame_active_) {
+        ui_items_.push_back(prim);
+    }
 }
 
 void Renderer::draw_ui_tiles(const std::vector<UITile>& tiles, const Vec2& pivot,
@@ -1516,6 +1745,7 @@ void Renderer::draw_ui_segment(const Vec2& p0, const Vec2& p1, f32 thickness, co
     UIDrawCmd cmd;
     cmd.rect = Vec4{lo.x, lo.y, hi.x - lo.x, hi.y - lo.y};
     cmd.color = color;
+    cmd.color2 = color;
     cmd.params = Vec4{0.0f, 0.75f /*tighter AA = crisper text*/, 1.0f /*segment mode*/, half};
     cmd.seg = Vec4{p0.x, p0.y, p1.x, p1.y};
     ui_items_.push_back(cmd);
@@ -1575,6 +1805,11 @@ void Renderer::end_frame() {
     } else if (present != VK_SUCCESS) {
         ALRYN_ERROR("vkQueuePresentKHR failed: {}", vk::result_string(present));
     }
+    if (screenshot_recorded_) {
+        vkWaitForFences(device_.handle(), 1, &frame.in_flight, VK_TRUE,
+                        std::numeric_limits<u64>::max());
+        save_screenshot();
+    }
 
     frame_index_ = (frame_index_ + 1) % kFramesInFlight;
     frame_active_ = false;
@@ -1584,6 +1819,8 @@ void Renderer::on_shutdown() {
     if (device_.valid()) {
         device_.wait_idle();
     }
+    screenshot_buffer_.destroy();
+    ui_font_atlas_.destroy();
     for (FrameSync& frame : frames_) {
         if (frame.image_available != VK_NULL_HANDLE) {
             vkDestroySemaphore(device_.handle(), frame.image_available, nullptr);

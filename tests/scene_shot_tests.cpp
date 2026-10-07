@@ -3,7 +3,9 @@
 #include "support/OffscreenRenderer.h"
 
 #include <Alryn/Character/BodyMesh.h>
+#include <Alryn/Character/CharacterAnimator.h>
 #include <Alryn/Character/CharacterModel.h>
+#include <Alryn/Character/ClothRig.h>
 #include <Alryn/Character/Outfit.h>
 #include <Alryn/Character/OutfitMesh.h>
 #include <Alryn/Character/SkinnedMesh.h>
@@ -51,7 +53,8 @@ Vec3 pixel(const std::vector<u8>& px, u32 w, u32 x, u32 y) {
 void render_world(test::OffscreenRenderer& r, u32 seed, const Vec2& focus, f32 radius,
                   const std::string& out, f32 cam_height_mul = 1.95f, f32 cam_back_mul = 0.85f,
                   const Vec3* eye_rel = nullptr, const Vec3* target_rel = nullptr,
-                  bool with_wagon = false, f32 wagon_yaw = 0.0f, bool with_surf = false) {
+                  bool with_wagon = false, f32 wagon_yaw = 0.0f, bool with_surf = false,
+                  bool dollhouse = false) {
     constexpr f32 voxel = 1.0f;
     constexpr int cv = 16;                 // voxels per chunk
     constexpr f32 cw = static_cast<f32>(cv) * voxel; // chunk world size (16 m)
@@ -63,6 +66,8 @@ void render_world(test::OffscreenRenderer& r, u32 seed, const Vec2& focus, f32 r
     PropLibrary lib;
 
     std::vector<test::OffscreenRenderer::Draw> draws;
+    std::vector<test::OffscreenRenderer::Draw> water_draws;
+    std::vector<test::OffscreenRenderer::Draw> trans_draws;
     auto add = [&](const MeshData& d, const Mat4& model, const Vec4& tint = Vec4{1.0f}) {
         if (!d.indices.empty()) {
             if (Mesh* m = r.upload(d)) {
@@ -109,6 +114,14 @@ void render_world(test::OffscreenRenderer& r, u32 seed, const Vec2& focus, f32 r
                     if (part.layer == PropLayer::Glow) {
                         continue;
                     }
+                    // The dollhouse view: the client fades a house's roof shell (walls + roof +
+                    // upper floors) to a ghost while you stand inside, so the interior shows.
+                    if (dollhouse && part.layer == PropLayer::Roof) {
+                        if (Mesh* m = r.upload(part.mesh)) {
+                            trans_draws.push_back({m, model, Vec4{1.0f, 1.0f, 1.0f, 0.18f}});
+                        }
+                        continue;
+                    }
                     const Vec4 tint = part.layer == PropLayer::Emissive ? Vec4{1.6f, 1.5f, 1.2f, 1.0f}
                                                                         : Vec4{1.0f};
                     add(part.mesh, model, tint);
@@ -149,8 +162,6 @@ void render_world(test::OffscreenRenderer& r, u32 seed, const Vec2& focus, f32 r
     // the waterline, drawn with the game's water.* shaders - depth-tested so land above the line
     // hides it) and the client's draw_surf foam (thin alpha streaks ALONG the waterline) so the
     // shot shows water + foam exactly as the game does.
-    std::vector<test::OffscreenRenderer::Draw> water_draws;
-    std::vector<test::OffscreenRenderer::Draw> trans_draws;
     if (with_surf) {
         const f32 wext = radius * 2.0f + 16.0f;
         if (Mesh* wmesh = r.upload(primitives::grid(72, wext / 72.0f, Vec3{0.1f, 0.3f, 0.4f}))) {
@@ -491,6 +502,42 @@ TEST_CASE("Scene shot: real-world towns + the roads between them") {
     }
 }
 
+// House interiors in a real town, seen the way the player does on stepping inside: the roof shell
+// faded to a ghost (the client's dollhouse view) from the iso camera, so the floor, hearth, bed and
+// table read - and anything poking up through the floor (terrain, grass) would show.
+TEST_CASE("Scene shot: house interiors in a real town (dollhouse view)") {
+    test::OffscreenRenderer renderer;
+    if (!renderer.init(960, 600)) {
+        MESSAGE("No Vulkan device/shaders - skipping house interior shots");
+        return;
+    }
+    const u32 seed = 4242u;
+    std::optional<worldgen::Village> town;
+    for (int vz = -6; vz <= 6 && !town; ++vz) {
+        for (int vx = -6; vx <= 6 && !town; ++vx) {
+            town = worldgen::village_at(vx, vz, seed);
+        }
+    }
+    REQUIRE(town.has_value());
+    int shots = 0;
+    for (const PropInstance& p : village_props(*town, seed)) {
+        if (p.category != PropCategory::House || p.variant >= kHouseVariants || shots >= 3) {
+            continue;
+        }
+        // Iso camera in FRONT of the house (its local +z), ~50 deg down onto the floor.
+        const Vec3 front{std::sin(p.yaw), 0.0f, std::cos(p.yaw)};
+        const Vec3 side{front.z, 0.0f, -front.x};
+        const f32 gy = p.position.y;
+        const Vec3 eye = front * 8.5f + side * 3.0f + Vec3{0.0f, gy + 11.0f, 0.0f};
+        const Vec3 tgt{0.0f, gy + 0.3f, 0.0f};
+        render_world(renderer, seed, Vec2{p.position.x, p.position.z}, 12.0f,
+                     (executable_dir() / ("house_interior" + std::to_string(shots) + ".ppm")).string(),
+                     1.0f, 1.0f, &eye, &tgt, false, 0.0f, false, /*dollhouse=*/true);
+        ++shots;
+    }
+    CHECK(shots > 0);
+}
+
 // Wagon-on-road vistas across the biomes the roads cross (forest / plains / desert / bog /
 // mountains), framed low along the road so the cart sits in its landscape. These are the baseline
 // aesthetic shots to compare against reference art (`make shots` -> wagon_<biome>.png).
@@ -736,19 +783,31 @@ TEST_CASE("Scene shot: a wagon crossing a river bridge") {
     MESSAGE("no bridge found near origin in the scanned seeds - skipping");
 }
 
-// The character line-up: every playable race, the four hero roles in their outfits (with a tier
-// progression for the Knight), and the NPC garb (peasant / brigand / outlaw) - rendered exactly the
-// way the client draws a character (skinned body + skinned outfit + attachment primitives + the
-// modular held weapons), so the aesthetic can be eyeballed from one still.
-TEST_CASE("Scene shot: character line-up (races, roles, tiers, NPCs)") {
+namespace {
+// One character for a line-up shot: who they are, what they wear, where they stand + face, and
+// whether they're caught mid-stride (the walk cycle + its cloth sim) or standing at rest.
+struct Sitter {
+    u32 seed;
+    CharacterAppearance app;
+    OutfitKind kind;
+    Equipment eq;
+    Vec3 pos;
+    int role = -1;   // PlayerRole for the held weapons, -1 = none (townsfolk / bandits)
+    f32 yaw = 0.0f;  // radians about +Y; 0 faces the camera (+Z)
+    bool walk = false;
+};
+
+// Renders `cast` the way the client draws a character - skinned body + skinned outfit + attachment
+// primitives + the role's modular weapons hung from the hand joints + the SIMULATED cloth (capes,
+// robe / surcoat skirts, stoles), settled against the posed body colliders - to `file` next to the
+// test binary. Returns the pixels (empty if there's no GPU).
+std::vector<u8> render_cast(const std::vector<Sitter>& cast, const Vec3& eye, const Vec3& target,
+                            const std::string& file, u32 w = 1200, u32 h = 700, f32 fov = 40.0f) {
     test::OffscreenRenderer renderer;
-    if (!renderer.init(1200, 700)) {
-        MESSAGE("No Vulkan device/shaders - skipping character line-up shot");
-        return;
+    if (!renderer.init(w, h)) {
+        return {};
     }
-
     std::vector<test::OffscreenRenderer::Draw> draws;
-
     // The client's five unit shapes, tinted per bone.
     Mesh* shape_box = renderer.upload(primitives::cube(1.0f, Vec3{1.0f}));
     Mesh* shape_sphere = renderer.upload(primitives::sphere(18, 12, Vec3{1.0f}));
@@ -765,50 +824,96 @@ TEST_CASE("Scene shot: character line-up (races, roles, tiers, NPCs)") {
         }
         return shape_box;
     };
-
     if (Mesh* ground = renderer.upload(primitives::grid(30, 1.2f, Vec3{0.38f, 0.33f, 0.26f}))) {
         draws.push_back({ground, Mat4{1.0f}, Vec4{1.0f}});
     }
+    auto add_mesh = [&](const MeshData& md, const Mat4& model) {
+        if (!md.indices.empty()) {
+            if (Mesh* m = renderer.upload(md)) {
+                draws.push_back({m, model, Vec4{1.0f}});
+            }
+        }
+    };
 
-    // One character drawn the client's way: skinned body + skinned outfit + attachment primitives
-    // (face/hair/helm/...) + the role's modular weapons hung from the hand joints. Bind pose.
-    auto add_character = [&](u32 seed, const CharacterAppearance& app, OutfitKind kind,
-                             const Equipment& eq, const Vec3& pos, int role) {
-        CharacterModel model = CharacterModel::create(seed, app);
-        apply_outfit(model, kind, eq);
-        // The client's root convention (HalfPi - yaw); yaw = HalfPi faces the camera (+Z).
-        const Mat4 root = glm::translate(Mat4{1.0f}, pos);
-        const std::vector<Quat> pose; // bind pose
+    for (const Sitter& s : cast) {
+        CharacterModel model = CharacterModel::create(s.seed, s.app);
+        apply_outfit(model, s.kind, s.eq);
+        const SkinnedMesh body = build_body_mesh(model);
+        const SkinnedMesh outfit = build_outfit_mesh(model, s.kind, s.eq);
+        const BodyColliders fit = fit_body_colliders(model, body, outfit);
+        std::vector<ClothPiece> cloth = outfit_cloth(model, s.kind, s.eq, fit);
+
+        // Walk (or stand) for a couple of seconds so the cloth swings + settles against the body.
+        CharacterAnimator anim;
+        const f32 dt = 1.0f / 60.0f;
+        Vec3 at = s.pos - Vec3{std::sin(s.yaw), 0.0f, std::cos(s.yaw)} * (s.walk ? 3.2f * 2.0f : 0.0f);
+        Mat4 root{1.0f};
+        std::vector<Quat> pose;
+        std::vector<ClothCollider> colliders;
+        for (int f = 0; f < 120; ++f) {
+            anim.update(s.walk ? 3.2f : 0.0f, Timestep{dt});
+            if (s.walk) {
+                at += Vec3{std::sin(s.yaw), 0.0f, std::cos(s.yaw)} * (3.2f * dt);
+            }
+            root = glm::translate(Mat4{1.0f}, at) * glm::rotate(Mat4{1.0f}, s.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
+                   (s.walk ? anim.body_offset() : Mat4{1.0f});
+            pose = s.walk ? anim.pose(model) : std::vector<Quat>{};
+            const std::vector<Mat4> jm = model.joint_matrices(root, pose);
+            pose_body_colliders(fit, jm, colliders);
+            ClothEnv env;
+            env.wind = Vec3{0.6f, 0.0f, -0.4f};
+            env.dt = dt;
+            env.body = colliders;
+            env.ground = 0.0f;
+            for (ClothPiece& c : cloth) {
+                step_cloth(c, model, jm, root, env);
+            }
+        }
+
         const CharacterPalette& pal = model.palette();
         auto palette = [&pal](u8 m) { return body_material_color(pal, static_cast<BodyMaterial>(m)); };
         std::vector<Vertex> verts;
-        auto add_skinned = [&](const SkinnedMesh& sm) {
-            if (sm.vertices.empty()) {
-                return;
+        for (const SkinnedMesh* sm : {&body, &outfit}) {
+            if (sm->vertices.empty()) {
+                continue;
             }
-            skin(sm, model.joint_matrices(Mat4{1.0f}, pose), verts, palette);
+            skin(*sm, model.joint_matrices(Mat4{1.0f}, pose), verts, palette);
             MeshData md;
             md.vertices = verts;
-            md.indices = sm.indices;
-            if (Mesh* m = renderer.upload(md)) {
-                draws.push_back({m, root, Vec4{1.0f}});
-            }
-        };
-        add_skinned(build_body_mesh(model));
-        add_skinned(build_outfit_mesh(model, kind, eq));
-
+            md.indices = sm->indices;
+            add_mesh(md, root);
+        }
         // The attachment primitives riding on the skinned body (face, hair, helm, pauldrons, ...).
         const std::vector<Mat4> mats = model.bone_matrices(root, pose);
         for (usize i = 0; i < model.bones().size(); ++i) {
             const Bone& b = model.bones()[i];
-            if (!b.attachment) {
-                continue;
+            if (b.attachment) {
+                const Vec3 c = body_material_color(pal, static_cast<BodyMaterial>(b.color));
+                draws.push_back({shape_of(b.shape), mats[i], Vec4{c, 1.0f}});
             }
-            const Vec3 c = body_material_color(pal, static_cast<BodyMaterial>(b.color));
-            draws.push_back({shape_of(b.shape), mats[i], Vec4{c, 1.0f}});
+        }
+        // The simulated cloth, built in world space.
+        for (const ClothPiece& c : cloth) {
+            MeshData md;
+            if (c.ring) {
+                // The device's front panel is found in the character's local frame (as the client does).
+                std::vector<ClothChain> local = c.chains;
+                const Mat4 inv = glm::inverse(root);
+                for (ClothChain& ch : local) {
+                    for (Vec3& p : ch.pos) {
+                        p = Vec3{inv * Vec4{p, 1.0f}};
+                    }
+                }
+                const Vec3 body_axis{0.0f};
+                build_cloth_tube(local, c.closed, c.color, md, c.device, c.device_color, &body_axis);
+                add_mesh(md, root);
+            } else {
+                build_cloth_mesh(c.chains[0], Mat3{root} * c.side_local, c.color, md, Mat3{root} * c.drape_local);
+                add_mesh(md, Mat4{1.0f});
+            }
         }
         // The held weapons, hung from the hand joints exactly as the client attaches them.
-        if (role >= 0) {
+        if (s.role >= 0) {
             const std::vector<Mat4> jmats = model.joint_matrices(root, pose);
             auto hand_frame = [&](BonePart arm) -> Mat4 {
                 for (usize i = 0; i < model.bones().size(); ++i) {
@@ -824,65 +929,105 @@ TEST_CASE("Scene shot: character line-up (races, roles, tiers, NPCs)") {
                     return;
                 }
                 const Mat4 hand = hand_frame(arm);
-                for (const WeaponPiece& wp : weapon_pieces(t, eq.weapon(), pal)) {
+                for (const WeaponPiece& wp : weapon_pieces(t, s.eq.weapon(), pal)) {
                     draws.push_back({shape_of(wp.shape), hand * wp.local, Vec4{wp.color, 1.0f}});
                 }
             };
-            add_weapon(role_weapon(static_cast<u8>(role), 0), BonePart::LowerArmL);
-            add_weapon(role_offhand(static_cast<u8>(role)), BonePart::LowerArmR);
+            add_weapon(role_weapon(static_cast<u8>(s.role), 0), BonePart::LowerArmL);
+            add_weapon(role_offhand(static_cast<u8>(s.role)), BonePart::LowerArmR);
         }
-    };
-
-    // Back row: the four hero roles in MASTER gear, mixing races/skins/tints.
-    const Equipment master{3, 3, 0, 0};
-    add_character(11u, {1, 1, EyeStyle::Round, EarStyle::Round, HairStyle::Short, Race::Human},
-                  OutfitKind::Plate, master, Vec3{-4.2f, 0.0f, -4.5f}, 0);
-    add_character(12u, {3, 2, EyeStyle::Sharp, EarStyle::Pointed, HairStyle::Ponytail, Race::Elf},
-                  OutfitKind::Leather, master, Vec3{-1.4f, 0.0f, -4.5f}, 1);
-    add_character(13u, {2, 3, EyeStyle::Round, EarStyle::Round, HairStyle::Bald, Race::Dwarf},
-                  OutfitKind::Holy, master, Vec3{1.4f, 0.0f, -4.5f}, 2);
-    add_character(14u, {4, 0, EyeStyle::Wide, EarStyle::Small, HairStyle::Spiky, Race::Human},
-                  OutfitKind::Robe, master, Vec3{4.2f, 0.0f, -4.5f}, 3);
-
-    // Middle row: the Knight's plate at each tier (rags -> master), one race, same seed - so the
-    // tier progression is the only variable.
-    for (u8 t = 0; t < kTierCount; ++t) {
-        const Equipment eq{t, t, 1, 0};
-        add_character(21u, {1, 0, EyeStyle::Round, EarStyle::Round, HairStyle::Short, Race::Human},
-                      OutfitKind::Plate, eq, Vec3{-4.2f + 2.8f * static_cast<f32>(t), 0.0f, 0.0f}, 0);
     }
 
-    // Front row: the three races side by side in peasant garb, then the two bandit kinds.
-    const Equipment rags{0, 0, 0, 0};
-    add_character(31u, {2, 1, EyeStyle::Round, EarStyle::Round, HairStyle::Short, Race::Human},
-                  OutfitKind::Peasant, rags, Vec3{-5.6f, 0.0f, 4.5f}, -1);
-    add_character(32u, {1, 3, EyeStyle::Sleepy, EarStyle::Round, HairStyle::Mohawk, Race::Dwarf},
-                  OutfitKind::Peasant, rags, Vec3{-2.8f, 0.0f, 4.5f}, -1);
-    add_character(33u, {0, 2, EyeStyle::Sharp, EarStyle::Pointed, HairStyle::Ponytail, Race::Elf},
-                  OutfitKind::Peasant, rags, Vec3{0.0f, 0.0f, 4.5f}, -1);
-    add_character(34u, {3, 0, EyeStyle::Sharp, EarStyle::Round, HairStyle::Bald, Race::Human},
-                  OutfitKind::Brigand, rags, Vec3{2.8f, 0.0f, 4.5f}, -1);
-    add_character(35u, {2, 1, EyeStyle::Round, EarStyle::Round, HairStyle::Short, Race::Human},
-                  OutfitKind::Outlaw, rags, Vec3{5.6f, 0.0f, 4.5f}, -1);
-
-    REQUIRE_FALSE(draws.empty());
-
-    const Vec3 target{0.0f, 1.0f, 0.0f};
-    const Vec3 eye{0.0f, 5.2f, 13.5f};
     const Mat4 view = look_at(eye, target, Vec3{0.0f, 1.0f, 0.0f});
-    const Mat4 proj = perspective(radians(40.0f),
-                                  static_cast<f32>(renderer.width()) / renderer.height(), 0.1f, 100.0f);
+    const Mat4 proj = perspective(radians(fov), static_cast<f32>(renderer.width()) / renderer.height(), 0.1f, 100.0f);
     const Vec3 sky{0.46f, 0.62f, 0.82f};
-    const std::string path = (executable_dir() / "characters.ppm").string();
+    const std::string path = (executable_dir() / file).string();
     // A slightly warm, dimmed key so materials don't blow out near-white (the in-game look).
-    const std::vector<u8> px =
-        renderer.render(draws, view, proj, sky, glm::normalize(Vec3{0.35f, 0.8f, 0.55f}), path,
-                        Vec4{1.0f, 0.95f, 0.85f, 0.95f});
-
-    const Vec3 mid = pixel(px, renderer.width(), renderer.width() / 2, renderer.height() / 2);
-    CHECK(glm::length(mid - sky) > 0.05f); // characters, not empty sky
+    std::vector<u8> px = renderer.render(draws, view, proj, sky, glm::normalize(Vec3{0.35f, 0.8f, 0.55f}), path,
+                                         Vec4{1.0f, 0.95f, 0.85f, 0.95f});
     const std::string wrote = "Wrote " + path;
     MESSAGE(wrote);
+    return px;
+}
+} // namespace
+
+// A line-up of characters (all races, every hero role at every gear tier, townsfolk + bandits) drawn the
+// way the client draws them, so the aesthetic can be eyeballed from a few stills: the overview, close
+// front + back views of each role's three looks (capes, hoods, helms), and a mid-stride shot of the
+// cloth swinging against the walking body.
+TEST_CASE("Scene shot: character line-up (races, roles, tiers, NPCs)") {
+    std::vector<Sitter> cast;
+    // Back row: the four hero roles in MASTER gear, mixing races/skins/tints.
+    const Equipment master{3, 3, 0, 0};
+    cast.push_back({11u, {1, 1, EyeStyle::Round, EarStyle::Round, HairStyle::Short, Race::Human},
+                    OutfitKind::Plate, master, Vec3{-4.2f, 0.0f, -4.5f}, 0});
+    cast.push_back({12u, {3, 2, EyeStyle::Sharp, EarStyle::Pointed, HairStyle::Ponytail, Race::Elf},
+                    OutfitKind::Leather, Equipment{3, 3, 2, 0}, Vec3{-1.4f, 0.0f, -4.5f}, 1});
+    cast.push_back({13u, {2, 3, EyeStyle::Round, EarStyle::Round, HairStyle::Bald, Race::Dwarf},
+                    OutfitKind::Holy, Equipment{3, 3, 5, 0}, Vec3{1.4f, 0.0f, -4.5f}, 2});
+    cast.push_back({14u, {4, 0, EyeStyle::Wide, EarStyle::Small, HairStyle::Spiky, Race::Human},
+                    OutfitKind::Robe, Equipment{3, 3, 3, 0}, Vec3{4.2f, 0.0f, -4.5f}, 3});
+    // Middle row: the Knight's plate at each tier (rags -> master), one race, same seed - so the tier
+    // progression is the only variable.
+    for (u8 t = 0; t < kTierCount; ++t) {
+        cast.push_back({21u, {1, 0, EyeStyle::Round, EarStyle::Round, HairStyle::Short, Race::Human},
+                        OutfitKind::Plate, Equipment{t, t, 1, 0}, Vec3{-4.2f + 2.8f * static_cast<f32>(t), 0.0f, 0.0f},
+                        0});
+    }
+    // Front row: the three races side by side in townsfolk garb (a hood, a coif, a straw hat), then the
+    // two bandit kinds.
+    cast.push_back({31u, {2, 1, EyeStyle::Round, EarStyle::Round, HairStyle::Short, Race::Human},
+                    OutfitKind::Peasant, Equipment{0, 0, 0 | (0 << 2) | 16, 0}, Vec3{-5.6f, 0.0f, 4.5f}});
+    cast.push_back({32u, {1, 3, EyeStyle::Sleepy, EarStyle::Round, HairStyle::Mohawk, Race::Dwarf},
+                    OutfitKind::Peasant, Equipment{0, 0, 1 | (1 << 2), 0}, Vec3{-2.8f, 0.0f, 4.5f}});
+    cast.push_back({33u, {0, 2, EyeStyle::Sharp, EarStyle::Pointed, HairStyle::Ponytail, Race::Elf},
+                    OutfitKind::Peasant, Equipment{0, 0, 3 | (2 << 2) | 16, 0}, Vec3{0.0f, 0.0f, 4.5f}});
+    cast.push_back({34u, {3, 0, EyeStyle::Sharp, EarStyle::Round, HairStyle::Bald, Race::Human},
+                    OutfitKind::Brigand, Equipment{}, Vec3{2.8f, 0.0f, 4.5f}});
+    cast.push_back({35u, {2, 1, EyeStyle::Round, EarStyle::Round, HairStyle::Short, Race::Human},
+                    OutfitKind::Outlaw, Equipment{}, Vec3{5.6f, 0.0f, 4.5f}});
+
+    const std::vector<u8> px = render_cast(cast, Vec3{0.0f, 5.2f, 13.5f}, Vec3{0.0f, 1.0f, 0.0f}, "characters.ppm");
+    if (px.empty()) {
+        MESSAGE("No Vulkan device/shaders - skipping character line-up shot");
+        return;
+    }
+    const Vec3 sky{0.46f, 0.62f, 0.82f};
+    const Vec3 mid = pixel(px, 1200, 600, 350);
+    CHECK(glm::length(mid - sky) > 0.05f); // characters, not empty sky
+
+    // Close-ups, one still per design look (worn / fine / master): the four hero roles facing the
+    // camera, then the same four turned round (capes, quivers, liripipes).
+    const OutfitKind kinds[4] = {OutfitKind::Plate, OutfitKind::Leather, OutfitKind::Holy, OutfitKind::Robe};
+    const u8 tints[4] = {0, 2, 5, 3};
+    for (int t = 0; t < 3; ++t) {
+        const u8 tier = static_cast<u8>(t == 0 ? 1 : t + 1);
+        std::vector<Sitter> roles;
+        for (int side = 0; side < 2; ++side) {
+            for (int k = 0; k < 4; ++k) {
+                Sitter s{40u + static_cast<u32>(k), {1, static_cast<u8>(k), EyeStyle::Round, EarStyle::Round,
+                                                    HairStyle::Short, Race::Human},
+                         kinds[k], Equipment{tier, tier, tints[k], 0},
+                         Vec3{-4.55f + 1.3f * static_cast<f32>(side * 4 + k), 0.0f, 0.0f}, k};
+                s.yaw = side == 0 ? 0.0f : Pi;
+                roles.push_back(s);
+            }
+        }
+        const std::string file = "characters_tier" + std::to_string(t) + ".ppm";
+        CHECK_FALSE(render_cast(roles, Vec3{0.0f, 2.1f, 7.8f}, Vec3{0.0f, 0.85f, 0.0f}, file, 1600, 600, 30.0f).empty());
+    }
+
+    // Mid-stride, side-on: the cloth (capes, skirts) swings with the legs instead of passing through.
+    std::vector<Sitter> walkers;
+    const std::pair<OutfitKind, int> walk_kinds[4] = {{OutfitKind::Plate, 0}, {OutfitKind::Holy, 2},
+                                                      {OutfitKind::Robe, 3}, {OutfitKind::Plate, 0}};
+    for (int k = 0; k < 4; ++k) {
+        const u8 tier = static_cast<u8>(k == 3 ? 2 : 3);
+        walkers.push_back({50u + static_cast<u32>(k), CharacterAppearance{}, walk_kinds[k].first,
+                           Equipment{tier, tier, tints[walk_kinds[k].second], 0},
+                           Vec3{-3.3f + 2.2f * static_cast<f32>(k), 0.0f, 0.0f}, walk_kinds[k].second, HalfPi, true});
+    }
+    CHECK_FALSE(render_cast(walkers, Vec3{0.0f, 2.2f, 7.5f}, Vec3{0.0f, 0.85f, 0.0f}, "characters_walk.ppm", 1200, 600, 40.0f).empty());
 }
 
 TEST_CASE("Scene shot: a medieval town overview (walls, houses, market, lanterns)") {

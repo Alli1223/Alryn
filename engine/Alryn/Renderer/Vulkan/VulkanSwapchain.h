@@ -35,6 +35,8 @@ public:
     VkImage image(u32 i) const { return images_[i]; }
     VkImageView view(u32 i) const { return views_[i]; }
     bool valid() const { return swapchain_ != VK_NULL_HANDLE; }
+    // The images can be copied out (screenshots), when the surface allows TRANSFER_SRC usage.
+    bool can_copy_from() const { return copyable_; }
 
 private:
     bool build(u32 width, u32 height, VkSwapchainKHR old_swapchain);
@@ -46,6 +48,7 @@ private:
     VkFormat format_ = VK_FORMAT_UNDEFINED;
     VkExtent2D extent_{0, 0};
     bool vsync_ = true;
+    bool copyable_ = false;
 
     std::vector<VkImage> images_;
     std::vector<VkImageView> views_;

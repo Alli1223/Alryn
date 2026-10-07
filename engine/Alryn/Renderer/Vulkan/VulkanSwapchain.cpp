@@ -96,6 +96,11 @@ bool Swapchain::build(u32 width, u32 height, VkSwapchainKHR old_swapchain) {
     info.imageExtent = extent;
     info.imageArrayLayers = 1;
     info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    // Also copyable when the surface allows it, so a frame can be read back for a screenshot.
+    copyable_ = (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
+    if (copyable_) {
+        info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    }
     info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE; // graphics == present family here
     info.preTransform = caps.currentTransform;
     info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;

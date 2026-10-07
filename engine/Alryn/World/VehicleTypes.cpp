@@ -208,6 +208,18 @@ const VehicleType& vehicle_type(u8 i) {
     return *v[i % v.size()];
 }
 
+bool on_deck(const VehicleType& vt, const Vec3& cart, f32 yaw, const Vec3& feet, f32 slack) {
+    const Vec2 rel{feet.x - cart.x, feet.z - cart.z};
+    const Vec2 fwd{std::cos(yaw), std::sin(yaw)};
+    const Vec2 right{-std::sin(yaw), std::cos(yaw)};
+    const Vec2 fp = vt.footprint();
+    if (std::abs(glm::dot(rel, fwd)) > fp.x + slack || std::abs(glm::dot(rel, right)) > fp.y + slack) {
+        return false; // not over the bed
+    }
+    const f32 deck = cart.y + vt.deck_height();
+    return feet.y >= deck - 0.45f && feet.y <= deck + 1.2f; // standing on it, not beside or far above
+}
+
 // ---- Horse ---------------------------------------------------------------
 MeshData build_horse_body() {
     MeshData m;

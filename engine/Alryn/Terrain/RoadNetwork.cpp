@@ -32,7 +32,7 @@ bool precedes(int acx, int acz, int bcx, int bcz) {
 // (otherwise a road would be dropped at the river's banks).
 bool crossable_river(const Vec2& p, u32 seed) {
     return worldgen::river_amount(p.x, p.y, seed) > 0.04f &&
-           worldgen::height(p.x, p.y, seed) > worldgen::water_level - 2.5f;
+           worldgen::base_height(p.x, p.y, seed) > worldgen::water_level - 2.5f;
 }
 
 // Cost of routing a road through (x,z): a strong penalty for being at/under water, so the refinement
@@ -45,7 +45,7 @@ f32 water_cost(const Vec2& p, u32 seed) {
         const f32 ra = worldgen::river_amount(p.x, p.y, seed);
         return ra * ra * 1.5f;
     }
-    const f32 h = worldgen::height(p.x, p.y, seed);
+    const f32 h = worldgen::base_height(p.x, p.y, seed);
     const f32 below = (worldgen::water_level + 1.2f) - h; // >0 when too low/wet
     if (below <= 0.0f) {
         return 0.0f;
@@ -93,7 +93,7 @@ std::vector<Vec2> route_impl(const Vec2& pa, const Vec2& pb, u32 seed) {
     auto in_water = [&](const Vec2& p) {
         // A river is crossable (bridged), so it doesn't count as water the road must avoid/drop.
         return !crossable_river(p, seed) &&
-               worldgen::height(p.x, p.y, seed) < worldgen::water_level + 0.4f;
+               worldgen::base_height(p.x, p.y, seed) < worldgen::water_level + 0.4f;
     };
 
     const f32 max_off = std::min(span * 0.6f, 120.0f); // bend further to snake around water bodies
@@ -410,8 +410,8 @@ void poly_bridges(const std::vector<Vec2>& poly, u32 seed, std::vector<Bridge>& 
                     const Vec2 bdir{std::cos(br.yaw), std::sin(br.yaw)};
                     const Vec2 e0 = br.center - bdir * (br.length * 0.5f);
                     const Vec2 e1 = br.center + bdir * (br.length * 0.5f);
-                    br.bank_a = worldgen::height(e0.x, e0.y, seed); // deck meets the land at each end
-                    br.bank_b = worldgen::height(e1.x, e1.y, seed);
+                    br.bank_a = worldgen::base_height(e0.x, e0.y, seed); // deck meets the land at each end
+                    br.bank_b = worldgen::base_height(e1.x, e1.y, seed);
                     u32 h = seed * 2654435761u;
                     h ^= static_cast<u32>(std::lround(br.center.x * 0.5f)) * 73856093u;
                     h ^= static_cast<u32>(std::lround(br.center.y * 0.5f)) * 19349663u;

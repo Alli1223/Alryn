@@ -555,7 +555,9 @@ void add_front_gable(MeshData& shell, MeshData& op, MeshData& em, const Vec3& wa
     add_box(shell, {xc - bw, 0.0f, d - 0.1f}, {xc - bw + 0.14f, ph, zfront}, wall_col);  // left side
     add_box(shell, {xc + bw - 0.14f, 0.0f, d - 0.1f}, {xc + bw, ph, zfront}, wall_col);  // right side
     add_box(shell, {xc - bw, 0.0f, zfront - 0.14f}, {xc + bw, ph, zfront}, wall_col);    // front
-    add_box(op, {xc - bw - 0.05f, 0.0f, d - 0.08f}, {xc + bw + 0.05f, 0.5f, zfront + 0.05f}, found); // footing
+    // footing - run on down into the ground: the bay reaches past the house's levelled pad, where the
+    // ground starts easing back to its natural slope, so no gap opens beneath it
+    add_box(op, {xc - bw - 0.05f, -0.6f, d - 0.08f}, {xc + bw + 0.05f, 0.5f, zfront + 0.05f}, found);
     if (half_timber) {
         timber_frame(shell, true, zfront, 1.0f, xc - bw, xc + bw, 0.0f, ph, 0.45f, frame);
         timber_frame(shell, false, xc - bw, -1.0f, d - 0.05f, zfront - 0.05f, 0.0f, ph, 0.0f, frame);
@@ -584,7 +586,7 @@ void add_leanto(MeshData& shell, MeshData& op, const Vec3& wall_col, const Vec3&
     const f32 xo = side * (w + lw); // outer wall x
     const f32 xi = side * w;        // inner (against the house) x
     const f32 lo = std::min(xo, xi), hix = std::max(xo, xi);
-    add_box(op, {lo - 0.05f, 0.0f, -dz - 0.05f}, {hix + 0.05f, 0.45f, dz + 0.05f}, found);       // footing
+    add_box(op, {lo - 0.05f, -0.6f, -dz - 0.05f}, {hix + 0.05f, 0.45f, dz + 0.05f}, found);      // footing (into the ground)
     add_box(shell, {std::min(xo, xo - side * 0.14f), 0.0f, -dz}, {std::max(xo, xo - side * 0.14f), lh, dz}, wall_col); // outer wall
     add_box(shell, {lo, 0.0f, -dz - 0.06f}, {hix, lh, -dz}, wall_col);                            // end walls
     add_box(shell, {lo, 0.0f, dz}, {hix, lh, dz + 0.06f}, wall_col);
@@ -764,7 +766,9 @@ PropDef PropLibrary::build_house(u32 variant) {
     const Vec3 wall_col = st.material == 1 ? stone
                           : st.material == 2 ? glm::mix(daub_cols[variant % 3], timber, 0.22f)
                                              : daub_cols[variant % 3];
-    const Vec3 floor_c{0.32f, 0.25f, 0.17f};
+    const Vec3 plank{0.55f, 0.38f, 0.22f};    // honey oak floorboards (lighter than the furniture)
+    const Vec3 flagstone{0.58f, 0.55f, 0.50f}; // warm grey flags (the stone houses' floors)
+    const Vec3 subfloor{0.15f, 0.11f, 0.07f};  // the dark joints between boards / flags
     // Roofs come in two builds: chunky stepped wood/clay shingles in a warm earthy palette
     // (browns, terracotta, weathered wood, muted slate) or a golden straw thatch - matching the
     // Synty-style reference (a town of brown-shingled + thatched cottages, not gaudy slates).
@@ -863,7 +867,55 @@ PropDef PropLibrary::build_house(u32 variant) {
         def.colliders.push_back(col);
     };
 
-    add_box(op, {-w, -0.04f, -d}, {w, 0.05f, d}, floor_c); // ground floor
+    // ---- The ground floor: floorboards (flagstones in the stone houses) over a dark sub-floor that
+    // shows through the joints. The ground under a house is levelled flat (worldgen::height), so the
+    // floor lies right on it rather than being buried by the slope it stands on.
+    add_box(op, {-w, -0.3f, -d}, {w, 0.02f, d}, subfloor);
+    if (st.material == 1) {
+        // Flagstones: rows of ~0.75 m slabs, every other row offset half a slab, each shade-jittered.
+        const int nx = std::max(3, static_cast<int>(std::round(2.0f * w / 0.75f)));
+        const int nz = std::max(3, static_cast<int>(std::round(2.0f * d / 0.75f)));
+        const f32 sx = 2.0f * w / static_cast<f32>(nx);
+        const f32 sz = 2.0f * d / static_cast<f32>(nz);
+        constexpr f32 gap = 0.025f;
+        for (int j = 0; j < nz; ++j) {
+            const f32 z0 = -d + static_cast<f32>(j) * sz;
+            const f32 shift = (j % 2 == 1) ? sx * 0.5f : 0.0f;
+            for (int i = -1; i < nx; ++i) {
+                const f32 x0 = std::max(-w, -w + static_cast<f32>(i) * sx + shift);
+                const f32 x1 = std::min(w, -w + static_cast<f32>(i + 1) * sx + shift);
+                if (x1 - x0 < 0.1f) {
+                    continue;
+                }
+                const f32 shade = 0.82f + 0.26f * rnd(300u + static_cast<u32>(j * 31 + i + 1));
+                add_box(op, {x0 + gap, 0.02f, z0 + gap}, {x1 - gap, 0.055f, z0 + sz - gap},
+                        flagstone * shade);
+            }
+        }
+    } else {
+        // Boards run along the house's long axis, each with one butt joint at a hashed spot so the
+        // joints stagger across the floor.
+        const bool along_x = w >= d;
+        const f32 len = along_x ? w : d;  // half-length along the boards
+        const f32 span = along_x ? d : w; // half-width across them
+        const int boards = std::max(4, static_cast<int>(std::round(2.0f * span / 0.32f)));
+        constexpr f32 gap = 0.012f;
+        for (int i = 0; i < boards; ++i) {
+            const f32 a0 = glm::mix(-span, span, static_cast<f32>(i) / static_cast<f32>(boards)) + gap;
+            const f32 a1 = glm::mix(-span, span, static_cast<f32>(i + 1) / static_cast<f32>(boards)) - gap;
+            const f32 joint = glm::mix(-len * 0.6f, len * 0.6f, rnd(400u + static_cast<u32>(i)));
+            for (int s = 0; s < 2; ++s) {
+                const f32 l0 = s == 0 ? -len : joint + gap;
+                const f32 l1 = s == 0 ? joint - gap : len;
+                const Vec3 c = plank * (0.84f + 0.26f * rnd(500u + static_cast<u32>(i * 2 + s)));
+                if (along_x) {
+                    add_box(op, {l0, 0.02f, a0}, {l1, 0.055f, a1}, c);
+                } else {
+                    add_box(op, {a0, 0.02f, l0}, {a1, 0.055f, l1}, c);
+                }
+            }
+        }
+    }
 
     // Build each storey's four walls. The ground floor's front wall is split around the
     // door; every wall gets a centred window. (For a wider front, two windows.)

@@ -200,19 +200,20 @@ CharacterModel CharacterModel::generate(u32 seed, Race race) {
     const f32 hscale = rng.range(0.97f, 1.06f) * rt.height; // overall height
     const f32 build = rng.range(0.94f, 1.12f) * rt.build;   // width / bulk
 
-    // Cute, stylised "chibi" proportions (~4.8 heads, total ~1.45 m): a big head over a compact torso
-    // with SHORT, chunky limbs - the look of the reference art, not a realistic 7.5-head adult. The
-    // body masses are faceted rounded boxes; the limbs are capsules; the feet are boot boxes. The
-    // skinned body + outfits read these segment lengths, so changing them re-proportions everything.
-    const f32 leg_upper = 0.31f * hscale * rt.legs; // short stubby legs (shorter still for dwarves)
-    const f32 leg_lower = 0.29f * hscale * rt.legs;
-    const f32 leg_len = leg_upper + leg_lower;
-    const f32 torso = 0.52f * hscale;
-    const f32 head_h = 0.30f * hscale * rt.head; // a big cute head
-    const f32 head_w = 0.25f * hscale * rt.head;
-    const f32 neck = 0.045f * hscale;                // short neck
-    const f32 arm_upper = 0.23f * hscale * rt.arms;  // short arms
-    const f32 arm_lower = 0.21f * hscale * rt.arms;
+    // Stylised heroic proportions (~5.8 heads, total ~1.6 m): a slightly large head over a broad-
+    // shouldered torso with proper-length limbs - a storybook medieval figure rather than a chibi toy
+    // or a realistic 7.5-head adult. The skinned body + outfits read these segment lengths, so changing
+    // them re-proportions everything (dwarves keep short legs + a big head via the race traits).
+    const f32 leg_upper = 0.36f * hscale * rt.legs; // hip -> knee
+    const f32 leg_lower = 0.30f * hscale * rt.legs; // knee -> ankle
+    const f32 ankle = 0.07f * hscale;               // ankle -> sole (the boot stands ON the ground)
+    const f32 leg_len = leg_upper + leg_lower + ankle;
+    const f32 torso = 0.54f * hscale;
+    const f32 head_h = 0.28f * hscale * rt.head;
+    const f32 head_w = 0.225f * hscale * rt.head;
+    const f32 neck = 0.07f * hscale;
+    const f32 arm_upper = 0.28f * hscale * rt.arms;
+    const f32 arm_lower = 0.25f * hscale * rt.arms;
 
     // Palette (base skin + drab starting clothes; outfits recolour on top).
     static const Vec3 skin_tones[] = {{0.86f, 0.66f, 0.52f}, {0.80f, 0.58f, 0.45f},
@@ -230,11 +231,11 @@ CharacterModel CharacterModel::generate(u32 seed, Race race) {
         m.bones_.push_back({part, parent, joint, size, center, color, shape});
     };
 
-    const f32 hip_w = 0.10f * build;            // half-spacing of the hip joints
-    const f32 shoulder_y = torso * 0.84f;       // shoulders near the top of the torso
-    const f32 shoulder_x = 0.20f * build + 0.03f; // half-spacing of the shoulder joints
-    const f32 arm_r = 0.098f * build;           // arm radius (chunky for the cute look)
-    const f32 leg_r = 0.135f * build;           // leg radius
+    const f32 hip_w = 0.095f * build;            // half-spacing of the hip joints
+    const f32 shoulder_y = torso * 0.84f;        // shoulders near the top of the torso
+    const f32 shoulder_x = 0.17f * build + 0.03f; // half-spacing of the shoulder joints (broad)
+    const f32 arm_r = 0.074f * build;            // arm radius
+    const f32 leg_r = 0.1f * build;              // leg radius
 
     // Core skeleton, indices 0..12 - parts/order unchanged so the animator + the face/hair feature
     // bones (parented to the head, index 2) still work. Limb segments are made a touch LONGER than
@@ -242,7 +243,7 @@ CharacterModel CharacterModel::generate(u32 seed, Race race) {
     // so the body reads as one connected figure rather than stacked blocks.
     add(BonePart::Pelvis, -1, {0.0f, leg_len, 0.0f}, {0.30f * build, 0.24f, 0.23f * build},
         {0.0f, 0.0f, 0.0f}, BoneColor::Pants, BoneShape::RoundedBox);
-    add(BonePart::Torso, 0, {0.0f, 0.04f, 0.0f}, {0.40f * build, torso, 0.25f * build},
+    add(BonePart::Torso, 0, {0.0f, 0.04f, 0.0f}, {0.38f * build, torso, 0.28f * build},
         {0.0f, torso * 0.52f, 0.0f}, BoneColor::Shirt, BoneShape::RoundedBox);
     add(BonePart::Head, 1, {0.0f, torso + neck, 0.0f}, {head_w, head_h, head_w * 1.04f},
         {0.0f, head_h * 0.5f, 0.0f}, BoneColor::Skin, BoneShape::RoundedBox);
@@ -262,10 +263,13 @@ CharacterModel CharacterModel::generate(u32 seed, Race race) {
         {0.0f, -leg_upper * 0.5f, 0.0f}, BoneColor::Pants, BoneShape::Capsule);
     add(BonePart::LowerLegR, 9, {0.0f, -leg_upper, 0.0f}, {leg_r * 1.7f, leg_lower * 1.16f, leg_r * 1.8f},
         {0.0f, -leg_lower * 0.5f, 0.0f}, BoneColor::Pants, BoneShape::Capsule);
-    add(BonePart::FootL, 8, {0.0f, -leg_lower, 0.05f}, {0.15f, 0.14f, 0.32f}, {0.0f, -0.01f, 0.07f},
-        BoneColor::Pants, BoneShape::RoundedBox);
-    add(BonePart::FootR, 10, {0.0f, -leg_lower, 0.05f}, {0.15f, 0.14f, 0.32f}, {0.0f, -0.01f, 0.07f},
-        BoneColor::Pants, BoneShape::RoundedBox);
+    // Feet: the joint is the ANKLE (`ankle` above the ground); the boot box reaches down to the sole.
+    const Vec3 foot_size{0.11f * build, ankle + 0.03f, 0.27f * hscale};
+    const Vec3 foot_center{0.0f, -ankle * 0.5f + 0.005f, 0.05f * hscale};
+    add(BonePart::FootL, 8, {0.0f, -leg_lower, 0.0f}, foot_size, foot_center, BoneColor::Pants,
+        BoneShape::RoundedBox);
+    add(BonePart::FootR, 10, {0.0f, -leg_lower, 0.0f}, foot_size, foot_center, BoneColor::Pants,
+        BoneShape::RoundedBox);
 
     // Joint fillers + neck + hands (part = None, so they're not animated specially - they just ride
     // their parent and fill the seam at each joint, connecting the limbs). Parented to the bone whose

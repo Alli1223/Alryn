@@ -249,7 +249,7 @@ inline std::vector<PropInstance> scatter_props(int cx, int cz, f32 chunk_world, 
 
     // Village structures (cottages, walls, gate towers) whose pieces fall in this
     // chunk. Towns are large but sparse, so checking the 3x3 village cells around
-    // the chunk and filtering to its bounds is cheap (and the chunk result caches).
+    // the chunk and filtering each town's (cached) layout to its bounds is cheap.
     {
         const int vcx = static_cast<int>(std::floor((x0 + chunk_world * 0.5f) / worldgen::village_cell));
         const int vcz = static_cast<int>(std::floor((z0 + chunk_world * 0.5f) / worldgen::village_cell));
@@ -259,7 +259,7 @@ inline std::vector<PropInstance> scatter_props(int cx, int cz, f32 chunk_world, 
                 if (!village) {
                     continue;
                 }
-                for (const PropInstance& p : village_props(*village, seed)) {
+                for (const PropInstance& p : cached_village_props(*village, seed)) {
                     if (p.position.x >= x0 && p.position.x < x0 + chunk_world &&
                         p.position.z >= z0 && p.position.z < z0 + chunk_world) {
                         out.push_back(p);

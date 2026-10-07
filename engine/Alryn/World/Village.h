@@ -10,6 +10,7 @@
 
 #include <array>
 #include <cmath>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
@@ -301,7 +302,9 @@ inline void for_each_house(const worldgen::Village& v, u32 seed,
     int np = 0;
     auto try_place = [&](f32 x, f32 z, f32 yaw, u8 variant) -> bool {
         const f32 r = house_reach(variant);
-        const f32 gh = worldgen::height(x, z, seed);
+        // The NATURAL ground: the layout is planned on the raw land (the levelled ground height()
+        // is itself derived from these plots, see Terrain/WorldGen.cpp).
+        const f32 gh = worldgen::base_height(x, z, seed);
         if (std::abs(gh - v.ground) > 2.4f || gh < worldgen::water_level + 1.0f) {
             return false; // too uneven to build on, or it would sit in the water
         }
@@ -464,7 +467,9 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
     const auto gates = detail::village_gate_points(v, seed);
 
     auto push = [&](PropCategory cat, u8 var, f32 x, f32 z, f32 yaw, f32 length = 1.0f) {
-        const f32 gh = worldgen::height(x, z, seed);
+        // A house stands on its own levelled pad, whose height is the natural ground at its centre.
+        const f32 gh = cat == PropCategory::House ? worldgen::base_height(x, z, seed)
+                                                  : worldgen::height(x, z, seed);
         if (gh < worldgen::water_level + 0.5f) {
             return; // never place a town prop down in the water
         }
@@ -878,6 +883,26 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
         }
     }
     return out;
+}
+
+// village_props, cached per town (keyed like village_gate_points). The terrain streamer asks for a
+// town's layout once for every chunk it builds near it, and laying out a whole town each time made
+// towns slow to stream in. Thread-safe (chunks build on a worker thread); entries are never evicted,
+// so the returned reference stays valid.
+inline const std::vector<PropInstance>& cached_village_props(const worldgen::Village& v, u32 seed) {
+    static std::mutex mtx;
+    static std::unordered_map<u64, std::shared_ptr<const std::vector<PropInstance>>> cache;
+    const u64 key = (static_cast<u64>(v.vseed) << 32) | static_cast<u64>(seed);
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        const auto it = cache.find(key);
+        if (it != cache.end()) {
+            return *it->second;
+        }
+    }
+    auto props = std::make_shared<const std::vector<PropInstance>>(village_props(v, seed));
+    std::lock_guard<std::mutex> lock(mtx);
+    return *cache.emplace(key, std::move(props)).first->second;
 }
 
 // The town's gate-opening world positions (one where each road crosses the wall).

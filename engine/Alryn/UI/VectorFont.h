@@ -26,7 +26,8 @@ constexpr f32 kFontStrokeRatio = 0.095f;
 // Extra space added after each glyph's advance, in cap-height units.
 constexpr f32 kFontTracking = 0.16f;
 
-// Pixel width of a string rendered at the given cap-height size.
+// Pixel width of a string rendered at the given cap-height size: in the theme's TrueType face
+// once the font atlas is baked (see Font.h), else in this vector font.
 f32 font_text_width(std::string_view text, f32 size);
 
 } // namespace alryn::ui

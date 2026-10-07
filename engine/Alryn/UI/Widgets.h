@@ -10,19 +10,25 @@
 
 namespace alryn::ui {
 
-// A background card with a subtle border. Pure container; add children to it.
+// A background card: a soft drop shadow, a gradient fill, a border and (on the bigger cards)
+// an inset hairline with corner studs. Pure container; add children to it.
 class Panel : public Widget {
 public:
     Vec4 color = theme().panel;
+    // The fill's bottom colour. a = 0 (the default) means automatic: the theme's panel gradient
+    // for a theme-coloured panel, otherwise flat `color`.
+    Vec4 color_bottom{0.0f};
     Vec4 border = theme().panel_border;
     f32 radius = 14.0f;
     bool fill = true;
+    bool shadow = true;   // a drop shadow lifting the card off what's behind it
+    bool ornate = true;   // inset hairline + corner studs (skipped on small panels anyway)
 
 protected:
     void on_draw(DrawList& dl) override;
 };
 
-// Static text. `size` is the cap height in px; aligned within bounds.
+// Static text. `size` is the cap height in px; aligned within bounds (vertically centred).
 class Label : public Widget {
 public:
     Label() = default;
@@ -32,7 +38,19 @@ public:
     std::string text;
     f32 size = 22.0f;
     Vec4 color = theme().text;
+    Vec4 color_bottom{0.0f}; // a > 0: a vertical gradient from `color` down to this
     TextAlign align = TextAlign::Left;
+    FontFace face = theme().font;
+    f32 tracking = 0.0f; // extra letter spacing, in cap heights
+
+    // Restyles this label as a heading: the theme's title face and gold gradient, a deeper shadow.
+    Label& heading() {
+        face = theme().title_font;
+        color = theme().title;
+        color_bottom = theme().title_bottom;
+        tracking = 0.04f;
+        return *this;
+    }
 
 protected:
     void on_draw(DrawList& dl) override;

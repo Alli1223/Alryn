@@ -37,6 +37,7 @@ option(ALRYN_WARNINGS_AS_ERRORS "Treat warnings as errors (engine)" OFF)
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(AlrynWarnings)
 include(CompileShaders)
+include(EmbedFiles)
 
 # --------------------------------------------------------------------------
 #  Dependencies
@@ -124,6 +125,21 @@ target_include_directories(miniaudio_impl PUBLIC ${miniaudio_SOURCE_DIR})
 target_link_libraries(miniaudio_impl PUBLIC ${CMAKE_DL_LIBS})
 if(UNIX AND NOT APPLE)
     target_link_libraries(miniaudio_impl PUBLIC m pthread)
+endif()
+
+# stb_truetype (single-header TrueType parser + rasterizer; public domain), for the UI's
+# font atlas. Fetched as just the header, pinned to a commit, and compiled as its own C
+# translation unit like miniaudio so the engine's warning set never sees it.
+FetchContent_Declare(stb_truetype
+    URL https://raw.githubusercontent.com/nothings/stb/6e9f34d5429cf16790ec43c9bac3f1ee4ad1f760/stb_truetype.h
+    DOWNLOAD_NO_EXTRACT TRUE)
+FetchContent_MakeAvailable(stb_truetype)
+file(WRITE ${CMAKE_BINARY_DIR}/stb_truetype_impl.c
+    "#define STB_TRUETYPE_IMPLEMENTATION\n#include \"stb_truetype.h\"\n")
+add_library(stb_truetype_impl STATIC ${CMAKE_BINARY_DIR}/stb_truetype_impl.c)
+target_include_directories(stb_truetype_impl PUBLIC ${stb_truetype_SOURCE_DIR})
+if(UNIX AND NOT APPLE)
+    target_link_libraries(stb_truetype_impl PUBLIC m)
 endif()
 
 set(alryn_enet_sources callbacks.c compress.c host.c list.c packet.c peer.c protocol.c)

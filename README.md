@@ -1,6 +1,6 @@
 <div align="center">
 
-# ⚔️ ALRYN
+# ALRYN
 
 ### *A medieval wagon-escort adventure*
 
@@ -26,41 +26,27 @@ a noble in a covered carriage, and the raiders know exactly who is riding inside
 
 Bring friends. One player can hold a road, but nobody holds it for long.
 
-## ✨ Highlights
+## Highlights
 
-- **⚒️ Four roles** — the **Knight** tanks and taunts, the **Hunter** kills at range, the
+- **Four roles** — the **Knight** tanks and taunts, the **Hunter** kills at range, the
   **Cleric** mends and smites, the **Mage** chains elemental combos. Each has its own
   weapon, stat block and skill tree.
-- **🧝 Three races** — Men, Dwarves and Elves, with real mechanical passives. An Elf throws
+- **Three races** — Men, Dwarves and Elves, with real mechanical passives. An Elf throws
   an ally the farthest; a Dwarf lands the hardest. Yes, you can toss the dwarf.
-- **🛒 Wagon contracts** — vote on the route, hire a driver or haul it manually, survive the
+- **Wagon contracts** — vote on the route, hire a driver or haul it manually, survive the
   ambush, deliver for coin. Escort the VIP carriage if the pay is worth the trouble.
-- **🌍 A new world every launch** — procedural terrain, roads, forests and towns full of
+- **A new world every launch** — procedural terrain, roads, forests and towns full of
   villagers going about their day. The ground itself is deformable.
-- **🌙 A world that turns** — a full day/night cycle with lantern-lit towns after dark, and
+- **A world that turns** — a full day/night cycle with lantern-lit towns after dark, and
   weather that builds from clear skies into a proper storm.
-- **🌐 Drop-in co-op** — server-authoritative multiplayer. Host from the menu, or join a
+- **Drop-in co-op** — server-authoritative multiplayer. Host from the menu, or join a
   friend by IP.
 
-## 🎮 Controls
-
-| | |
-|---|---|
-| **WASD** / **Space** | Move / jump |
-| **Shift** | Dodge roll |
-| **Left click** | Primary attack (sword, arrow, spell) |
-| **1–4** | Abilities — for the Mage, elements (hold **Ctrl** to combo) |
-| **E** | Hitch / unhitch a wagon |
-| **H** | Vote: hire a driver or haul it yourself |
-| **G** | Ally toss |
-| **M** / **K** / **U** | World map / skills / wardrobe |
-| **Esc** | Pause |
-
-Gamepads are supported.
+Keyboard and gamepad are both supported.
 
 ---
 
-## 📦 Download & play
+## Download & play
 
 1. Grab the build for your platform from the
    [**Releases**](https://github.com/Alli1223/Alryn/releases/latest) page —
@@ -76,7 +62,7 @@ Gamepads are supported.
 | **GPU** | Any GPU with up-to-date **Vulkan 1.3** drivers (NVIDIA / AMD / Intel, ~2018 or newer) |
 | **Multiplayer** | UDP port **24650** open on the host |
 
-## 🔨 Build from source
+## Build from source
 
 Needs **CMake 3.24+**, a **C++23** compiler, and the
 [**LunarG Vulkan SDK**](https://vulkan.lunarg.com/sdk/home) (for `glslc` and the loader).
