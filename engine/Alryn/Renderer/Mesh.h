@@ -8,6 +8,7 @@
 
 #include <vulkan/vulkan.h>
 
+#include <utility>
 #include <vector>
 
 namespace alryn {
@@ -40,6 +41,27 @@ struct MeshData {
 class Mesh : public NonCopyable {
 public:
     Mesh() = default;
+    // Moves hand the GPU buffers over AND leave the source empty (invalid). The implicit move used to
+    // copy index_count_ / vertex_bytes_, so a moved-from mesh still claimed valid() with null buffers -
+    // and the next update_vertices() on it mapped memory on a null device (an abort in the Vulkan
+    // loader, e.g. when the hero preview was rebuilt after being drawn).
+    Mesh(Mesh&& other) noexcept
+        : vertex_buffer_(std::move(other.vertex_buffer_)), index_buffer_(std::move(other.index_buffer_)),
+          index_count_(std::exchange(other.index_count_, 0u)),
+          vertex_bytes_(std::exchange(other.vertex_bytes_, VkDeviceSize{0})), bounds_center_(other.bounds_center_),
+          bounds_radius_(std::exchange(other.bounds_radius_, 0.0f)) {}
+    Mesh& operator=(Mesh&& other) noexcept {
+        if (this != &other) {
+            vertex_buffer_ = std::move(other.vertex_buffer_); // (Buffer's move-assign frees ours first)
+            index_buffer_ = std::move(other.index_buffer_);
+            index_count_ = std::exchange(other.index_count_, 0u);
+            vertex_bytes_ = std::exchange(other.vertex_bytes_, VkDeviceSize{0});
+            bounds_center_ = other.bounds_center_;
+            bounds_radius_ = std::exchange(other.bounds_radius_, 0.0f);
+        }
+        return *this;
+    }
+    ~Mesh() = default;
 
     bool create(const vk::Device& device, const MeshData& data);
     void destroy();

@@ -41,6 +41,7 @@ public:
     void send_welcome(PlayerId client, const Welcome& welcome); // reliable
     void broadcast_snapshot(const Snapshot& snapshot);          // unreliable
     void broadcast_deform(const DeformEvent& deform);           // reliable
+    void send_deform(PlayerId client, const DeformEvent& deform); // reliable (catching a late joiner up)
     void broadcast_player_left(PlayerId id);                    // reliable
 
     usize client_count() const { return peers_.size(); }

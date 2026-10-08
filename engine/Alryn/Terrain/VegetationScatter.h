@@ -60,8 +60,9 @@ inline bool veg_ground(f32 wx, f32 wz, u32 seed, f32 gh, f32 max_slope, f32 min_
         if (!town_ok) {
             return false; // most plants don't grow on the trampled town ground...
         }
-        if (town_path_amount(Vec3{wx, gh, wz}, 1.0f, seed) > 0.1f) {
-            return false; // ...but grass does, in the green areas - just keep it off the streets
+        if (town_path_amount(Vec3{wx, gh, wz}, 1.0f, seed) > 0.1f ||
+            town_pave_amount(Vec3{wx, gh, wz}, 1.0f, seed) > 0.15f) {
+            return false; // ...but grass does, in the green areas - keep it off the streets + cobbles
         }
         if (worldgen::under_building(wx, wz, seed, 0.5f)) {
             return false; // ...and out of the houses (the margin covers a cluster's spread)

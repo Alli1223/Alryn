@@ -686,7 +686,8 @@ void ClientApp::update_town_arrival(Timestep dt) {
             for (char& c : town_banner_name_) {
                 c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
             }
-            town_banner_ = 4.5f;
+            // (Not over a scripted close-up of the fighting - it would cover the top of the shot.)
+            town_banner_ = dev_screen() == "bestiary" || dev_screen() == "quest" ? 0.0f : 4.5f;
         }
     } else if (!worldgen::inside_village(f.x, f.z, world_seed_, 8.0f)) {
         town_vseed_ = 0;

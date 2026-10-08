@@ -6,14 +6,16 @@
 #include <vector>
 
 // The sound-effect bank, synthesized FROM SCRATCH - no audio assets, in the same spirit as the
-// vector font: every clip is rendered procedurally (oscillators + noise + envelopes + simple
-// filters) into a mono f32 PCM buffer at engine startup. Pure DSP with a deterministic seed, so
-// the synth is headless-testable and the whole soundscape ships inside the binary.
+// vector font: every clip is rendered procedurally into a mono f32 PCM buffer at engine startup.
+// Each one is layered like a designed sound (a transient for the attack, a body for the weight, a
+// tail for the size) from a small DSP kit: seeded noise, resonant filters, struck metal/wood modes,
+// a plucked string, FM bells, band-limited brass and a little reverb. Pure DSP with deterministic
+// seeds, so the synth is headless-testable and the whole soundscape ships inside the binary.
 namespace alryn {
 
 enum class SfxId : u8 {
-    SwordSwing = 0, // a whooshing air cut (also pitched for the ally-toss flight)
-    SwordHit,       // a meaty thunk when a blow lands
+    SwordSwing = 0, // the swing's whoosh, timed to the animation's cut (peaks ~0.22 s in)
+    SwordHit,       // a blade biting home: crack + meaty thump + a ring of steel
     BowShot,        // a plucked-string twang + arrow hiss
     ArrowHit,       // a sharp thock (arrow striking wood/flesh)
     CastMagic,      // a shimmering rising chime (ability / spell casts)
@@ -28,14 +30,24 @@ enum class SfxId : u8 {
     Fanfare,        // a three-note delivery jingle
     UiClick,        // a short dry tick for menu/button presses
     LevelUp,        // a bright rising arpeggio + shimmer (a hero levels up / a journey step lands)
+    SpellHit,       // an arcane bolt landing: a zap, a whump and a fizz of sparks
+    Roar,           // a raider's war-cry / a beast's snarl: a rough, throaty bellow
+    Howl,           // a dire wolf's howl rising out of the wilds
+    Dig,            // a spade biting into earth: a crunch of soil + a gritty scrape
 };
-inline constexpr usize kSfxCount = 16;
+inline constexpr usize kSfxCount = 20;
 
 // The shared engine sample rate for synthesis + playback (miniaudio converts to native).
 inline constexpr u32 kSfxSampleRate = 48000;
 
-// Render one clip: a mono f32 buffer in [-1, 1] at kSfxSampleRate. Deterministic per id.
-std::vector<f32> render_sfx(SfxId id);
+// How many distinct takes the bank holds of a clip. The frequent combat sounds get a few (each with
+// its own noise and small detunes) and playback rotates through them, so a flurry of swings doesn't
+// machine-gun one identical sample.
+u32 sfx_variants(SfxId id);
+
+// Render one take of a clip: a mono f32 buffer in [-1, 1] at kSfxSampleRate. Deterministic per
+// (id, variant).
+std::vector<f32> render_sfx(SfxId id, u32 variant = 0);
 
 // --- 3D spatialisation (pure, shared by the mixer and the tests) --------------------------------
 // Per-ear gains for a sound at `source` heard by a listener at `listener` facing `listener_yaw`

@@ -73,12 +73,21 @@ struct PlayerInput {
                                     // Held a few ticks; the server buys ONE rank on the rising edge, in a town.
     bool toss = false;              // Ally Toss combo: hurl the nearest teammate toward `aim` (one-shot press)
     bool channel = false;          // Cleric Power Conduit combo: channel a heal+damage beam to an ally (held)
+    bool lantern = false;           // the hero holds a lit lantern out (off-hand item stowed; no shield block)
     u8 color_pref = 255;            // preferred identity colour (index; 255 = no preference)
     std::string name;               // the hero's display name (the server sanitises + clamps it)
     u8 learn = 0;                   // skill tree: 1..7 = learn ability (index + 1), 8..10 = raise talent
                                     // (8 + t). Held a few ticks; the server spends ONE point per rising edge.
     bool restore = false;           // `progress` holds the saved hero (adopted once, on joining)
     HeroProgress progress;
+    // Charged HEAVY attack (Roles.h): hold the primary attack to wind up, release to unleash.
+    u8 charge = 0;                  // 0..255 how far it's wound up while the button is held (0 = not)
+    u8 heavy_seq = 0;               // bumps on each release - the server acts on a CHANGE (a dropped
+                                    // packet can't lose it: every later packet carries the same seq)
+    u8 heavy_power = 0;             // the charge (1..255) that release was at
+    // Side quests (the town's notice board): take an offered quest, or give up the active one.
+    u32 quest_pick = 0;             // offered quest id to accept (0 = none). Held a few ticks.
+    bool quest_abandon = false;
 };
 
 struct PlayerState {
@@ -105,8 +114,12 @@ struct PlayerState {
                                     // clients land the Meteor / sky strike / spell beams on the right spot
     u8 color = 0;                   // identity colour (ring, name plate, party frame, map pin)
     u8 level = 1;                   // character level (name plates / party frames)
+    u8 lantern = 0;                 // 1 = holding a lit lantern out (every client draws + lights it)
     std::string name;               // display name
     HeroProgress progress;          // live progression (the owner's client saves it + draws its HUD)
+    u8 charge = 0;                  // 0..255 a heavy attack being wound up (-> the wind-up pose + glow)
+    u8 heavy_seq = 0;               // bumps per heavy released (-> remote clients play the blow + VFX)
+    u8 heavy_power = 0;             // the charge of the last heavy released (0..255)
 };
 
 // A live enemy, broadcast each tick so clients can render + animate it.
@@ -116,9 +129,14 @@ struct EnemyState {
     f32 yaw = 0.0f;
     u8 kind = 0;
     u8 health = 0;  // 0..255 scaled from max, for a health bar / death fade
-    u8 action = 0;  // 0 none, 1 swinging (-> attack animation)
-    u8 status = 0;  // status bitflags: bit0 = chilled (Frost Bolt) -> icy tint + shatter VFX
+    u8 action = 0;  // 0 none, 1 striking, 2 winding up (slam / aim / a wolf's crouch), 3 slammed, 4 pouncing
+    u8 status = 0;  // status bitflags (kStatus* below) -> tints, rage + mud VFX
 };
+inline constexpr u8 kStatusChilled = 1u;  // a Frost Bolt's chill -> icy tint + shatter VFX
+inline constexpr u8 kStatusMired = 2u;    // bogged down in a dug pit -> mud splashes
+inline constexpr u8 kStatusEnraged = 4u;  // the lone last raider's berserk fury
+inline constexpr u8 kStatusRallied = 8u;  // spurred on by a nearby warlord
+inline constexpr u8 kStatusQuest = 16u;   // a side quest's foe (guarding a camp / den)
 
 // A live villager or town guard, broadcast each tick. Appearance rides along so every
 // client renders the right look without local generation. `kind`: 0 = villager, 1 = guard.
@@ -221,6 +239,28 @@ struct BubbleState {
     u8 strength = 255;   // 0..255 of its remaining health (fades/pops as arrows batter it)
 };
 
+// A side quest on the town's notice board (Offered), under way (Active), or just won (Complete), so
+// every client can list the board, mark the site on the HUD + map, and draw its props.
+struct QuestState {
+    u32 id = 0;
+    u8 kind = 0;     // QuestKind
+    u8 phase = 0;    // QuestPhase
+    u8 danger = 1;   // 1..3
+    u8 progress = 0; // foes felled / digs / petals gathered ...
+    u8 goal = 1;     // ... out of this many
+    u32 reward = 0;
+    Vec3 site{0.0f};  // the camp / den / X / meadow
+    Vec3 board{0.0f}; // the notice board it's pinned on
+};
+// A side quest's pickup: a moonpetal (kind 0), or the treasure chest (kind 1; state 0 = still buried
+// under the X, 1 = unearthed, 2 = opened).
+struct QuestItemState {
+    u32 id = 0;
+    Vec3 position{0.0f};
+    u8 kind = 0;
+    u8 state = 0;
+};
+
 struct Snapshot {
     u32 tick = 0;
     f32 time_of_day = 0.0f; // 0..1, server-authoritative day/night clock
@@ -248,6 +288,8 @@ struct Snapshot {
     std::vector<AuraState> auras;   // ground effects (Cleric heal auras)
     std::vector<WallState> walls;   // raised rock walls (Mage); colliders NPCs route around
     std::vector<BubbleState> bubbles; // Cleric max-Aegis domes that block enemy ranged attacks
+    std::vector<QuestState> quests;   // the notice board's side quests (+ the one under way)
+    std::vector<QuestItemState> quest_items; // moonpetals to pick, the buried chest
 };
 
 struct Welcome {

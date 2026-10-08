@@ -340,11 +340,15 @@ void ClientApp::on_event(Event& event) {
                 selected_wagon_ = 0; // withdraw the offer
                 return true;
             }
+            // The notice board's ACCEPT / ABANDON buttons.
+            if (quest_panel_click(p)) {
+                return true;
+            }
             // A click on the debug overlay's toggles takes priority over melee.
             if (debug_open_ && debug_click(p)) {
                 return true;
             }
-            primary_action(); // role-specific attack (shared with the controller's right trigger)
+            attack_press(); // tap = the basic attack, hold = wind up a heavy (released below)
         } else if (e.button() == 1) {
             // Right mouse is held: a Knight raises their shield, a Cleric channels a heal
             // aura (charges while held). Everyone else builds terrain.
@@ -360,6 +364,9 @@ void ClientApp::on_event(Event& event) {
         if (e.button() == 0 && drag_slot_ >= 0) {
             abilitybar_release(pointer_pos()); // finish reordering the action bar
             return true;
+        }
+        if (e.button() == 0) {
+            attack_release(); // a tap's basic attack, or the wound-up heavy
         }
         if (e.button() == 1) {
             blocking_ = false; // lower the shield / stop channelling
@@ -427,12 +434,19 @@ void ClientApp::on_event(Event& event) {
             pending_fire_ = true; // throw a rock toward the cursor
         } else if (key::is_shift(e.key()) && !e.is_repeat()) {
             pending_dodge_ = true; // dodge roll (a quick burst + brief i-frames)
+        } else if (e.key() == key::Q) {
+            pending_dig_ = true; // the spade: scoop out the earth at the aim (pits, treasure)
         } else if (e.key() == key::E) {
             pending_grab_ = true; // hitch / unhitch the nearest wagon (manual haul)
         } else if (e.key() == key::G && !e.is_repeat()) {
             pending_toss_ = true; // Ally Toss: hurl the nearest teammate toward the cursor
         } else if (e.key() == key::V) {
             conduit_held_ = true; // Power Conduit: Cleric channels a heal + damage beam to an ally
+        } else if (e.key() == key::L && !e.is_repeat()) {
+            lantern_on_ = !lantern_on_; // hold a lantern out (stows the off-hand shield / dagger)
+            if (Audio* a = audio()) {
+                a->play(SfxId::UiClick, 0.7f, lantern_on_ ? 0.7f : 0.55f);
+            }
         } else if (e.key() == key::H) {
             vote_mode_ = vote_mode_ == 1 ? 2 : 1; // toggle hire driver / haul manually
         } else if (role_ != PlayerRole::Mage &&
@@ -463,20 +477,125 @@ void ClientApp::primary_action() {
     // the server picks), the Mage throws a basic fireball. Only the Knight melees + plays the swing.
     Audio* a = audio();
     if (role_ == PlayerRole::Knight) {
-        pending_attack_ = true;      // melee swing (carves terrain if nothing to hit)
-        pending_local_swing_ = true; // swing the actual held sword on our own model
-        if (a != nullptr) {
-            a->play(SfxId::SwordSwing, 0.8f, frand(0.92f, 1.1f));
-        }
-    } else if (role_ == PlayerRole::Mage) {
-        cast_mage_spell(SpellId::Fireball); // basic bolt (1-4 = elements, CTRL = combos)
+        swing_queued_ = true; // buffered: update_sword_pacing starts it as soon as the current cut allows
     } else {
-        pending_fire_ = true; // Hunter arrow / Cleric arcane bolt
-        spawn_primary_vfx();  // muzzle / cast flourish at the hand
+        // Hunter arrow / Cleric arcane bolt / the Mage's quick arcane bolt (its elements are the keys).
+        pending_fire_ = true;
+        pending_local_swing_ = true; // the cast / bow-release animation on our own model
+        spawn_primary_vfx();         // muzzle / cast flourish at the hand
         if (a != nullptr) {
             a->play(role_ == PlayerRole::Hunter ? SfxId::BowShot : SfxId::CastMagic, 0.75f,
                     frand(0.95f, 1.08f));
         }
+    }
+}
+
+// The primary button went down: start timing the hold. Nothing fires yet - a quick tap is the basic
+// attack (on release), a hold winds up a heavy.
+void ClientApp::attack_press() {
+    if (paused_ || overlay_open() || casting_) {
+        return;
+    }
+    attack_held_ = true;
+    attack_hold_t_ = 0.0f;
+    charge_ = 0.0f;
+    charge_full_ = false;
+}
+
+void ClientApp::attack_release() {
+    if (!attack_held_) {
+        return;
+    }
+    attack_held_ = false;
+    if (attack_hold_t_ < kChargeTapTime || charge_ <= 0.0f) {
+        primary_action(); // a tap: the quick basic attack
+    } else {
+        heavy_release();
+    }
+    attack_hold_t_ = 0.0f;
+    charge_ = 0.0f;
+}
+
+void ClientApp::cancel_charge() {
+    attack_held_ = false;
+    attack_hold_t_ = 0.0f;
+    charge_ = 0.0f;
+}
+
+// Unleash the wound-up heavy: the server is told (a seq bump carried by every packet until it changes
+// again, so a dropped packet can't lose it), our own hero plays the release at once, and the blow's
+// weight is felt - the Knight's when the sword hits the ground, the others' as the shot leaves.
+void ClientApp::heavy_release() {
+    const f32 c = glm::clamp(charge_, 0.0f, 1.0f);
+    ++heavy_seq_;
+    heavy_power_ = static_cast<u8>(std::max(1, static_cast<int>(std::lround(c * 255.0f))));
+    heavy_face_lock_ = role_ == PlayerRole::Knight ? kHeavyWindup + 0.2f : 0.15f;
+    swing_queued_ = false;
+    swing_ready_in_ = std::max(swing_ready_in_, kHeavyWindup + 0.35f);
+    const u8 style = role_ == PlayerRole::Knight ? 0 : role_ == PlayerRole::Hunter ? 1 : 2;
+    if (const auto it = visuals_.find(my_id_); it != visuals_.end()) {
+        it->second.animator.play_heavy(style); // (our own echo isn't replayed - see update_visuals)
+    }
+    const Vec3 feet = local_feet();
+    if (role_ == PlayerRole::Knight) {
+        pending_impacts_.push_back({feet, face_yaw_, c, kHeavyWindup - 0.02f, role_, true});
+        if (Audio* a = audio()) {
+            a->play(SfxId::SwordSwing, 1.0f, 0.72f); // a deep, heavy whoosh
+        }
+    } else {
+        heavy_impact_fx(feet, face_yaw_, c, role_, true);
+    }
+}
+
+void ClientApp::update_charge(f32 dt) {
+    heavy_face_lock_ = std::max(0.0f, heavy_face_lock_ - dt);
+    if (paused_ || overlay_open() || casting_) {
+        cancel_charge();
+    }
+    if (attack_held_) {
+        attack_hold_t_ += dt;
+        const f32 prev = charge_;
+        charge_ = glm::clamp((attack_hold_t_ - kChargeTapTime) / heavy_charge_time(role_), 0.0f, 1.0f);
+        if (prev <= 0.0f && charge_ > 0.0f) {
+            swing_queued_ = false; // committing to the heavy: no light cut sneaks in first
+        }
+        if (charge_ >= kFullCharge && !charge_full_) {
+            // Fully wound: a bright flare + a ringing chime - release now for the big one.
+            charge_full_ = true;
+            if (Audio* a = audio()) {
+                a->play(SfxId::CastMagic, 0.85f, 1.55f);
+            }
+        }
+    }
+    // The Knight's heavy blow lands a beat after the release: crack the ground then.
+    for (PendingImpact& pi : pending_impacts_) {
+        pi.in -= dt;
+        if (pi.in <= 0.0f) {
+            heavy_impact_fx(pi.feet, pi.yaw, pi.power, pi.role, pi.local);
+        }
+    }
+    std::erase_if(pending_impacts_, [](const PendingImpact& pi) { return pi.in <= 0.0f; });
+}
+
+// A sword swing is a committed, weighty action: one starts at most every kSwingPace seconds (the
+// server's melee cooldown sits just under this), and a click that arrives early is BUFFERED and
+// chains the next cut the moment it can - so mashing reads as a steady combo, never dropped clicks.
+void ClientApp::update_sword_pacing(f32 dt) {
+    constexpr f32 kSwingPace = 0.35f;
+    swing_ready_in_ = std::max(0.0f, swing_ready_in_ - dt);
+    if (role_ != PlayerRole::Knight || paused_ || overlay_open()) {
+        swing_queued_ = false;
+        return;
+    }
+    if (!swing_queued_ || swing_ready_in_ > 0.0f) {
+        return;
+    }
+    swing_queued_ = false;
+    swing_ready_in_ = kSwingPace;
+    pending_attack_ = true;      // melee swing (the server lands the blow as the blade comes down)
+    pending_local_swing_ = true; // swing the actual held sword on our own model
+    if (Audio* a = audio()) {
+        a->play(SfxId::SwordSwing, 0.8f, frand(0.92f, 1.08f));
     }
 }
 
@@ -583,7 +702,12 @@ void ClientApp::apply_gamepad(Timestep dt) {
 
     // In-game actions (mirrors the mouse/keyboard bindings).
     if (rt_edge) {
-        primary_action(); // right trigger = primary attack
+        attack_press(); // right trigger = primary attack: tap for the basic, hold to charge a heavy
+    } else if (!rt && attack_held_ && !in->mouse_down(0)) {
+        attack_release();
+    }
+    if (pressed(pad::L3)) {
+        pending_dig_ = true; // left-stick click: the spade
     }
     if (role_ == PlayerRole::Knight || role_ == PlayerRole::Cleric) {
         blocking_ = lt; // hold left trigger to guard (Knight) / channel a heal (Cleric)
@@ -598,6 +722,9 @@ void ClientApp::apply_gamepad(Timestep dt) {
     }
     if (pressed(pad::Y)) {
         pending_fire_ = true; // throw a rock / loose toward the aim
+    }
+    if (pressed(pad::R3)) {
+        lantern_on_ = !lantern_on_; // right-stick click: hold the lantern out / put it away
     }
     // D-pad -> abilities 1-4 (for the Mage, cast that single element's spell, like the number keys).
     const int dpad[4] = {pad::DUp, pad::DRight, pad::DDown, pad::DLeft};
@@ -633,6 +760,7 @@ void ClientApp::send_input() {
         drag_slot_ = -1;   // and cancel any in-progress action-bar drag
         casting_ = false;  // and cancel a half-woven Mage spell
         combo_n_ = 0;
+        cancel_charge();   // and a heavy being wound up
     }
     // Movement is relative to the fixed camera: W goes "into" the screen.
     const f32 cam_yaw = radians(iso::yaw_deg);
@@ -670,7 +798,7 @@ void ClientApp::send_input() {
     // A sword swing holds the facing it was struck with for a moment, so a flick of the mouse
     // mid-swing doesn't smear the slash round; the click itself always re-aims.
     swing_face_lock_ = std::max(0.0f, swing_face_lock_ - frame_dt_);
-    const bool locked = swing_face_lock_ > 0.0f && !pending_attack_;
+    const bool locked = (swing_face_lock_ > 0.0f && !pending_attack_) || heavy_face_lock_ > 0.0f;
     if (pending_attack_) {
         swing_face_lock_ = 0.3f;
     }
@@ -704,6 +832,7 @@ void ClientApp::send_input() {
     packet.throttle = throttle;
     packet.steer = steer;
     packet.add = pending_add_;
+    packet.dig = pending_dig_ && aim_valid_;
     packet.fire = pending_fire_;
     packet.attack = pending_attack_;
     packet.dodge = pending_dodge_;
@@ -748,6 +877,9 @@ void ClientApp::send_input() {
     packet.buy_rig = pending_buy_rig_;
     packet.toss = pending_toss_;                    // Ally Toss (one-shot; server gates on cooldown + an ally)
     packet.channel = conduit_held_;                 // Power Conduit (held; server gates to a Cleric near an ally)
+    packet.lantern = lantern_on_;                   // holding the lantern out (everyone sees + is lit by it)
+    // The lantern hand holds no shield: a Knight's guard stays down while it's out.
+    packet.block = packet.block && !(lantern_on_ && role_ == PlayerRole::Knight);
     // Ability upgrade: hold the request a few ticks so the server sees a rising edge even if a packet
     // drops (the server buys exactly one rank per press). Clears itself as the hold window elapses.
     if (upgrade_hold_ > 0) {
@@ -771,10 +903,29 @@ void ClientApp::send_input() {
         packet.restore = true;
         packet.progress = hero_.progress;
     }
+    // The heavy: how far it's wound up right now (slows us + shows the wind-up to everyone), and the
+    // last release (seq + power, sent every tick - the server acts on a change).
+    packet.charge = attack_held_ && charge_ > 0.0f
+                        ? static_cast<u8>(std::max(1, static_cast<int>(std::lround(charge_ * 255.0f))))
+                        : 0;
+    packet.heavy_seq = heavy_seq_;
+    packet.heavy_power = heavy_power_;
+    // The notice board: a pick / abandon is held a few ticks so the server sees it even if a packet drops.
+    if (quest_pick_hold_ > 0) {
+        packet.quest_pick = pending_quest_pick_;
+        if (--quest_pick_hold_ <= 0) {
+            pending_quest_pick_ = 0;
+        }
+    }
+    if (quest_abandon_hold_ > 0) {
+        packet.quest_abandon = true;
+        --quest_abandon_hold_;
+    }
     client_.send_input(packet);
     pending_ability_ = 0;
     pending_spell_ = 0;
     pending_add_ = false;
+    pending_dig_ = false;
     pending_fire_ = false;
     pending_attack_ = false;
     pending_dodge_ = false;

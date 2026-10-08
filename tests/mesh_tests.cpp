@@ -153,4 +153,19 @@ TEST_CASE("Vulkan: host-visible buffer upload + readback (headless)") {
         CHECK(mesh.index_count() == 36);
         mesh.destroy();
     }
+
+    SUBCASE("a moved-from mesh is left empty, so nothing re-uploads into its handed-off buffers") {
+        Mesh a;
+        REQUIRE(a.create(device, primitives::cube()));
+        Mesh b{std::move(a)};
+        CHECK(b.valid());
+        CHECK(b.index_count() == 36);
+        CHECK_FALSE(a.valid()); // used to keep its index count -> update_vertices() on a null device
+        a.update_vertices(primitives::cube().vertices); // must be a harmless no-op now
+        Mesh c;
+        c = std::move(b);
+        CHECK(c.valid());
+        CHECK_FALSE(b.valid());
+        c.destroy();
+    }
 }

@@ -147,6 +147,25 @@ inline const Vec3 kOxLegs[4] = {
     {-0.5f, kOxLegHipY, -0.24f},
 };
 
+// DIRE WOLF meshes (a side quest's beasts): a lean, deep-chested body with a bristling ridge of hackles,
+// a long snarling muzzle (upper jaw + bared fangs; the lower jaw is its own mesh so it can snap), pricked
+// ears and a low brush tail - facing +X. The leg (drawn x4) hangs from its hip pivot. The alpha is the
+// same mesh drawn bigger and darker. kWolfJaw is where the lower jaw hinges (body-local).
+MeshData build_wolf_body();
+MeshData build_wolf_leg();
+MeshData build_wolf_jaw();
+inline constexpr f32 kWolfLegHipY = 0.62f;
+inline const Vec3 kWolfLegs[4] = {
+    {0.34f, kWolfLegHipY, 0.12f},
+    {0.34f, kWolfLegHipY, -0.12f},
+    {-0.42f, kWolfLegHipY, 0.11f},
+    {-0.42f, kWolfLegHipY, -0.11f},
+};
+inline const Vec3 kWolfJaw{0.78f, 0.78f, 0.0f};
+inline const Vec3 kWolfEyes[2] = {{0.86f, 0.96f, 0.09f}, {0.86f, 0.96f, -0.09f}};
+// A bandit camp's ragged A-frame tent (faces +X along its ridge), the camp's side quest dressing.
+MeshData build_camp_tent();
+
 // Deer meshes (ambient wildlife): a slender stag body + a slim leg drawn x4 with a walk gait.
 MeshData build_deer_body();
 MeshData build_deer_leg();

@@ -280,6 +280,78 @@ const char* default_hero_name(PlayerRole role, usize n) {
 }
 } // namespace
 
+void ClientApp::run_ui_script() {
+    static bool parsed = false;
+    if (!parsed) {
+        parsed = true;
+        if (const char* s = std::getenv("ALRYN_UI_SCRIPT"); s != nullptr) {
+            std::string all{s};
+            usize start = 0;
+            while (start <= all.size()) {
+                const usize end = all.find(';', start);
+                const std::string step = all.substr(start, end == std::string::npos ? std::string::npos : end - start);
+                if (!step.empty()) {
+                    ui_script_.push_back(step);
+                }
+                if (end == std::string::npos) {
+                    break;
+                }
+                start = end + 1;
+            }
+        }
+    }
+    if (ui_script_step_ >= ui_script_.size()) {
+        return;
+    }
+    if (--ui_script_wait_ > 0) {
+        return;
+    }
+    ui_script_wait_ = 20;
+    const std::string step = ui_script_[ui_script_step_++];
+    const usize colon = step.find(':');
+    const std::string verb = step.substr(0, colon);
+    const std::string arg = colon == std::string::npos ? std::string{} : step.substr(colon + 1);
+    ALRYN_INFO("UI script: {}", step);
+    if (verb == "wait") {
+        ui_script_wait_ = std::max(1, std::atoi(arg.c_str()));
+    } else if (verb == "type") {
+        for (const char c : arg) {
+            ui_.text(c);
+        }
+    } else if (verb == "key") {
+        // A key press through the app's normal event routing (e.g. "key:76" = L, the lantern).
+        KeyPressedEvent press{static_cast<KeyCode>(std::atoi(arg.c_str()))};
+        on_event(press);
+    } else if (verb == "click") {
+        // Find the widget by its visible label (buttons, hero cards, class cards) and click its centre
+        // through the normal pointer dispatch.
+        std::function<ui::Widget*(ui::Widget&)> find = [&](ui::Widget& w) -> ui::Widget* {
+            for (auto it = w.children().rbegin(); it != w.children().rend(); ++it) {
+                if (ui::Widget* hit = find(**it)) {
+                    return hit;
+                }
+            }
+            if (auto* b = dynamic_cast<ui::Button*>(&w); b != nullptr && b->label == arg) {
+                return b;
+            }
+            if (auto* h = dynamic_cast<HeroCard*>(&w); h != nullptr && h->name == arg) {
+                return h;
+            }
+            if (auto* r = dynamic_cast<RoleCard*>(&w); r != nullptr && r->name == arg) {
+                return r;
+            }
+            return nullptr;
+        };
+        if (ui::Widget* target = find(ui_.root())) {
+            const Vec2 c = target->bounds.center();
+            ui_.pointer_down(c, 0);
+            ui_.pointer_up(c, 0);
+        } else {
+            ALRYN_WARN("UI script: no widget labelled '{}'", arg);
+        }
+    }
+}
+
 void ClientApp::escape_pressed() {
     if (state_ == AppState::Menu) {
         menu_escape();
@@ -650,7 +722,7 @@ void ClientApp::build_customise(f32 w, f32 h) {
         }
     });
     back.bounds = ui::Rect{x, by, half, bh};
-    auto& done = panel.add<ui::Button>(creating_ ? "CREATE HERO" : "SAVE", [this] {
+    auto& done = panel.add<ui::Button>(creating_ ? "CREATE" : "SAVE", [this] {
         commit_hero();
         creating_ = false;
         show_screen(Screen::Heroes);
@@ -968,6 +1040,9 @@ void ClientApp::rebuild_preview() {
     Equipment eq = equip_loadout_;
     eq.outfit_tier = 3;
     eq.weapon_tier = 3;
+    // While choosing a look the helm / hood / hat comes off, so the hair, eyes and ears being picked
+    // actually show (the master helms enclose the whole head).
+    eq.bare_head = current_screen_ == Screen::Customise;
     const OutfitKind kind = outfit_kind_for_role(static_cast<u8>(role_));
     preview_.model = CharacterModel::create(kPreviewSeed, appearance_);
     apply_outfit(preview_.model, kind, eq);
@@ -995,9 +1070,12 @@ void ClientApp::draw_preview() {
     const f32 fovy = radians(32.0f);
     const f32 tan_v = std::tan(fovy * 0.5f);
     const f32 height = preview_.model.height();
-    const f32 ty = height * 0.52f;         // look just above the avatar's middle
-    const f32 half_h = height * 0.78f;     // half-height + headroom (helms, plumes, a raised weapon)
-    const f32 half_w = 0.6f;               // generous half-width (shield / bow)
+    // Full-length on the roster; in the creator the camera closes in on the head + shoulders so the
+    // eyes / ears / hair being chosen are big enough to see (eased between the two).
+    const f32 z = glm::smoothstep(0.0f, 1.0f, preview_zoom_);
+    const f32 ty = height * glm::mix(0.52f, 0.8f, z);      // look at the middle .. the face
+    const f32 half_h = height * glm::mix(0.78f, 0.42f, z); // half-height + headroom (helms, a raised weapon)
+    const f32 half_w = glm::mix(0.6f, 0.44f, z);           // generous half-width (shield / bow)
     const f32 free_frac = glm::clamp(panel_left / W, 0.25f, 1.0f);
 
     // Distance that fits both the height and the (panel-limited) width, + margin.
@@ -1010,7 +1088,7 @@ void ClientApp::draw_preview() {
     const f32 target_x = -ndc_x * tan_v * aspect * dist;
 
     const Vec3 target{target_x, ty, 0.0f};
-    const Vec3 eye = target + Vec3{0.0f, ty * 0.35f, dist};
+    const Vec3 eye = target + Vec3{0.0f, glm::mix(ty * 0.35f, 0.12f, z), dist};
     camera_.set_perspective(fovy, aspect, 0.1f, 50.0f);
     camera_.look_at(eye, target);
     renderer_->set_camera(camera_);
@@ -1022,6 +1100,17 @@ void ClientApp::draw_preview() {
     renderer_->draw(shape_cylinder_,
                     glm::translate(Mat4{1.0f}, Vec3{0.0f, -0.035f, 0.0f}) * glm::scale(Mat4{1.0f}, Vec3{1.31f, 0.05f, 1.31f}),
                     Vec4{0.80f, 0.60f, 0.28f, 1.0f});
+    // A cool rim light from behind + above, so the silhouette separates from the dark backdrop and the
+    // forms read (the warm key is the sun - see set_preview_studio).
+    Renderer::SpotLight rim;
+    rim.position = Vec3{-1.2f, height * 1.6f, -2.6f};
+    rim.direction = glm::normalize(Vec3{0.0f, height * 0.6f, 0.0f} - rim.position);
+    rim.color = Vec3{0.55f, 0.68f, 1.0f} * 1.6f;
+    rim.range = 9.0f;
+    rim.cone_outer_cos = std::cos(glm::radians(55.0f));
+    rim.cone_inner_cos = std::cos(glm::radians(30.0f));
+    rim.cast_shadow = false;
+    renderer_->add_light(rim);
 
     const Mat4 root = glm::rotate(Mat4{1.0f}, preview_turn_, Vec3{0.0f, 1.0f, 0.0f}) *
                       preview_anim_.body_offset(); // soft idle breathe on the turntable
@@ -1042,6 +1131,21 @@ void ClientApp::draw_preview() {
     } else {
         draw_role_weapon(preview_.model, jmats, role_, preview_eq);
     }
+}
+
+void ClientApp::set_preview_studio() {
+    // The haze is measured from the "player" (see mesh.frag fogFactor) - and the menu backdrop parks
+    // that reference on the showcase town it orbits, hundreds of metres from the turntable at the
+    // origin. Left as it was, the hero stood deep inside the fog and washed out to a pale cream
+    // silhouette (only when you came through the main menu, which is why a straight-to-the-creator
+    // run looked fine). So the turntable gets a clean studio: no haze, dry ground, no cloud shadow,
+    // and a warm, slightly softened key light from the front.
+    renderer_->set_player_position(Vec3{0.0f});
+    renderer_->set_fog(menu_sky_, 0.0f, 0.0f, 0.0f);
+    renderer_->set_cloud_cover(0.0f);
+    renderer_->set_wetness(0.0f);
+    renderer_->set_wind(0.12f);
+    renderer_->set_sun(glm::normalize(Vec3{0.35f, 0.85f, 0.45f}), Vec3{1.0f, 0.94f, 0.86f}, 0.88f);
 }
 
 // ---- The living backdrop behind the menus ---------------------------------------------------

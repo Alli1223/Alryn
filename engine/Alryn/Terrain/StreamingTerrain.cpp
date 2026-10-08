@@ -189,7 +189,11 @@ void StreamingTerrain::update(const Vec3& focus, const vk::Device& device) {
                     const int cz = center.y + dz; // IVec2 stores (chunk_x, chunk_z)
                     const i64 key = key_of(cx, cz);
                     if (chunks_.count(key) == 0 && pending_.count(key) == 0) {
-                        in_queue_.push_back({cx, cz, sampler_.seed(), sampler_.edits()});
+                        // Only the edits that reach this chunk ride along (the fill tests each one
+                        // per voxel, and a long session can pile up hundreds of craters + digs).
+                        const Vec2 lo{static_cast<f32>(cx) * chunk_world_, static_cast<f32>(cz) * chunk_world_};
+                        in_queue_.push_back({cx, cz, sampler_.seed(),
+                                             sampler_.edit_index().overlapping(lo, lo + Vec2{chunk_world_})});
                         pending_.insert(key);
                     }
                 }

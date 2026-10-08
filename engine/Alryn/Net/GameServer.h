@@ -8,6 +8,7 @@
 #include <Alryn/Game/GameManager.h>
 #include <Alryn/Game/Progression.h>
 #include <Alryn/Game/Roles.h>
+#include <Alryn/Game/SideQuest.h>
 #include <Alryn/Net/NetServer.h>
 #include <Alryn/Net/Protocol.h>
 #include <Alryn/Physics/CharacterController.h>
@@ -46,6 +47,17 @@ public:
         f32 roll_cd = 0.0f;                   // seconds until the next dodge roll is available
         Vec3 roll_dir{0.0f};                  // locked roll direction (set when the roll begins)
         f32 melee_cd = 0.0f;                  // seconds until the next melee swing can land
+        f32 strike_in = 0.0f;                 // a committed swing's blow lands in this many seconds (0 = none)
+        f32 basic_cd = 0.0f;                  // pacing of the ranged basic attack (arrow / bolt / thrown rock)
+        // --- Charged HEAVY attacks (Roles.h) ---
+        u8 heavy_seen = 0;                    // the last input.heavy_seq acted on (a change = a fresh release)
+        f32 heavy_in = 0.0f;                  // Knight: the charged overhead blow lands in this many seconds
+        f32 heavy_power = 0.0f;               // ...at this charge (0..1)
+        u8 heavy_fx_seq = 0;                  // bumps per heavy released (-> every client plays it)
+        u8 heavy_fx_power = 0;                // the charge (0..255) of the last heavy released
+        f32 dig_cd = 0.0f;                    // pacing of the spade (Q)
+        f32 earth_cd = 0.0f;                  // pacing of raising earth (right mouse, Hunter / Mage)
+        bool input_fresh = false;             // a packet already landed this tick (later ones only ADD presses)
         f32 ability_cd[kAbilityCount] = {}; // per-ability cooldown timers (indexed by ability)
         f32 bulwark_timer = 0.0f;             // Knight: extra damage reduction while > 0
         f32 dash_timer = 0.0f;                // Hunter: walk-speed boost while > 0
@@ -137,7 +149,8 @@ public:
         // Incoming damage after role mitigation + the race passive + the armour tier + a held
         // shield block + bulwark (a Dwarf's stoutness stacks with all of it, capped below 1).
         f32 mitigated(f32 raw) const {
-            const bool guarding = input.block && role == PlayerRole::Knight; // Cleric block = channel
+            // Cleric block = channel; a Knight holding a lantern out has stowed the shield.
+            const bool guarding = input.block && role == PlayerRole::Knight && !input.lantern;
             f32 r = role_stats(role).damage_reduction + equipment_bonus(equipment).mitigation_add +
                     race_combat(input.appearance.race).mitigation_add +
                     (guarding ? kBlockReduction : 0.0f) + (bulwark_timer > 0.0f ? kBulwarkReduction : 0.0f);
@@ -331,6 +344,56 @@ public:
     // protects allies + the cargo from enemy ranged attacks. Public so the ambush loop + tests use it.
     bool bubble_absorbs(const Vec3& pos, f32 damage);
 
+    // --- Terrain deformation ---
+    // Carve (amount > 0) or raise (< 0) the ground with a sphere edit and replicate it to every client
+    // (a client joining later is sent the whole history - see tick()).
+    void deform(const Vec3& center, f32 radius, f32 amount);
+    // Gouge a crater where a heavy blow / blast landed (on the ground under `at`). Refused in towns, on
+    // bridges, in water, or once the world holds kMaxCraterEdits edits. True if one was made.
+    bool crater(const Vec3& at, f32 radius, f32 depth);
+    static constexpr usize kMaxCraterEdits = 1600;
+    static constexpr usize kMaxWorldEdits = 6000; // digs + raised earth stop here too (a safety cap)
+    usize terrain_edit_count() const { return sampler_.edits().size(); }
+
+    // --- Side quests (Game/SideQuest.h; see Game/SideQuests.cpp) ---
+    // A quest pinned on the board of the town the party is in (Offered), the one the party took
+    // (Active), or a just-finished one showing its banner (Complete).
+    struct QuestRun {
+        u32 id = 0;
+        QuestKind kind = QuestKind::BanditCamp;
+        QuestPhase phase = QuestPhase::Offered;
+        u8 danger = 1;
+        u8 progress = 0;
+        u8 goal = 1;
+        u32 reward = 0;
+        u32 xp = 0;
+        Vec3 site{0.0f};   // the camp / den / X / meadow
+        Vec3 board{0.0f};  // the notice board it was pinned on
+        bool woken = false; // its foes have been placed (a hero came near)
+        f32 banner = 0.0f;  // Complete: seconds the banner still shows
+    };
+    // A quest's pickups: a moonpetal (kind 0) or the treasure chest (kind 1: state 0 buried under the X,
+    // 1 unearthed, 2 opened).
+    struct QuestItem {
+        u32 id = 0;
+        u32 quest = 0;
+        Vec3 position{0.0f};
+        u8 kind = 0;
+        u8 state = 0;
+    };
+    const std::vector<QuestRun>& quests() const { return quests_; }
+    const std::vector<QuestItem>& quest_items() const { return quest_items_; }
+    // The party's quest under way (nullptr if none).
+    const QuestRun* active_quest() const;
+    // Take an offered quest as if a player had picked it on the board (tests / debug).
+    bool debug_accept_quest(u32 id);
+    // Debug / screenshots: one of every foe (raiders of each kind, a wolf + an alpha) - or just `kinds` -
+    // around `at` (a few: a line abreast along `yaw`), guarding where they stand. `frozen` ones hold
+    // still facing along `yaw` (model close-ups).
+    void debug_spawn_bestiary(const Vec3& at, f32 yaw, std::span<const u8> kinds = {}, bool frozen = false);
+    // Where a town's notice board stands (the side quests are read there).
+    static Vec3 notice_board(const worldgen::Village& town, u32 seed);
+
 private:
     Vec3 spawn_point(net::PlayerId id) const;
     // Peaceful townsfolk: spawn one per cottage in towns near players and let them
@@ -356,7 +419,21 @@ private:
     f32 wagon_top_at(f32 x, f32 z) const;
     // After the cart moves, carry any player standing on top along with it (delta = this tick's move).
     void carry_top_riders(const Vec2& delta, const VehicleType& vt);
-    void update_ambush(Timestep dt, const DensitySampler& density); // ambushers + player combat
+    void update_ambush(Timestep dt, const DensitySampler& density); // spawn the haul's ambush waves
+    // Every hostile's AI (ambushers + quest foes), the players' attacks landing (melee, shots, heavy
+    // blows, blasts), the dead culled + paid out, and the heroes' regen / respawn. Runs every tick.
+    void update_combat(Timestep dt, const DensitySampler& density);
+    void land_earthsplitter(ServerPlayer& player, f32 last_stand); // the Knight's charged heavy lands
+    // --- Charged heavy attacks (Game/Abilities.cpp) ---
+    void update_heavy(Timestep dt); // a released heavy: the Knight's blow is timed, the rest fire orbs
+    // --- Side quests (Game/SideQuests.cpp) ---
+    void update_quests(Timestep dt, const DensitySampler& density);
+    void generate_quests(const worldgen::Village& town);
+    void wake_quest(QuestRun& q, const DensitySampler& density); // place its camp / pack / chest / petals
+    void finish_quest(QuestRun& q);                              // pay out + raise the banner
+    void quest_foe_felled(u32 quest);                            // a camp raider / wolf down: progress
+    void quest_dig(const Vec3& at);                              // a spade strike: does it hit the X?
+    std::optional<Vec3> quest_site(const worldgen::Village& town, u32 salt) const;
     // --- Progression (Game/Progress.cpp) ---
     void assign_color(net::PlayerId id);              // the first identity colour no one else has
     void sync_identity(net::PlayerId id, ServerPlayer& player); // name + colour preference, each tick
@@ -442,6 +519,23 @@ private:
     std::vector<Wall> walls_;                     // Mage rock walls (NPCs path around them)
     std::vector<Aura> auras_;                     // ground auras (heal / consecration)
     std::vector<BubbleShield> bubbles_;           // Cleric max-Aegis domes (block enemy ranged attacks)
+    // A heavy orb's burst (Cleric Sunburst / Mage Comet), queued where it struck or landed and
+    // resolved in update_combat: damage to foes in reach, heal to allies, maybe a crater.
+    struct Blast {
+        Vec3 at{0.0f};
+        f32 radius = 0.0f;
+        f32 damage = 0.0f;
+        f32 heal = 0.0f;
+        net::PlayerId owner = 0;
+        bool crater = false;
+    };
+    std::vector<Blast> blasts_;
+    // --- Side quests ---
+    std::vector<QuestRun> quests_;
+    std::vector<QuestItem> quest_items_;
+    u32 quest_town_vseed_ = 0; // the town whose board the offers came from
+    u32 quest_round_ = 0;      // bumps per finished / abandoned quest, so a board's next offers differ
+    u32 next_quest_item_ = 1;
     u32 next_enemy_id_ = 1;
     u32 wave_ = 0;            // = nights survived
     u32 spawn_index_ = 0;     // distinct layout per wave spawn

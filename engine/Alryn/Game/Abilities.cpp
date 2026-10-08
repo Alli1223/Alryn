@@ -437,6 +437,77 @@ void GameServer::update_abilities(Timestep dt, const DensitySampler& density) {
     (void)density;
 }
 
+// --- Charged HEAVY attacks (see Roles.h) --------------------------------------------------------
+// The client holds the primary attack to wind up and, on release, bumps input.heavy_seq with the
+// charge it reached. A change of seq is one heavy: the Knight's overhead blow is TIMED to land as the
+// sword comes down (update_combat), the others loose a heavy shot / orb straight away.
+void GameServer::update_heavy(Timestep dt) {
+    const f32 dts = dt.seconds;
+    for (auto& [id, pl] : players_) {
+        for (f32* cd : {&pl.basic_cd, &pl.dig_cd, &pl.earth_cd}) {
+            if (*cd > 0.0f) {
+                *cd -= dts;
+            }
+        }
+        if (pl.input.heavy_seq == pl.heavy_seen) {
+            continue;
+        }
+        pl.heavy_seen = pl.input.heavy_seq;
+        if (pl.input.heavy_power == 0 || riders_.count(id) != 0u || id == pilot_ || pl.toss_timer > 0.0f) {
+            continue; // nothing wound up, or no footing to swing from (riding / driving / mid-toss)
+        }
+        const f32 c = static_cast<f32>(pl.input.heavy_power) / 255.0f;
+        ++pl.heavy_fx_seq; // every client plays the release (the blow / the loosed orb)
+        pl.heavy_fx_power = pl.input.heavy_power;
+        pl.basic_cd = std::max(pl.basic_cd, 0.3f);
+        const Vec3 eye = pl.controller.eye_position();
+        const Vec3 facing{std::cos(pl.input.yaw), 0.0f, std::sin(pl.input.yaw)};
+        Vec3 dir = pl.input.aim - eye;
+        dir = glm::length(dir) > 0.2f ? glm::normalize(dir) : facing;
+        const RoleStats stats = role_stats(pl.role);
+        auto loose = [&](u8 kind, f32 speed, f32 damage, f32 radius) -> Projectile& {
+            Projectile pr;
+            pr.position = eye + dir * 0.7f;
+            pr.velocity = dir * speed;
+            pr.owner = id;
+            pr.damage = damage;
+            pr.kind = kind;
+            pr.radius = radius;
+            pr.life = 3.5f;
+            projectiles_.push_back(pr);
+            return projectiles_.back();
+        };
+        switch (pl.role) {
+            case PlayerRole::Knight: // EARTHSPLITTER: the blow lands as the overhead swing comes down
+                pl.heavy_in = kHeavyWindup;
+                pl.heavy_power = c;
+                pl.strike_in = 0.0f; // a pending light cut is swallowed by the big one
+                pl.melee_cd = std::max(pl.melee_cd, kHeavyWindup + 0.3f);
+                break;
+            case PlayerRole::Hunter: { // DRAWN SHOT: faster + heavier; a full draw punches through
+                Projectile& pr = loose(8, drawn_shot_speed(c), stats.ranged_damage * heavy_damage_mult(c), 0.18f);
+                pr.pierce = c >= kFullCharge ? kDrawnShotPierce : 0;
+                break;
+            }
+            case PlayerRole::Cleric: { // SUNBURST: bursts where it lands - scorches foes, mends allies
+                Projectile& pr = loose(9, 24.0f, stats.ranged_damage * heavy_damage_mult(c) * 0.8f, 0.3f);
+                pr.blast = sunburst_radius(c);
+                pr.blast_heal = sunburst_heal(c);
+                break;
+            }
+            case PlayerRole::Mage: { // ARCANE COMET: a wide detonation; a full charge craters the ground
+                Projectile& pr = loose(10, 21.0f, kMageBoltDamage * heavy_damage_mult(c) * 1.25f, 0.36f);
+                pr.blast = comet_radius(c);
+                pr.crater = c >= kFullCharge;
+                break;
+            }
+        }
+        if (projectiles_.size() > 256u) {
+            projectiles_.erase(projectiles_.begin());
+        }
+    }
+}
+
 // --- Gauntlet co-op combos --------------------------------------------------------------------
 // Runs BEFORE the per-player movement loop, so an Ally Toss launch arcs the tossed ally the same
 // tick. Ticks the combo cooldowns, fires a toss when a player presses it near a teammate, and runs

@@ -15,6 +15,7 @@ add_executable(alryn_game
     ClientAppSpellFx.cpp
     ClientAppHud.cpp
     ClientAppProgress.cpp
+    ClientAppQuests.cpp
     Profile.cpp
 )
 
