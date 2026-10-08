@@ -25,6 +25,9 @@ struct Projectile {
     u8 kind = 0;          // 0 = thrown rock, 1 = enemy arrow, 2 = cleric holy bolt
     u8 pierce = 0;        // bodies this shot can still punch THROUGH (max-rank Power Shot)
     u32 last_hit = 0;     // last enemy id struck, so a piercing shot can't re-hit it while passing
+    f32 blast = 0.0f;     // > 0: bursts in a blast of this radius where it strikes or lands (heavy orbs)
+    f32 blast_heal = 0.0f; // ...mending allies caught in that blast by this much (the Cleric's Sunburst)
+    bool crater = false;  // ...and gouges a crater into the ground there (full-charge heavies)
     bool hostile = false; // an enemy arrow: damages the town side, not enemies
     bool alive = true;
     bool resting = false;

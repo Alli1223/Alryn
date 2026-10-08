@@ -366,29 +366,35 @@ TEST_CASE("BodyMesh: the action overlay deforms the skinned upper body (legs kee
     CHECK(leg_shift < 0.02f); // the legs are untouched by the upper-body action (same walk phase)
 }
 
-TEST_CASE("CharacterAnimator: the attack swing is a horizontal right-to-left slash") {
+TEST_CASE("CharacterAnimator: the attack swing is a diagonal cut from high right to low left") {
     CharacterModel model = CharacterModel::create(11u, CharacterAppearance{});
-    const int hand = model.bone_index(BonePart::LowerArmL); // sword hand (rig labels mirrored: L = player's right)
-    REQUIRE(hand >= 0);
+    const int arm = model.bone_index(BonePart::LowerArmL); // sword arm (rig labels mirrored: L = player's right)
+    REQUIRE(arm >= 0);
+    const f32 wrist = model.bones()[static_cast<usize>(arm)].box_center.y * 2.0f;
 
-    // The sword-hand joint position at `t` seconds into a fresh swing (idle underneath, so only the
-    // swing moves the arm). The rig faces +Z, so the player's right is +X.
-    auto hand_x_y = [&](f32 t) {
+    // The sword-hand (wrist) position at `t` seconds into a fresh swing (idle underneath, so only the
+    // swing moves the arm). The rig faces +Z with +Y up, so the player's right is -X.
+    auto hand_at = [&](f32 t) {
         CharacterAnimator anim;
         anim.play_swing();
         const Timestep dt{1.0f / 240.0f};
         for (f32 e = 0.0f; e < t; e += dt.seconds) {
             anim.update(0.0f, dt);
         }
-        const Vec3 p{model.joint_matrices(Mat4{1.0f}, anim.pose(model))[hand][3]};
-        return Vec2{p.x, p.y};
+        const Mat4 m = model.joint_matrices(Mat4{1.0f}, anim.pose(model))[static_cast<usize>(arm)] *
+                       glm::translate(Mat4{1.0f}, Vec3{0.0f, wrist, 0.0f});
+        return Vec3{m[3]};
     };
 
-    const Vec2 windup = hand_x_y(0.10f); // cocked to the player's right
-    const Vec2 follow = hand_x_y(0.24f); // followed through to the left
+    const Vec3 rest = hand_at(0.0f);
+    const Vec3 windup = hand_at(0.14f); // raised high over the right shoulder
+    const Vec3 impact = hand_at(0.27f); // cut down + across to the left, out in front
 
-    CHECK(windup.x > follow.x);                              // sweeps right -> left
-    CHECK(std::abs(follow.x - windup.x) > std::abs(follow.y - windup.y)); // horizontal, not a chop
+    CHECK(windup.y > rest.y + 0.4f);   // a real wind-up: the hand goes up above the shoulder
+    CHECK(windup.x < 0.0f);            // ...on the player's right
+    CHECK(impact.x > windup.x + 0.4f); // sweeps right -> left
+    CHECK(impact.y < windup.y - 0.4f); // ...and down (a diagonal cut, not a flat sweep)
+    CHECK(impact.z > rest.z + 0.2f);   // ...out in front of the body
 }
 
 TEST_CASE("ClothChain: hangs under gravity, blows in wind, and falls when detached") {
@@ -738,4 +744,42 @@ TEST_CASE("CharacterAnimator: actions blend over locomotion (legs keep walking)"
     }
     step_both(50);
     CHECK_FALSE(acting.casting()); // one-shot ends, the arm rejoins locomotion
+}
+
+// The sword swing is authored as a hand path + blade direction and solved with two-bone IK + a wrist
+// turn: check the solved rig really puts the hand where it's keyed and points the blade the keyed way.
+TEST_CASE("Character: the sword swing's IK lands the hand + blade where they're keyed") {
+    CharacterModel model = CharacterModel::create(60u, CharacterAppearance{});
+    CharacterAnimator anim;
+    anim.update(0.0f, Timestep{1.0f / 60.0f});
+    anim.play_swing();
+    const int iu = model.bone_index(BonePart::UpperArmL);
+    const int il = model.bone_index(BonePart::LowerArmL);
+    const int it = model.bone_index(BonePart::Torso);
+    REQUIRE(iu >= 0);
+    REQUIRE(il >= 0);
+    REQUIRE(it >= 0);
+    const f32 l1 = std::abs(model.bones()[static_cast<usize>(il)].joint_offset.y);
+    const f32 l2 = std::abs(model.bones()[static_cast<usize>(il)].box_center.y * 2.0f);
+    for (int step = 0; step < 30; ++step) {
+        anim.update(0.0f, Timestep{1.0f / 60.0f});
+        if (anim.swing_env() < 0.99f) {
+            continue; // only judge the fully-blended part of the swing
+        }
+        const CharacterAnimator::SwingParams p = anim.swing_params();
+        const std::vector<Quat> pose = anim.pose(model);
+        const std::vector<Mat4> jm = model.joint_matrices(Mat4{1.0f}, pose);
+        const Mat4& torso = jm[static_cast<usize>(it)];
+        const Mat4 hand = jm[static_cast<usize>(il)] * glm::translate(Mat4{1.0f}, Vec3{0.0f, -l2, 0.0f});
+        // Hand position: the shoulder (in the torso's frame) + the keyed offset * arm length.
+        const Vec3 shoulder = Vec3{torso * Vec4{model.bones()[static_cast<usize>(iu)].joint_offset, 1.0f}};
+        const Vec3 want_hand = shoulder + Mat3{torso} * (p.hand * (l1 + l2));
+        CAPTURE(step);
+        CHECK(glm::length(Vec3{hand[3]} - want_hand) < 0.03f);
+        // Blade direction.
+        const Vec3 blade = glm::normalize(Mat3{hand * glm::mat4_cast(anim.weapon_wrist(model))} *
+                                          CharacterAnimator::blade_axis());
+        const Vec3 want_blade = glm::normalize(Mat3{torso} * p.blade);
+        CHECK(glm::dot(blade, want_blade) > 0.97f);
+    }
 }

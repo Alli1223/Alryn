@@ -312,8 +312,10 @@ void main() {
     vec3 stoneCol = vec3(0.0);
     // (The stone-space coordinate + its screen derivative are taken OUTSIDE the branch below:
     // derivatives are undefined in non-uniform control flow, and the paving edge is exactly that.)
-    // A gentle drift in stone size across a town keeps the setts from reading as one stamp.
-    float cobbleSize = mix(0.30, 0.40, vnoise(vWorldPos.xz * 0.05));
+    // A CONSTANT stone size: scaling the coordinate by a size that varies with position (p / s(p))
+    // shears the lattice by p * s'(p) / s^2, which grows with the distance from the world origin - towns
+    // a few hundred metres out came out smeared and warped. Per-stone jitter supplies the variety.
+    const float cobbleSize = 0.34;
     vec2 sp = vWorldPos.xz / cobbleSize;
     float px = length(fwidth(sp));
     if (vPave > 0.02) {

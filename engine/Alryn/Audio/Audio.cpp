@@ -16,8 +16,18 @@
 namespace alryn {
 
 namespace {
-constexpr usize kMaxVoices = 24; // a busy fight steals the oldest voice rather than growing
+constexpr usize kMaxVoices = 32; // a busy fight steals the oldest voice rather than growing
+
+// The output's gentle limiter: transparent below 0.8, then a soft knee that never passes 1.0 - a
+// pile-up of voices in a big fight thickens instead of crackling into hard clipping.
+inline f32 soft_limit(f32 x) {
+    const f32 a = std::abs(x);
+    if (a <= 0.8f) {
+        return x;
+    }
+    return std::copysign(0.8f + 0.2f * std::tanh((a - 0.8f) / 0.2f), x);
 }
+} // namespace
 
 struct Audio::Impl {
     // A playing instance of a bank clip. `cursor` walks the mono clip at `pitch` samples/frame
@@ -30,7 +40,9 @@ struct Audio::Impl {
         f32 gain_r = 0.0f;
     };
 
-    std::array<std::vector<f32>, kSfxCount> bank; // rendered once in start()
+    std::array<std::vector<std::vector<f32>>, kSfxCount> bank; // every take of every clip, rendered once in start()
+    std::array<u32, kSfxCount> last_take{};                     // the take each clip played last (never twice running)
+    u32 rng = 0x2545f491u;
     std::mutex mutex;                             // guards voices + listener + master
     std::vector<Voice> voices;
     Vec3 listener{0.0f};
@@ -60,17 +72,37 @@ struct Audio::Impl {
             }
         }
         std::erase_if(impl->voices, [](const Voice& v) { return v.clip == nullptr; });
+        for (ma_uint32 s = 0; s < frames * 2; ++s) {
+            dst[s] = soft_limit(dst[s]);
+        }
     }
 
     void add_voice(SfxId id, f32 gain_l, f32 gain_r, f32 pitch) {
         if (!device_ready || (gain_l <= 0.0f && gain_r <= 0.0f)) {
             return; // silent no-op without a device, or a fully-attenuated 3D sound
         }
-        const std::vector<f32>& clip = bank[static_cast<usize>(id)];
-        if (clip.empty()) {
+        const usize ci = static_cast<usize>(id);
+        const std::vector<std::vector<f32>>& takes = bank[ci];
+        if (takes.empty()) {
             return;
         }
         std::scoped_lock lock{mutex};
+        // Rotate through the clip's takes at random, never the same one twice in a row.
+        u32 take = 0;
+        if (takes.size() > 1) {
+            rng ^= rng << 13;
+            rng ^= rng >> 17;
+            rng ^= rng << 5;
+            take = rng % static_cast<u32>(takes.size() - 1);
+            if (take >= last_take[ci]) {
+                ++take;
+            }
+        }
+        last_take[ci] = take;
+        const std::vector<f32>& clip = takes[take];
+        if (clip.empty()) {
+            return;
+        }
         if (voices.size() >= kMaxVoices) {
             voices.erase(voices.begin()); // steal the oldest
         }
@@ -89,7 +121,11 @@ bool Audio::start() {
         return true;
     }
     for (usize i = 0; i < kSfxCount; ++i) { // synthesize the whole bank (no assets)
-        impl_->bank[i] = render_sfx(static_cast<SfxId>(i));
+        const auto id = static_cast<SfxId>(i);
+        impl_->bank[i].clear();
+        for (u32 v = 0; v < sfx_variants(id); ++v) {
+            impl_->bank[i].push_back(render_sfx(id, v));
+        }
     }
     ma_device_config config = ma_device_config_init(ma_device_type_playback);
     config.playback.format = ma_format_f32;

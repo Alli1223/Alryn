@@ -38,6 +38,9 @@ struct Equipment {
     u8 weapon_tier = 0;  // EquipmentTier of the held weapon
     u8 outfit_tint = 0;  // index into outfit_tints() - the player-chosen primary colour
     u8 weapon_index = 0; // which weapon within the role's allowed set (for changing weapons)
+    // Presentation only (never on the wire): leave off the headwear - hood, helm, hat, mitre, mask - so
+    // the face + hair show. The hero creator's turntable dresses the hero this way.
+    bool bare_head = false;
 
     bool operator==(const Equipment&) const = default;
 

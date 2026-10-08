@@ -422,6 +422,7 @@ SkinnedMesh build_outfit_mesh(const CharacterModel& model, OutfitKind kind, cons
     }
     const int vt = outfit_design_tier(equip.outfit());
     using M = BodyMaterial;
+    const bool head = !equip.bare_head; // headwear (hood / helm / hat) - off on the creator's turntable
 
     switch (kind) {
         case OutfitKind::Plate: {
@@ -437,7 +438,7 @@ SkinnedMesh build_outfit_mesh(const CharacterModel& model, OutfitKind kind, cons
                 legs(sm, r, 1.1f, 0.9f, M::Pants);
                 boots(sm, r, 0.6f, M::Leather, M::Leather, true);
                 band(sm, r, 0.22f, 0.02f, 0.05f, M::Dark); // sword belt
-                hood(sm, r, M::Dark, 0.13f, 0.0f, 0.0f, false);
+                if (head) hood(sm, r, M::Dark, 0.13f, 0.0f, 0.0f, false);
             } else if (vt == 1) {
                 // KNIGHT - a mail hauberk to the knee with full sleeves, mail chausses, a mail coif under a
                 // conical helm, and a cloth surcoat over it (the bodice here; the skirt is cloth).
@@ -448,8 +449,10 @@ SkinnedMesh build_outfit_mesh(const CharacterModel& model, OutfitKind kind, cons
                 boots(sm, r, 0.35f, M::Leather, M::Leather, false);
                 shell(sm, r, 0.14f, 0.9f, 0.05f, M::Primary); // the surcoat bodice (sleeveless)
                 band(sm, r, 0.26f, 0.022f, 0.062f, M::Dark);  // its belt (the cloth skirt hangs from here)
-                hood(sm, r, M::Mail, 0.11f, 0.0f, 0.0f, false); // mail coif + its short mail cape
-                cap(sm, r, M::Metal, 1.3f, 0.55f, 0.28f);       // conical nasal helm
+                if (head) {
+                    hood(sm, r, M::Mail, 0.11f, 0.0f, 0.0f, false); // mail coif + its short mail cape
+                    cap(sm, r, M::Metal, 1.3f, 0.55f, 0.28f);       // conical nasal helm
+                }
             } else {
                 // PALADIN - full plate: a swelling cuirass over faulds, plate arms with couters, plate legs
                 // with poleyns, pointed sabatons, and a flat-topped great helm.
@@ -463,7 +466,7 @@ SkinnedMesh build_outfit_mesh(const CharacterModel& model, OutfitKind kind, cons
                 joint_plate(sm, r, BonePart::UpperLegR, BonePart::LowerLegR, r.leg_r() * 1.08f, M::Metal);
                 boots(sm, r, 0.5f, M::Metal, M::Metal, false, 1.5f, 0.02f);
                 band(sm, r, 0.2f, 0.02f, 0.058f, M::Dark); // sword belt
-                great_helm(sm, r, M::Metal);
+                if (head) great_helm(sm, r, M::Metal);
             }
             break;
         }
@@ -497,9 +500,9 @@ SkinnedMesh build_outfit_mesh(const CharacterModel& model, OutfitKind kind, cons
             boots(sm, r, 0.2f, M::Dark, M::Dark, false);
             band(sm, r, 0.26f, vt == 0 ? 0.012f : 0.02f, 0.044f, vt == 2 ? M::Accent : vt == 1 ? M::Dark : M::Leather);
             if (vt == 0) {
-                hood(sm, r, M::Primary, 0.14f, 0.025f, 0.32f, true);
+                if (head) hood(sm, r, M::Primary, 0.14f, 0.025f, 0.32f, true);
             } else {
-                hat(sm, r, M::Primary, M::Accent, vt == 2 ? 0.24f : 0.21f, vt == 2 ? 0.46f : 0.38f, 0.14f);
+                if (head) hat(sm, r, M::Primary, M::Accent, vt == 2 ? 0.24f : 0.21f, vt == 2 ? 0.46f : 0.38f, 0.14f);
                 capelet(sm, r, 0.1f, 0.0f, M::PrimaryShade, 0.92f); // a short mantle over the shoulders
                 if (vt == 2) {
                     collar(sm, r, M::Accent, 0.05f, 0.08f); // a gilt high collar
@@ -516,7 +519,7 @@ SkinnedMesh build_outfit_mesh(const CharacterModel& model, OutfitKind kind, cons
             boots(sm, r, 0.0f, M::Leather, M::Leather, false);
             band(sm, r, 0.26f, vt == 0 ? 0.01f : 0.02f, 0.044f, vt == 2 ? M::Accent : vt == 1 ? M::Dark : M::Linen);
             if (vt == 0) {
-                hood(sm, r, M::Primary, 0.16f, 0.0f, 0.0f, false); // the monk's cowl
+                if (head) hood(sm, r, M::Primary, 0.16f, 0.0f, 0.0f, false); // the monk's cowl
             } else {
                 collar(sm, r, M::Linen, 0.06f, 0.035f); // the amice
             }
@@ -547,7 +550,7 @@ SkinnedMesh build_outfit_mesh(const CharacterModel& model, OutfitKind kind, cons
                     bracer(sm, r, up, lo, 0.2f, 0.92f, 1.34f, M::Leather);
                 }
                 band(sm, r, 0.2f, 0.018f, 0.056f, M::Dark);
-                hood(sm, r, M::Primary, 0.15f, 0.035f, 0.42f, true);
+                if (head) hood(sm, r, M::Primary, 0.15f, 0.035f, 0.42f, true);
             }
             break;
         }

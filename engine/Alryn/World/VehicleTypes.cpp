@@ -322,6 +322,100 @@ MeshData build_deer_body() {
             Vec3{0.93f, 0.9f, 0.85f}); // white scut at the rump (hangs at the rear, not on the spine)
     return m;
 }
+MeshData build_wolf_body() {
+    MeshData m;
+    const Vec3 fur{0.33f, 0.32f, 0.31f};    // grizzled grey
+    const Vec3 saddle{0.12f, 0.11f, 0.11f}; // the dark saddle + ridge down the back
+    const Vec3 pale{0.55f, 0.53f, 0.5f};    // muzzle, throat, belly
+    const Vec3 dark{0.1f, 0.09f, 0.09f};
+    const Vec3 fang{0.92f, 0.88f, 0.76f};
+    const Vec3 gum{0.48f, 0.1f, 0.1f};
+    // Broad, deep shoulders tapering to a tucked waist and lean haunches - the hunter's wedge, which
+    // has to read from above (the game camera looks down on it).
+    add_box(m, {0.02f, 0.5f, -0.21f}, {0.46f, 0.98f, 0.21f}, fur);     // chest + shoulders
+    add_box(m, {-0.34f, 0.6f, -0.12f}, {0.06f, 0.88f, 0.12f}, fur);    // waist
+    add_box(m, {-0.6f, 0.56f, -0.16f}, {-0.3f, 0.9f, 0.16f}, fur);     // haunches
+    add_box(m, {-0.5f, 0.86f, -0.1f}, {0.42f, 0.99f, 0.1f}, saddle);   // the dark saddle along the back
+    add_box(m, {-0.3f, 0.56f, -0.1f}, {0.34f, 0.63f, 0.1f}, pale);     // pale underbelly
+    add_box(m, {0.1f, 0.48f, -0.14f}, {0.42f, 0.58f, 0.14f}, pale);    // brisket
+    // A shaggy ruff round the neck, rising forward to the head.
+    add_box(m, {0.3f, 0.66f, -0.2f}, {0.6f, 1.04f, 0.2f}, fur);
+    add_box(m, {0.42f, 0.64f, -0.16f}, {0.62f, 0.84f, 0.16f}, pale);  // the pale throat
+    // The head: a broad skull, a long tapering muzzle with a black nose, the snarl's gums + fangs.
+    add_box(m, {0.56f, 0.8f, -0.15f}, {0.84f, 1.07f, 0.15f}, fur);    // skull
+    add_box(m, {0.56f, 1.0f, -0.08f}, {0.84f, 1.08f, 0.08f}, saddle); // the dark crown
+    add_box(m, {0.8f, 0.83f, -0.085f}, {1.12f, 0.97f, 0.085f}, pale); // muzzle
+    add_box(m, {1.08f, 0.91f, -0.045f}, {1.14f, 0.99f, 0.045f}, dark); // nose
+    add_box(m, {0.82f, 0.78f, -0.08f}, {1.1f, 0.84f, 0.08f}, gum);    // the snarl's gums
+    for (const f32 z : {-0.058f, 0.058f}) {
+        add_box(m, {1.02f, 0.71f, z - 0.013f}, {1.06f, 0.84f, z + 0.013f}, fang); // canines
+        add_box(m, {0.9f, 0.74f, z - 0.01f}, {0.93f, 0.82f, z + 0.01f}, fang);
+    }
+    add_box(m, {0.8f, 0.99f, -0.14f}, {0.88f, 1.04f, 0.14f}, dark); // a heavy, scowling brow
+    // Tall ears pricked up + forward (dark-tipped).
+    for (const f32 z : {-0.095f, 0.095f}) {
+        add_box(m, {0.6f, 1.04f, z - 0.045f}, {0.72f, 1.25f, z + 0.045f}, fur);
+        add_box(m, {0.63f, 1.2f, z - 0.03f}, {0.7f, 1.3f, z + 0.03f}, saddle);
+    }
+    // The hackles: a bristling ridge of dark spikes down the spine (tallest at the shoulders).
+    for (int k = 0; k < 6; ++k) {
+        const f32 x = 0.42f - 0.16f * static_cast<f32>(k);
+        const f32 h = 0.14f - 0.015f * static_cast<f32>(k);
+        const f32 top = x > 0.0f ? 0.98f : 0.9f;
+        add_box(m, {x - 0.05f, top - 0.02f, -0.04f}, {x + 0.05f, top + h, 0.04f}, saddle);
+    }
+    // A big bushy brush of a tail sweeping down behind, pale at the tip.
+    add_box(m, {-0.86f, 0.62f, -0.08f}, {-0.56f, 0.82f, 0.08f}, fur);
+    add_box(m, {-1.06f, 0.48f, -0.09f}, {-0.82f, 0.7f, 0.09f}, saddle);
+    add_box(m, {-1.16f, 0.42f, -0.07f}, {-1.02f, 0.56f, 0.07f}, pale);
+    return m;
+}
+MeshData build_wolf_leg() {
+    MeshData m;
+    const Vec3 fur{0.3f, 0.29f, 0.28f};
+    const Vec3 paw{0.12f, 0.11f, 0.11f};
+    add_box(m, {-0.07f, -0.3f, -0.06f}, {0.07f, 0.05f, 0.06f}, fur);  // the thick upper leg
+    add_box(m, {-0.045f, -0.56f, -0.04f}, {0.045f, -0.28f, 0.04f}, fur); // the slim lower leg
+    add_box(m, {-0.05f, -0.62f, -0.06f}, {0.1f, -0.55f, 0.06f}, paw);   // a broad, clawed paw
+    return m;
+}
+MeshData build_wolf_jaw() {
+    MeshData m;
+    const Vec3 fur{0.52f, 0.5f, 0.47f};
+    const Vec3 fang{0.9f, 0.86f, 0.74f};
+    const Vec3 gum{0.42f, 0.1f, 0.1f};
+    // Hinged at the origin (the back of the jaw), reaching forward along +X.
+    add_box(m, {0.0f, -0.07f, -0.07f}, {0.3f, 0.0f, 0.07f}, fur);
+    add_box(m, {0.02f, -0.005f, -0.06f}, {0.28f, 0.02f, 0.06f}, gum);
+    for (const f32 z : {-0.045f, 0.045f}) {
+        add_box(m, {0.24f, 0.0f, z - 0.011f}, {0.28f, 0.08f, z + 0.011f}, fang); // lower canines
+    }
+    return m;
+}
+
+MeshData build_camp_tent() {
+    MeshData m;
+    const Vec3 canvas{0.46f, 0.38f, 0.28f};
+    const Vec3 patch{0.36f, 0.22f, 0.17f};
+    const Vec3 pole{0.3f, 0.21f, 0.12f};
+    // Two sloped canvas sheets leaning into a ridge pole (an A-frame), a ragged patch or two.
+    const f32 half_len = 1.2f, base = 1.05f, ridge = 1.45f;
+    for (const f32 s : {-1.0f, 1.0f}) {
+        // Tip the sheet's local +Y from straight up onto the slope (from its ground edge to the ridge).
+        const Mat4 xf = glm::translate(Mat4{1.0f}, Vec3{0.0f, ridge * 0.5f, s * base * 0.5f}) *
+                        glm::rotate(Mat4{1.0f}, -s * std::atan2(base, ridge), Vec3{1.0f, 0.0f, 0.0f});
+        const f32 slope = std::sqrt(base * base + ridge * ridge);
+        append_xf(m, primitives::box({-half_len, -slope * 0.5f, -0.02f}, {half_len, slope * 0.5f, 0.02f}, canvas), xf,
+                  Vec3{1.0f});
+        append_xf(m, primitives::box({-0.5f, -0.25f, 0.025f}, {-0.1f, 0.15f, 0.045f}, patch), xf, Vec3{1.0f});
+    }
+    add_box(m, {-half_len - 0.1f, ridge - 0.04f, -0.04f}, {half_len + 0.1f, ridge + 0.04f, 0.04f}, pole); // ridge pole
+    for (const f32 x : {-half_len, half_len}) {
+        add_box(m, {x - 0.04f, 0.0f, -0.04f}, {x + 0.04f, ridge + 0.1f, 0.04f}, pole); // uprights
+    }
+    return m;
+}
+
 MeshData build_fish_body() {
     MeshData m;
     const Vec3 body{0.86f, 0.87f, 0.92f}; // light base; tinted per-fish at draw time

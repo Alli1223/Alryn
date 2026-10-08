@@ -29,7 +29,9 @@ enum class BonePart : u8 {
 // Skin/Shirt/Pants/Hair/Eye are the base body; Primary/Accent/Metal/Dark are equipment colours
 // (Primary = the player's chosen heraldic colour, Accent = the tier trim/gold, Metal = steel,
 // Dark = leather/straps). Glow marks an emissive piece (mage eyes, lit visor, gem).
-enum class BoneColor : u8 { Skin, Shirt, Pants, Hair, Eye, Primary, Accent, Metal, Dark, Glow };
+// The first ten mirror BodyMaterial 1:1 (same order, see BodyMesh.h); PrimaryShade + Linen continue
+// that mirror (the white of an eye is drawn in Linen), so a bone colour always casts to its material.
+enum class BoneColor : u8 { Skin, Shirt, Pants, Hair, Eye, Primary, Accent, Metal, Dark, Glow, PrimaryShade, Linen };
 enum class BoneShape : u8 { Box, Sphere, Cylinder, RoundedBox, Capsule };
 
 struct Bone {
@@ -90,6 +92,15 @@ public:
     template <typename Pred>
     void remove_attachments(Pred pred) {
         std::erase_if(bones_, [&](const Bone& b) { return b.attachment && pred(b); });
+    }
+    // Repaint the attachment bones matching `pred` (e.g. a raider's eyes lit an angry ember-glow).
+    template <typename Pred>
+    void recolor_attachments(Pred pred, BoneColor color) {
+        for (Bone& b : bones_) {
+            if (b.attachment && pred(b)) {
+                b.color = color;
+            }
+        }
     }
 
     f32 height() const { return height_; }

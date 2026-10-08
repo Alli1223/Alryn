@@ -176,6 +176,66 @@ inline AbilityDef ability_def(PlayerRole role, u8 ability) {
     return {};
 }
 
+// --- Basic + CHARGED HEAVY attacks -------------------------------------------------------------
+// Every role's primary attack has two forms. TAP it for the quick BASIC attack (the sword cut, the
+// loosed arrow, the arcane bolt); HOLD it to wind up a HEAVY attack, and release to unleash it. The
+// heavy grows with the charge - a quick release is a solid blow, a full charge is devastating (and
+// the strongest ones crack the very ground). Winding up slows your feet, so it's a commitment.
+//   Knight  EARTHSPLITTER - a two-handed overhead blow across a wide arc ahead; at full charge it
+//           cracks the earth: a crater + a shockwave that throws everyone nearby off their feet.
+//   Hunter  DRAWN SHOT    - a fully drawn arrow: faster + much heavier, and at full draw it punches
+//           through every body in its line.
+//   Cleric  SUNBURST      - a gathered orb of holy light that bursts where it lands, scorching foes
+//           and mending allies caught in the blast.
+//   Mage    ARCANE COMET  - a roiling orb that detonates in a wide blast; at full charge it leaves a
+//           smoking crater.
+inline constexpr f32 kChargeTapTime = 0.18f;   // a press released sooner than this is a basic attack
+inline constexpr f32 kChargeMoveMult = 0.55f;  // x walk speed while winding up a heavy
+inline constexpr f32 kFullCharge = 0.97f;      // charge at (or over) this is a FULL charge (the big effects)
+// Seconds of holding (after the tap window) to reach a full charge.
+inline f32 heavy_charge_time(PlayerRole role) {
+    switch (role) {
+        case PlayerRole::Knight: return 1.0f;
+        case PlayerRole::Hunter: return 0.85f;
+        case PlayerRole::Cleric: return 1.1f;
+        case PlayerRole::Mage: return 1.15f;
+    }
+    return 1.0f;
+}
+// x the role's basic damage a heavy deals at `charge` (0..1): 1.6x for a snap release .. 3.6x full.
+inline f32 heavy_damage_mult(f32 charge) {
+    const f32 c = charge < 0.0f ? 0.0f : (charge > 1.0f ? 1.0f : charge);
+    return 1.6f + 2.0f * c;
+}
+// Server-side pacing of the basic attacks, so mashed clicks can't out-fire the animation.
+inline f32 basic_attack_cooldown(PlayerRole role) {
+    switch (role) {
+        case PlayerRole::Knight: return 0.3f; // (the sword's own wind-up pacing; see kMeleeCooldown)
+        case PlayerRole::Hunter: return 0.36f;
+        case PlayerRole::Cleric: return 0.4f;
+        case PlayerRole::Mage: return 0.38f;
+    }
+    return 0.35f;
+}
+inline constexpr f32 kMageBoltDamage = 22.0f;  // the Mage's basic arcane bolt (the spells are its burst)
+// Knight EARTHSPLITTER.
+inline constexpr f32 kHeavyWindup = 0.26f;     // the overhead blow lands this long after the release
+inline constexpr f32 kHeavyReach = 3.4f;       // reach of the cleave...
+inline constexpr f32 kHeavyConeCos = -0.05f;   // ...across the whole front half (a wide arc)
+inline constexpr f32 kQuakeRadius = 4.4f;      // full charge: the shockwave's reach around the impact
+inline constexpr f32 kQuakeDamage = 30.0f;     // ...and its damage to everything caught in it
+inline constexpr f32 kHeavyKnockback = 6.0f;
+// Hunter DRAWN SHOT.
+inline f32 drawn_shot_speed(f32 charge) { return 38.0f + 26.0f * (charge < 0.0f ? 0.0f : (charge > 1.0f ? 1.0f : charge)); }
+inline constexpr u8 kDrawnShotPierce = 2;      // full draw: punches through this many bodies
+// Cleric SUNBURST + Mage ARCANE COMET (blast radius grows with the charge).
+inline f32 sunburst_radius(f32 charge) { return 2.6f + 1.8f * (charge < 0.0f ? 0.0f : (charge > 1.0f ? 1.0f : charge)); }
+inline f32 sunburst_heal(f32 charge) { return 14.0f + 30.0f * (charge < 0.0f ? 0.0f : (charge > 1.0f ? 1.0f : charge)); }
+inline f32 comet_radius(f32 charge) { return 2.8f + 2.0f * (charge < 0.0f ? 0.0f : (charge > 1.0f ? 1.0f : charge)); }
+// Craters: the shape a full-charge blast leaves in the ground (a WorldEdit sphere at the impact).
+inline constexpr f32 kCraterRadius = 2.4f;
+inline constexpr f32 kCraterDepth = 0.95f;     // edit amount (the bowl ends up ~0.6 m deep)
+
 // --- Ability tuning (shared by the server and the headless tests) -----------------
 inline constexpr f32 kBashDamage = 55.0f;       // Knight shield bash, plus knockback
 inline constexpr f32 kBashKnockback = 3.5f;     // metres an enemy is shoved

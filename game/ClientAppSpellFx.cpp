@@ -447,6 +447,54 @@ void ClientApp::projectile_impact(u8 kind, const Vec3& at) {
             emit_ring(at, Vec4{0.8f, 1.0f, 0.88f, 0.85f}, 18, 3.2f, 0.4f, 0.14f);
             flash_light(at + up, Vec3{0.7f, 1.0f, 0.8f}, 3.8f, 9.0f, 0.45f);
             break;
+        case 9: // SUNBURST: a blinding nova of sunlight - a ring of light rolling out, motes rising
+            emit(at, Vec3{0.0f}, Vec4{1.0f, 0.97f, 0.82f, 1.0f}, 0.28f, 3.0f, 1);
+            emit_ring(at, Vec4{1.0f, 0.86f, 0.45f, 0.95f}, 44, 9.0f, 0.5f, 0.22f);
+            for (int i = 0; i < 36; ++i) {
+                emit(at + rand_dir() * 0.5f, rand_dir() * frand(2.0f, 7.0f) + Vec3{0.0f, 1.5f, 0.0f},
+                     Vec4{1.0f, 0.92f, 0.6f, 0.95f}, frand(0.5f, 1.0f), frand(0.08f, 0.16f), 1, -0.6f);
+            }
+            for (int i = 0; i < 16; ++i) { // the healing motes drifting up out of the blast
+                emit(at + Vec3{frand(-2.5f, 2.5f), 0.2f, frand(-2.5f, 2.5f)}, Vec3{0.0f, frand(1.2f, 2.6f), 0.0f},
+                     Vec4{0.6f, 1.0f, 0.7f, 0.9f}, frand(0.8f, 1.3f), 0.1f, 1, -0.4f);
+            }
+            glyph(at, 3.6f, Vec4{1.0f, 0.85f, 0.4f, 0.9f}, 1.0f, 8);
+            flash_light(at + up, Vec3{1.0f, 0.85f, 0.5f}, 7.0f, 14.0f, 0.6f);
+            if (Audio* a = audio()) {
+                a->play_at(SfxId::Heal, at, 1.0f, 0.75f);
+                a->play_at(SfxId::SpellHit, at, 0.9f, 0.8f);
+            }
+            break;
+        case 10: // ARCANE COMET: a violet detonation - a shock ring, a column of fire-motes, a lingering glow
+            emit(at, Vec3{0.0f}, Vec4{0.95f, 0.85f, 1.0f, 1.0f}, 0.3f, 3.4f, 1);
+            emit_ring(at, Vec4{0.7f, 0.4f, 1.0f, 0.95f}, 50, 11.0f, 0.5f, 0.24f);
+            emit_ring(at, Vec4{0.45f, 0.4f, 0.38f, 0.6f}, 26, 6.0f, 1.0f, 0.45f, 0);
+            for (int i = 0; i < 44; ++i) {
+                emit_ember(at + rand_dir() * 0.4f, rand_dir() * frand(3.0f, 9.0f) + Vec3{0.0f, 2.5f, 0.0f},
+                           Vec3{0.95f, 0.75f, 1.0f}, Vec3{0.35f, 0.1f, 0.6f}, frand(0.5f, 0.9f), frand(0.14f, 0.3f), 2.0f);
+            }
+            flash_light(at + up, Vec3{0.7f, 0.45f, 1.0f}, 8.0f, 15.0f, 0.6f);
+            flash_light(at + up, Vec3{0.6f, 0.3f, 1.0f}, 2.0f, 8.0f, 2.5f); // the smouldering crater
+            if (Audio* a = audio()) {
+                a->play_at(SfxId::Explosion, at, 0.85f, 1.2f);
+                a->play_at(SfxId::SpellHit, at, 0.9f, 0.7f);
+            }
+            if (glm::length(at - local_feet()) < 14.0f) {
+                cam_shake_ = std::max(cam_shake_, 0.7f);
+            }
+            break;
+        case 11: // the Mage's arcane bolt: a small blue-violet pop
+            emit(at, Vec3{0.0f}, Vec4{0.8f, 0.75f, 1.0f, 1.0f}, 0.14f, 0.9f, 1);
+            for (int i = 0; i < 12; ++i) {
+                emit(at, rand_dir() * frand(2.0f, 5.0f), Vec4{0.6f, 0.55f, 1.0f, 0.95f}, frand(0.25f, 0.45f),
+                     frand(0.06f, 0.1f), 1, 0.0f, 3.0f);
+            }
+            flash_light(at, Vec3{0.55f, 0.5f, 1.0f}, 2.0f, 6.0f, 0.3f);
+            break;
+        case 8: // the DRAWN SHOT driving home: a spray of sparks + splinters
+            emit_burst(at, Vec4{0.85f, 1.0f, 0.6f, 1.0f}, 16, 6.0f, 0.35f, 0.08f, 1, 1.0f, 4.0f);
+            flash_light(at, Vec3{0.7f, 1.0f, 0.55f}, 2.0f, 6.0f, 0.25f);
+            break;
         case 4: // the Cleric's arcane bolt: a violet pop
             emit(at, Vec3{0.0f}, Vec4{0.85f, 0.65f, 1.0f, 1.0f}, 0.16f, 1.1f, 1);
             for (int i = 0; i < 16; ++i) {
@@ -470,7 +518,7 @@ void ClientApp::track_projectiles() {
                        : glm::clamp(static_cast<f32>(snapshot_.tick - proj_track_tick_) / 60.0f,
                                     1.0f / 60.0f, 0.5f);
     proj_track_tick_ = snapshot_.tick;
-    auto spell_bolt = [](u8 kind) { return kind == 2 || kind == 4 || kind == 5 || kind == 6 || kind == 7; };
+    auto spell_bolt = [](u8 kind) { return kind == 2 || (kind >= 4 && kind <= 11); };
     for (ProjectileTrack& t : proj_tracks_) {
         t.seen = false;
     }

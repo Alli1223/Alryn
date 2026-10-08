@@ -45,7 +45,7 @@ void ClientApp::draw_health_bars() {
         }
     };
     for (const net::EnemyState& en : snapshot_.enemies) {
-        const f32 hgt = en.kind == 2 ? 3.0f : 2.2f;
+        const f32 hgt = en.kind == 2 ? 3.0f : en.kind == kEnemyAlpha ? 1.9f : en.kind == kEnemyWolf ? 1.5f : 2.2f;
         bar(en.position + Vec3{0.0f, hgt, 0.0f}, static_cast<f32>(en.health) / 255.0f,
             Vec3{0.92f, 0.26f, 0.2f});
     }
@@ -145,6 +145,7 @@ void ClientApp::draw_hud() {
         }
     }
     draw_combat_text(draw, W, H); // world-anchored "SHATTER!" / "EMPOWERED!" / "CANNONBALL!" labels
+    draw_charge_meter(draw, W, H); // the heavy attack's wind-up gauge under the hero
     draw_nameplates(draw, W, H);  // teammates' names in their colours (+ edge pointers when off-screen)
     draw_party_frames(draw, W, H, ts);
 
@@ -198,9 +199,35 @@ void ClientApp::draw_hud() {
         }
     };
 
+    // A side quest under way gets its own lines on the card: what it is, what to do, how far along,
+    // and how far off the site lies.
+    auto add_quest = [&]() {
+        const net::QuestState* q = active_quest();
+        if (q == nullptr) {
+            return;
+        }
+        const auto kind = static_cast<QuestKind>(q->kind);
+        rows.push_back({ts * 0.55f, 0.0f, [&draw, ts](f32 x, f32 y) {
+                            draw.line(Vec2{x, y + ts * 0.22f}, Vec2{x + ts * 9.0f, y + ts * 0.22f}, 1.0f,
+                                      hud::alpha(ui::theme().accent, 0.45f));
+                        }});
+        add_text(std::format("SIDE QUEST  -  {}", quest_title(kind)), ts * 0.56f, Vec4{0.72f, 0.9f, 1.0f, 1.0f}, 0.3f);
+        const f32 dist = glm::length(Vec2{q->site.x - feet.x, q->site.z - feet.z});
+        std::string line = quest_objective(kind);
+        if (q->goal > 1 && q->phase == static_cast<u8>(QuestPhase::Active)) {
+            line += std::format("   {} / {}", q->progress, q->goal);
+        }
+        add_rich(line, ts * 0.6f, ui::theme().text);
+        if (dist > 18.0f) {
+            add_text(std::format("~{} M AWAY", static_cast<int>(dist)), ts * 0.5f, hud::alpha(ui::theme().text_muted, 0.95f),
+                     0.25f);
+        }
+    };
+
     // The hero's JOURNEY - the linear spine of goals - closes out the objective card: the current
     // step, what to do, and progress toward a counted goal.
     auto add_journey = [&]() {
+        add_quest();
         const u8 step = std::min<u8>(live_progress_.journey, kJourneySteps);
         const JourneyStep js = journey_step(step);
         rows.push_back({ts * 0.55f, 0.0f, [&draw, ts](f32 x, f32 y) {
@@ -386,6 +413,8 @@ void ClientApp::draw_hud() {
         paint_card(0.0f);
     }
 
+    draw_quest_hud(draw, W, H, ts); // the notice board's panel, the quest's waypoint + its triumph banner
+
     // Settle banner: the haul's outcome, big and centred, in green or red.
     if (snapshot_.contract_outcome != 0) {
         const bool ok = snapshot_.contract_outcome == 1;
@@ -434,11 +463,13 @@ void ClientApp::draw_hud() {
     const f32 hs = ts * 0.64f;
     hud::rich(draw, Vec2{x, controls_y - hs * 2.0f}, combo_hint, hs,
               can_combo ? hud::kGold : hud::alpha(ui::theme().text, 0.85f));
+    hud::rich(draw, Vec2{x, controls_y - hs * 4.0f}, "HOLD [LMB] HEAVY ATTACK   [Q] DIG", hs,
+              hud::alpha(ui::theme().text, 0.85f));
     {
         // An unspent skill point makes the [K] hint glow, so levelling up leads straight to the tree.
         const i32 pts = points_available(role_, hero_level(), known_mask(), live_progress_.talents);
-        const f32 cw = hud::rich(draw, Vec2{x, controls_y}, "[M] MAP   [K] SKILLS   [U] GEAR   [J] JOURNEY", hs,
-                                 ui::theme().text);
+        const f32 cw = hud::rich(draw, Vec2{x, controls_y}, "[M] MAP   [K] SKILLS   [U] GEAR   [J] JOURNEY   [L] LANTERN",
+                                 hs, ui::theme().text);
         if (pts > 0) {
             const f32 pulse = 0.82f + 0.18f * std::sin(elapsed_ * 5.0f);
             hud::chip(draw, Vec2{x + cw + hs * 0.6f, controls_y - hs * 0.3f},
@@ -576,6 +607,30 @@ void ClientApp::draw_hud() {
     if (debug_open_) {
         draw_debug(draw, H);
     }
+}
+
+void ClientApp::draw_charge_meter(ui::DrawList& draw, f32 W, f32 H) {
+    if (!attack_held_ || charge_ <= 0.0f) {
+        return;
+    }
+    Vec2 sp;
+    if (!world_to_screen(local_feet() - Vec3{0.0f, 0.15f, 0.0f}, W, H, sp)) {
+        return;
+    }
+    // A short gilded gauge under the hero, filling in their role's colour; full, it flares white-gold
+    // and calls for the release.
+    const bool full = charge_ >= kFullCharge;
+    const Vec3 rc = role_color(role_);
+    const f32 pulse = full ? 0.75f + 0.25f * std::sin(elapsed_ * 18.0f) : 1.0f;
+    const Vec3 fill = full ? glm::mix(rc, Vec3{1.0f, 0.95f, 0.75f}, 0.6f) : rc;
+    const f32 bw = 92.0f, bh = 9.0f;
+    const Vec4 r{sp.x - bw * 0.5f, sp.y + 16.0f, bw, bh};
+    if (full) {
+        draw.shadow(r, 4.5f, 12.0f, Vec4{fill, 0.55f * pulse});
+    }
+    hud::bar(draw, r, charge_, Vec4{glm::mix(fill, Vec3{1.0f}, 0.25f) * pulse, 1.0f}, Vec4{fill * 0.7f * pulse, 1.0f}, 4);
+    hud::text(draw, Vec2{sp.x, r.y + bh + 5.0f}, full ? "RELEASE!" : "HEAVY", 12.0f,
+              full ? Vec4{1.0f, 0.93f, 0.7f, pulse} : hud::alpha(ui::theme().text, 0.85f), ui::TextAlign::Center);
 }
 
 void ClientApp::draw_nav_paths(ui::DrawList& draw, f32 W, f32 H) {
@@ -1166,6 +1221,19 @@ void ClientApp::draw_minimap(ui::DrawList& draw, const Vec3& feet, f32 W, f32 H)
             d = c + glm::normalize(off) * r;
         }
         draw.rect(Vec4{d.x - 4.0f, d.y - 4.0f, 8.0f, 8.0f}, Vec4{0.98f, 0.82f, 0.3f, 1.0f}, 4.0f);
+    }
+    // The side quest's site: a pale-blue diamond (edge-clamped, like the wagon's destination).
+    if (const net::QuestState* q = active_quest()) {
+        Vec2 d = to_mm(Vec2{q->site.x, q->site.z});
+        const f32 r = sz * 0.5f - 7.0f;
+        if (const Vec2 off = d - c; glm::length(off) > r) {
+            d = c + glm::normalize(off) * r;
+        }
+        const Vec4 qc{0.62f, 0.86f, 1.0f, 1.0f};
+        draw.line(Vec2{d.x, d.y - 6.0f}, Vec2{d.x + 6.0f, d.y}, 3.0f, qc);
+        draw.line(Vec2{d.x + 6.0f, d.y}, Vec2{d.x, d.y + 6.0f}, 3.0f, qc);
+        draw.line(Vec2{d.x, d.y + 6.0f}, Vec2{d.x - 6.0f, d.y}, 3.0f, qc);
+        draw.line(Vec2{d.x - 6.0f, d.y}, Vec2{d.x, d.y - 6.0f}, 3.0f, qc);
     }
     // Teammates, each in their identity colour (edge-clamped so you can always find them).
     for (const net::PlayerState& p : snapshot_.players) {

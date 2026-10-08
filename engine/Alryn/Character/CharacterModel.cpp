@@ -64,31 +64,47 @@ void CharacterModel::add_features(CharacterModel& m, const CharacterAppearance& 
     };
 
     // ---- Eyes + nose (on the front face, +Z) ----
-    // Kept SIMPLE: small dark eyes + a subtle nose, no big anime eyes or expressive brows - clean
-    // low-poly faces like the reference art.
+    // Kept SIMPLE - no big anime eyes or expressive brows, clean low-poly faces like the reference art
+    // - but READABLE: a small white of the eye with the dark iris set in it, so the four styles differ
+    // at a glance (round / wide-set + big / heavy-lidded / narrow + slanted), not just in a dot's size.
     {
         const f32 fz = c.z + r * 0.97f;       // front surface
         const f32 ey = c.y + r * 0.1f;        // a touch above centre
-        f32 ex = r * 0.36f;                   // horizontal spacing
-        Vec3 size{hs * 0.12f, hs * 0.13f, hs * 0.08f}; // small + understated, but reads clearly
+        f32 ex = r * 0.38f;                   // horizontal spacing
+        Vec3 white{hs * 0.17f, hs * 0.16f, hs * 0.06f};
+        Vec3 iris{hs * 0.10f, hs * 0.11f, hs * 0.07f};
         BoneShape shape = BoneShape::Sphere;
+        f32 slant = 0.0f; // roll: the outer corners lift (sharp eyes)
+        f32 lid = 0.0f;   // 0..1 how far the upper lid hangs down over the eye (sleepy)
         switch (app.eyes) {
             case EyeStyle::Round: break;
             case EyeStyle::Wide:
-                ex = r * 0.42f;
-                size = Vec3{hs * 0.12f, hs * 0.12f, hs * 0.07f};
+                ex = r * 0.45f;
+                white = Vec3{hs * 0.21f, hs * 0.20f, hs * 0.06f};
+                iris = Vec3{hs * 0.12f, hs * 0.13f, hs * 0.07f};
                 break;
             case EyeStyle::Sleepy:
-                size = Vec3{hs * 0.13f, hs * 0.06f, hs * 0.07f};
-                shape = BoneShape::RoundedBox;
+                white = Vec3{hs * 0.19f, hs * 0.14f, hs * 0.06f};
+                iris = Vec3{hs * 0.10f, hs * 0.10f, hs * 0.07f};
+                lid = 0.55f;
                 break;
             case EyeStyle::Sharp:
-                size = Vec3{hs * 0.12f, hs * 0.07f, hs * 0.07f};
-                shape = BoneShape::Box;
+                white = Vec3{hs * 0.21f, hs * 0.085f, hs * 0.06f};
+                iris = Vec3{hs * 0.085f, hs * 0.075f, hs * 0.07f};
+                shape = BoneShape::RoundedBox;
+                slant = 0.3f;
                 break;
         }
-        add(Vec3{-ex, ey, fz}, size, BoneColor::Eye, shape);
-        add(Vec3{ex, ey, fz}, size, BoneColor::Eye, shape);
+        for (const f32 s : {-1.0f, 1.0f}) {
+            const Quat roll = glm::angleAxis(s * slant, Vec3{0.0f, 0.0f, 1.0f});
+            add_rot(Vec3{s * ex, ey, fz}, white, BoneColor::Linen, shape, roll);
+            add_rot(Vec3{s * ex * 0.96f, ey - hs * 0.005f, fz + hs * 0.02f}, iris, BoneColor::Eye, shape, roll);
+            if (lid > 0.0f) {
+                // The heavy upper lid: skin drawn down over the top of the eye, in front of the iris.
+                add_rot(Vec3{s * ex, ey + white.y * 0.5f * (1.0f - lid) + hs * 0.01f, fz + hs * 0.035f},
+                        Vec3{white.x * 1.12f, white.y * lid, hs * 0.05f}, BoneColor::Skin, BoneShape::RoundedBox, roll);
+            }
+        }
 
         // A small, subtle nose so the face isn't a bare ball - no brow ridge / eyebrows (those read
         // anime). Skin-coloured and low-relief.

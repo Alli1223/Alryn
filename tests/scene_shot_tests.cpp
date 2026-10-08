@@ -799,6 +799,7 @@ struct Sitter {
     int role = -1;   // PlayerRole for the held weapons, -1 = none (townsfolk / bandits)
     f32 yaw = 0.0f;  // radians about +Y; 0 faces the camera (+Z)
     bool walk = false;
+    f32 swing_t = -1.0f; // >= 0: caught this many seconds into a sword swing (the attack animation)
 };
 
 // Renders `cast` the way the client draws a character - skinned body + skinned outfit + attachment
@@ -861,7 +862,11 @@ std::vector<u8> render_cast(const std::vector<Sitter>& cast, const Vec3& eye, co
             }
             root = glm::translate(Mat4{1.0f}, at) * glm::rotate(Mat4{1.0f}, s.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
                    (s.walk ? anim.body_offset() : Mat4{1.0f});
-            pose = s.walk ? anim.pose(model) : std::vector<Quat>{};
+            // A swing caught `swing_t` seconds in: start it so it reaches that point on the last frame.
+            if (s.swing_t >= 0.0f && f == 119 - static_cast<int>(s.swing_t / dt)) {
+                anim.play_swing();
+            }
+            pose = (s.walk || s.swing_t >= 0.0f) ? anim.pose(model) : std::vector<Quat>{};
             const std::vector<Mat4> jm = model.joint_matrices(root, pose);
             pose_body_colliders(fit, jm, colliders);
             ClothEnv env;
@@ -937,7 +942,13 @@ std::vector<u8> render_cast(const std::vector<Sitter>& cast, const Vec3& eye, co
                     draws.push_back({shape_of(wp.shape), hand * wp.local, Vec4{wp.color, 1.0f}});
                 }
             };
-            add_weapon(role_weapon(static_cast<u8>(s.role), 0), BonePart::LowerArmL);
+            // The main hand turns the blade over during a swing (the client's weapon_wrist).
+            {
+                const Mat4 hand = hand_frame(BonePart::LowerArmL) * glm::mat4_cast(anim.weapon_wrist(model));
+                for (const WeaponPiece& wp : weapon_pieces(role_weapon(static_cast<u8>(s.role), 0), s.eq.weapon(), pal)) {
+                    draws.push_back({shape_of(wp.shape), hand * wp.local, Vec4{wp.color, 1.0f}});
+                }
+            }
             add_weapon(role_offhand(static_cast<u8>(s.role)), BonePart::LowerArmR);
         }
     }
@@ -1181,4 +1192,41 @@ TEST_CASE("Shot: instanced UI-tile raster draws, transforms and clips (world-map
         CHECK(near3(pixel(px, w, 42, 20), green)); // green's left edge is inside the clip
         CHECK(near3(pixel(px, w, 50, 20), bg));   // past the clip edge: no tile drawn
     }
+}
+
+// The Knight's sword attack, frame by frame: a strip of the same Knight caught at successive moments of
+// one swing (wind-up -> strike -> follow-through -> recovery), from the game's high iso angle and from
+// the side - the quick way to judge the swing's arc, weight and timing without playing.
+TEST_CASE("Scene shot: the knight's sword swing, frame by frame") {
+    constexpr int kFrames = 8;
+    constexpr f32 kDur = 0.62f; // a little past the whole swing
+    std::vector<Sitter> strip;
+    for (int k = 0; k < kFrames; ++k) {
+        Sitter s{60u, {1, 1, EyeStyle::Round, EarStyle::Round, HairStyle::Short, Race::Human}, OutfitKind::Plate,
+                 Equipment{3, 3, 0, 0}, Vec3{-6.3f + 1.8f * static_cast<f32>(k), 0.0f, 0.0f}, 0};
+        s.yaw = 0.35f; // facing the camera, turned a touch so the arc reads
+        s.swing_t = kDur * static_cast<f32>(k) / static_cast<f32>(kFrames - 1);
+        strip.push_back(s);
+    }
+    // The in-game view: high + angled down onto the fighters.
+    const std::vector<u8> px =
+        render_cast(strip, Vec3{0.0f, 9.0f, 9.5f}, Vec3{0.0f, 0.8f, 0.0f}, "characters_swing.ppm", 1600, 500, 40.0f);
+    if (px.empty()) {
+        MESSAGE("No Vulkan device/shaders - skipping the swing strip");
+        return;
+    }
+    // And level with them, to read the arc + the body's commitment.
+    CHECK_FALSE(render_cast(strip, Vec3{0.0f, 1.6f, 9.0f}, Vec3{0.0f, 1.0f, 0.0f}, "characters_swing_side.ppm", 1600, 500,
+                            40.0f)
+                    .empty());
+    // The cut itself in fine steps (anticipation peak -> impact -> follow-through), seen from behind +
+    // above the way the game's camera usually sees a fighter.
+    std::vector<Sitter> cut = strip;
+    for (int k = 0; k < kFrames; ++k) {
+        cut[static_cast<usize>(k)].yaw = 0.3f; // facing away from the camera (it looks over their shoulder)
+        cut[static_cast<usize>(k)].swing_t = 0.12f + 0.26f * static_cast<f32>(k) / static_cast<f32>(kFrames - 1);
+    }
+    CHECK_FALSE(render_cast(cut, Vec3{0.0f, 6.5f, -8.5f}, Vec3{0.0f, 0.9f, 0.0f}, "characters_swing_cut.ppm", 1600, 500,
+                            40.0f)
+                    .empty());
 }

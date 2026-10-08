@@ -406,6 +406,8 @@ Asset build_character(int role) {
             case BoneColor::Metal: return pal.metal;
             case BoneColor::Dark: return pal.dark;
             case BoneColor::Glow: return pal.glow * 1.7f; // brighten (no emissive pass in the preview)
+            case BoneColor::PrimaryShade: return pal.primary * 0.66f;
+            case BoneColor::Linen: return pal.linen;
         }
         return Vec3{1.0f};
     };
@@ -680,6 +682,8 @@ Asset build_bandit(int variant) {
             case BoneColor::Metal: return pal.metal;
             case BoneColor::Dark: return pal.dark;
             case BoneColor::Glow: return pal.glow * 1.7f;
+            case BoneColor::PrimaryShade: return pal.primary * 0.66f;
+            case BoneColor::Linen: return pal.linen;
         }
         return Vec3{1.0f};
     };

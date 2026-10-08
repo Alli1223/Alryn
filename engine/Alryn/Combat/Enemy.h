@@ -6,6 +6,7 @@
 #include <Alryn/Core/Types.h>
 #include <Alryn/Physics/Collider.h>
 
+#include <algorithm>
 #include <cmath>
 #include <functional>
 #include <span>
@@ -37,11 +38,46 @@ inline constexpr f32 kWarlordMaxHealth = 140.0f; // a tough priority target
 inline constexpr f32 kWarlordAuraRadius = 8.0f;  // allied raiders within this are rallied
 inline constexpr f32 kWarlordBuff = 1.3f;        // x march speed + x attack damage for rallied allies
 
+// DIRE WOLVES (kinds 8 + 9): the side quests' beasts - a lean pack that lopes in fast, CROUCHES (a
+// telegraph you can read) and POUNCES, led by a hulking ALPHA. Beasts carry no purse (a pelt bounty
+// instead) and answer to no warlord.
+inline constexpr u8 kEnemyWolf = 8u;
+inline constexpr u8 kEnemyAlpha = 9u;
+inline constexpr f32 kWolfMaxHealth = 48.0f;
+inline constexpr f32 kAlphaMaxHealth = 140.0f;
+inline constexpr f32 kWolfSpeed = 4.7f;         // a loping run - quicker than a raider, a touch under a hero
+inline constexpr f32 kWolfBite = 8.0f;          // the snapping bite at close quarters
+inline constexpr f32 kAlphaBite = 14.0f;
+inline constexpr f32 kWolfBiteInterval = 0.8f;
+inline constexpr f32 kPounceMin = 2.4f;         // a wolf pounces from between these ranges...
+inline constexpr f32 kPounceMax = 7.0f;
+inline constexpr f32 kPounceWindup = 0.42f;     // ...after crouching low for this long (dodge it!)
+inline constexpr f32 kPounceTime = 0.36f;       // the leap itself
+inline constexpr f32 kPounceSpeed = 13.0f;
+inline constexpr f32 kPounceDamage = 15.0f;     // landing on a hero
+inline constexpr f32 kPounceCooldown = 3.4f;
+inline bool is_beast(u8 kind) { return kind == kEnemyWolf || kind == kEnemyAlpha; }
+
 inline f32 enemy_max_health(u8 kind) {
-    return kind == 2              ? kBruteMaxHealth
-           : kind == kEnemySapper ? kSapperMaxHealth
+    return kind == 2               ? kBruteMaxHealth
+           : kind == kEnemySapper  ? kSapperMaxHealth
            : kind == kEnemyWarlord ? kWarlordMaxHealth
+           : kind == kEnemyWolf    ? kWolfMaxHealth
+           : kind == kEnemyAlpha   ? kAlphaMaxHealth
                                    : kEnemyMaxHealth;
+}
+
+// EARTHWORKS: a raider or beast wading through a DUG pit or trench - ground sunk well below the land's
+// natural lie - is MIRED and slogs out at a fraction of its pace. Dig a ditch across their path (or
+// crater the road with a heavy blow) and the charge bogs down in it.
+inline constexpr f32 kMireDepth = 0.35f; // metres below the natural ground before it bogs down
+inline constexpr f32 kMireSlow = 0.42f;  // x speed at the deepest
+inline f32 mire_mult(f32 sunk) {
+    if (sunk <= kMireDepth) {
+        return 1.0f;
+    }
+    const f32 t = std::min((sunk - kMireDepth) / 0.6f, 1.0f);
+    return 0.72f + (kMireSlow - 0.72f) * t;
 }
 inline constexpr f32 kEnemySpeed = 2.7f;       // march speed (m/s)
 inline constexpr f32 kEnemyRadius = 0.4f;      // collision radius (xz)
@@ -58,6 +94,11 @@ inline constexpr f32 kSecondWindHealth = 25.0f; // once per haul, a lethal blow 
 inline constexpr f32 kMeleeRange = 2.7f;        // player melee reach
 inline constexpr f32 kMeleeDamage = 34.0f;      // per swing
 inline constexpr f32 kMeleeConeCos = 0.35f;     // ~69° half-cone in front
+// A sword blow lands when the swung blade does, not on the click: the swing commits and its hit is
+// resolved this long after (the client's swing animation cuts through at ~0.27 s, and the hit takes a
+// tick + the snapshot to come back). The cooldown sits just under the client's own swing pacing.
+inline constexpr f32 kMeleeWindup = 0.2f;
+inline constexpr f32 kMeleeCooldown = 0.3f;
 inline constexpr f32 kThrowDamage = 28.0f;      // a thrown rock hitting an enemy
 inline constexpr f32 kMeleeKillHeal = 7.0f;     // lifesteal: felling a raider in melee mends you a little
 
@@ -107,6 +148,10 @@ struct Enemy {
     f32 slam_windup = 0.0f; // brute slam / archer aim: while > 0 it is winding up a telegraphed attack
     f32 stagger = 0.0f;     // while > 0 it reels from a heavy hit: no move + no attack (combo window)
     f32 chill_timer = 0.0f; // ELEMENTAL SHATTER: while > 0 it is chilled (slowed); a heavy hit shatters it
+    u32 quest = 0;          // the side quest it guards (0 = a wagon ambusher); it holds `home` (its camp/den)
+    f32 pounce = 0.0f;      // wolf: > 0 crouched to spring (counting down), < 0 mid-leap (counting up to 0)
+    Vec3 pounce_dir{0.0f};  // the leap's locked heading
+    bool mired = false;     // bogged down in a dug pit this tick (client: mud + a slog)
 };
 
 // Elemental Shatter combo: a Mage Frost Bolt CHILLS an enemy (slowing it) for kChillDuration; the next
@@ -197,6 +242,8 @@ inline constexpr f32 kHealerKeepDist = 9.0f;  // hangs this far back from its ta
 // Paid AT the kill, so standing and fighting always earns, even on a haul that later wrecks.
 inline u32 bandit_loot(u8 kind) {
     switch (kind) {
+        case kEnemyWolf: return 2u;     // a pelt bounty
+        case kEnemyAlpha: return 12u;   // the alpha's prized pelt
         case 2u: return 8u;             // brute
         case 3u: return 4u;             // archer
         case kEnemyShield: return 5u;   // shield-bearer

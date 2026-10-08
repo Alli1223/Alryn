@@ -14,8 +14,10 @@
 namespace alryn {
 
 namespace {
-constexpr f32 kEditRadius = 2.5f;
-constexpr f32 kEditAmount = 2.0f;
+constexpr f32 kEditRadius = 2.5f;   // raised earth (right mouse): a mound this wide...
+constexpr f32 kEditAmount = 2.0f;   // ...and this strong
+constexpr f32 kRaiseReach = 10.0f;  // only near at hand
+constexpr f32 kRaiseCooldown = 0.4f;
 constexpr f32 kProjectileSpeed = 24.0f;
 constexpr usize kMaxProjectiles = 256;
 
@@ -140,6 +142,7 @@ void GameServer::tick(Timestep dt) {
     // Debug godmode: make every player invincible this tick (their damage routes through take_damage).
     for (auto& [id, player] : players_) {
         player.invincible = debug_god_;
+        player.input_fresh = false; // no packet has landed for them yet this tick
     }
 
     for (const net::ServerEvent& e : server_.poll()) {
@@ -150,6 +153,11 @@ void GameServer::tick(Timestep dt) {
                 players_.emplace(e.client, std::move(player));
                 assign_color(e.client); // their own identity colour (ring / name plate / map pin)
                 server_.send_welcome(e.client, net::Welcome{e.client, sampler_.seed()});
+                // Catch a late joiner up on every dig + crater made so far (in order), so the ground
+                // they see matches the ground the server collides against.
+                for (const WorldEdit& ed : sampler_.edits()) {
+                    server_.send_deform(e.client, net::DeformEvent{ed.center, ed.radius, ed.amount});
+                }
                 ALRYN_INFO("Player {} joined ({} online)", e.client, players_.size());
                 break;
             }
@@ -158,38 +166,76 @@ void GameServer::tick(Timestep dt) {
                 if (it == players_.end()) {
                     break;
                 }
+                ServerPlayer& sp = it->second;
                 // PARRY: raising the shield (block false->true) opens a brief parry window.
-                if (e.input.block && !it->second.input.block) {
-                    it->second.parry_window = kParryWindow;
+                if (e.input.block && !sp.input.block) {
+                    sp.parry_window = kParryWindow;
                 }
-                it->second.input = e.input;
-                if (e.input.dig) {
-                    sampler_.add_edit(e.input.aim, kEditRadius, kEditAmount);
-                    server_.broadcast_deform(net::DeformEvent{e.input.aim, kEditRadius, kEditAmount});
+                // Several packets can land in one tick (a client drawing faster than the 60 Hz sim): the
+                // newest wins, but a one-shot press an earlier one carried this tick must not be lost
+                // under it (a click that never swings, a dodge that never rolls).
+                net::PlayerInput in = e.input;
+                if (sp.input_fresh) {
+                    in.attack = in.attack || sp.input.attack;
+                    in.dodge = in.dodge || sp.input.dodge;
+                    in.grab = in.grab || sp.input.grab;
+                    in.toss = in.toss || sp.input.toss;
+                    if (in.ability == 0) {
+                        in.ability = sp.input.ability;
+                    }
+                    if (in.spell == 0) {
+                        in.spell = sp.input.spell;
+                    }
                 }
-                if (e.input.add) {
-                    sampler_.add_edit(e.input.aim, kEditRadius, -kEditAmount);
-                    server_.broadcast_deform(net::DeformEvent{e.input.aim, kEditRadius, -kEditAmount});
+                sp.input = in;
+                sp.input_fresh = true;
+                const Vec3 feet = sp.controller.position();
+                const Vec3 aim = e.input.aim;
+                const f32 reach = glm::length(Vec2{aim.x - feet.x, aim.z - feet.z});
+                // Towns are paved + built on, so the earth only moves out in the wilds (and the world
+                // holds only so many edits).
+                const bool wild = !worldgen::inside_village(aim.x, aim.z, sampler_.seed(), 5.0f) &&
+                                  sampler_.edits().size() < kMaxWorldEdits;
+                // The spade (Q): scoop out a little earth at the aim, within arm's reach - dig a pit to
+                // bog raiders down, or turn up a treasure quest's chest at its X.
+                if (e.input.dig && sp.dig_cd <= 0.0f && reach <= kDigReach && wild) {
+                    deform(aim, kDigRadius, kDigAmount);
+                    sp.dig_cd = kDigCooldown;
+                    quest_dig(aim);
                 }
-                if (e.input.fire) {
-                    const Vec3 eye = it->second.controller.eye_position();
-                    Vec3 dir = e.input.aim - eye;
+                // Raise a mound of earth (right mouse, Hunter / Mage): a little cover, near at hand.
+                if (e.input.add && sp.earth_cd <= 0.0f && reach <= kRaiseReach && wild) {
+                    deform(aim, kEditRadius, -kEditAmount);
+                    sp.earth_cd = kRaiseCooldown;
+                }
+                // The ranged BASIC attack (paced so mashing can't out-fire the animation): the Hunter
+                // looses an arrow (kind 3), the Cleric an arcane bolt (kind 4), the Mage a quick arcane
+                // bolt of its own (kind 11) - and anyone else lobs a rock (kind 0).
+                if (e.input.fire && sp.basic_cd <= 0.0f) {
+                    const Vec3 eye = sp.controller.eye_position();
+                    Vec3 dir = aim - eye;
                     if (glm::length(dir) > 0.2f) {
                         dir = glm::normalize(dir);
                         Projectile pr;
                         pr.position = eye + dir * 0.6f;
                         pr.velocity = dir * kProjectileSpeed;
                         pr.owner = e.client;
-                        pr.damage = role_stats(it->second.role).ranged_damage;
-                        // Projectile per role: Hunter looses an arrow (kind 3), Cleric casts an
-                        // arcane bolt (kind 4), everyone else lobs a rock (kind 0).
-                        pr.kind = it->second.role == PlayerRole::Hunter  ? 3
-                                  : it->second.role == PlayerRole::Cleric ? 4
-                                                                          : 0;
+                        pr.damage = role_stats(sp.role).ranged_damage;
+                        pr.kind = sp.role == PlayerRole::Hunter   ? 3
+                                  : sp.role == PlayerRole::Cleric ? 4
+                                  : sp.role == PlayerRole::Mage   ? 11
+                                                                  : 0;
+                        if (sp.role == PlayerRole::Mage) {
+                            pr.damage = kMageBoltDamage;
+                            pr.velocity = dir * 30.0f;
+                            pr.radius = 0.22f;
+                            pr.life = 2.5f;
+                        }
                         projectiles_.push_back(pr);
                         if (projectiles_.size() > kMaxProjectiles) {
                             projectiles_.erase(projectiles_.begin());
                         }
+                        sp.basic_cd = basic_attack_cooldown(sp.role);
                     }
                 }
                 // Note: melee/build/rally (e.input.attack/build/rally) are part of the
@@ -213,6 +259,7 @@ void GameServer::tick(Timestep dt) {
     // this tick (against the live ambush enemies / allies) before they move.
     update_abilities(dt, density);
     update_spells(dt, density); // Mage combo spells + ageing out raised rock walls
+    update_heavy(dt);           // charged heavy attacks released this tick
     prof_ms_[1] += ms_since(prof_mark); // abilities + spells
 
     for (auto& [id, player] : players_) {
@@ -253,6 +300,10 @@ void GameServer::tick(Timestep dt) {
             if (l > 1e-3f) {
                 move = move / l * f; // exact fraction of walk speed, any direction
             }
+        }
+        // Winding up (or bringing down) a heavy attack plants the feet: a slow shuffle at best.
+        if (!rolling && (player.input.charge > 0 || player.heavy_in > 0.0f)) {
+            move *= kChargeMoveMult;
         }
         // Wading through water is slow going: scale movement down by how submerged the feet are
         // (ankle-deep barely slows; waist-deep wading is a hard slog). Server-authoritative, so the
@@ -297,7 +348,14 @@ void GameServer::tick(Timestep dt) {
         if (collision_) {
             collision_->gather(pr.position, collider_scratch_);
         }
+        const bool was_resting = pr.resting;
         step_projectile(pr, density, collider_scratch_, dt);
+        // A heavy orb that comes down on the ground bursts there (one that strikes a foe bursts in
+        // update_combat).
+        if (pr.blast > 0.0f && pr.alive && pr.resting && !was_resting) {
+            blasts_.push_back({pr.position, pr.blast, pr.damage, pr.blast_heal, pr.owner, pr.crater});
+            pr.alive = false;
+        }
     }
     std::erase_if(projectiles_, [](const Projectile& pr) { return !pr.alive; });
     prof_ms_[2] += ms_since(prof_mark); // player movement + projectiles
@@ -305,7 +363,9 @@ void GameServer::tick(Timestep dt) {
     update_townsfolk(dt, density); // peaceful villagers stroll the nearby towns
     prof_ms_[3] += ms_since(prof_mark); // townsfolk spawn scan + strolling
     update_contracts(dt, density); // the wagon-transport game loop (offers / haul / ambush)
-    prof_ms_[4] += ms_since(prof_mark); // contracts: wagon + cargo + ambush
+    update_quests(dt, density);    // the notice board's side quests (camps, packs, treasure, petals)
+    update_combat(dt, density);    // every hostile + the heroes' attacks landing
+    prof_ms_[4] += ms_since(prof_mark); // contracts: wagon + cargo + ambush + quests + combat
 
     net::Snapshot snapshot;
     snapshot.tick = ++tick_;
@@ -330,7 +390,7 @@ void GameServer::tick(Timestep dt) {
         // attack input is held (the client sends it for one frame per click).
         const u8 action = player.toss_timer > 0.0f ? 4u // Ally Toss -> client plays a tumble + trail
                           : player.roll_timer > 0.0f ? 3u // dodge roll -> client plays it + a dust puff
-                          : player.input.block         ? 2u
+                          : (player.input.block && !player.input.lantern) ? 2u
                           : player.input.attack        ? 1u
                                                        : 0u;
         const u8 shield = static_cast<u8>(
@@ -354,6 +414,7 @@ void GameServer::tick(Timestep dt) {
         net::PlayerState& ps = snapshot.players.back();
         ps.color = player.color;
         ps.level = player.level;
+        ps.lantern = player.input.lantern ? 1 : 0;
         ps.name = player.name;
         ps.progress.xp = player.xp;
         ps.progress.known = player.known[static_cast<u8>(player.role)];
@@ -364,6 +425,9 @@ void GameServer::tick(Timestep dt) {
         ps.progress.kills = player.kills;
         ps.progress.deliveries = player.deliveries;
         ps.progress.best_danger = player.best_danger;
+        ps.charge = player.input.charge;
+        ps.heavy_seq = player.heavy_fx_seq;
+        ps.heavy_power = player.heavy_fx_power;
     }
     snapshot.projectiles.reserve(projectiles_.size());
     for (const Projectile& pr : projectiles_) {
@@ -394,7 +458,13 @@ void GameServer::tick(Timestep dt) {
         // Networked action cue for the client (no new wire field - EnemyState.action is reused):
         // brute slam telegraph (2 = winding up) / strike (3 = just slammed), else a melee swing (1).
         u8 action = 0u;
-        if (en.kind == 2u) {
+        if (is_beast(en.kind)) {
+            // A wolf: crouched to spring (2), mid-pounce (4), or a snapping bite (1).
+            action = en.pounce > 0.0f                          ? 2u
+                     : en.pounce < 0.0f                        ? 4u
+                     : en.attack_cd > kWolfBiteInterval - 0.18f ? 1u
+                                                                : 0u;
+        } else if (en.kind == 2u) {
             if (en.slam_windup > 0.0f) {
                 action = 2u; // winding up -> client draws the danger ring
             } else if (en.attack_cd > kSlamCooldown - 0.18f) {
@@ -407,7 +477,14 @@ void GameServer::tick(Timestep dt) {
         } else if (en.attack_cd > kEnemyAttackInterval - 0.18f) {
             action = 1u; // melee swing in sync with the hit
         }
-        const u8 status = static_cast<u8>(en.chill_timer > 0.0f ? 1u : 0u); // bit0 = chilled
+        const usize group = static_cast<usize>(std::count_if(ambush_.begin(), ambush_.end(), [&](const Enemy& o) {
+            return o.quest == en.quest && o.alive && o.health > 0.0f;
+        }));
+        u8 status = en.chill_timer > 0.0f ? net::kStatusChilled : 0u;
+        status |= en.mired ? net::kStatusMired : 0u;
+        status |= is_enraged(group, en.kind) ? net::kStatusEnraged : 0u;
+        status |= near_warlord(en, std::span<const Enemy>(ambush_)) ? net::kStatusRallied : 0u;
+        status |= en.quest != 0 ? net::kStatusQuest : 0u;
         snapshot.enemies.push_back({en.id, en.position, en.yaw, en.kind, hp, action, status});
     }
     // Wagons: the parked offers while choosing, or the single active cargo en route.
@@ -487,6 +564,15 @@ void GameServer::tick(Timestep dt) {
         snapshot.bubbles.push_back(
             {b.position, b.radius,
              static_cast<u8>(glm::clamp(b.health / kAegisBubbleHealth, 0.0f, 1.0f) * 255.0f)});
+    }
+    snapshot.quests.reserve(quests_.size());
+    for (const QuestRun& q : quests_) {
+        snapshot.quests.push_back({q.id, static_cast<u8>(q.kind), static_cast<u8>(q.phase), q.danger, q.progress,
+                                   q.goal, q.reward, q.site, q.board});
+    }
+    snapshot.quest_items.reserve(quest_items_.size());
+    for (const QuestItem& qi : quest_items_) {
+        snapshot.quest_items.push_back({qi.id, qi.position, qi.kind, qi.state});
     }
     // fires / barricades stay empty (siege dormant); outcome/phase/wave keep defaults.
     server_.broadcast_snapshot(snapshot);

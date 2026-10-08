@@ -98,6 +98,15 @@ protected:
         return Vec2{0.0f};
     }
 
+    // ALRYN_UI_SCRIPT: a ';'-separated list of menu steps run one every ~20 frames through the REAL
+    // pointer/keyboard dispatch - "click:<button or card label>", "type:<text>", "key:<keycode>",
+    // "wait:<frames>" - so a
+    // menu flow (e.g. forging a hero) can be replayed headless for repros + screenshots.
+    void run_ui_script();
+    std::vector<std::string> ui_script_;
+    usize ui_script_step_ = 0;
+    int ui_script_wait_ = 60;
+
     // ALRYN_SCREEN: a screen/overlay to open straight away for scripted screenshot runs.
     static std::string_view dev_screen() {
         const char* s = std::getenv("ALRYN_SCREEN");
@@ -191,6 +200,8 @@ protected:
     // left of the controls panel. The camera distance + horizontal offset are
     // derived from the window aspect and the panel position so the whole avatar
     // (head to feet) always fits without clipping, in any window shape.
+    // The turntable's little studio: no haze, dry ground, a clean key light (see ClientAppMenu.cpp).
+    void set_preview_studio();
     void draw_preview();
 
     // Draws a posed character's bones as primitives, each with its palette colour (times `tint`)
@@ -212,8 +223,11 @@ protected:
     // raises with the block. NOTE: the rig's bone labels are mirrored - the *L* arm is on the
     // player's RIGHT (the main-hand weapon), the *R* arm on their LEFT (the off-hand shield/dagger).
     // Built from the shared modular weapon_pieces (Character/Weapon.h).
+    // `wrist` turns the main-hand weapon within the hand (the swing's blade-over - see
+    // CharacterAnimator::weapon_wrist).
     void draw_role_weapon(const CharacterModel& model, const std::vector<Mat4>& jmats,
-                          PlayerRole role, const Equipment& eq);
+                          PlayerRole role, const Equipment& eq, bool offhand = true,
+                          const Quat& wrist = QuatIdentity);
     void draw_weapon(WeaponType type, const Mat4& hand, const CharacterPalette& pal,
                      EquipmentTier tier);
     const Mesh& shape_mesh(BoneShape s) const; // BoneShape -> the matching unit shape mesh
@@ -231,7 +245,10 @@ protected:
     void apply_idle_stance(const CharacterModel& model, std::vector<Quat>& pose, PlayerRole role,
                            f32 weight = 1.0f) const;
     void draw_planted_weapon(const CharacterModel& model, const std::vector<Mat4>& jmats,
-                             const Vec3& feet, PlayerRole role, const Equipment& eq);
+                             const Vec3& feet, PlayerRole role, const Equipment& eq, bool offhand = true);
+
+    // The hand-held LANTERN (L): the off-hand arm raised to hold it out ahead (blended by `weight`).
+    void apply_lantern_pose(const CharacterModel& model, std::vector<Quat>& pose, f32 weight) const;
 
     // Cast an ability by its index (0..kAbilityCount-1) for the local player: gate on the client
     // cooldown estimate, queue it for the server (as index+1), mirror the cooldown for the HUD, and
@@ -301,6 +318,13 @@ private:
         u8 last_buffs = 0;      // previous co-op buff bits - a rising edge pops floating combat text
         u8 last_shield = 0;     // previous Aegis strength - a fresh ward pops "WARDED!"
         u8 last_level = 0;      // previous networked level - a rise pops "LEVEL UP!" over them
+        bool lantern = false;   // holding a lit lantern out (local: instant; remote: from the snapshot)
+        Vec3 last_tip{0.0f};    // the sword tip last frame (the cut's smear is laid between the two)
+        bool tip_valid = false;
+        f32 lantern_w = 0.0f;   // eased 0..1 arm raise as the lantern comes out / is put away
+        u8 last_heavy = 0;      // previous networked heavy_seq - a change plays a remote heavy release
+        bool heavy_init = false;
+        bool charge_full = false; // the "fully charged" flare has played for the current wind-up
         f32 seen = 0.0f;        // seconds this visual has existed (a join-time restore isn't a level-up)
         SkinnedMesh body_skin;  // continuous body geometry + bone weights (built with the model)
         Mesh body_mesh;         // dynamic GPU mesh, re-skinned from the posed joints every frame
@@ -347,6 +371,10 @@ private:
         u8 last_health = 255;    // last networked health (0..255) - felled vs self-detonated sapper
         u8 last_action = 0;
         u8 last_status = 0;      // to detect a chill->shatter transition for the VFX
+        f32 hurt = 0.0f;         // hit flash (1 on a fresh wound, decays) - the body blanches + recoils
+        f32 gait = 0.0f;         // a wolf's run cycle (driven by distance covered)
+        f32 jaw = 0.0f;          // a wolf's jaw: eased open on a bite / snarl
+        Vec3 last_yaw_dir{1.0f, 0.0f, 0.0f}; // facing last frame (a wolf's body leans into its turns)
         SkinnedMesh body_skin;   // continuous body, built on first sight; re-skinned each frame
         Mesh body_mesh;          // dynamic GPU mesh (body)
         SkinnedMesh outfit_skin; // worn bandit leather/cloth, skinned like the body
@@ -733,6 +761,9 @@ private:
 
     void draw_character(PlayerVisual& v, const Vec3& feet, f32 yaw, bool seated = false,
                         int role = -1);
+    // The lantern itself, hanging from the raised off-hand: an iron frame round a glowing glass core
+    // that swings as the hero moves, plus its warm light (a real shadow-caster for the local player).
+    void draw_lantern(const CharacterModel& model, const std::vector<Mat4>& jmats, PlayerVisual& v, bool local);
 
     // ---- Village NPCs (server-authoritative; the player defends them) -------
     // Villagers are simulated on the server (wander/sleep/flee, killable by enemies)
@@ -755,6 +786,58 @@ private:
 
     // The left-click primary attack, role-specific - shared by the mouse button and the pad trigger.
     void primary_action();
+    // Hold-to-charge (Roles.h): the primary button went down / came up. A quick tap is the basic attack
+    // (primary_action); a hold winds up a HEAVY, unleashed on release (heavy_release).
+    void attack_press();
+    void attack_release();
+    void cancel_charge(); // a menu / overlay opened mid-wind-up: drop it (no attack)
+    void heavy_release();
+    // Per-frame wind-up: builds the charge while held, flares at a full charge, gathers VFX at the hand.
+    void update_charge(f32 dt);
+    // The visible weight of a heavy, for whoever threw it: the Knight's blow cracking the ground (at
+    // `feet` + its facing, `power` 0..1), a Hunter's drawn-bow snap, a caster's hurled orb.
+    void heavy_impact_fx(const Vec3& feet, f32 yaw, f32 power, PlayerRole role, bool local);
+    // The swirl of power gathering at a hero's weapon while they wind up a heavy (drawn every frame).
+    void draw_charge_fx(PlayerVisual& v, const std::vector<Mat4>& jmats, PlayerRole role, f32 charge);
+    // The charge gauge under the local hero (the HUD pass).
+    void draw_charge_meter(ui::DrawList& draw, f32 W, f32 H);
+    // A terrain edit arrived (a dig, a crater, raised earth): the dirt it throws up.
+    void deform_fx(const Vec3& center, f32 radius, f32 amount);
+
+    // ---- Side quests (ClientAppQuests.cpp) ---------------------------------------------------------
+    // The quest under way (nullptr if none) / the offers on the board of the town we're in.
+    const net::QuestState* active_quest() const;
+    // The notice board the local hero is standing at (its quests are listed), if any.
+    bool near_quest_board() const;
+    // The board's panel (offers + ACCEPT, or the quest under way + ABANDON), click rects stored.
+    void draw_quest_panel(ui::DrawList& draw, f32 W, f32 H, f32 ts);
+    bool quest_panel_click(const Vec2& p);
+    // The quest's place in the world: a bandit camp (tents, a fire, a war banner), the treasure X and
+    // chest, the moonpetals, a beacon over the site - and the waypoint arrow + completion banner.
+    void draw_quest_world();
+    void draw_quest_hud(ui::DrawList& draw, f32 W, f32 H, f32 ts);
+    void update_quest_fx(Timestep dt);
+    // Scripted screenshots (a hosted game): ALRYN_SCREEN=quest takes a side quest (ALRYN_QUEST_KIND
+    // 0..3 picks which) and stands the hero within sight of its site; =board stands them at the notice
+    // board. ALRYN_HOLD=1 holds the primary attack down (the heavy's wind-up + gauge).
+    void dev_quest_setup();
+    bool dev_setup_done_ = false;
+    f32 dev_setup_wait_ = 0.0f;
+
+    // ---- Enemy looks (ClientAppWorld.cpp) -------------------------------------------------------------
+    // A dire wolf (or the alpha, `alpha`): a lean low-poly quadruped with hackles, a snapping jaw and
+    // ember eyes, run-cycled from its motion; `action` crouches it (2) or stretches it into a pounce (4).
+    // `pose_root` (a felled wolf, lying where it fell) replaces the live posture with a fixed frame.
+    void draw_wolf(EnemyVisual& v, const net::EnemyState& en, const Vec3& tint, const Mat4* pose_root = nullptr);
+    // The ferocity layer on a raider: ember-lit eyes, war paint, spikes + horns by rank, the rage of the
+    // last raider standing, the warlord's banner, mud when bogged in a pit.
+    void draw_enemy_menace(EnemyVisual& v, const net::EnemyState& en, const std::vector<Mat4>& jmats, f32 scale);
+    // A felled foe keeps its body a moment: it pitches over and sinks away (enemy_deaths_).
+    void draw_enemy_deaths(Timestep dt);
+    // Knight: start a buffered sword swing once the current one allows (see swing_queued_).
+    void update_sword_pacing(f32 dt);
+    // The feedback of one of OUR attacks landing (marker, camera kick, sparks, impact sound).
+    void land_hit_feedback();
 
     // The yaw to draw a player with: ours (unless seated on the wagon) turns with our live aim
     // straight away rather than waiting on the server's echo; everyone else uses their networked
@@ -933,7 +1016,8 @@ private:
         f32 drag = 1.6f;
         Vec4 color{1.0f};
         Vec3 tail{-1.0f}; // colour it cools toward as it ages (x < 0 = keeps `color`)
-        u8 style = 0; // 0 = emissive, 1 = additive glow sprite (streaks along its velocity)
+        u8 style = 0; // 0 = emissive, 1 = additive glow sprite (streaks along its velocity), 2 = a soft
+                      // translucent puff of dust / smoke that billows out as it fades
     };
     std::vector<Particle> particles_;
 
@@ -1012,6 +1096,7 @@ private:
     PlayerVisual preview_; // the customise turntable avatar, dressed exactly as in game (rebuild_preview)
     CharacterAnimator preview_anim_;
     f32 preview_turn_ = 0.6f;
+    f32 preview_zoom_ = 0.0f; // 0 = full-length (hero roster) .. 1 = head + shoulders (the creator)
     ui::Rect customise_panel_{}; // the controls card; the preview fills the area left of it
     net::NetClient client_;
     std::unique_ptr<StreamingTerrain> terrain_;
@@ -1158,6 +1243,52 @@ private:
     bool pending_grab_ = false; // one-shot hitch/unhitch the nearest wagon
     bool pending_toss_ = false; // Ally Toss combo: one-shot hurl the nearest teammate (G)
     bool conduit_held_ = false; // Power Conduit combo: Cleric channelling a beam to an ally (hold V)
+    bool lantern_on_ = false;   // the local hero is holding a lit lantern out (toggled with L)
+    // Hold-to-charge heavy attacks (see attack_press / update_charge).
+    bool attack_held_ = false;  // the primary button (left mouse / right trigger) is down
+    f32 attack_hold_t_ = 0.0f;  // seconds it's been held
+    f32 charge_ = 0.0f;         // 0..1 the heavy's wind-up (after the tap window)
+    bool charge_full_ = false;  // the full-charge flare has played this hold
+    u8 heavy_seq_ = 0;          // bumps on each heavy released (sent every tick; the server acts on a change)
+    u8 heavy_power_ = 0;        // the charge (1..255) of the last heavy released
+    f32 heavy_face_lock_ = 0.0f; // the facing holds on a heavy's aim while the blow comes down
+    bool pending_dig_ = false;  // Q: a spade-strike at the aim this tick
+    // A Knight's heavy blow lands a beat after the release: its ground-cracking VFX wait for it.
+    struct PendingImpact {
+        Vec3 feet{0.0f};
+        f32 yaw = 0.0f;
+        f32 power = 0.0f;
+        f32 in = 0.0f;
+        PlayerRole role = PlayerRole::Knight;
+        bool local = false;
+    };
+    std::vector<PendingImpact> pending_impacts_;
+    // Side quests: the board's panel (click rects) + the pick / abandon requests (held a few ticks).
+    ui::Rect quest_accept_rects_[kQuestOffers] = {};
+    u32 quest_accept_ids_[kQuestOffers] = {};
+    ui::Rect quest_abandon_rect_{};
+    u32 pending_quest_pick_ = 0;
+    int quest_pick_hold_ = 0;
+    int quest_abandon_hold_ = 0;
+    u32 last_quest_done_ = 0;      // the last quest whose completion we celebrated
+    f32 quest_banner_ = 0.0f;      // "QUEST COMPLETE" banner timer
+    std::string quest_banner_text_;
+    u8 last_quest_progress_ = 0;   // to pop "+1" when the active quest advances
+    u32 last_quest_id_ = 0;
+    // A felled foe's body, kept a moment to pitch over + sink into the ground (by its last pose).
+    struct EnemyDeath {
+        EnemyVisual v;
+        Vec3 pos{0.0f};
+        f32 yaw = 0.0f;
+        f32 t = 0.0f;
+        f32 scale = 1.0f;
+        Vec3 fall{1.0f, 0.0f, 0.0f}; // the way it topples (away from the blow)
+    };
+    std::vector<EnemyDeath> enemy_deaths_;
+    Mesh wolf_body_mesh_;   // a dire wolf (body + head), faces +X; legs + jaw drawn separately
+    Mesh wolf_leg_mesh_;
+    Mesh wolf_jaw_mesh_;
+    Mesh tent_mesh_;        // a bandit camp's ragged A-frame tent
     // Controller state. `using_gamepad_` is the active input device (auto-switched: any pad activity
     // selects it, any mouse motion selects KBM) and decides whether the aim follows the right stick
     // or the cursor. The trigger edges are tracked here because triggers are analog axes, not buttons.
@@ -1266,6 +1397,10 @@ private:
     f32 hit_flash_ = 0.0f;   // red damage-flash intensity (decays)
     f32 last_health_ = 1.0f; // last seen local health fraction (to detect hits)
     f32 hit_marker_ = 0.0f;  // hit-marker pop intensity when OUR attack lands (decays); drawn at screen centre
+    f32 hit_fx_hold_ = -1.0f; // a landed sword blow's feedback, held until our swing cuts through (s; < 0 none)
+    f32 swing_ready_in_ = 0.0f; // Knight: seconds until the next sword swing may start (the swing's pacing)
+    bool swing_queued_ = false; // Knight: a click arrived mid-swing - it chains as soon as the pacing allows
+    f32 cam_shake_ = 0.0f;   // camera kick when a blow lands (decays fast) - sells the weight of a hit
     u8 last_hit_fx_ = 0;     // last seen local hit_fx counter (server bumps it on a confirmed hit)
     bool hit_fx_init_ = false; // seen the first snapshot value yet (so a fresh join doesn't pop a marker)
     u32 last_money_ = 0;     // last seen party wallet, to pop a "+$n" when loot/pay lands

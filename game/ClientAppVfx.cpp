@@ -18,7 +18,15 @@ void ClientApp::spawn_primary_vfx() {
             dir = glm::normalize(d);
         }
     }
-    if (role_ == PlayerRole::Hunter) {
+    if (role_ == PlayerRole::Mage) {
+        // The arcane bolt leaves the hand in a blue-violet spark.
+        emit(hand, Vec3{0.0f}, Vec4{0.7f, 0.65f, 1.0f, 1.0f}, 0.14f, 0.32f, 1);
+        for (int i = 0; i < 12; ++i) {
+            emit(hand + rand_dir() * 0.15f, dir * frand(3.0f, 7.0f) + rand_dir() * 1.2f, Vec4{0.6f, 0.55f, 1.0f, 0.9f},
+                 0.35f, 0.09f, 1);
+        }
+        flash_light(hand, Vec3{0.55f, 0.5f, 1.0f}, 1.6f, 5.0f, 0.18f);
+    } else if (role_ == PlayerRole::Hunter) {
         emit(hand, Vec3{0.0f}, Vec4{0.85f, 1.0f, 0.7f, 1.0f}, 0.12f, 0.3f, 1); // bow flash
         for (int i = 0; i < 12; ++i) {
             emit(hand, dir * frand(4.0f, 9.0f) + rand_dir() * 1.0f,
@@ -165,6 +173,20 @@ void ClientApp::update_particles(Timestep dt) {
                      Vec4{0.95f, 0.7f, 0.35f, 0.45f}, 0.35f, 0.12f, 1);
             } else if (pr.kind == 3) {
                 emit(pr.position, Vec3{0.0f}, Vec4{0.85f, 0.95f, 0.7f, 0.5f}, 0.25f, 0.07f, 1);
+            } else if (pr.kind == 8) { // drawn shot: a bright streaming wake
+                emit(pr.position, back * 1.5f + rand_dir() * 0.3f, Vec4{0.75f, 1.0f, 0.55f, 0.8f}, 0.35f, 0.1f, 1);
+            } else if (pr.kind == 9) { // sunburst: golden motes shed in a spiral
+                for (int e = 0; e < 2; ++e) {
+                    emit(pr.position + rand_dir() * 0.3f, back * 1.5f + rand_dir() * 0.8f, Vec4{1.0f, 0.88f, 0.5f, 0.9f},
+                         0.5f, 0.13f, 1, -0.4f);
+                }
+            } else if (pr.kind == 10) { // comet: a roiling violet tail of fire
+                for (int e = 0; e < 3; ++e) {
+                    emit_ember(pr.position + rand_dir() * 0.25f, back * frand(1.5f, 3.5f) + rand_dir() * 0.9f,
+                               Vec3{0.92f, 0.78f, 1.0f}, Vec3{0.35f, 0.08f, 0.55f}, frand(0.35f, 0.6f), frand(0.2f, 0.38f), -0.5f);
+                }
+            } else if (pr.kind == 11) { // arcane bolt: a faint shimmer
+                emit(pr.position, rand_dir() * 0.4f, Vec4{0.6f, 0.55f, 1.0f, 0.85f}, 0.3f, 0.09f, 1);
             }
         }
         // Motes rising out of each ground aura, tinted by its kind (heal = gentle, drifting;
@@ -352,6 +374,12 @@ void ClientApp::draw_particles() {
             const f32 speed = glm::length(p.vel);
             const Vec3 tail = speed > 2.5f ? p.vel * std::min(0.04f, 1.0f / speed) : Vec3{0.0f};
             renderer_->draw_sprite(p.pos, p.pos - tail, sz * 1.25f, col, 0.55f);
+        } else if (p.style == 2) {
+            // Dust / smoke: an alpha-blended puff that swells as it thins out.
+            renderer_->draw_transparent(shape_sphere_,
+                                        glm::translate(Mat4{1.0f}, p.pos) *
+                                            glm::scale(Mat4{1.0f}, Vec3{p.size * (1.0f + 1.2f * (1.0f - t))}),
+                                        Vec4{rgb, p.color.a * t * t});
         } else {
             renderer_->draw_emissive(shape_sphere_,
                                      glm::translate(Mat4{1.0f}, p.pos) * glm::scale(Mat4{1.0f}, Vec3{sz}),
@@ -1222,6 +1250,167 @@ void ClientApp::draw_weather() {
     ui::DrawList draw{*renderer_};
     draw.rect(Vec4{0.0f, 0.0f, W, H},
               Vec4{0.88f, 0.92f, 1.0f, lightning_ * 0.45f * std::max(weather_amt_, 0.5f)});
+}
+
+// ---- Charged heavy attacks --------------------------------------------------------------------
+
+namespace {
+// The colour of a role's gathered power (the wind-up glow, the release flash).
+Vec3 heavy_color(PlayerRole role) {
+    switch (role) {
+        case PlayerRole::Knight: return Vec3{1.0f, 0.72f, 0.32f};  // molten steel
+        case PlayerRole::Hunter: return Vec3{0.72f, 1.0f, 0.55f};  // a keen green-gold
+        case PlayerRole::Cleric: return Vec3{1.0f, 0.9f, 0.5f};    // holy sunlight
+        case PlayerRole::Mage: return Vec3{0.72f, 0.42f, 1.0f};    // arcane violet
+    }
+    return Vec3{1.0f};
+}
+} // namespace
+
+void ClientApp::draw_charge_fx(PlayerVisual& v, const std::vector<Mat4>& jmats, PlayerRole role, f32 charge) {
+    if (charge <= 0.01f) {
+        v.charge_full = false;
+        return;
+    }
+    // Where the power gathers: the Knight's blade tip (laid back overhead), the Hunter's bow hand, the
+    // head of a caster's raised staff.
+    const Mat4 hand = hand_frame(v.model, jmats, BonePart::LowerArmL);
+    Vec3 at = Vec3{hand[3]};
+    if (role == PlayerRole::Knight) {
+        const Mat4 grip = hand * glm::mat4_cast(v.animator.weapon_wrist(v.model));
+        at = Vec3{(grip * glm::translate(Mat4{1.0f}, Vec3{0.0f, -0.95f, 0.0f}))[3]};
+    } else if (role != PlayerRole::Hunter) {
+        at = Vec3{(hand * glm::translate(Mat4{1.0f}, Vec3{0.0f, 0.45f, 0.0f}))[3]};
+    }
+    const Vec3 col = heavy_color(role);
+    const bool full = charge >= kFullCharge;
+    const f32 pulse = full ? 0.75f + 0.25f * std::sin(elapsed_ * 22.0f) : 1.0f;
+    renderer_->draw_sprite(at, (0.12f + 0.42f * charge) * pulse, Vec4{col, 0.5f + 0.9f * charge}, 0.0f);
+    renderer_->draw_sprite(at, 0.06f + 0.12f * charge, Vec4{glm::mix(col, Vec3{1.0f}, 0.6f), 1.2f}, 1.0f);
+    fx_light(at, col, (0.6f + 2.4f * charge) * pulse, 4.0f + 3.0f * charge);
+    // Motes drawn in from all round toward the gathering point, faster as it fills.
+    const int motes = 1 + static_cast<int>(charge * 3.0f);
+    for (int i = 0; i < motes; ++i) {
+        const Vec3 from = at + rand_dir() * frand(0.6f, 1.1f);
+        emit(from, (at - from) * (2.5f + 2.5f * charge), Vec4{col, 0.85f}, 0.3f, 0.06f + 0.04f * charge, 1, 0.0f, 0.0f);
+    }
+    // A ring at the feet tightening in as the charge builds.
+    const Vec3 feet = Vec3{jmats.front()[3]} - Vec3{0.0f, v.model.hip_height() - 0.06f, 0.0f};
+    sprite_circle(feet, Vec3{1.0f, 0.0f, 0.0f}, Vec3{0.0f, 0.0f, 1.0f}, 1.7f - 0.9f * charge, 32, 0.05f + 0.04f * charge,
+                  Vec4{col, (0.25f + 0.55f * charge) * pulse}, 0.4f);
+    if (full && !v.charge_full) {
+        // Fully wound: a flare of light at the weapon.
+        v.charge_full = true;
+        emit_burst(at, Vec4{glm::mix(col, Vec3{1.0f}, 0.4f), 1.0f}, 26, 4.5f, 0.4f, 0.1f, 1, 0.5f);
+        flash_light(at, col, 5.0f, 8.0f, 0.3f);
+    }
+}
+
+void ClientApp::heavy_impact_fx(const Vec3& feet, f32 yaw, f32 power, PlayerRole role, bool local) {
+    const Vec3 fwd{std::cos(yaw), 0.0f, std::sin(yaw)};
+    const Vec3 col = heavy_color(role);
+    const bool full = power >= kFullCharge;
+    Audio* a = audio();
+    const f32 near = glm::length(feet - local_feet());
+    if (role == PlayerRole::Knight) {
+        // EARTHSPLITTER: the blade bites into the ground ahead - dust rolling out in a ring, clods and
+        // stones flung up, sparks off the steel; a full charge throws a shockwave of light round it.
+        Vec3 at = feet + fwd * 1.7f;
+        if (terrain_ != nullptr) {
+            if (const auto g = terrain_->raycast(at + Vec3{0.0f, 3.0f, 0.0f}, Vec3{0.0f, -1.0f, 0.0f}, 8.0f)) {
+                at = *g;
+            }
+        }
+        const f32 k = 0.5f + 0.5f * power;
+        emit_ring(at, Vec4{0.6f, 0.53f, 0.42f, 0.55f}, 14 + static_cast<int>(16.0f * power), 3.0f + 5.0f * power, 0.9f,
+                  0.3f + 0.2f * power, 2);
+        for (int i = 0; i < 10 + static_cast<int>(18.0f * power); ++i) {
+            Vec3 d = rand_dir();
+            d.y = std::abs(d.y) + 0.7f;
+            emit(at + Vec3{0.0f, 0.15f, 0.0f}, d * frand(2.5f, 6.0f) * k, Vec4{0.34f, 0.29f, 0.24f, 1.0f},
+                 frand(0.6f, 1.1f), frand(0.07f, 0.16f), 0, 14.0f, 0.4f);
+        }
+        emit_burst(at + Vec3{0.0f, 0.3f, 0.0f}, Vec4{1.0f, 0.86f, 0.52f, 1.0f}, 14 + static_cast<int>(10.0f * power), 6.5f,
+                   0.35f, 0.07f, 1, 2.0f, 6.0f);
+        flash_light(at + Vec3{0.0f, 0.6f, 0.0f}, col, 3.0f + 4.0f * power, 9.0f, 0.35f);
+        if (full) {
+            emit_ring(at, Vec4{col, 0.95f}, 48, kQuakeRadius * 2.4f, 0.45f, 0.24f, 1);
+            emit_ring(at, Vec4{0.55f, 0.48f, 0.38f, 0.5f}, 24, kQuakeRadius * 1.6f, 1.2f, 0.5f, 2);
+            for (int i = 0; i < 6; ++i) { // cracks of light racing out through the ground
+                const f32 ang = yaw + TwoPi * static_cast<f32>(i) / 6.0f + frand(-0.3f, 0.3f);
+                const Vec3 d{std::cos(ang), 0.0f, std::sin(ang)};
+                beam(at + Vec3{0.0f, 0.08f, 0.0f}, at + d * kQuakeRadius * frand(0.8f, 1.1f) + Vec3{0.0f, 0.08f, 0.0f},
+                     Vec4{col, 0.85f}, 0.09f, 0.5f, 1, 26.0f);
+            }
+            if (local) {
+                combat_text(at, "EARTHSPLITTER!", Vec4{1.0f, 0.78f, 0.4f, 1.0f}, 26.0f);
+            }
+        }
+        if (local) {
+            cam_shake_ = std::max(cam_shake_, 1.2f + 0.9f * power);
+        } else if (near < 14.0f) {
+            cam_shake_ = std::max(cam_shake_, 0.6f * power);
+        }
+        if (a != nullptr) {
+            a->play_at(SfxId::Thud, at, 0.8f + 0.2f * power, 0.85f - 0.15f * power);
+            a->play_at(SfxId::SwordHit, at, 0.7f, 0.7f);
+            if (full) {
+                a->play_at(SfxId::Explosion, at, 0.55f, 1.15f);
+            }
+        }
+        return;
+    }
+    // The ranged heavies leave the hand in a flash of their colour.
+    const Vec3 hand = feet + Vec3{0.0f, 1.2f, 0.0f} + fwd * 0.55f;
+    emit(hand, Vec3{0.0f}, Vec4{glm::mix(col, Vec3{1.0f}, 0.4f), 1.0f}, 0.16f, 0.5f + 0.5f * power, 1);
+    for (int i = 0; i < 14 + static_cast<int>(16.0f * power); ++i) {
+        emit(hand + rand_dir() * 0.15f, fwd * frand(3.0f, 9.0f) + rand_dir() * 1.4f, Vec4{col, 0.95f}, frand(0.25f, 0.45f),
+             0.08f + 0.05f * power, 1);
+    }
+    flash_light(hand, col, 2.5f + 3.5f * power, 7.0f, 0.25f);
+    if (local) {
+        cam_shake_ = std::max(cam_shake_, 0.35f + 0.4f * power);
+    }
+    if (a != nullptr) {
+        if (role == PlayerRole::Hunter) {
+            a->play_at(SfxId::BowShot, hand, 1.0f, 0.78f - 0.12f * power); // a deeper, heavier twang
+        } else {
+            a->play_at(SfxId::CastMagic, hand, 0.95f, role == PlayerRole::Cleric ? 0.8f : 0.66f);
+        }
+    }
+}
+
+void ClientApp::deform_fx(const Vec3& center, f32 radius, f32 amount) {
+    if (glm::length(center - local_feet()) > 70.0f) {
+        return; // too far off to see
+    }
+    const Vec3 dirt{0.36f, 0.27f, 0.18f};
+    Audio* a = audio();
+    if (amount > 0.0f) {
+        // Earth thrown out of the hole: clods arcing up + falling back, a puff of dust. A crater (a big,
+        // deep edit) throws far more, further.
+        const f32 big = glm::clamp(radius * amount, 0.5f, 3.5f);
+        const int n = 8 + static_cast<int>(big * 9.0f);
+        for (int i = 0; i < n; ++i) {
+            Vec3 d = rand_dir();
+            d.y = std::abs(d.y) + 0.8f;
+            emit(center + Vec3{frand(-0.3f, 0.3f), 0.25f, frand(-0.3f, 0.3f)}, d * frand(1.8f, 3.0f + big * 1.4f),
+                 Vec4{dirt * frand(0.8f, 1.15f), 1.0f}, frand(0.6f, 1.0f), frand(0.06f, 0.1f + 0.03f * big), 0, 12.0f, 0.3f);
+        }
+        emit_burst(center + Vec3{0.0f, 0.35f, 0.0f}, Vec4{0.56f, 0.49f, 0.39f, 0.45f}, 5 + static_cast<int>(big * 4.0f),
+                   1.2f + big * 0.6f, 1.2f, 0.28f + radius * 0.1f, 2, 0.5f);
+        if (a != nullptr) {
+            a->play_at(big > 1.6f ? SfxId::Thud : SfxId::Dig, center, std::min(1.0f, 0.55f + big * 0.15f),
+                       frand(0.92f, 1.08f));
+        }
+    } else {
+        // Raised earth: a mound shouldering up out of the ground in a shower of soil + grass.
+        emit_burst(center + Vec3{0.0f, 0.4f, 0.0f}, Vec4{dirt, 0.95f}, 14, 3.0f, 0.7f, 0.1f, 0, 3.0f, 10.0f);
+        emit_burst(center + Vec3{0.0f, 0.5f, 0.0f}, Vec4{0.38f, 0.52f, 0.24f, 0.9f}, 8, 2.4f, 0.6f, 0.07f, 0, 2.5f, 9.0f);
+        if (a != nullptr) {
+            a->play_at(SfxId::Dig, center, 0.7f, 0.75f);
+        }
+    }
 }
 
 } // namespace alryn::game

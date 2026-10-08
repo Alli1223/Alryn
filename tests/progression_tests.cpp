@@ -140,6 +140,7 @@ TEST_CASE("Progression: names, colours + hero progress survive the wire") {
     in.name = "Aldric the Bold";
     in.color_pref = 5;
     in.learn = 9;
+    in.lantern = true;
     in.restore = true;
     in.progress = HeroProgress{1234u, 0x12u, 0x05u, 4u, 2u, 0x0021u, 17u, 3u, 2u};
     ByteWriter w;
@@ -150,6 +151,7 @@ TEST_CASE("Progression: names, colours + hero progress survive the wire") {
     CHECK(out.name == "Aldric the Bold");
     CHECK(out.color_pref == 5);
     CHECK(out.learn == 9);
+    CHECK(out.lantern);
     CHECK(out.restore);
     CHECK(out.progress == in.progress);
 
@@ -164,6 +166,7 @@ TEST_CASE("Progression: names, colours + hero progress survive the wire") {
     s.players[0].id = 3;
     s.players[0].color = 6;
     s.players[0].level = 7;
+    s.players[0].lantern = 1;
     s.players[0].name = "Wren";
     s.players[0].progress.xp = 2222u;
     s.players[0].progress.journey = 9u;
@@ -175,6 +178,7 @@ TEST_CASE("Progression: names, colours + hero progress survive the wire") {
     REQUIRE(back.players.size() == 1);
     CHECK(back.players[0].color == 6);
     CHECK(back.players[0].level == 7);
+    CHECK(back.players[0].lantern == 1);
     CHECK(back.players[0].name == "Wren");
     CHECK(back.players[0].progress.xp == 2222u);
     CHECK(back.players[0].progress.journey == 9u);
@@ -383,4 +387,16 @@ TEST_CASE("GameServer: XP is shared for raiders felled nearby and the journey pa
     p.pump(6);
     CHECK(p.server.players().at(id).journey > static_cast<u8>(JourneyGoal::ReadContract));
     CHECK(p.server.players().at(id).xp >= xp0 + journey_step(0).xp);
+}
+
+TEST_CASE("GameServer: a Knight holding a lantern out has stowed the shield (no block)") {
+    GameServer::ServerPlayer p;
+    p.role = PlayerRole::Knight;
+    p.input.block = true;
+    const f32 guarded = p.mitigated(100.0f);
+    p.input.lantern = true; // the lantern takes the shield hand
+    const f32 lantern = p.mitigated(100.0f);
+    CHECK(lantern > guarded + 30.0f); // the block's big reduction is gone...
+    p.input.block = false;
+    CHECK(p.mitigated(100.0f) == doctest::Approx(lantern)); // ...it's just an unguarded Knight
 }

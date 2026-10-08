@@ -82,6 +82,7 @@ void write(ByteWriter& w, const PlayerInput& in) {
     w.write_u8(in.upgrade);
     w.write_u8(in.toss ? 1 : 0);
     w.write_u8(in.channel ? 1 : 0);
+    w.write_u8(in.lantern ? 1 : 0);
     w.write_u8(in.color_pref);
     w.write_string(in.name);
     w.write_u8(in.learn);
@@ -89,6 +90,11 @@ void write(ByteWriter& w, const PlayerInput& in) {
     if (in.restore) {
         write_progress(w, in.progress); // only while restoring - a normal input stays small
     }
+    w.write_u8(in.charge);
+    w.write_u8(in.heavy_seq);
+    w.write_u8(in.heavy_power);
+    w.write_u32(in.quest_pick);
+    w.write_u8(in.quest_abandon ? 1 : 0);
 }
 
 bool read(ByteReader& r, PlayerInput& in) {
@@ -122,6 +128,7 @@ bool read(ByteReader& r, PlayerInput& in) {
     in.upgrade = r.read_u8();
     in.toss = r.read_u8() != 0;
     in.channel = r.read_u8() != 0;
+    in.lantern = r.read_u8() != 0;
     in.color_pref = r.read_u8();
     in.name = r.read_string();
     in.learn = r.read_u8();
@@ -129,6 +136,11 @@ bool read(ByteReader& r, PlayerInput& in) {
     if (in.restore) {
         read_progress(r, in.progress);
     }
+    in.charge = r.read_u8();
+    in.heavy_seq = r.read_u8();
+    in.heavy_power = r.read_u8();
+    in.quest_pick = r.read_u32();
+    in.quest_abandon = r.read_u8() != 0;
     return r.ok();
 }
 
@@ -173,8 +185,12 @@ void write(ByteWriter& w, const Snapshot& s) {
         }
         w.write_u8(p.color);
         w.write_u8(p.level);
+        w.write_u8(p.lantern);
         w.write_string(p.name);
         write_progress(w, p.progress);
+        w.write_u8(p.charge);
+        w.write_u8(p.heavy_seq);
+        w.write_u8(p.heavy_power);
     }
     w.write_u16(static_cast<u16>(s.projectiles.size()));
     for (const ProjectileState& pr : s.projectiles) {
@@ -263,6 +279,25 @@ void write(ByteWriter& w, const Snapshot& s) {
         w.write_f32(b.radius);
         w.write_u8(b.strength);
     }
+    w.write_u16(static_cast<u16>(s.quests.size()));
+    for (const QuestState& q : s.quests) {
+        w.write_u32(q.id);
+        w.write_u8(q.kind);
+        w.write_u8(q.phase);
+        w.write_u8(q.danger);
+        w.write_u8(q.progress);
+        w.write_u8(q.goal);
+        w.write_u32(q.reward);
+        w.write_vec3(q.site);
+        w.write_vec3(q.board);
+    }
+    w.write_u16(static_cast<u16>(s.quest_items.size()));
+    for (const QuestItemState& it : s.quest_items) {
+        w.write_u32(it.id);
+        w.write_vec3(it.position);
+        w.write_u8(it.kind);
+        w.write_u8(it.state);
+    }
 }
 
 bool read(ByteReader& r, Snapshot& s) {
@@ -309,8 +344,12 @@ bool read(ByteReader& r, Snapshot& s) {
         }
         p.color = r.read_u8();
         p.level = r.read_u8();
+        p.lantern = r.read_u8();
         p.name = r.read_string();
         read_progress(r, p.progress);
+        p.charge = r.read_u8();
+        p.heavy_seq = r.read_u8();
+        p.heavy_power = r.read_u8();
         s.players.push_back(p);
     }
     const u16 proj_count = r.read_u16();
@@ -439,6 +478,33 @@ bool read(ByteReader& r, Snapshot& s) {
         b.radius = r.read_f32();
         b.strength = r.read_u8();
         s.bubbles.push_back(b);
+    }
+    const u16 quest_count = r.read_u16();
+    s.quests.clear();
+    s.quests.reserve(quest_count);
+    for (u16 i = 0; i < quest_count && r.ok(); ++i) {
+        QuestState q;
+        q.id = r.read_u32();
+        q.kind = r.read_u8();
+        q.phase = r.read_u8();
+        q.danger = r.read_u8();
+        q.progress = r.read_u8();
+        q.goal = r.read_u8();
+        q.reward = r.read_u32();
+        q.site = r.read_vec3();
+        q.board = r.read_vec3();
+        s.quests.push_back(q);
+    }
+    const u16 item_count = r.read_u16();
+    s.quest_items.clear();
+    s.quest_items.reserve(item_count);
+    for (u16 i = 0; i < item_count && r.ok(); ++i) {
+        QuestItemState it;
+        it.id = r.read_u32();
+        it.position = r.read_vec3();
+        it.kind = r.read_u8();
+        it.state = r.read_u8();
+        s.quest_items.push_back(it);
     }
     return r.ok();
 }

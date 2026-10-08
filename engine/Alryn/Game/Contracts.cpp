@@ -527,7 +527,7 @@ void GameServer::accept_contract(const Wagon& chosen, WagonMode mode) {
             cargo_.push_back({next_good_id_++, Vec2{glm::mix(x0, x1, fx), glm::mix(z0, z1, fz)}, Vec2{0.0f}});
         }
     }
-    ambush_.clear();
+    std::erase_if(ambush_, [](const Enemy& e) { return e.quest == 0; }); // (a side quest's camp stays)
     offers_.clear();
     votes_.clear();
 
@@ -1108,7 +1108,7 @@ void GameServer::append_wagon_colliders(std::vector<Collider>& out) const {
 
 // Shared teardown when a contract ends (delivered or wrecked): clear the haul state.
 void GameServer::end_contract_cleanup() {
-    ambush_.clear();
+    std::erase_if(ambush_, [](const Enemy& e) { return e.quest == 0; }); // the haul's raiders go; a quest's stay
     tower_ = 0;
     pilot_ = 0;
     driver_.reset();
@@ -1463,14 +1463,12 @@ void GameServer::toss_impact(const Vec3& at, Race race) {
 
 void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
     Wagon& w = active_;
-    // Debug: stop the wagon ambushes entirely - clear any raiders in progress and never spawn more.
+    // Debug: stop the wagon ambushes entirely - clear any raiders in progress and never spawn more
+    // (a side quest's camp / den is left alone).
     if (debug_no_ambush_) {
-        ambush_.clear();
+        std::erase_if(ambush_, [](const Enemy& e) { return e.quest == 0; });
         return;
     }
-    // So ambushers chasing the cart cross bridges with it instead of dropping into the river.
-    const u32 wseed = sampler_.seed();
-    const auto bridge = [wseed](f32 x, f32 z) { return roads::bridge_height(x, z, wseed); };
 
     // Spawn ambushers in up to two waves as the wagon travels.
     auto spawn_wave = [&](u32 count) {
@@ -1499,6 +1497,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
     };
     // Hold the ambush until the wagon is actually OUTSIDE the town walls, so raiders never
     // spawn inside the town while it's still parked / crossing / being hitched.
+    const u32 wseed = sampler_.seed();
     const bool left_town =
         glm::length(Vec2{w.position.x - w.source.x, w.position.z - w.source.y}) > w.source_half + 4.0f;
     // Towns are safe ground, wherever they are on the route: no fresh raiders spawn while the
@@ -1533,29 +1532,91 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
     // Not inside a town, though: a wheel shed within the walls is a safe, guarded repair.
     if (wheel_off_ && left_town && !in_town) {
         bandit_cd_ -= dt.seconds;
-        if (bandit_cd_ <= 0.0f && ambush_.size() < kRepairBanditCap) {
+        const usize raiders = static_cast<usize>(
+            std::count_if(ambush_.begin(), ambush_.end(), [](const Enemy& e) { return e.quest == 0; }));
+        if (bandit_cd_ <= 0.0f && raiders < kRepairBanditCap) {
             spawn_wave(kBanditWaveSize);
             bandit_cd_ = kBanditWaveInterval;
         }
     }
 
-    // Steer ambushers at the nearest player (else the wagon) and have them strike.
+    // FIELD REPAIR: between waves (no raiders alive), a player staying near the cart patches it up,
+    // mending its health slowly - so clearing a wave then tending the cart lets a battered haul recover.
+    const bool raiders_left =
+        std::any_of(ambush_.begin(), ambush_.end(), [](const Enemy& e) { return e.quest == 0; });
+    if (w.health > 0.0f && !raiders_left) {
+        bool tended = false;
+        for (const auto& [pid, pl] : players_) {
+            if (glm::length(pl.controller.position() - w.position) < kFieldRepairRange) {
+                tended = true;
+                break;
+            }
+        }
+        w.health = field_repair(w.health, rig_max_health(rig_level_), tended, dt.seconds);
+    }
+}
+
+bool GameServer::crater(const Vec3& at, f32 radius, f32 depth) {
+    const u32 seed = sampler_.seed();
+    // Towns are paved + built on (a hole under a cottage would leave it floating), bridges span rivers,
+    // a crater in the water is invisible - and the world can only hold so many edits.
+    if (worldgen::inside_village(at.x, at.z, seed, 6.0f) || roads::bridge_height(at.x, at.z, seed) > -1e8f ||
+        worldgen::height(at.x, at.z, seed) < worldgen::water_level + 0.4f ||
+        sampler_.edits().size() >= kMaxCraterEdits) {
+        return false;
+    }
+    // Sit the bowl on the ground under the blast (an orb may burst at chest height on a raider).
+    const DensitySampler density = sampler_.as_sampler();
+    Vec3 c = at;
+    if (const auto g = raycast_density(density, Vec3{at.x, at.y + 4.0f, at.z}, Vec3{0.0f, -1.0f, 0.0f}, 12.0f)) {
+        c = *g;
+    }
+    deform(c, radius, depth);
+    return true;
+}
+
+void GameServer::deform(const Vec3& center, f32 radius, f32 amount) {
+    sampler_.add_edit(center, radius, amount);
+    server_.broadcast_deform(net::DeformEvent{center, radius, amount});
+}
+
+void GameServer::update_combat(Timestep dt, const DensitySampler& density) {
+    // The wagon is only a target (and a thing to defend) while a haul is under way.
+    Wagon* const wagon = contract_phase_ == ContractPhase::Active ? &active_ : nullptr;
+    // So ambushers chasing the cart cross bridges with it instead of dropping into the river.
+    const u32 wseed = sampler_.seed();
+    const auto bridge = [wseed](f32 x, f32 z) { return roads::bridge_height(x, z, wseed); };
+    // A haul's raiders + a quest's camp are separate fights: the lone-last-raider enrage looks at its
+    // own group only.
+    auto group_alive = [&](u32 quest) {
+        return static_cast<usize>(std::count_if(ambush_.begin(), ambush_.end(), [quest](const Enemy& o) {
+            return o.quest == quest && o.alive && o.health > 0.0f;
+        }));
+    };
+
+    // Steer each hostile at the nearest player (a raider falls back on the wagon; a quest's guards
+    // hold their camp) and have them strike.
     for (Enemy& e : ambush_) {
         if (collision_) {
             collision_->gather(e.position, collider_scratch_);
         }
-        append_walls(e.position, collider_scratch_); // ambushers steer around Mage rock walls too
+        append_walls(e.position, collider_scratch_); // hostiles steer around Mage rock walls too
         if (e.taunt_cd > 0.0f) {
             e.taunt_cd -= dt.seconds;
         }
+        // EARTHWORKS: wading a dug pit / crater bogs it down (the ground's sunk below its natural lie).
+        const f32 mire = mire_mult(worldgen::height(e.position.x, e.position.z, wseed) - e.position.y);
+        e.mired = mire < 0.999f;
         if (e.stagger > 0.0f) {
             // Reeling from a heavy hit: no movement or attack this frame (step_enemy still resolves
             // knockback + terrain + ticks the stagger timer down), opening a follow-up combo window.
             step_enemy(e, density, collider_scratch_, e.position, dt, 0.0f, bridge);
             continue;
         }
-        Vec3 goal = w.position;
-        f32 best = kAggroRadius;
+        Wagon* const w = e.quest == 0 ? wagon : nullptr; // quest foes have no interest in the cart
+        const f32 aggro = e.quest != 0 ? kQuestAggro : kAggroRadius;
+        Vec3 goal = w != nullptr ? w->position : e.home;
+        f32 best = aggro;
         ServerPlayer* victim = nullptr;
         // A Knight's taunt overrides target selection: the enemy fixates on the taunter.
         if (e.taunt_cd > 0.0f) {
@@ -1574,16 +1635,23 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                 goal = pl.controller.position();
             }
         }
+        // A camp's guards give up a chase that drags them too far from home and go back to it.
+        if (e.quest != 0 && e.taunt_cd <= 0.0f &&
+            glm::length(Vec2{e.position.x - e.home.x, e.position.z - e.home.z}) > kQuestLeash) {
+            victim = nullptr;
+            goal = e.home;
+            best = aggro;
+        }
         // VIP ESCORT: on a Passengers haul the raiders press the COACH itself (the noble is the
         // prize) unless a defender stands markedly nearer - so the party must bodyguard the
         // carriage, not just kite. A Knight's taunt still overrides (the tank can peel them off).
-        if (static_cast<CargoKind>(w.cargo_kind) == CargoKind::Passengers && e.taunt_cd <= 0.0f &&
-            victim != nullptr) {
-            const f32 dw = glm::length(w.position - e.position);
+        if (w != nullptr && static_cast<CargoKind>(w->cargo_kind) == CargoKind::Passengers &&
+            e.taunt_cd <= 0.0f && victim != nullptr) {
+            const f32 dw = glm::length(w->position - e.position);
             if (best >= dw * 0.8f) {
                 victim = nullptr;
-                goal = w.position;
-                best = kAggroRadius;
+                goal = w->position;
+                best = aggro;
             }
         }
 
@@ -1591,13 +1659,63 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
         // their goal they close at kApproachSpeedMult, easing back to normal combat pace as
         // they arrive - the ambush is visible coming in but lands just as fast.
         const f32 sprint =
-            1.0f + (kApproachSpeedMult - 1.0f) *
-                       glm::smoothstep(kAggroRadius, kAmbushSpawnRadius,
-                                       glm::length(goal - e.position));
+            (1.0f + (kApproachSpeedMult - 1.0f) *
+                        glm::smoothstep(kAggroRadius, kAmbushSpawnRadius, glm::length(goal - e.position))) *
+            mire;
+
+        if (is_beast(e.kind)) {
+            // DIRE WOLF: lope in, crouch (the telegraph) and POUNCE from mid-range, then worry the
+            // hero with quick bites. The pack never strays far from its den.
+            const bool alpha = e.kind == kEnemyAlpha;
+            if (e.slam_windup > 0.0f) {
+                e.slam_windup -= dt.seconds; // (reused as the pounce cooldown for beasts)
+            }
+            if (e.pounce > 0.0f) { // crouched, about to spring
+                e.pounce -= dt.seconds;
+                step_enemy(e, density, collider_scratch_, e.position, dt, 0.0f, bridge);
+                if (e.pounce <= 0.0f) {
+                    e.pounce = -kPounceTime; // airborne
+                }
+                continue;
+            }
+            if (e.pounce < 0.0f) { // mid-leap: a fast lunge along the locked heading; lands on whoever's there
+                e.pounce = std::min(0.0f, e.pounce + dt.seconds);
+                step_enemy(e, density, collider_scratch_, e.position + e.pounce_dir * 4.0f, dt,
+                           kPounceSpeed * mire, bridge);
+                if (victim != nullptr && e.attack_cd <= 0.0f &&
+                    glm::length(victim->controller.position() - e.position) < 1.4f) {
+                    victim->take_damage(kPounceDamage * (alpha ? 1.4f : 1.0f));
+                    e.attack_cd = kWolfBiteInterval;
+                    e.pounce = 0.0f;
+                }
+                continue;
+            }
+            step_enemy(e, density, collider_scratch_, goal, dt, (alpha ? kWolfSpeed * 0.9f : kWolfSpeed) * sprint,
+                       bridge);
+            if (victim != nullptr) {
+                Vec3 to = victim->controller.position() - e.position;
+                to.y = 0.0f;
+                const f32 d = glm::length(to);
+                if (e.slam_windup <= 0.0f && d > kPounceMin && d < kPounceMax) {
+                    e.pounce = kPounceWindup; // crouch...
+                    e.pounce_dir = to / d;
+                    e.yaw = std::atan2(e.pounce_dir.z, e.pounce_dir.x);
+                    e.slam_windup = kPounceCooldown;
+                } else if (d < kEnemyAttackRange + kEnemyRadius && e.attack_cd <= 0.0f) {
+                    if (victim->try_parry()) {
+                        e.stagger = kStaggerDuration;
+                    } else {
+                        victim->take_damage(alpha ? kAlphaBite : kWolfBite);
+                    }
+                    e.attack_cd = kWolfBiteInterval;
+                }
+            }
+            continue;
+        }
 
         if (e.kind == kEnemyHealer) {
             // Hang back out of reach (kite from the nearest player) and mend the most-wounded raider.
-            const Vec3 target = victim != nullptr ? victim->controller.position() : w.position;
+            const Vec3 target = victim != nullptr ? victim->controller.position() : goal;
             const f32 td = glm::length(target - e.position);
             Vec3 g = goal;
             if (td < kHealerKeepDist) {
@@ -1619,11 +1737,13 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
 
         if (e.kind == 3u) { // archer: kite to range, AIM (telegraph), then loose a heavy arrow
             // Bandit archers primarily snipe the CARGO WAGON (they're after the goods); they only
-            // switch to a defender if one is markedly closer than the cart (a nearer threat).
-            Vec3 target = w.position;
-            if (victim != nullptr) {
+            // switch to a defender if one is markedly closer than the cart (a nearer threat). A camp's
+            // archer just shoots whoever comes calling.
+            const bool has_target = w != nullptr || victim != nullptr;
+            Vec3 target = w != nullptr ? w->position : (victim != nullptr ? victim->controller.position() : e.home);
+            if (victim != nullptr && w != nullptr) {
                 const f32 dv = glm::length(victim->controller.position() - e.position);
-                const f32 dw = glm::length(w.position - e.position);
+                const f32 dw = glm::length(w->position - e.position);
                 if (dv < dw * 0.8f) {
                     target = victim->controller.position();
                 }
@@ -1653,7 +1773,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             } else {
                 // Kite to/around range; begin aiming once in range + off cooldown.
                 Vec3 g = goal;
-                if (td < kArcherShootRange) {
+                if (has_target && td < kArcherShootRange) {
                     g = e.position;
                     if (td < kArcherKeepDist) {
                         Vec3 away = e.position - target;
@@ -1664,20 +1784,20 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                     }
                 }
                 step_enemy(e, density, collider_scratch_, g, dt, kEnemySpeed * sprint, bridge);
-                if (e.attack_cd <= 0.0f && td < kArcherShootRange) {
+                if (has_target && e.attack_cd <= 0.0f && td < kArcherShootRange) {
                     e.slam_windup = kAimWindup; // start the aim telegraph
                 }
             }
             continue;
         }
 
-        if (e.kind == kEnemySapper) {
+        if (e.kind == kEnemySapper && w != nullptr) {
             // Sapper: ignores the players and rushes the WAGON, then DETONATES on contact - a heavy
             // hit to the cargo + a small blast on nearby players. Intercept it before it arrives!
-            step_enemy(e, density, collider_scratch_, w.position, dt, kSapperSpeed * sprint, bridge);
-            if (glm::length(w.position - e.position) < kSapperRange) {
+            step_enemy(e, density, collider_scratch_, w->position, dt, kSapperSpeed * sprint, bridge);
+            if (glm::length(w->position - e.position) < kSapperRange) {
                 if (!debug_god_) {
-                    w.health -= kSapperDamage * rig_damage_mult(rig_level_);
+                    w->health -= kSapperDamage * rig_damage_mult(rig_level_);
                     // SABOTAGE: the blast also SHEDS A WHEEL (no-op if one is already off), so a
                     // sapper reaching the cart strands it - intercept it before it arrives!
                     force_wheel_break();
@@ -1687,7 +1807,8 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                         pl.take_damage(kSapperBlastDamage); // i-frames (a dodge roll) evade the blast
                     }
                 }
-                e.alive = false; // it's spent - blew itself up on the cart
+                crater(e.position, 2.6f, 1.1f); // the satchel blows a hole in the road
+                e.alive = false;                // it's spent - blew itself up on the cart
             }
             continue;
         }
@@ -1704,9 +1825,11 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                             pl.take_damage(kSlamDamage); // role armour / block / shield soak it
                         }
                     }
-                    if (brute_slam_hits(e.position, w.position) && !debug_god_) {
-                        w.health -= kSlamWagonDamage * rig_damage_mult(rig_level_);
+                    if (w != nullptr && brute_slam_hits(e.position, w->position) && !debug_god_) {
+                        w->health -= kSlamWagonDamage * rig_damage_mult(rig_level_);
                     }
+                    // The maul cracks the ground in front of it.
+                    crater(e.position + Vec3{std::cos(e.yaw), 0.0f, std::sin(e.yaw)} * 1.3f, 1.6f, 0.55f);
                     e.attack_cd = kSlamCooldown;
                 }
             } else {
@@ -1715,7 +1838,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                 if (e.attack_cd <= 0.0f) {
                     const f32 trig = kSlamRadius * 0.8f; // commit once a target is well inside the ring
                     const bool nearV = victim != nullptr && best < trig;
-                    const bool nearW = glm::length(w.position - e.position) < trig;
+                    const bool nearW = w != nullptr && glm::length(w->position - e.position) < trig;
                     if (nearV || nearW) {
                         e.slam_windup = kSlamWindup;
                     }
@@ -1725,7 +1848,7 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
         }
 
         // The lone last raider goes berserk - a faster, harder "finish it" climax (not the brute).
-        const f32 enrage = is_enraged(ambush_.size(), e.kind) ? kEnrageMult : 1.0f;
+        const f32 enrage = is_enraged(group_alive(e.quest), e.kind) ? kEnrageMult : 1.0f;
         // A nearby WARLORD rallies the swarm: allied raiders march faster + hit harder until it falls.
         const f32 rally = near_warlord(e, std::span<const Enemy>(ambush_)) ? kWarlordBuff : 1.0f;
         const f32 spd = (e.kind == kEnemyShield ? kEnemySpeed * 0.85f // shield-bearer is weighed down
@@ -1749,9 +1872,9 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                     victim->take_damage(dmg); // role armour / block / Aegis shield soak it
                 }
                 e.attack_cd = kEnemyAttackInterval;
-            } else if (glm::length(w.position - e.position) < reach + 0.7f) {
+            } else if (w != nullptr && glm::length(w->position - e.position) < reach + 0.7f) {
                 if (!debug_god_) {
-                    w.health -= kWagonDamage * rig_damage_mult(rig_level_); // armored sides shrug off some
+                    w->health -= kWagonDamage * rig_damage_mult(rig_level_); // armored sides shrug off some
                 }
                 e.attack_cd = kEnemyAttackInterval;
             }
@@ -1760,7 +1883,32 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
 
     // A near-wrecked wagon rallies its defenders: LAST STAND ramps their outgoing damage as the cart
     // nears destruction (a comeback chance). Same for everyone - keyed on the shared cargo's health.
-    const f32 last_stand = last_stand_mult(w.health / rig_max_health(rig_level_));
+    const f32 last_stand = wagon != nullptr ? last_stand_mult(wagon->health / rig_max_health(rig_level_)) : 1.0f;
+
+    // A shove away from `from`, sized by the damage (a solid hit reads with impact + opens space).
+    auto shove = [](Enemy& e, const Vec3& from, f32 dmg) {
+        Vec3 kdir = e.position - from;
+        kdir.y = 0.0f;
+        if (glm::length(kdir) > 1e-3f) {
+            e.knockback = glm::normalize(kdir) * std::min(dmg * kKnockbackPerDamage, kKnockbackMax);
+        }
+    };
+    // The aftermath every landed blow shares: a heavy one reels the foe (and breaks a shield-bearer's
+    // guard); the felling blow stokes the attacker's RAMPAGE and rattles the pack.
+    auto struck = [&](Enemy& e, f32 raw, f32 before, ServerPlayer* by) {
+        if (e.kind == kEnemyShield && raw >= kSunderThreshold) {
+            e.sunder_cd = kSunderDuration;
+        }
+        if (raw >= kStaggerThreshold) {
+            e.stagger = std::max(e.stagger, kStaggerDuration);
+        }
+        if (e.health <= 0.0f && before > 0.0f) {
+            if (by != nullptr) {
+                by->on_kill();
+            }
+            flinch_allies(e.position, std::span<Enemy>(ambush_)); // MORALE: rattle the pack
+        }
+    };
 
     // Thrown rocks hurt ambushers; hostile arrows hurt players. A spent projectile that has
     // landed (resting) no longer deals damage - it's just stuck in the ground.
@@ -1784,16 +1932,18 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             }
             // A bandit arrow that reaches the cargo wagon thuds into it and chips its health, so
             // ranged raiders actually threaten the goods (not just the escorts).
-            if (pr.alive && glm::length(w.position - pr.position) < pr.radius + kWagonHitRadius) {
+            if (wagon != nullptr && pr.alive &&
+                glm::length(wagon->position - pr.position) < pr.radius + kWagonHitRadius) {
                 if (!debug_god_) {
-                    w.health -= kArrowWagonDamage * rig_damage_mult(rig_level_);
+                    wagon->health -= kArrowWagonDamage * rig_damage_mult(rig_level_);
                 }
                 pr.alive = false;
             }
         } else {
             // A friendly projectile's damage is amplified if its owner is Empowered (co-op buff).
             const auto ownit = players_.find(pr.owner);
-            const f32 boost = ownit != players_.end() ? ownit->second.outgoing_mult() : 1.0f;
+            ServerPlayer* const owner = ownit != players_.end() ? &ownit->second : nullptr;
+            const f32 boost = owner != nullptr ? owner->outgoing_mult() : 1.0f;
             for (Enemy& e : ambush_) {
                 if (!pr.alive) {
                     break; // the shot stopped in a body this tick (no pierce left)
@@ -1803,6 +1953,12 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                 }
                 const Vec3 chest = e.position + Vec3{0.0f, 0.9f, 0.0f};
                 if (glm::length(chest - pr.position) < pr.radius + kEnemyRadius + 0.3f) {
+                    if (pr.blast > 0.0f) {
+                        // A heavy orb bursts on the body it struck (the blast pass does the damage).
+                        blasts_.push_back({pr.position, pr.blast, pr.damage, pr.blast_heal, pr.owner, pr.crater});
+                        pr.alive = false;
+                        break;
+                    }
                     f32 dmg = (pr.damage > 0.0f ? pr.damage : kThrowDamage) * boost * last_stand;
                     const f32 raw = dmg; // pre-block magnitude, for the sunder check
                     // COMBOS: focus-zone amp + elemental shatter (a Frost Bolt itself chills, below,
@@ -1818,31 +1974,15 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
                     if (pr.kind == 6) {
                         e.chill_timer = kChillDuration; // a Mage Frost Bolt CHILLS the foe (shatter set-up)
                     }
-                    if (ownit != players_.end()) {
-                        ++ownit->second.hit_fx; // confirmed hit -> the shooter's client pops a hit marker
+                    if (owner != nullptr) {
+                        ++owner->hit_fx; // confirmed hit -> the shooter's client pops a hit marker
                     }
-                    // A HEAVY shot (a charged ability) staggers a shield-bearer, dropping its guard for
-                    // follow-ups - even one this hit blocked (the shield took the brunt + cracked).
-                    if (e.kind == kEnemyShield && raw >= kSunderThreshold) {
-                        e.sunder_cd = kSunderDuration;
-                    }
-                    if (raw >= kStaggerThreshold) {
-                        e.stagger = kStaggerDuration; // a heavy hit reels any enemy (combo window)
-                    }
-                    Vec3 kdir = pr.velocity; // shove along the shot's flight direction (less if blocked)
-                    kdir.y = 0.0f;
-                    if (glm::length(kdir) > 1e-3f) {
-                        e.knockback = glm::normalize(kdir) * std::min(dmg * kKnockbackPerDamage, kKnockbackMax);
-                    }
-                    // RAMPAGE: the felling shot stokes the shooter's kill momentum (crossing zero this hit).
-                    if (e.health <= 0.0f && e_before > 0.0f) {
-                        if (ownit != players_.end()) {
-                            ownit->second.on_kill();
-                        }
-                        flinch_allies(e.position, std::span<Enemy>(ambush_)); // MORALE: rattle the pack
-                    }
-                    // A max-rank Power Shot PIERCES: the bolt punches through this body and flies
-                    // on to the next; anything else stops in the first thing it strikes.
+                    // A HEAVY shot (a charged ability) staggers + breaks a shield-bearer's guard - even
+                    // one this hit blocked (the shield took the brunt + cracked).
+                    struck(e, raw, e_before, owner);
+                    shove(e, e.position - pr.velocity, dmg); // along the shot's flight (less if blocked)
+                    // A max-rank Power Shot / a full-draw shot PIERCES: the bolt punches through this
+                    // body and flies on to the next; anything else stops in the first thing it strikes.
                     if (pr.pierce > 0) {
                         --pr.pierce;
                         pr.last_hit = e.id;
@@ -1854,14 +1994,71 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
         }
     }
 
-    // Player melee: a swing hits the nearest ambusher in the front cone (rate-limited).
+    // Heavy orbs that burst this tick (on a body above, or on landing - see tick()): every foe in the
+    // blast takes it (a little less toward the rim), allies caught in a Sunburst are mended, and a
+    // full-charge Comet leaves a crater.
+    for (const Blast& b : blasts_) {
+        const auto ownit = players_.find(b.owner);
+        ServerPlayer* const owner = ownit != players_.end() ? &ownit->second : nullptr;
+        const f32 boost = owner != nullptr ? owner->outgoing_mult() : 1.0f;
+        bool any = false;
+        for (Enemy& e : ambush_) {
+            const f32 d = glm::length(Vec2{e.position.x - b.at.x, e.position.z - b.at.z});
+            if (d > b.radius || std::abs(e.position.y + 0.9f - b.at.y) > 3.0f) {
+                continue;
+            }
+            f32 dmg = b.damage * (1.0f - 0.4f * d / b.radius) * boost * last_stand;
+            const f32 raw = dmg;
+            dmg = combo_amp(e, dmg);
+            const f32 before = e.health;
+            e.health -= dmg;
+            struck(e, raw, before, owner);
+            shove(e, b.at, dmg * 1.4f);
+            any = true;
+        }
+        if (any && owner != nullptr) {
+            ++owner->hit_fx;
+        }
+        if (b.heal > 0.0f) {
+            for (auto& [id, pl] : players_) {
+                if (glm::length(pl.controller.position() + Vec3{0.0f, 0.9f, 0.0f} - b.at) <= b.radius + 0.6f) {
+                    pl.heal(b.heal);
+                }
+            }
+        }
+        if (b.crater) {
+            crater(b.at, kCraterRadius * (0.4f + b.radius / 4.0f), kCraterDepth);
+        }
+    }
+    blasts_.clear();
+
+    // Player melee: a click commits a swing; kMeleeWindup later (as the blade comes down) it hits the
+    // nearest hostile in the front cone THEN - so the blow lands in step with the animation, and a
+    // raider that steps out of reach during the wind-up is missed. Rate-limited by the cooldown.
     for (auto& [id, pl] : players_) {
         if (pl.melee_cd > 0.0f) {
             pl.melee_cd -= dt.seconds;
         }
-        if (!pl.input.attack || pl.melee_cd > 0.0f) {
+        // The Knight's charged EARTHSPLITTER lands as the overhead blow comes down (see update_heavy).
+        if (pl.heavy_in > 0.0f) {
+            pl.heavy_in -= dt.seconds;
+            if (pl.heavy_in <= 0.0f) {
+                pl.heavy_in = 0.0f;
+                land_earthsplitter(pl, last_stand);
+            }
+        }
+        if (pl.strike_in <= 0.0f) {
+            if (pl.input.attack && pl.melee_cd <= 0.0f && pl.heavy_in <= 0.0f) {
+                pl.strike_in = kMeleeWindup;
+                pl.melee_cd = kMeleeCooldown;
+            }
             continue;
         }
+        pl.strike_in -= dt.seconds;
+        if (pl.strike_in > 0.0f) {
+            continue;
+        }
+        pl.strike_in = 0.0f;
         const Vec3 origin = pl.controller.position() + Vec3{0.0f, 0.9f, 0.0f};
         Enemy* hit = nullptr;
         f32 best = kMeleeRange + 1.0f;
@@ -1889,47 +2086,42 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             hit->health -= dmg;
             ++pl.hit_fx; // confirmed melee hit -> the attacker's client pops a hit marker
             // LIFESTEAL: felling a raider in melee mends the attacker a little (sustain by fighting).
-            if (hit->health <= 0.0f) {
+            if (hit->health <= 0.0f && hit_before > 0.0f) {
                 pl.heal(kMeleeKillHeal);
-                if (hit_before > 0.0f) {
-                    pl.on_kill(); // RAMPAGE: the felling blow stokes kill momentum
-                    flinch_allies(hit->position, std::span<Enemy>(ambush_)); // MORALE: rattle the pack
-                }
             }
-            // A HEAVY swing (e.g. an Empowered Knight blow) staggers it, breaking its guard a while.
-            if (hit->kind == kEnemyShield && raw >= kSunderThreshold) {
-                hit->sunder_cd = kSunderDuration;
-            }
-            if (raw >= kStaggerThreshold) {
-                hit->stagger = kStaggerDuration; // a heavy hit reels any enemy (combo window)
-            }
-            Vec3 kdir = hit->position - pl.controller.position(); // shove away from the attacker (less if blocked)
-            kdir.y = 0.0f;
-            if (glm::length(kdir) > 1e-3f) {
-                hit->knockback = glm::normalize(kdir) * std::min(dmg * kKnockbackPerDamage, kKnockbackMax);
-            }
-            pl.melee_cd = 0.35f;
+            struck(*hit, raw, hit_before, &pl);
+            shove(*hit, pl.controller.position(), dmg); // away from the attacker (less if blocked)
         }
     }
 
-    // Cull the dead: each removal tallies the delivery-time kill bounty, and a genuinely FELLED
-    // raider (health beaten to zero) also spills its purse straight into the shared wallet - a
+    // Cull the dead: each felled hostile shares its XP + spills its purse (or pelt) into the shared
+    // wallet; a haul's raiders tally the delivery-time kill bounty, a quest's foes its progress. A
     // self-spent sapper (alive=false with health intact) pays nothing; its satchel went up with it.
     u32 loot = 0;
     for (const Enemy& e : ambush_) {
         if (e.health <= 0.0f) {
             award_kill(e.position, e.kind); // XP for every hero near the fight (+ the journey tally)
+            if (e.quest != 0) {
+                quest_foe_felled(e.quest);
+            }
         }
     }
-    contract_kills_ += static_cast<u32>(std::erase_if(ambush_, [&loot](const Enemy& e) {
+    u32 raiders_removed = 0;
+    std::erase_if(ambush_, [&](const Enemy& e) {
         if (e.alive && e.health > 0.0f) {
             return false;
         }
         if (e.health <= 0.0f) {
             loot += bandit_loot(e.kind);
         }
+        if (e.quest == 0) {
+            ++raiders_removed;
+        }
         return true;
-    }));
+    });
+    if (wagon != nullptr) {
+        contract_kills_ += raiders_removed;
+    }
     money_ += loot;
 
     // Player health: regen out of combat, respawn at the town on death.
@@ -1949,18 +2141,63 @@ void GameServer::update_ambush(Timestep dt, const DensitySampler& density) {
             ALRYN_INFO("Player {} was slain and respawned", id);
         }
     }
+}
 
-    // FIELD REPAIR: between waves (no raiders alive), a player staying near the cart patches it up,
-    // mending its health slowly - so clearing a wave then tending the cart lets a battered haul recover.
-    if (w.health > 0.0f && ambush_.empty()) {
-        bool tended = false;
-        for (const auto& [pid, pl] : players_) {
-            if (glm::length(pl.controller.position() - w.position) < kFieldRepairRange) {
-                tended = true;
-                break;
-            }
+// The Knight's charged EARTHSPLITTER comes down: a heavy cleave across the whole front arc, and at a
+// full charge the ground itself cracks - a crater + a shockwave that throws everything nearby.
+void GameServer::land_earthsplitter(ServerPlayer& pl, f32 last_stand) {
+    const f32 c = pl.heavy_power;
+    const Vec3 feet = pl.controller.position();
+    const Vec3 origin = feet + Vec3{0.0f, 0.9f, 0.0f};
+    const f32 yaw = pl.input.yaw;
+    const Vec3 facing{std::cos(yaw), 0.0f, std::sin(yaw)};
+    const f32 boost = pl.outgoing_mult() * last_stand;
+    const bool full = c >= kFullCharge;
+    const Vec3 impact = feet + facing * 1.7f;
+    bool any = false;
+    for (Enemy& e : ambush_) {
+        if (!e.alive || e.health <= 0.0f) {
+            continue;
         }
-        w.health = field_repair(w.health, rig_max_health(rig_level_), tended, dt.seconds);
+        const Vec3 chest = e.position + Vec3{0.0f, 0.9f, 0.0f};
+        f32 raw = 0.0f;
+        if (in_attack_cone(origin, yaw, chest, kHeavyReach, kHeavyConeCos)) {
+            raw += role_stats(pl.role).melee_damage * heavy_damage_mult(c) * boost;
+        }
+        const f32 qd = glm::length(Vec2{e.position.x - impact.x, e.position.z - impact.z});
+        if (full && qd <= kQuakeRadius) {
+            raw += kQuakeDamage * boost * (1.0f - 0.5f * qd / kQuakeRadius); // the shockwave
+        }
+        if (raw <= 0.0f) {
+            continue;
+        }
+        f32 dmg = combo_amp(e, raw);
+        // Even a shield can't stop an overhead blow outright - but a frontal one is still dulled.
+        if (enemy_blocks_hit(e, feet)) {
+            dmg *= 0.6f;
+        }
+        const f32 before = e.health;
+        e.health -= dmg;
+        e.stagger = std::max(e.stagger, raw >= kStaggerThreshold ? kShockwaveStagger : kStaggerDuration);
+        if (e.kind == kEnemyShield && raw >= kSunderThreshold) {
+            e.sunder_cd = kSunderDuration;
+        }
+        Vec3 kdir = e.position - feet;
+        kdir.y = 0.0f;
+        kdir = glm::length(kdir) > 1e-3f ? glm::normalize(kdir) : facing;
+        e.knockback = kdir * kHeavyKnockback * (0.5f + 0.5f * c);
+        if (e.health <= 0.0f && before > 0.0f) {
+            pl.on_kill();
+            pl.heal(kMeleeKillHeal);
+            flinch_allies(e.position, std::span<Enemy>(ambush_));
+        }
+        any = true;
+    }
+    if (any) {
+        ++pl.hit_fx;
+    }
+    if (full) {
+        crater(impact, kCraterRadius, kCraterDepth); // the earth splits under the blow
     }
 }
 

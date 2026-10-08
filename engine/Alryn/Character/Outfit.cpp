@@ -166,7 +166,10 @@ void pauldrons(CharacterModel& m, const Fit& f, BoneColor plate, BoneColor rim, 
 void build_plate(CharacterModel& m, const Equipment& eq) {
     const Fit f(m);
     const int vt = outfit_design_tier(eq.outfit());
-    hide_hair(m, f, true); // a hood, a coif, a great helm
+    const bool helm = !eq.bare_head; // the creator's turntable shows the face (no headwear)
+    if (helm) {
+        hide_hair(m, f, true); // a hood, a coif, a great helm
+    }
     scabbard(m, f, BoneColor::Dark, vt == 0 ? BoneColor::Metal : BoneColor::Accent);
 
     if (vt == 0) {
@@ -180,8 +183,10 @@ void build_plate(CharacterModel& m, const Equipment& eq) {
               Vec3{f.at(0.7f).rx * 1.5f, 0.075f, 0.02f}, BoneColor::Accent, BoneShape::Box);
         buckle(m, f, 0.26f, 0.062f, BoneColor::Accent, false);
         // The helm's nasal bar down over the nose.
-        piece(m, BonePart::Head, Vec3{0.0f, f.hc.y + f.hr.y * 0.05f, f.hr.z * 1.3f},
-              Vec3{0.03f, f.hr.y * 0.95f, 0.026f}, BoneColor::Metal, BoneShape::Box);
+        if (helm) {
+            piece(m, BonePart::Head, Vec3{0.0f, f.hc.y + f.hr.y * 0.05f, f.hr.z * 1.3f},
+                  Vec3{0.03f, f.hr.y * 0.95f, 0.026f}, BoneColor::Metal, BoneShape::Box);
+        }
         // Steel poleyns over the mail at the knees.
         for (BonePart up : {BonePart::UpperLegL, BonePart::UpperLegR}) {
             piece(m, up, Vec3{0.0f, -f.seg(up), f.lr * 1.0f}, Vec3{f.lr * 1.7f, f.lr * 1.4f, f.lr * 1.0f},
@@ -207,6 +212,9 @@ void build_plate(CharacterModel& m, const Equipment& eq) {
                   BoneColor::Metal, BoneShape::Box); // gauntlet cuff
         }
         // The great helm's face: a dark eye slit, a gilt cross down the faceplate, a crest on top.
+        if (!helm) {
+            return;
+        }
         const f32 fz = f.hr.z * 1.25f;
         piece(m, BonePart::Head, Vec3{0.0f, f.hc.y + f.hr.y * 0.12f, fz}, Vec3{f.hr.x * 1.9f, 0.026f, 0.03f},
               BoneColor::Dark, BoneShape::Box);
@@ -232,7 +240,9 @@ void build_plate(CharacterModel& m, const Equipment& eq) {
 void build_robe(CharacterModel& m, const Equipment& eq) {
     const Fit f(m);
     const int vt = outfit_design_tier(eq.outfit());
-    hide_hair(m, f, vt == 0); // the hood covers it all; a hat only the tall hair
+    if (!eq.bare_head) {
+        hide_hair(m, f, vt == 0); // the hood covers it all; a hat only the tall hair
+    }
     if (vt == 0) {
         buckle(m, f, 0.26f, 0.044f, BoneColor::Dark, true);
     } else {
@@ -244,7 +254,7 @@ void build_robe(CharacterModel& m, const Equipment& eq) {
               Vec3{0.04f, 0.12f, 0.1f}, BoneColor::Accent,
               BoneShape::Box, roll(0.1f)); // its gilt clasp edge
     }
-    if (vt == 2) {
+    if (vt == 2 && !eq.bare_head) {
         // A glowing star gem on the hat band.
         piece(m, BonePart::Head, Vec3{0.0f, f.hc.y + f.hr.y * 0.5f + 0.06f, f.hr.z * 1.12f},
               Vec3{0.05f, 0.05f, 0.03f}, BoneColor::Glow, BoneShape::Box, roll(0.785f));
@@ -258,7 +268,9 @@ void build_robe(CharacterModel& m, const Equipment& eq) {
 void build_leather(CharacterModel& m, const Equipment& eq) {
     const Fit f(m);
     const int vt = outfit_design_tier(eq.outfit());
-    hide_hair(m, f, true);
+    if (!eq.bare_head) {
+        hide_hair(m, f, true);
+    }
     quiver(m, f, 1.0f, vt == 0 ? BoneColor::Primary : BoneColor::Accent);
     buckle(m, f, 0.2f, 0.056f, BoneColor::Accent, true);
     {
@@ -280,15 +292,17 @@ void build_leather(CharacterModel& m, const Equipment& eq) {
         }
     } else if (vt == 2) {
         // BEASTMASTER - an angular bone skull, sweeping horns, a fur ruff, bone pauldrons + spikes, runes.
-        piece(m, BonePart::Head, Vec3{0.0f, f.hc.y + f.hs.y * 0.04f, f.hs.z * 0.14f}, f.hs * Vec3{1.18f, 1.16f, 1.16f},
-              BoneColor::Metal, BoneShape::Box); // skull (angular = bone)
-        piece(m, BonePart::Head, Vec3{0.0f, f.hc.y - f.hs.y * 0.3f, f.hs.z * 0.62f},
-              Vec3{f.hs.x * 0.52f, f.hs.y * 0.34f, f.hs.z * 0.46f}, BoneColor::Metal, BoneShape::Box); // snout
-        for (f32 ex : {-1.0f, 1.0f}) {
-            piece(m, BonePart::Head, Vec3{ex * f.hs.x * 0.24f, f.hc.y + f.hs.y * 0.06f, f.hs.z * 0.6f},
-                  Vec3{0.045f, 0.05f, 0.04f}, BoneColor::Glow, BoneShape::Box); // glowing eyes
-            piece(m, BonePart::Head, Vec3{ex * f.hs.x * 0.5f, f.hc.y + f.hs.y * 0.66f, -f.hs.z * 0.08f},
-                  Vec3{0.045f, f.hs.y * 1.0f, 0.045f}, BoneColor::Metal, BoneShape::Box, roll(ex * 0.42f)); // horn
+        if (!eq.bare_head) {
+            piece(m, BonePart::Head, Vec3{0.0f, f.hc.y + f.hs.y * 0.04f, f.hs.z * 0.14f}, f.hs * Vec3{1.18f, 1.16f, 1.16f},
+                  BoneColor::Metal, BoneShape::Box); // skull (angular = bone)
+            piece(m, BonePart::Head, Vec3{0.0f, f.hc.y - f.hs.y * 0.3f, f.hs.z * 0.62f},
+                  Vec3{f.hs.x * 0.52f, f.hs.y * 0.34f, f.hs.z * 0.46f}, BoneColor::Metal, BoneShape::Box); // snout
+            for (f32 ex : {-1.0f, 1.0f}) {
+                piece(m, BonePart::Head, Vec3{ex * f.hs.x * 0.24f, f.hc.y + f.hs.y * 0.06f, f.hs.z * 0.6f},
+                      Vec3{0.045f, 0.05f, 0.04f}, BoneColor::Glow, BoneShape::Box); // glowing eyes
+                piece(m, BonePart::Head, Vec3{ex * f.hs.x * 0.5f, f.hc.y + f.hs.y * 0.66f, -f.hs.z * 0.08f},
+                      Vec3{0.045f, f.hs.y * 1.0f, 0.045f}, BoneColor::Metal, BoneShape::Box, roll(ex * 0.42f)); // horn
+            }
         }
         const TorsoRing sh = f.at(0.86f);
         piece(m, BonePart::Torso, Vec3{0.0f, f.ty(0.86f), sh.dz}, Vec3{sh.rx * 2.6f, f.span * 0.24f, sh.rz * 2.9f},
@@ -311,7 +325,9 @@ void build_leather(CharacterModel& m, const Equipment& eq) {
 void build_holy(CharacterModel& m, const Equipment& eq) {
     const Fit f(m);
     const int vt = outfit_design_tier(eq.outfit());
-    hide_hair(m, f, vt != 1);
+    if (!eq.bare_head) {
+        hide_hair(m, f, vt != 1);
+    }
     // A cross on the chest at height t, arm-length s, standing `inflate` proud of the body.
     auto cross = [&](f32 t, f32 s, f32 inflate, BoneColor c) {
         const Vec3 p = f.front(t, inflate);
@@ -341,6 +357,12 @@ void build_holy(CharacterModel& m, const Equipment& eq) {
               Vec3{0.05f, 0.14f, 0.11f}, BoneColor::Dark, BoneShape::Box); // book at the hip
     } else {
         // A peaked jewelled MITRE (two plates leaning to a point + a glowing cross).
+        if (eq.bare_head) {
+            orphrey();
+            cross(0.62f, 0.15f, 0.05f, BoneColor::Accent);
+            buckle(m, f, 0.26f, 0.044f, BoneColor::Accent, false);
+            return;
+        }
         const f32 base = f.hc.y + f.hr.y * 0.62f;
         piece(m, BonePart::Head, Vec3{0.0f, base, 0.0f}, Vec3{f.hr.x * 2.2f, 0.05f, f.hr.z * 2.1f},
               BoneColor::Accent, BoneShape::Cylinder); // gold base band

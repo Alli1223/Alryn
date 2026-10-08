@@ -71,6 +71,9 @@ void ClientApp::on_init() {
     if (const char* d = std::getenv("ALRYN_DAY_SECONDS")) {
         day_seconds_ = std::max(daynight::min_day_seconds, static_cast<f32>(std::atof(d)));
     }
+    if (const char* z = std::getenv("ALRYN_ZOOM")) { // scripted close-ups: the camera's pull-back (m)
+        cam_distance_ = glm::clamp(static_cast<f32>(std::atof(z)), cam::min_distance, cam::max_distance);
+    }
     marker_.create(renderer_->device(), primitives::cube(1.0f, Vec3{1.0f, 0.85f, 0.2f}));
     {
         // The identity ring: a flat annulus (white - tinted per player at draw time), a hair thick.
@@ -105,6 +108,10 @@ void ClientApp::on_init() {
     deer_body_mesh_.create(renderer_->device(), build_deer_body());
     deer_leg_mesh_.create(renderer_->device(), build_deer_leg());
     fish_body_mesh_.create(renderer_->device(), build_fish_body());
+    wolf_body_mesh_.create(renderer_->device(), build_wolf_body()); // the side quests' dire wolves
+    wolf_leg_mesh_.create(renderer_->device(), build_wolf_leg());
+    wolf_jaw_mesh_.create(renderer_->device(), build_wolf_jaw());
+    tent_mesh_.create(renderer_->device(), build_camp_tent());      // a bandit camp's tents
     // A unit rope segment (along +Y, 0..1) for the verlet harness traces; scaled per link.
     rope_mesh_.create(renderer_->device(),
                       primitives::box(Vec3{-0.5f, 0.0f, -0.5f}, Vec3{0.5f, 1.0f, 0.5f},
@@ -357,11 +364,14 @@ void ClientApp::return_to_menu() {
     terrain_.reset();
     visuals_.clear();
     enemy_visuals_.clear();
+    enemy_deaths_.clear();
     villager_visuals_.clear();
     for (auto& [frames, m] : mesh_graveyard_) {
         m.destroy();
     }
     mesh_graveyard_.clear();
+    pending_impacts_.clear();
+    cancel_charge();
     have_snapshot_ = false;
     my_id_ = 0;
     restore_acked_ = false;
@@ -424,6 +434,10 @@ void ClientApp::on_update(Timestep dt) {
                     if (terrain_ != nullptr) {
                         terrain_->apply_edit(e.deform.center, e.deform.radius, e.deform.amount);
                     }
+                    // The dirt it throws up (not for the history a fresh join is caught up on).
+                    if (have_snapshot_ && session_time_ > 2.0f) {
+                        deform_fx(e.deform.center, e.deform.radius, e.deform.amount);
+                    }
                     break;
                 default:
                     break;
@@ -475,6 +489,11 @@ void ClientApp::on_update(Timestep dt) {
         }
         update_ability_vfx(dt); // buff auras + remote cast VFX
         update_particles(dt);
+        update_sword_pacing(dt.seconds);
+        update_charge(dt.seconds); // the held primary attack's heavy wind-up (+ a Knight's pending blow)
+        update_quest_fx(dt);       // side-quest edges: progress pops, the completion banner
+        dev_setup_wait_ += dt.seconds;
+        dev_quest_setup();         // (scripted screenshot runs only)
         send_input();
         // Ease the wagons BEFORE the character visuals: a rider standing on the deck measures their
         // stride against this frame's cart step (see update_visuals).
@@ -498,14 +517,18 @@ void ClientApp::on_update(Timestep dt) {
         }
     } else if (renderer_ != nullptr) {
         apply_gamepad(dt); // controller drives the main-menu focus navigation (in-game path is above)
+        tick_mesh_graveyard(); // free the hero preview's retired meshes (rebuilt on every look change)
         renderer_->set_sky_color(menu_sky_); // calm backdrop behind the menu
         if (!menu_shows_preview()) {
             update_menu_scene(dt); // the live town the menus float over
         } else {
             preview_turn_ += dt.seconds * 0.6f; // slow turntable
             preview_anim_.update(0.0f, dt);     // idle pose
-            renderer_->set_sun(glm::normalize(Vec3{0.35f, 0.85f, 0.45f}),
-                               Vec3{1.0f, 0.96f, 0.9f}, 1.0f);
+            // The creator frames the hero closer (head + shoulders up) so the face edits read; the
+            // roster stands them full-length.
+            const f32 zoom_goal = current_screen_ == Screen::Customise ? 1.0f : 0.0f;
+            preview_zoom_ += (zoom_goal - preview_zoom_) * std::min(1.0f, dt.seconds * 5.0f);
+            set_preview_studio();
         }
     }
 
@@ -524,6 +547,7 @@ void ClientApp::on_update(Timestep dt) {
         }
     }
     ui_.update(dt.seconds, pointer_pos());
+    run_ui_script();
 }
 
 void ClientApp::on_render() {
@@ -560,6 +584,8 @@ void ClientApp::on_render() {
     }
     draw_villagers();
     draw_enemies();
+    draw_enemy_deaths(Timestep{frame_dt_}); // felled foes toppling + sinking away
+    draw_quest_world();                     // the side quest's camp / X / petals / beacon
     draw_gates();
     draw_bridges();
     draw_fires();
@@ -616,6 +642,20 @@ void ClientApp::on_render() {
                 orb(pr, Vec3{1.0f, 0.75f, 0.35f}, Vec3{1.0f, 0.42f, 0.12f}, 0.42f, 3.0f);
             } else if (pr.kind == 6) { // Mage frost bolt: a pale cyan orb
                 orb(pr, Vec3{0.8f, 0.95f, 1.0f}, Vec3{0.4f, 0.72f, 1.0f}, 0.32f, 2.2f);
+            } else if (pr.kind == 9) { // Cleric SUNBURST: a swollen orb of gathered sunlight
+                orb(pr, Vec3{1.0f, 0.97f, 0.8f}, Vec3{1.0f, 0.82f, 0.38f}, 0.55f, 4.0f);
+            } else if (pr.kind == 10) { // Mage ARCANE COMET: a roiling violet-white star
+                orb(pr, Vec3{0.95f, 0.85f, 1.0f}, Vec3{0.62f, 0.3f, 1.0f}, 0.62f, 4.5f);
+            } else if (pr.kind == 11) { // the Mage's quick arcane bolt
+                orb(pr, Vec3{0.85f, 0.8f, 1.0f}, Vec3{0.5f, 0.45f, 1.0f}, 0.22f, 1.4f);
+            } else if (pr.kind == 8) { // the Hunter's DRAWN SHOT: a heavier shaft streaming light
+                renderer_->draw(shape_box_,
+                                glm::translate(Mat4{1.0f}, pr.position) * orient_to(pr.dir) *
+                                    glm::scale(Mat4{1.0f}, Vec3{0.08f, 0.08f, 0.75f}),
+                                Vec4{0.78f, 0.68f, 0.42f, 1.0f});
+                renderer_->draw_sprite(pr.position, pr.position - pr.dir * 1.6f, 0.16f, Vec4{0.72f, 1.0f, 0.55f, 0.7f},
+                                       0.4f);
+                fx_light(pr.position, Vec3{0.7f, 1.0f, 0.55f}, 1.4f, 5.0f);
             } else if (pr.kind == 7) { // Mage boulder: a tumbling grey rock wreathed in amber
                 renderer_->draw(shape_sphere_,
                                 glm::translate(Mat4{1.0f}, pr.position) *
@@ -716,6 +756,7 @@ void ClientApp::on_shutdown() {
     menu_terrain_.reset();      // the menu backdrop's streamed chunks own GPU meshes
     visuals_.clear();           // PlayerVisuals own dynamic body/outfit GPU meshes (freed via ~Mesh)
     enemy_visuals_.clear();     // EnemyVisuals own a dynamic body mesh
+    enemy_deaths_.clear();      // ...as do the fallen, sinking away
     villager_visuals_.clear();
     preview_ = PlayerVisual{}; // the customise turntable avatar's body / outfit / cloth meshes
     for (auto& [frames, m] : mesh_graveyard_) {
@@ -761,6 +802,10 @@ void ClientApp::on_shutdown() {
     deer_body_mesh_.destroy();
     deer_leg_mesh_.destroy();
     fish_body_mesh_.destroy();
+    wolf_body_mesh_.destroy();
+    wolf_leg_mesh_.destroy();
+    wolf_jaw_mesh_.destroy();
+    tent_mesh_.destroy();
     rope_mesh_.destroy();
     goods_mesh_.destroy();
     cargo_weapons_mesh_.destroy();
@@ -910,6 +955,24 @@ void ClientApp::update_day_night(Timestep dt) {
     renderer_->set_fog(fog_color, density, fog_gloom_, fog_patch_);
 }
 
+void ClientApp::land_hit_feedback() {
+    hit_fx_hold_ = -1.0f;
+    hit_marker_ = 1.0f;
+    // A blow that lands kicks the camera - harder for a Knight's sword than a loosed arrow.
+    cam_shake_ = std::max(cam_shake_, role_ == PlayerRole::Knight ? 1.0f : 0.35f);
+    // A burst of sparks at the point we're aiming at (the enemy we struck is right there).
+    if (aim_valid_) {
+        emit_burst(aim_ + Vec3{0.0f, 0.9f, 0.0f}, Vec4{1.0f, 0.92f, 0.6f, 1.0f}, 14, 4.5f, 0.35f, 0.12f,
+                   /*style=*/1, /*up=*/1.5f);
+    }
+    if (Audio* a = audio()) { // the impact of a landed blow, where it landed - in the weapon's voice
+        const SfxId id = role_ == PlayerRole::Knight   ? SfxId::SwordHit
+                         : role_ == PlayerRole::Hunter ? SfxId::ArrowHit
+                                                       : SfxId::SpellHit;
+        a->play_at(id, aim_valid_ ? aim_ : local_feet(), 0.9f, frand(0.9f, 1.1f));
+    }
+}
+
 void ClientApp::update_camera() {
     // Scroll wheel zooms by scaling the camera pull-back distance (the map consumes scroll instead
     // while it's open, so the camera doesn't lurch behind the overlay).
@@ -938,6 +1001,16 @@ void ClientApp::update_camera() {
     const f32 zoom_goal = snapshot_.enemies.empty() ? 1.0f : 0.86f;
     combat_zoom_ += (zoom_goal - combat_zoom_) * (1.0f - std::exp(-2.5f * dt));
     Vec3 eye = cam_target_ + dir_to_cam * (cam_distance_ * combat_zoom_);
+    // Impact kick: a short, fast-decaying jolt (mostly downward, like the weight of the blow) when one
+    // of our attacks connects.
+    if (cam_shake_ > 0.001f) {
+        const f32 k = cam_shake_ * cam_shake_ * 0.13f;
+        const Vec3 jolt{std::sin(elapsed_ * 91.0f) * k, -std::abs(std::sin(elapsed_ * 67.0f)) * k * 1.4f,
+                        std::cos(elapsed_ * 83.0f) * k};
+        eye += jolt;
+        cam_target_ += jolt * 0.6f;
+        cam_shake_ = std::max(0.0f, cam_shake_ - dt * 5.5f);
+    }
     // Camera-terrain collision: never let the eye sink into a hillside - going up a hill, the fixed
     // iso offset can bury the camera in the slope, clipping through the ground. Lift the eye to stay a
     // clearance above the terrain at its own position (smooth, since the height field is continuous).
@@ -991,7 +1064,8 @@ void ClientApp::update_net_smooth(Timestep dt) {
         ease(0x100000000ull | p.id, p.position, p.yaw, p.seated != 0);
     }
     for (net::EnemyState& en : snapshot_.enemies) {
-        ease(0x200000000ull | en.id, en.position, en.yaw, false);
+        // A pouncing wolf covers ground fast: snap, so the leap reads as a leap (not a glide).
+        ease(0x200000000ull | en.id, en.position, en.yaw, en.action == 4);
     }
     for (net::VillagerState& vg : snapshot_.villagers) {
         ease(0x300000000ull | vg.id, vg.position, vg.yaw, false);
@@ -1067,6 +1141,25 @@ void ClientApp::update_visuals(Timestep dt) {
         } else if (p.action == 1 && v.last_action != 1) {
             attack_anim(); // rising edge of a remote attack
         }
+        // The HEAVY: the wind-up pose (ours from the live hold, others' from the snapshot), and a
+        // teammate's release - their blow / shot plays when their heavy_seq ticks over (ours already
+        // played the moment we let go).
+        const auto prole = static_cast<PlayerRole>(p.role % kRoleCount);
+        const u8 style = prole == PlayerRole::Knight ? 0 : prole == PlayerRole::Hunter ? 1 : 2;
+        v.animator.set_charge(is_local ? (attack_held_ ? charge_ : 0.0f) : static_cast<f32>(p.charge) / 255.0f, style);
+        if (!v.heavy_init || is_local) {
+            v.last_heavy = p.heavy_seq;
+            v.heavy_init = true;
+        } else if (p.heavy_seq != v.last_heavy) {
+            v.last_heavy = p.heavy_seq;
+            v.animator.play_heavy(style);
+            const f32 power = static_cast<f32>(p.heavy_power) / 255.0f;
+            if (prole == PlayerRole::Knight) {
+                pending_impacts_.push_back({p.position, p.yaw, power, kHeavyWindup - 0.02f, prole, false});
+            } else {
+                heavy_impact_fx(p.position, p.yaw, power, prole, false);
+            }
+        }
         // Dodge roll: kick up a dust puff at the feet on the rising edge (local + remote).
         if (p.action == 3 && v.last_action != 3) {
             emit_burst(p.position + Vec3{0.0f, 0.12f, 0.0f}, Vec4{0.74f, 0.69f, 0.58f, 0.65f}, 12,
@@ -1108,6 +1201,9 @@ void ClientApp::update_visuals(Timestep dt) {
                        1, 4.0f, 3.0f);
         }
         v.last_level = p.level;
+        // The lantern: ours responds the instant L is pressed; everyone else's follows the snapshot.
+        v.lantern = is_local ? lantern_on_ : p.lantern != 0;
+        v.lantern_w += ((v.lantern ? 1.0f : 0.0f) - v.lantern_w) * std::min(1.0f, dt.seconds * 9.0f);
         v.last_buffs = p.buffs;
         v.last_shield = p.shield;
         v.animator.update(v.speed, dt, v.heading);
@@ -1145,17 +1241,26 @@ void ClientApp::update_feedback(Timestep dt) {
             last_hit_fx_ = lp->hit_fx; // adopt the first value so joining mid-fight doesn't false-pop
             hit_fx_init_ = true;
         } else if (lp->hit_fx != last_hit_fx_) {
-            hit_marker_ = 1.0f;
-            // A burst of sparks at the point we're aiming at (the enemy we struck is right there).
-            if (aim_valid_) {
-                emit_burst(aim_ + Vec3{0.0f, 0.9f, 0.0f}, Vec4{1.0f, 0.92f, 0.6f, 1.0f}, 14, 4.5f, 0.35f,
-                           0.12f, /*style=*/1, /*up=*/1.5f);
+            // A sword blow's feedback waits for OUR blade to actually cut through (the confirmation can
+            // beat the animation back from the server), so the thunk, kick and sparks land on the hit.
+            f32 hold = 0.0f;
+            if (role_ == PlayerRole::Knight) {
+                if (const auto it = visuals_.find(my_id_); it != visuals_.end()) {
+                    hold = glm::clamp(it->second.animator.swing_until_impact(), 0.0f, 0.3f);
+                }
             }
-            if (Audio* a = audio()) { // the thunk of a landed blow, where it landed
-                a->play_at(SfxId::SwordHit, aim_valid_ ? aim_ : local_feet(), 0.9f,
-                           frand(0.9f, 1.12f));
+            if (hold > 0.01f) {
+                hit_fx_hold_ = hold;
+            } else {
+                land_hit_feedback();
             }
             last_hit_fx_ = lp->hit_fx;
+        }
+    }
+    if (hit_fx_hold_ >= 0.0f) {
+        hit_fx_hold_ -= dt.seconds;
+        if (hit_fx_hold_ < 0.0f) {
+            land_hit_feedback();
         }
     }
     hit_marker_ = std::max(0.0f, hit_marker_ - dt.seconds * 3.2f);

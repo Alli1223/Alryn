@@ -13,20 +13,9 @@ void ClientApp::draw_rig(const CharacterModel& model, const std::vector<Mat4>& m
         if (attachments_only && !bones[i].attachment) {
             continue; // the skinned body already covers the core body + joint fillers
         }
-        Vec3 color{1.0f};
-        bool glow = false;
-        switch (bones[i].color) {
-            case BoneColor::Skin: color = pal.skin; break;
-            case BoneColor::Shirt: color = pal.shirt; break;
-            case BoneColor::Pants: color = pal.pants; break;
-            case BoneColor::Hair: color = pal.hair; break;
-            case BoneColor::Eye: color = pal.eye; break;
-            case BoneColor::Primary: color = pal.primary; break;
-            case BoneColor::Accent: color = pal.accent; break;
-            case BoneColor::Metal: color = pal.metal; break;
-            case BoneColor::Dark: color = pal.dark; break;
-            case BoneColor::Glow: color = pal.glow; glow = true; break;
-        }
+        // BoneColor mirrors BodyMaterial (see CharacterModel.h), so one resolver serves both.
+        const Vec3 color = body_material_color(pal, static_cast<BodyMaterial>(bones[i].color));
+        const bool glow = bones[i].color == BoneColor::Glow;
         const Mesh& shape = bones[i].shape == BoneShape::Sphere       ? shape_sphere_
                             : bones[i].shape == BoneShape::Cylinder   ? shape_cylinder_
                             : bones[i].shape == BoneShape::Capsule    ? shape_capsule_
@@ -94,16 +83,17 @@ void ClientApp::draw_weapon(WeaponType type, const Mat4& hand, const CharacterPa
 }
 
 void ClientApp::draw_role_weapon(const CharacterModel& model, const std::vector<Mat4>& jmats,
-                                 PlayerRole role, const Equipment& eq) {
+                                 PlayerRole role, const Equipment& eq, bool offhand, const Quat& wrist) {
     // Modular weapons: the role's main-hand weapon (the player's chosen weapon_index) on the
     // L-suffixed arm (the player's right) and the off-hand (shield / dagger) on the R-suffixed arm,
     // both built from the shared weapon_pieces at the equipment's tier + palette.
     const CharacterPalette& pal = model.palette();
     const u8 r = static_cast<u8>(role);
     const EquipmentTier wt = eq.weapon();
-    draw_weapon(role_weapon(r, eq.weapon_index), hand_frame(model, jmats, BonePart::LowerArmL), pal, wt);
+    draw_weapon(role_weapon(r, eq.weapon_index), hand_frame(model, jmats, BonePart::LowerArmL) * glm::mat4_cast(wrist),
+                pal, wt);
     const WeaponType off = role_offhand(r);
-    if (off != WeaponType::None) {
+    if (offhand && off != WeaponType::None) {
         draw_weapon(off, hand_frame(model, jmats, BonePart::LowerArmR), pal, wt);
     }
 }
@@ -154,7 +144,7 @@ void ClientApp::apply_idle_stance(const CharacterModel& model, std::vector<Quat>
 }
 
 void ClientApp::draw_planted_weapon(const CharacterModel& model, const std::vector<Mat4>& jmats,
-                                    const Vec3& feet, PlayerRole role, const Equipment& eq) {
+                                    const Vec3& feet, PlayerRole role, const Equipment& eq, bool offhand) {
     const CharacterPalette& pal = model.palette();
     const Mat4 hand = hand_frame(model, jmats, BonePart::LowerArmL);
     const Vec3 grip = Vec3{hand[3]};                       // where the hand grips the shaft
@@ -179,11 +169,90 @@ void ClientApp::draw_planted_weapon(const CharacterModel& model, const std::vect
                         glm::translate(Mat4{1.0f}, top) * glm::scale(Mat4{1.0f}, Vec3{0.13f}),
                         Vec4{pal.accent, 1.0f});
     }
-    // Keep the off-hand (the Cleric's shield) in hand.
+    // Keep the off-hand (the Cleric's shield) in hand - unless a lantern has taken its place.
     const WeaponType off = role_offhand(static_cast<u8>(role));
-    if (off != WeaponType::None) {
+    if (offhand && off != WeaponType::None) {
         draw_weapon(off, hand_frame(model, jmats, BonePart::LowerArmR), pal, eq.weapon());
     }
+}
+
+void ClientApp::apply_lantern_pose(const CharacterModel& model, std::vector<Quat>& pose, f32 weight) const {
+    auto set = [&](BonePart p, const Quat& q) {
+        const int i = model.bone_index(p);
+        if (i >= 0 && static_cast<usize>(i) < pose.size()) {
+            pose[static_cast<usize>(i)] = glm::slerp(pose[static_cast<usize>(i)], q, weight);
+        }
+    };
+    const Vec3 X{1.0f, 0.0f, 0.0f};
+    // The off-hand is the R-suffixed arm (the rig's labels are mirrored): raise the upper arm well
+    // forward and keep the elbow nearly straight, so the lantern is held OUT ahead at chest height.
+    set(BonePart::UpperArmR, glm::angleAxis(-1.12f, X));
+    set(BonePart::LowerArmR, glm::angleAxis(0.32f, X));
+}
+
+void ClientApp::draw_lantern(const CharacterModel& model, const std::vector<Mat4>& jmats, PlayerVisual& v,
+                             bool local) {
+    const Mat4 hand = hand_frame(model, jmats, BonePart::LowerArmR);
+    const Vec3 grip = Vec3{hand[3]};
+    // It hangs from the hand by its bail and swings with the walk (a damped pendulum feel from the
+    // gait speed), always settling plumb - not rigidly locked to the wrist's angle.
+    const f32 swing = std::sin(elapsed_ * 5.2f + v.animator.phase()) * glm::clamp(v.speed * 0.06f, 0.0f, 0.32f);
+    Vec3 fh{hand[2].x, 0.0f, hand[2].z}; // the arm's heading, flattened (the swing plane)
+    fh = glm::length(fh) > 1e-3f ? glm::normalize(fh) : Vec3{0.0f, 0.0f, 1.0f};
+    const Vec3 hang = glm::normalize(Vec3{0.0f, -1.0f, 0.0f} + fh * swing);
+    const Vec3 top = grip + hang * 0.1f;  // where the bail meets the lantern's cap
+    const Vec3 core = top + hang * 0.16f; // the glass + flame
+    // The lantern's own frame: +Y up its hanging axis, +Z toward the arm's heading (built directly, so
+    // its square body never snaps round as the swing passes through plumb).
+    const Vec3 up = -hang;
+    const Vec3 rt = glm::normalize(glm::cross(up, fh));
+    Mat4 frame{1.0f};
+    frame[0] = Vec4{rt, 0.0f};
+    frame[1] = Vec4{up, 0.0f};
+    frame[2] = Vec4{glm::cross(rt, up), 0.0f};
+    frame[3] = Vec4{core, 1.0f};
+    const Vec4 iron{0.16f, 0.15f, 0.15f, 1.0f};
+    const Vec4 brass{0.62f, 0.46f, 0.2f, 1.0f};
+    auto box = [&](const Vec3& c, const Vec3& s, const Vec4& col) {
+        renderer_->draw(shape_box_, frame * glm::translate(Mat4{1.0f}, c) * glm::scale(Mat4{1.0f}, s), col);
+    };
+    // The bail (the hand-loop) as a thin bar from the grip down to the cap.
+    renderer_->draw(shape_box_,
+                    glm::translate(Mat4{1.0f}, (grip + top) * 0.5f) * orient_to(top - grip) *
+                        glm::scale(Mat4{1.0f}, Vec3{0.018f, 0.018f, glm::length(top - grip) + 0.02f}),
+                    iron);
+    box(Vec3{0.0f, 0.15f, 0.0f}, Vec3{0.16f, 0.04f, 0.16f}, brass);  // cap
+    box(Vec3{0.0f, 0.19f, 0.0f}, Vec3{0.09f, 0.04f, 0.09f}, brass);  // cap peak
+    box(Vec3{0.0f, -0.14f, 0.0f}, Vec3{0.17f, 0.04f, 0.17f}, iron);  // base
+    for (const f32 sx : {-0.07f, 0.07f}) {                            // four corner posts
+        for (const f32 sz : {-0.07f, 0.07f}) {
+            box(Vec3{sx, 0.0f, sz}, Vec3{0.022f, 0.26f, 0.022f}, iron);
+        }
+    }
+    // The glowing glass + flame (dims by day so it doesn't look like a hole in the scene).
+    const f32 night = 1.0f - sun_intensity_;
+    const f32 flick = 0.92f + 0.08f * std::sin(elapsed_ * 13.0f + v.last_pos.x) + 0.05f * std::sin(elapsed_ * 7.1f);
+    const f32 g = glm::mix(0.75f, 1.35f, night) * flick;
+    renderer_->draw_emissive(shape_box_, frame * glm::scale(Mat4{1.0f}, Vec3{0.12f, 0.24f, 0.12f}),
+                             Vec4{1.0f * g, 0.78f * g, 0.42f * g, 1.0f});
+    renderer_->draw_glow(shape_sphere_, glm::translate(Mat4{1.0f}, core) * glm::scale(Mat4{1.0f}, Vec3{0.42f}),
+                         Vec4{1.0f, 0.72f, 0.36f, (0.18f + 0.3f * night) * flick});
+
+    // The light: a warm pool around the hero. By day it barely tints; at night it carves a lit circle
+    // out of the dark. The local hero's is a priority shadow-caster (bodies + props throw shadows away
+    // from the lantern); teammates' join the cheap unshadowed pool.
+    const f32 strength = (0.25f + 1.9f * night) * flick;
+    Renderer::SpotLight sl;
+    sl.position = core + Vec3{0.0f, 0.25f, 0.0f};
+    sl.direction = Vec3{0.0f, -1.0f, 0.0f};
+    sl.color = Vec3{1.0f, 0.76f, 0.44f} * strength;
+    sl.range = 14.0f;
+    sl.cone_outer_cos = std::cos(glm::radians(80.0f));
+    sl.cone_inner_cos = std::cos(glm::radians(48.0f));
+    sl.cast_shadow = local;
+    sl.priority = local;
+    renderer_->add_light(sl);
+    fx_light(core, Vec3{1.0f, 0.74f, 0.42f}, 0.6f * flick, 5.0f); // a soft omni fill on nearby walls
 }
 
 void ClientApp::skin_and_draw(const CharacterModel& model, const SkinnedMesh& src, Mesh& gpu,
@@ -260,6 +329,9 @@ void ClientApp::draw_character(PlayerVisual& v, const Vec3& feet, f32 yaw, bool 
     if (idle_w > 0.01f) {
         apply_idle_stance(v.model, pose, r, idle_w);
     }
+    if (v.lantern_w > 0.01f && !seated) {
+        apply_lantern_pose(v.model, pose, v.lantern_w); // the off-hand holds the lantern out ahead
+    }
     // The continuous skinned body, then the face/hair/gear attachment primitives on top.
     draw_skinned_body(v, root, pose);
     const std::vector<Mat4> mats = v.model.bone_matrices(root, pose);
@@ -270,18 +342,38 @@ void ClientApp::draw_character(PlayerVisual& v, const Vec3& feet, f32 yaw, bool 
         const std::vector<Mat4> jmats = v.model.joint_matrices(root, pose);
         draw_cloth(v, root, jmats, Vec3{1.0f}, base.y); // simulated flowing cloth (cape, ...)
         const bool staff_user = (r == PlayerRole::Mage || r == PlayerRole::Cleric);
+        const bool offhand = !v.lantern; // the lantern takes the off-hand (shield / dagger stowed)
         if (idle_w > 0.5f && staff_user) {
-            draw_planted_weapon(v.model, jmats, feet, r, v.equipment); // rest on the planted staff/mace
+            draw_planted_weapon(v.model, jmats, feet, r, v.equipment, offhand); // rest on the planted staff
         } else {
-            draw_role_weapon(v.model, jmats, r, v.equipment);
+            draw_role_weapon(v.model, jmats, r, v.equipment, offhand, v.animator.weapon_wrist(v.model));
         }
-        // A steel motion trail off the real blade tip while a Knight is mid-swing (the sword
-        // is on the player's right = the L-suffixed bone).
-        if (r == PlayerRole::Knight && v.animator.swinging()) {
+        if (v.lantern) {
+            const auto mine = visuals_.find(my_id_);
+            draw_lantern(v.model, jmats, v, mine != visuals_.end() && &mine->second == &v);
+        }
+        draw_charge_fx(v, jmats, r, v.animator.charge()); // power gathering while a heavy winds up
+        // The cut's SMEAR: while the blade is moving fast, a pale steel arc is laid along the path
+        // the tip sweeps (motes spaced between last frame's tip and this one's, so a quick cut reads
+        // as one continuous crescent, not dots). The sword is on the player's right (L-suffixed bone).
+        if (r == PlayerRole::Knight && (v.animator.swinging() || v.animator.heavy_swinging())) {
             const Mat4 grip = hand_frame(v.model, jmats, BonePart::LowerArmL) *
-                              glm::rotate(Mat4{1.0f}, -0.35f, Vec3{1.0f, 0.0f, 0.0f});
-            const Vec3 tip = Vec3{(grip * glm::translate(Mat4{1.0f}, Vec3{0.0f, -1.15f, 0.0f}))[3]};
-            emit(tip, Vec3{0.0f}, Vec4{0.92f, 0.96f, 1.0f, 0.8f}, 0.16f, 0.17f, 1);
+                              glm::mat4_cast(v.animator.weapon_wrist(v.model));
+            const Vec3 tip = Vec3{(grip * glm::translate(Mat4{1.0f}, Vec3{0.0f, -1.05f, 0.0f}))[3]};
+            const Vec3 mid = Vec3{(grip * glm::translate(Mat4{1.0f}, Vec3{0.0f, -0.6f, 0.0f}))[3]};
+            if (v.animator.swing_cutting() && v.tip_valid) {
+                const int steps = std::clamp(static_cast<int>(glm::length(tip - v.last_tip) / 0.06f), 1, 10);
+                for (int k = 0; k < steps; ++k) {
+                    const f32 u = (static_cast<f32>(k) + 0.5f) / static_cast<f32>(steps);
+                    const Vec3 a = glm::mix(v.last_tip, tip, u);
+                    emit(a, Vec3{0.0f}, Vec4{0.9f, 0.95f, 1.0f, 0.75f}, 0.13f, 0.14f, 1);
+                    emit(glm::mix(mid, a, 0.55f), Vec3{0.0f}, Vec4{0.85f, 0.9f, 1.0f, 0.35f}, 0.1f, 0.1f, 1);
+                }
+            }
+            v.last_tip = tip;
+            v.tip_valid = true;
+        } else {
+            v.tip_valid = false;
         }
     }
 }

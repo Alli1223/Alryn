@@ -128,6 +128,17 @@ void NetServer::broadcast_deform(const DeformEvent& deform) {
     broadcast_packet(message, true);
 }
 
+void NetServer::send_deform(PlayerId client, const DeformEvent& deform) {
+    const auto it = peers_.find(client);
+    if (it == peers_.end()) {
+        return;
+    }
+    ByteWriter message;
+    message.write_u8(static_cast<u8>(MessageType::Deform));
+    write(message, deform);
+    send_packet(it->second, message, true);
+}
+
 void NetServer::broadcast_player_left(PlayerId id) {
     ByteWriter message;
     message.write_u8(static_cast<u8>(MessageType::PlayerLeft));

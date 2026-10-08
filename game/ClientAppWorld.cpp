@@ -44,8 +44,37 @@ Vec3 bandit_tint(u8 kind) {
         case 3u: return Vec3{0.92f, 1.0f, 0.9f};          // archer/outlaw - a cold woodland cast
         case kEnemyHealer: return Vec3{0.9f, 1.0f, 0.94f}; // healer - a sickly pallor
         case kEnemyWarlord: return Vec3{1.08f, 0.72f, 0.72f}; // warlord - a deep crimson menace
+        case kEnemyWolf:
+        case kEnemyAlpha: return Vec3{0.86f, 0.9f, 1.0f};   // wolves - a cold grey coat (not the warm grade's tan)
         default: return Vec3{1.0f, 0.9f, 0.88f};          // grunts - a grimy warm neutral
     }
+}
+// The shortest rotation taking direction `a` onto `b` (both unit length).
+Quat from_to(const Vec3& a, const Vec3& b) {
+    const f32 c = glm::dot(a, b);
+    if (c < -0.9999f) {
+        return glm::angleAxis(Pi, Vec3{1.0f, 0.0f, 0.0f});
+    }
+    const Vec3 ax = glm::cross(a, b);
+    return glm::normalize(Quat{1.0f + c, ax.x, ax.y, ax.z});
+}
+// A felled foe's size (matching the server-side bulk): brutes + warlords tower, an alpha wolf looms.
+f32 enemy_scale(u8 kind) {
+    return kind == 2 ? 1.5f : kind == kEnemyWarlord ? 1.28f : kind == kEnemyAlpha ? 1.35f : 1.0f;
+}
+// Where a character's eyes sit in the world (matching CharacterModel::add_features), so a raider's
+// ember-lit eyes can glint out from under its hood.
+std::array<Vec3, 2> eye_points(const CharacterModel& m, const std::vector<Mat4>& jmats) {
+    const int hi = m.bone_index(BonePart::Head);
+    if (hi < 0 || static_cast<usize>(hi) >= jmats.size()) {
+        return {};
+    }
+    const Bone& head = m.bones()[static_cast<usize>(hi)];
+    const f32 r = head.box_size.x * 0.5f;
+    const Vec3 c = head.box_center;
+    const Mat4& J = jmats[static_cast<usize>(hi)];
+    return {Vec3{J * Vec4{c.x - r * 0.38f, c.y + r * 0.1f, c.z + r * 1.02f, 1.0f}},
+            Vec3{J * Vec4{c.x + r * 0.38f, c.y + r * 0.1f, c.z + r * 1.02f, 1.0f}}};
 }
 } // namespace
 
@@ -53,22 +82,44 @@ void ClientApp::update_enemy_visuals(Timestep dt) {
     if (!have_snapshot_) {
         return;
     }
+    Audio* snd = audio();
     for (const net::EnemyState& en : snapshot_.enemies) {
         const auto [it, created] = enemy_visuals_.try_emplace(en.id);
         EnemyVisual& v = it->second;
+        const bool beast = is_beast(en.kind);
         if (created) {
-            const OutfitKind kind = bandit_outfit_for(en.kind);
-            CharacterAppearance look = enemy_look();
-            look.skin = static_cast<u8>((en.id * 7u + 2u) % 6u); // vary complexion per bandit
-            v.model = CharacterModel::create(en.id ^ 0xE0E0u, look);
-            Equipment eq;
-            eq.outfit_tint = static_cast<u8>(en.id % 4u); // vary the cloth colour per bandit
-            apply_outfit(v.model, kind, eq);              // dress them (adds decorative attachment bones)
-            v.body_skin = build_body_mesh(v.model);
-            v.outfit_skin = build_outfit_mesh(v.model, kind, eq);
             v.last_pos = en.position;
             v.kind = en.kind;
+            v.last_health = en.health;
+            v.gait = static_cast<f32>(en.id % 7u);
+            if (!beast) {
+                const OutfitKind kind = bandit_outfit_for(en.kind);
+                CharacterAppearance look = enemy_look();
+                look.skin = static_cast<u8>((en.id * 7u + 2u) % 6u); // vary complexion per bandit
+                v.model = CharacterModel::create(en.id ^ 0xE0E0u, look);
+                Equipment eq;
+                eq.outfit_tint = static_cast<u8>(en.id % 4u); // vary the cloth colour per bandit
+                apply_outfit(v.model, kind, eq);              // dress them (adds decorative attachment bones)
+                // Ember-lit eyes glaring out from under the hood - the whites sunk in its shadow.
+                v.model.palette().glow = Vec3{1.0f, 0.42f, 0.12f};
+                v.model.recolor_attachments([](const Bone& b) { return b.color == BoneColor::Eye; }, BoneColor::Glow);
+                v.model.recolor_attachments([](const Bone& b) { return b.color == BoneColor::Linen; }, BoneColor::Dark);
+                v.body_skin = build_body_mesh(v.model);
+                v.outfit_skin = build_outfit_mesh(v.model, kind, eq);
+            }
+            // A raider charging into view bellows a war-cry, a wolf howls - one in a few, so a whole pack
+            // or warband doesn't drown itself out.
+            if (snd != nullptr && (en.id % 3u == 0u || en.kind == kEnemyWarlord || en.kind == kEnemyAlpha) &&
+                glm::length(en.position - local_feet()) < 60.0f) {
+                snd->play_at(beast ? SfxId::Howl : SfxId::Roar, en.position, beast ? 0.75f : 0.65f,
+                             en.kind == 2 || en.kind == kEnemyAlpha ? 0.8f : frand(0.92f, 1.12f));
+            }
         }
+        // A fresh wound: the body blanches + recoils for a moment.
+        if (en.health + 2u < v.last_health) {
+            v.hurt = 1.0f;
+        }
+        v.hurt = std::max(0.0f, v.hurt - dt.seconds * 5.0f);
         v.last_health = en.health;
         f32 measured = 0.0f;
         if (dt.seconds > 0.0001f) {
@@ -78,24 +129,75 @@ void ClientApp::update_enemy_visuals(Timestep dt) {
         }
         v.speed = glm::mix(v.speed, measured, 0.3f);
         v.last_pos = en.position;
-        if (en.action == 1 && v.last_action != 1) {
-            v.animator.play_swing(); // the enemy just struck - play the swing
+        v.last_yaw_dir = Vec3{std::cos(en.yaw), 0.0f, std::sin(en.yaw)};
+        if (beast) {
+            // The run cycle follows the ground covered; the jaw snaps open on a bite / a pounce and
+            // curls into a snarl while crouched to spring (with a growl).
+            v.gait += std::min(measured, 12.0f) * dt.seconds * 2.4f;
+            const f32 jaw_goal = (en.action == 1 || en.action == 4)  ? 1.0f
+                                 : en.action == 2                     ? 0.55f
+                                                                      : 0.1f + 0.08f * std::sin(elapsed_ * 3.0f + static_cast<f32>(en.id));
+            v.jaw += (jaw_goal - v.jaw) * std::min(1.0f, dt.seconds * 16.0f);
+            if (snd != nullptr && en.action == 2 && v.last_action != 2) {
+                snd->play_at(SfxId::Roar, en.position, 0.45f, en.kind == kEnemyAlpha ? 1.25f : 1.55f); // a snarl
+            }
+        } else {
+            if (en.action == 1 && v.last_action != 1) {
+                v.animator.play_swing(0.1f); // the enemy just struck - swing (from the top of the wind-up)
+            }
+            // The archer DRAWS its bow while it aims; the brute heaves its maul up overhead as the slam
+            // winds up, and brings it crashing down on the strike.
+            if (en.kind == 3u) {
+                v.animator.set_charge(en.action == 2 ? 1.0f : 0.0f, 1);
+            } else if (en.kind == 2u) {
+                v.animator.set_charge(en.action == 2 ? 1.0f : 0.0f, 0);
+                if (en.action == 3 && v.last_action != 3) {
+                    v.animator.play_heavy(0);
+                    const Vec3 at = en.position + v.last_yaw_dir * 1.3f;
+                    emit_ring(at, Vec4{0.6f, 0.52f, 0.42f, 0.55f}, 26, 7.0f, 1.0f, 0.38f, 2);
+                    for (int i = 0; i < 22; ++i) {
+                        Vec3 d = rand_dir();
+                        d.y = std::abs(d.y) + 0.7f;
+                        emit(at + Vec3{0.0f, 0.2f, 0.0f}, d * frand(2.5f, 6.0f), Vec4{0.33f, 0.28f, 0.23f, 1.0f},
+                             frand(0.6f, 1.0f), frand(0.08f, 0.16f), 0, 14.0f, 0.4f);
+                    }
+                    if (snd != nullptr) {
+                        snd->play_at(SfxId::Thud, at, 1.0f, 0.75f);
+                    }
+                    if (glm::length(at - local_feet()) < kSlamRadius + 4.0f) {
+                        cam_shake_ = std::max(cam_shake_, 1.1f);
+                    }
+                }
+            }
         }
-        v.last_action = en.action;
         // Elemental Shatter VFX: while chilled, drift a few frost motes; when the chill clears with the
         // enemy still alive (a heavy hit shattered it), burst icy shards.
-        const bool chilled = (en.status & 1u) != 0u;
+        const bool chilled = (en.status & net::kStatusChilled) != 0u;
         if (chilled && dt.seconds > 0.0001f) {
             emit(en.position + Vec3{frand(-0.3f, 0.3f), frand(0.4f, 1.4f), frand(-0.3f, 0.3f)},
                  Vec3{0.0f, frand(-0.4f, 0.2f), 0.0f}, Vec4{0.7f, 0.88f, 1.0f, 0.8f}, 0.5f, 0.07f, 1);
-        } else if (!chilled && (v.last_status & 1u) != 0u) {
+        } else if (!chilled && (v.last_status & net::kStatusChilled) != 0u) {
             emit_burst(en.position + Vec3{0.0f, 0.9f, 0.0f}, Vec4{0.72f, 0.9f, 1.0f, 0.95f}, 20, 6.0f,
                        0.45f, 0.12f, 1, 1.0f, 3.0f);
             combat_text(en.position, "SHATTER!", Vec4{0.75f, 0.92f, 1.0f, 1.0f}); // the combo landed
-            if (Audio* snd = audio()) {
+            if (snd != nullptr) {
                 snd->play_at(SfxId::Shatter, en.position, 0.9f);
             }
         }
+        // The last raider standing snaps into a berserk fury: it roars, and the rage shows (see menace).
+        if ((en.status & net::kStatusEnraged) != 0u && (v.last_status & net::kStatusEnraged) == 0u && !beast) {
+            combat_text(en.position, "ENRAGED!", Vec4{1.0f, 0.38f, 0.22f, 1.0f});
+            if (snd != nullptr) {
+                snd->play_at(SfxId::Roar, en.position, 0.85f, 0.85f);
+            }
+        }
+        // Bogged down in a dug pit: mud slops up round its legs as it wades.
+        if ((en.status & net::kStatusMired) != 0u && v.speed > 0.3f && frand() < 0.4f) {
+            emit(en.position + Vec3{frand(-0.3f, 0.3f), 0.15f, frand(-0.3f, 0.3f)},
+                 Vec3{frand(-0.8f, 0.8f), frand(1.2f, 2.2f), frand(-0.8f, 0.8f)}, Vec4{0.24f, 0.18f, 0.12f, 1.0f}, 0.5f,
+                 frand(0.06f, 0.1f), 0, 9.0f, 0.5f);
+        }
+        v.last_action = en.action;
         v.last_status = en.status;
         v.animator.update(v.speed, dt);
     }
@@ -104,35 +206,54 @@ void ClientApp::update_enemy_visuals(Timestep dt) {
                                       [&](const net::EnemyState& e) { return e.id == it->first; });
         if (live) {
             ++it;
-        } else {
-            // A bandit vanishing MID-HAUL died (dusk despawns / contract ends flip the phase the same
-            // tick, so those don't shower loot). Felled -> a spilled purse of golden coins; a sapper
-            // that was still healthy went up on its own satchel -> a fiery blast instead.
-            if (snapshot_.contract_phase == static_cast<u8>(ContractPhase::Active)) {
-                const EnemyVisual& dv = it->second;
-                const Vec3 at = dv.last_pos + Vec3{0.0f, 0.9f, 0.0f};
-                Audio* snd = audio();
-                if (dv.kind == kEnemySapper && dv.last_health > 128u) {
-                    emit_burst(at, Vec4{1.0f, 0.55f, 0.2f, 1.0f}, 26, 7.0f, 0.5f, 0.16f, 1, 2.0f);
-                    emit_burst(at, Vec4{0.25f, 0.22f, 0.2f, 0.8f}, 14, 3.0f, 1.1f, 0.3f, 0, 2.5f);
-                    if (snd != nullptr) {
-                        snd->play_at(SfxId::Explosion, at, 1.0f); // the satchel goes up
-                    }
-                } else {
-                    for (int c = 0; c < 12; ++c) { // coins: golden glints tossed up, arcing down
-                        emit(at, Vec3{frand(-2.2f, 2.2f), frand(2.5f, 5.5f), frand(-2.2f, 2.2f)},
-                             Vec4{1.0f, 0.85f, 0.3f, 1.0f}, 0.9f, 0.09f, 1, 9.0f, 0.4f);
-                    }
-                    emit_burst(at, Vec4{0.5f, 0.42f, 0.35f, 0.7f}, 10, 2.5f, 0.6f, 0.2f, 0, 1.0f);
-                    if (snd != nullptr) {
-                        snd->play_at(SfxId::Coin, at, 0.6f, frand(0.9f, 1.15f)); // the purse spills
-                    }
-                }
-            }
-            retire_mesh(std::move(it->second.body_mesh)); // defer the GPU free past the frames in flight
-            retire_mesh(std::move(it->second.outfit_mesh));
-            it = enemy_visuals_.erase(it);
+            continue;
         }
+        // A foe vanishing MID-FIGHT died (a haul's dusk/contract-end despawns flip the phase the same
+        // tick, so those don't shower loot). Felled -> it pitches over and sinks away, spilling its purse
+        // of golden coins; a sapper that was still healthy went up on its own satchel -> a fiery blast.
+        EnemyVisual& dv = it->second;
+        const bool fight = snapshot_.contract_phase == static_cast<u8>(ContractPhase::Active) ||
+                           (dv.last_status & net::kStatusQuest) != 0u;
+        if (fight && glm::length(dv.last_pos - local_feet()) < 80.0f) {
+            const Vec3 at = dv.last_pos + Vec3{0.0f, 0.9f, 0.0f};
+            Audio* s = audio();
+            if (dv.kind == kEnemySapper && dv.last_health > 128u) {
+                emit_burst(at, Vec4{1.0f, 0.55f, 0.2f, 1.0f}, 26, 7.0f, 0.5f, 0.16f, 1, 2.0f);
+                emit_burst(at, Vec4{0.25f, 0.22f, 0.2f, 0.8f}, 14, 3.0f, 1.1f, 0.3f, 0, 2.5f);
+                if (s != nullptr) {
+                    s->play_at(SfxId::Explosion, at, 1.0f); // the satchel goes up
+                }
+            } else {
+                for (int c = 0; c < (is_beast(dv.kind) ? 5 : 12); ++c) { // coins: golden glints tossed up, arcing down
+                    emit(at, Vec3{frand(-2.2f, 2.2f), frand(2.5f, 5.5f), frand(-2.2f, 2.2f)},
+                         Vec4{1.0f, 0.85f, 0.3f, 1.0f}, 0.9f, 0.09f, 1, 9.0f, 0.4f);
+                }
+                emit_burst(at, Vec4{0.5f, 0.42f, 0.35f, 0.7f}, 10, 2.5f, 0.6f, 0.2f, 0, 1.0f);
+                if (s != nullptr) {
+                    s->play_at(SfxId::Coin, at, 0.6f, frand(0.9f, 1.15f)); // the purse spills
+                }
+                // The body topples away from the blow (away from us, near enough) and sinks into the earth.
+                EnemyDeath d;
+                d.pos = dv.last_pos;
+                d.yaw = std::atan2(dv.last_yaw_dir.z, dv.last_yaw_dir.x);
+                d.scale = enemy_scale(dv.kind);
+                Vec3 away = dv.last_pos - local_feet();
+                away.y = 0.0f;
+                d.fall = glm::length(away) > 0.1f ? glm::normalize(away) : -dv.last_yaw_dir;
+                d.v = std::move(dv);
+                if (enemy_deaths_.size() >= 12) {
+                    retire_mesh(std::move(enemy_deaths_.front().v.body_mesh));
+                    retire_mesh(std::move(enemy_deaths_.front().v.outfit_mesh));
+                    enemy_deaths_.erase(enemy_deaths_.begin());
+                }
+                enemy_deaths_.push_back(std::move(d));
+                it = enemy_visuals_.erase(it);
+                continue;
+            }
+        }
+        retire_mesh(std::move(dv.body_mesh)); // defer the GPU free past the frames in flight
+        retire_mesh(std::move(dv.outfit_mesh));
+        it = enemy_visuals_.erase(it);
     }
 }
 
@@ -146,16 +267,28 @@ void ClientApp::draw_enemies() {
             continue;
         }
         EnemyVisual& v = it->second;
-        // Bandit kinds: 0 grunt (dagger), 1 torch-bearer, 2 brute (maul, big), 3 archer (Outlaw kit +
-        // bow), 4 shield-bearer (sword + big shield), 5 healer (orb), 6 sapper (satchel), 7 warlord.
-        const f32 scale = en.kind == 2 ? 1.5f : en.kind == kEnemyWarlord ? 1.28f : 1.0f;
-        const Mat4 root = glm::translate(Mat4{1.0f}, en.position) *
-                          glm::rotate(Mat4{1.0f}, HalfPi - en.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
-                          glm::scale(Mat4{1.0f}, Vec3{scale}) * v.animator.body_offset();
+        // The tint: the kind's grimy cast, rimed blue when chilled, flushed red in a berserk rage, and
+        // blanched pale for a beat when a blow lands.
         Vec3 tint = bandit_tint(en.kind);
-        if ((en.status & 1u) != 0u) {
+        if ((en.status & net::kStatusChilled) != 0u) {
             tint = glm::mix(tint, Vec3{0.55f, 0.75f, 1.2f}, 0.6f); // chilled (Frost Bolt): an icy-blue rime
         }
+        if ((en.status & net::kStatusEnraged) != 0u) {
+            const f32 throb = 0.5f + 0.5f * std::sin(elapsed_ * 9.0f + static_cast<f32>(en.id));
+            tint *= glm::mix(Vec3{1.0f}, Vec3{1.3f, 0.72f, 0.66f}, 0.4f + 0.3f * throb);
+        }
+        tint = glm::mix(tint, Vec3{1.8f, 1.55f, 1.45f}, v.hurt * 0.55f);
+        if (is_beast(en.kind)) {
+            draw_wolf(v, en, tint);
+            continue;
+        }
+        // Bandit kinds: 0 grunt (dagger), 1 torch-bearer, 2 brute (maul, big), 3 archer (Outlaw kit +
+        // bow), 4 shield-bearer (sword + big shield), 5 shaman (spirit fire), 6 sapper (satchel), 7 warlord.
+        const f32 scale = enemy_scale(en.kind);
+        const Mat4 root = glm::translate(Mat4{1.0f}, en.position) *
+                          glm::rotate(Mat4{1.0f}, HalfPi - en.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
+                          glm::scale(Mat4{1.0f}, Vec3{scale}) * v.animator.body_offset() *
+                          glm::rotate(Mat4{1.0f}, -0.22f * v.hurt, Vec3{1.0f, 0.0f, 0.0f}); // recoil
         const std::vector<Quat> pose = v.animator.pose(v.model);
         if (v.body_skin.vertices.empty()) {
             v.body_skin = build_body_mesh(v.model);
@@ -168,152 +301,383 @@ void ClientApp::draw_enemies() {
         // from the shared modular weapon_pieces at the tarnished bandit palette so it swings with the arm.
         const std::vector<Mat4> jmats = v.model.joint_matrices(root, pose);
         if (const WeaponType bw = bandit_weapon(en.kind); bw != WeaponType::None) {
-            draw_weapon(bw, hand_frame(v.model, jmats, BonePart::LowerArmL), v.model.palette(),
-                        EquipmentTier::Worn);
+            draw_weapon(bw, hand_frame(v.model, jmats, BonePart::LowerArmL) *
+                                glm::mat4_cast(v.animator.weapon_wrist(v.model)),
+                        v.model.palette(), EquipmentTier::Worn);
         }
-        // The lone last raider is ENRAGED (server gives it a speed/damage boost) - a red angry aura
-        // so the climax reads (derived from the snapshot: one non-brute ambusher left).
-        if (snapshot_.enemies.size() == 1 && en.kind != 2) {
-            const f32 puls = 0.6f + 0.4f * std::sin(elapsed_ * 14.0f);
-            renderer_->draw_glow(shape_sphere_,
-                                 glm::translate(Mat4{1.0f}, en.position + Vec3{0.0f, 1.0f, 0.0f}) *
-                                     glm::scale(Mat4{1.0f}, Vec3{1.3f}),
-                                 Vec4{1.0f, 0.18f, 0.12f, 0.4f * puls});
+        draw_enemy_menace(v, en, jmats, scale);
+    }
+}
+
+// The ferocity layer over a raider's body: ember eyes, war paint and rank pieces bolted to its bones
+// (they move with it), the brute's ground-splitting telegraph, the warlord's rallying cry, the berserk
+// rage of the last one standing, and each kind's tools - torch, satchel, shaman's spirit fire, a skull-
+// painted shield, a burning arrow nocked.
+void ClientApp::draw_enemy_menace(EnemyVisual& v, const net::EnemyState& en, const std::vector<Mat4>& jmats, f32 scale) {
+    const CharacterModel& m = v.model;
+    const int hi = m.bone_index(BonePart::Head);
+    if (hi < 0 || static_cast<usize>(hi) >= jmats.size()) {
+        return;
+    }
+    const Bone& hb = m.bones()[static_cast<usize>(hi)];
+    const f32 hs = hb.box_size.x;
+    const f32 r = hs * 0.5f;
+    const Vec3 hc = hb.box_center;
+    const Mat4& head = jmats[static_cast<usize>(hi)];
+    const Vec3 fwd{std::cos(en.yaw), 0.0f, std::sin(en.yaw)};
+    const f32 night = 1.0f - sun_intensity_;
+    const bool enraged = (en.status & net::kStatusEnraged) != 0u;
+    const f32 rage = enraged ? 0.6f + 0.4f * std::sin(elapsed_ * 11.0f + static_cast<f32>(en.id)) : 0.0f;
+    const Vec4 iron{0.2f, 0.19f, 0.2f, 1.0f};
+    const Vec4 bone{0.84f, 0.8f, 0.68f, 1.0f};
+    const Vec4 blood{0.3f, 0.035f, 0.03f, 1.0f};
+    auto box_on = [&](const Mat4& frame, const Vec3& at, const Vec3& size, const Vec4& col, const Quat& rot = QuatIdentity) {
+        renderer_->draw(shape_box_, frame * glm::translate(Mat4{1.0f}, at) * glm::mat4_cast(rot) * glm::scale(Mat4{1.0f}, size),
+                        col);
+    };
+    auto roll = [](f32 a) { return glm::angleAxis(a, Vec3{0.0f, 0.0f, 1.0f}); };
+    auto pitch = [](f32 a) { return glm::angleAxis(a, Vec3{1.0f, 0.0f, 0.0f}); };
+    // A curving horn: tapering segments sweeping out from the temple, up, then forward to a point.
+    auto horn = [&](f32 side, f32 size, const Vec4& col) {
+        Vec3 p{hc.x + side * r * 0.75f, hc.y + r * 0.62f, hc.z - r * 0.1f};
+        const Vec3 step[4] = {{side * 0.6f, 0.35f, 0.0f}, {side * 0.45f, 0.7f, 0.1f}, {side * 0.1f, 0.8f, 0.45f}, {0.0f, 0.4f, 0.85f}};
+        f32 w = hs * 0.16f * size;
+        for (int i = 0; i < 4; ++i) {
+            const Vec3 d = glm::normalize(step[i]) * (hs * 0.18f * size);
+            box_on(head, p + d * 0.5f, Vec3{w, glm::length(d) * 1.3f, w}, col,
+                   from_to(Vec3{0.0f, 1.0f, 0.0f}, glm::normalize(d)));
+            p += d;
+            w *= 0.74f;
         }
-        if (en.kind == kEnemyWarlord) {
-            // A rallying champion: a crimson aura ring on the ground (the rally zone - allies inside
-            // march faster + hit harder until it falls, so cut it down first) + a back-banner.
-            const Vec3 base{en.position.x, en.position.y + 0.04f, en.position.z};
-            const f32 puls = 0.55f + 0.3f * std::sin(elapsed_ * 6.0f);
-            renderer_->draw_transparent(
-                shape_sphere_,
-                glm::translate(Mat4{1.0f}, base) *
-                    glm::scale(Mat4{1.0f}, Vec3{kWarlordAuraRadius, 0.04f, kWarlordAuraRadius}),
-                Vec4{0.85f, 0.12f, 0.2f, 0.1f + 0.06f * puls});
-            const Vec3 fwd{std::cos(en.yaw), 0.0f, std::sin(en.yaw)};
-            const Vec3 polebase = en.position - fwd * 0.25f;
-            renderer_->draw(shape_box_,
-                            glm::translate(Mat4{1.0f}, polebase + Vec3{0.0f, 1.4f, 0.0f}) *
-                                glm::scale(Mat4{1.0f}, Vec3{0.05f, 1.4f, 0.05f}),
-                            Vec4{0.15f, 0.1f, 0.08f, 1.0f}); // banner pole
-            renderer_->draw(shape_box_,
-                            glm::translate(Mat4{1.0f}, polebase + Vec3{0.0f, 2.35f, 0.0f} - fwd * 0.18f) *
-                                glm::scale(Mat4{1.0f}, Vec3{0.04f, 0.5f, 0.36f}),
-                            Vec4{0.82f, 0.12f, 0.2f, 1.0f}); // crimson flag
-        }
-        if (en.kind == 2 && (en.action == 2 || en.action == 3)) {
-            // Brute slam telegraph: a pulsing red danger ring on the ground while it winds up
-            // (action 2 - dodge out of it!), then a bright shockwave burst on the strike (action 3).
-            const Vec3 c{en.position.x, en.position.y + 0.06f, en.position.z};
-            if (en.action == 2) {
-                const f32 puls = 0.5f + 0.35f * std::sin(elapsed_ * 12.0f);
-                renderer_->draw_transparent(
-                    shape_sphere_,
-                    glm::translate(Mat4{1.0f}, c) *
-                        glm::scale(Mat4{1.0f}, Vec3{kSlamRadius, 0.05f, kSlamRadius}),
-                    Vec4{0.95f, 0.2f, 0.15f, 0.28f + 0.18f * puls});
-                renderer_->draw_glow(shape_sphere_,
-                                     glm::translate(Mat4{1.0f}, c) *
-                                         glm::scale(Mat4{1.0f}, Vec3{kSlamRadius * 1.03f, 0.04f,
-                                                                     kSlamRadius * 1.03f}),
-                                     Vec4{1.0f, 0.3f, 0.2f, 0.32f * puls});
-            } else { // action 3: the slam landed
-                renderer_->draw_glow(shape_sphere_,
-                                     glm::translate(Mat4{1.0f}, c + Vec3{0.0f, 0.2f, 0.0f}) *
-                                         glm::scale(Mat4{1.0f}, Vec3{kSlamRadius * 1.2f, 0.5f,
-                                                                     kSlamRadius * 1.2f}),
-                                     Vec4{1.0f, 0.55f, 0.25f, 0.6f});
+    };
+    // A short iron spike jutting from a joint frame.
+    auto spike = [&](const Mat4& frame, const Vec3& at, const Vec3& dir, f32 len) {
+        const Vec3 d = glm::normalize(dir);
+        box_on(frame, at + d * len * 0.5f, Vec3{len * 0.22f, len, len * 0.22f}, iron, from_to(Vec3{0.0f, 1.0f, 0.0f}, d));
+    };
+
+    // EMBER EYES: the glowing eyes (the eye bones are emissive) get a glint that blooms in the dark -
+    // and flares when it's enraged.
+    for (const Vec3& e : eye_points(m, jmats)) {
+        const Vec3 toward = glm::normalize(camera_.position() - e) * 0.02f;
+        renderer_->draw_sprite(e + toward, (0.04f + 0.025f * night + 0.03f * rage) * scale,
+                               Vec4{1.0f, 0.42f + 0.2f * rage, 0.12f, 0.55f + 0.35f * night + 0.4f * rage}, 0.75f);
+    }
+    // WAR PAINT: a band of dried blood smeared across the eyes (not the archers - their scarves ride high).
+    if (en.kind != 3u && en.kind != kEnemyHealer) {
+        box_on(head, Vec3{hc.x, hc.y + r * 0.1f, hc.z + r * 0.995f}, Vec3{hs * 1.04f, hs * 0.12f, 0.012f}, blood);
+    }
+
+    const int iul = m.bone_index(BonePart::UpperArmL), iur = m.bone_index(BonePart::UpperArmR);
+    const int it = m.bone_index(BonePart::Torso);
+    auto shoulder_spikes = [&](int n, f32 len) {
+        for (const int ia : {iul, iur}) {
+            if (ia < 0) {
+                continue;
+            }
+            const f32 o = m.bones()[static_cast<usize>(ia)].joint_offset.x < 0.0f ? -1.0f : 1.0f;
+            for (int k = 0; k < n; ++k) {
+                spike(jmats[static_cast<usize>(ia)], Vec3{o * 0.05f, 0.08f, -0.05f + 0.07f * static_cast<f32>(k)},
+                      Vec3{o * 0.7f, 1.0f, 0.0f}, len);
             }
         }
-        if (en.kind == kEnemySapper) {
-            // A lit-fuse satchel charge on its back: a dark box + a fast-sparking emissive fuse tip,
-            // so the bomber reads as "intercept me before I reach the cart!".
-            const Vec3 back = en.position -
-                              Vec3{std::cos(en.yaw), 0.0f, std::sin(en.yaw)} * 0.22f +
-                              Vec3{0.0f, 1.05f, 0.0f};
+    };
+    switch (en.kind) {
+        case 2u: { // BRUTE: curling horns, tusks jutting from the jaw, spiked iron shoulders
+            horn(-1.0f, 1.2f, bone);
+            horn(1.0f, 1.2f, bone);
+            for (const f32 s : {-1.0f, 1.0f}) {
+                box_on(head, Vec3{hc.x + s * r * 0.45f, hc.y - r * 0.55f, hc.z + r * 0.95f}, Vec3{0.03f, 0.1f, 0.03f}, bone,
+                       pitch(-0.35f) * roll(s * 0.25f));
+            }
+            shoulder_spikes(3, 0.16f);
+            break;
+        }
+        case kEnemyWarlord: { // WARLORD: a horned skull helm, a crest of spikes, a war banner at the back
+            // A great beast's skull worn as a helm: the rounded cranium over the crown, a heavy brow
+            // with dark eye sockets glaring out, cheek bones down the sides of the face.
+            const Vec4 skull{0.7f, 0.66f, 0.56f, 1.0f};
+            renderer_->draw(shape_rounded_,
+                            head * glm::translate(Mat4{1.0f}, Vec3{hc.x, hc.y + r * 0.62f, hc.z - r * 0.05f}) *
+                                glm::scale(Mat4{1.0f}, Vec3{hs * 1.08f, hs * 0.5f, hs * 1.1f}),
+                            skull);
+            box_on(head, Vec3{hc.x, hc.y + r * 0.34f, hc.z + r * 0.98f}, Vec3{hs * 1.0f, hs * 0.16f, hs * 0.12f}, skull);
+            for (const f32 s : {-1.0f, 1.0f}) {
+                box_on(head, Vec3{hc.x + s * r * 0.4f, hc.y + r * 0.34f, hc.z + r * 1.05f}, Vec3{hs * 0.2f, hs * 0.1f, 0.02f},
+                       Vec4{0.05f, 0.03f, 0.03f, 1.0f}); // the sockets
+                box_on(head, Vec3{hc.x + s * r * 0.95f, hc.y - r * 0.1f, hc.z + r * 0.45f}, Vec3{0.03f, hs * 0.55f, hs * 0.35f}, skull,
+                       roll(s * 0.12f)); // cheek guards
+            }
+            horn(-1.0f, 1.6f, Vec4{0.14f, 0.12f, 0.12f, 1.0f});
+            horn(1.0f, 1.6f, Vec4{0.14f, 0.12f, 0.12f, 1.0f});
+            for (int k = 0; k < 4; ++k) {
+                spike(head, Vec3{hc.x, hc.y + r * 0.95f, hc.z + r * (0.5f - 0.35f * static_cast<f32>(k))}, Vec3{0.0f, 1.0f, -0.25f},
+                      0.12f);
+            }
+            shoulder_spikes(2, 0.18f);
+            if (it >= 0) { // the banner pole riding the back, its crimson flag snapping in the wind
+                const Mat4& torso = jmats[static_cast<usize>(it)];
+                box_on(torso, Vec3{0.0f, 0.55f, -0.2f}, Vec3{0.05f, 1.9f, 0.05f}, Vec4{0.15f, 0.1f, 0.08f, 1.0f});
+                const f32 flap = 0.25f * std::sin(elapsed_ * 4.0f + static_cast<f32>(en.id));
+                box_on(torso, Vec3{0.0f, 1.25f, -0.42f}, Vec3{0.03f, 0.55f, 0.42f}, Vec4{0.7f, 0.08f, 0.1f, 1.0f},
+                       glm::angleAxis(flap, Vec3{0.0f, 1.0f, 0.0f}));
+                box_on(torso, Vec3{0.0f, 1.32f, -0.42f}, Vec3{0.035f, 0.14f, 0.14f}, bone); // a skull sigil on it
+            }
+            // The war-cry: every few seconds a ripple of red dust rolls out across its rally zone.
+            const f32 period = 2.8f;
+            if (std::fmod(elapsed_ + static_cast<f32>(en.id) * 0.37f, period) < frame_dt_) {
+                emit_ring(en.position, Vec4{0.75f, 0.16f, 0.12f, 0.6f}, 36, kWarlordAuraRadius * 1.7f, 0.6f, 0.2f, 1);
+            }
+            break;
+        }
+        case 0u: { // GRUNT: one in three wears a horned iron cap, one a spiked collar
+            if (en.id % 3u == 0u) {
+                box_on(head, Vec3{hc.x, hc.y + r * 0.72f, hc.z}, Vec3{hs * 1.08f, hs * 0.32f, hs * 1.08f}, iron);
+                horn(-1.0f, 0.65f, bone);
+                horn(1.0f, 0.65f, bone);
+            } else if (en.id % 3u == 1u && it >= 0) {
+                const Mat4& torso = jmats[static_cast<usize>(it)];
+                for (int k = 0; k < 5; ++k) {
+                    const f32 a = -1.2f + 0.6f * static_cast<f32>(k);
+                    spike(torso, Vec3{std::sin(a) * 0.17f, 0.52f, std::cos(a) * 0.14f}, Vec3{std::sin(a), 0.4f, std::cos(a)}, 0.1f);
+                }
+            } else {
+                shoulder_spikes(1, 0.13f);
+            }
+            break;
+        }
+        case kEnemyShield: { // SHIELD-BEARER: a round shield on the off arm, a skull daubed on it in white
+            const Mat4 hand = hand_frame(m, jmats, BonePart::LowerArmR);
+            const Mat4 face = hand * glm::translate(Mat4{1.0f}, Vec3{0.0f, 0.05f, 0.12f}) *
+                              glm::rotate(Mat4{1.0f}, HalfPi, Vec3{1.0f, 0.0f, 0.0f});
+            renderer_->draw(shape_cylinder_, face * glm::scale(Mat4{1.0f}, Vec3{0.62f, 0.06f, 0.62f}), Vec4{0.38f, 0.25f, 0.14f, 1.0f});
+            renderer_->draw(shape_cylinder_, face * glm::scale(Mat4{1.0f}, Vec3{0.66f, 0.04f, 0.66f}), iron);
+            const Mat4 paint = face * glm::translate(Mat4{1.0f}, Vec3{0.0f, -0.04f, 0.0f});
+            box_on(paint, Vec3{0.0f, 0.0f, 0.02f}, Vec3{0.22f, 0.01f, 0.22f}, bone);
+            for (const f32 s : {-1.0f, 1.0f}) {
+                box_on(paint, Vec3{s * 0.055f, -0.008f, -0.01f}, Vec3{0.06f, 0.01f, 0.06f}, Vec4{0.05f, 0.04f, 0.04f, 1.0f});
+            }
+            spike(face, Vec3{0.0f, -0.05f, 0.0f}, Vec3{0.0f, -1.0f, 0.0f}, 0.16f); // the boss spike
+            break;
+        }
+        case kEnemyHealer: { // SHAMAN: an antler headdress and a gnarled staff crowned with sickly spirit fire
+            for (const f32 s : {-1.0f, 1.0f}) {
+                box_on(head, Vec3{hc.x + s * r * 0.5f, hc.y + r * 1.1f, hc.z}, Vec3{0.03f, hs * 0.7f, 0.03f}, bone, roll(-s * 0.35f));
+                box_on(head, Vec3{hc.x + s * r * 0.95f, hc.y + r * 1.35f, hc.z}, Vec3{0.025f, hs * 0.35f, 0.025f}, bone, roll(-s * 0.9f));
+            }
+            const Mat4 hand = hand_frame(m, jmats, BonePart::LowerArmL);
+            const Vec3 grip = Vec3{hand[3]};
+            const Vec3 top = grip + Vec3{0.0f, 0.75f * scale, 0.0f};
+            const Vec3 foot{grip.x, en.position.y, grip.z};
             renderer_->draw(shape_box_,
-                            glm::translate(Mat4{1.0f}, back) *
-                                glm::scale(Mat4{1.0f}, Vec3{0.26f, 0.26f, 0.18f}),
-                            Vec4{0.22f, 0.18f, 0.13f, 1.0f}); // satchel charge
-            const f32 spark = 0.6f + 0.4f * std::sin(elapsed_ * 26.0f + en.position.x);
-            const Vec3 fuse = back + Vec3{0.0f, 0.22f, 0.0f};
-            renderer_->draw_emissive(shape_sphere_,
-                                     glm::translate(Mat4{1.0f}, fuse) *
-                                         glm::scale(Mat4{1.0f}, Vec3{0.09f * spark}),
-                                     Vec4{1.0f, 0.7f, 0.2f, 1.0f});
-            renderer_->draw_glow(shape_sphere_,
-                                 glm::translate(Mat4{1.0f}, fuse) *
-                                     glm::scale(Mat4{1.0f}, Vec3{0.42f}),
-                                 Vec4{1.0f, 0.5f, 0.15f, 0.5f * spark});
+                            glm::translate(Mat4{1.0f}, (top + foot) * 0.5f) * orient_to(top - foot) *
+                                glm::scale(Mat4{1.0f}, Vec3{0.05f, 0.05f, glm::length(top - foot)}),
+                            Vec4{0.26f, 0.19f, 0.12f, 1.0f});
+            renderer_->draw(shape_sphere_, glm::translate(Mat4{1.0f}, top) * glm::scale(Mat4{1.0f}, Vec3{0.14f}), bone); // a skull
+            const f32 flick = 0.8f + 0.2f * std::sin(elapsed_ * 17.0f + static_cast<f32>(en.id));
+            const Vec3 fire = top + Vec3{0.0f, 0.16f, 0.0f};
+            renderer_->draw_sprite(fire, 0.22f * flick, Vec4{0.45f, 1.0f, 0.4f, 0.75f}, 0.3f);
+            if (frand() < 0.8f) {
+                emit_ember(fire + rand_dir() * 0.06f, Vec3{frand(-0.2f, 0.2f), frand(0.9f, 1.6f), frand(-0.2f, 0.2f)},
+                           Vec3{0.75f, 1.0f, 0.55f}, Vec3{0.1f, 0.45f, 0.15f}, frand(0.35f, 0.6f), frand(0.06f, 0.11f), -0.6f, 0.85f);
+            }
+            fx_light(fire, Vec3{0.4f, 1.0f, 0.45f}, 1.6f * flick, 5.0f);
+            break;
         }
-        if (en.kind == 3 && en.action == 2) {
-            // Aiming a heavy shot: a nocked, charging glow swells at the bow hand (a telegraph the
-            // party reads to dodge or break line of sight). The bow itself is the held weapon above.
-            const Vec3 hand = Vec3{hand_frame(v.model, jmats, BonePart::LowerArmL)[3]};
-            const f32 chg = 0.5f + 0.5f * std::sin(elapsed_ * 16.0f);
-            renderer_->draw_glow(shape_sphere_,
-                                 glm::translate(Mat4{1.0f}, hand) *
-                                     glm::scale(Mat4{1.0f}, Vec3{0.28f + 0.1f * chg}),
-                                 Vec4{1.0f, 0.4f, 0.18f, 0.55f});
-            renderer_->draw_emissive(shape_sphere_,
-                                     glm::translate(Mat4{1.0f}, hand) *
-                                         glm::scale(Mat4{1.0f}, Vec3{0.10f}),
-                                     Vec4{1.0f, 0.7f, 0.3f, 1.0f});
-        }
-        if (en.kind == 5) {
-            // A healer floats a pulsing green orb of mending magic above its hand + a soft glow.
-            const f32 puls = 0.85f + 0.15f * std::sin(elapsed_ * 6.0f + en.position.x);
-            const Vec3 orb = en.position + Vec3{std::cos(en.yaw), 0.0f, std::sin(en.yaw)} * 0.42f +
-                             Vec3{0.0f, 1.35f, 0.0f};
-            renderer_->draw_emissive(shape_sphere_,
-                                     glm::translate(Mat4{1.0f}, orb) *
-                                         glm::scale(Mat4{1.0f}, Vec3{0.16f * puls}),
-                                     Vec4{0.4f, 1.0f, 0.5f, 1.0f});
-            renderer_->draw_glow(shape_sphere_,
-                                 glm::translate(Mat4{1.0f}, orb) *
-                                     glm::scale(Mat4{1.0f}, Vec3{0.5f}),
-                                 Vec4{0.4f, 1.0f, 0.5f, 0.35f * puls});
-        }
-        if (en.kind == 4) {
-            // A large round shield held out front (a wide wooden plate + a steel boss),
-            // facing the way it marches - the side it blocks from.
-            const Vec3 fwd{std::cos(en.yaw), 0.0f, std::sin(en.yaw)};
-            const Vec3 mid = en.position + fwd * 0.5f + Vec3{0.0f, 1.0f, 0.0f};
-            const Mat4 face = glm::translate(Mat4{1.0f}, mid) *
-                              glm::rotate(Mat4{1.0f}, -en.yaw, Vec3{0.0f, 1.0f, 0.0f});
+        case 1u: { // TORCH-BEARER: a pitch torch in hand, flames licking up off it
+            const Mat4 hand = hand_frame(m, jmats, BonePart::LowerArmL);
+            const Vec3 grip = Vec3{hand[3]};
+            const Vec3 tip = grip + Vec3{0.0f, 0.5f, 0.0f} + fwd * 0.12f;
             renderer_->draw(shape_box_,
-                            face * glm::scale(Mat4{1.0f}, Vec3{0.07f, 0.62f, 0.52f}),
-                            Vec4{0.40f, 0.28f, 0.16f, 1.0f}); // wooden plank face
-            renderer_->draw(shape_sphere_,
-                            glm::translate(Mat4{1.0f}, mid + fwd * 0.06f) *
-                                glm::scale(Mat4{1.0f}, Vec3{0.06f, 0.16f, 0.16f}),
-                            Vec4{0.66f, 0.70f, 0.80f, 1.0f}); // steel boss
-        }
-        if (en.kind == 1) {
-            // The torch: a wooden haft + a flickering emissive flame held aloft, with
-            // a warm point of light around it.
+                            glm::translate(Mat4{1.0f}, (grip + tip) * 0.5f - Vec3{0.0f, 0.1f, 0.0f}) * orient_to(tip - grip) *
+                                glm::scale(Mat4{1.0f}, Vec3{0.06f, 0.06f, 0.75f}),
+                            Vec4{0.32f, 0.2f, 0.1f, 1.0f});
             const f32 flick = 0.85f + 0.15f * std::sin(elapsed_ * 13.0f + en.position.x);
-            const Vec3 hand = en.position + Vec3{std::cos(en.yaw), 0.0f, std::sin(en.yaw)} * 0.45f +
-                              Vec3{0.0f, 1.15f, 0.0f};
-            const Mat4 haft = glm::translate(Mat4{1.0f}, hand - Vec3{0.0f, 0.25f, 0.0f}) *
-                              glm::scale(Mat4{1.0f}, Vec3{0.06f, 0.5f, 0.06f});
-            renderer_->draw(shape_box_, haft, Vec4{0.32f, 0.2f, 0.1f, 1.0f});
-            const Mat4 flame = glm::translate(Mat4{1.0f}, hand + Vec3{0.0f, 0.18f, 0.0f}) *
-                               glm::scale(Mat4{1.0f}, Vec3{0.18f, 0.3f * flick, 0.18f});
-            renderer_->draw_emissive(shape_sphere_, flame, Vec4{1.0f, 0.6f, 0.2f, 1.0f});
-            renderer_->draw_glow(shape_sphere_,
-                                 glm::translate(Mat4{1.0f}, hand) *
-                                     glm::scale(Mat4{1.0f}, Vec3{1.1f}),
-                                 Vec4{1.0f, 0.55f, 0.2f, 0.4f * flick});
+            renderer_->draw_sprite(tip, 0.32f * flick, Vec4{1.0f, 0.55f, 0.18f, 0.7f}, 0.25f);
+            renderer_->draw_sprite(tip, 0.12f, Vec4{1.0f, 0.9f, 0.6f, 1.0f}, 0.8f);
+            for (int k = 0; k < 2; ++k) {
+                emit_ember(tip + rand_dir() * 0.07f, Vec3{frand(-0.3f, 0.3f), frand(1.4f, 2.4f), frand(-0.3f, 0.3f)},
+                           Vec3{1.0f, 0.85f, 0.4f}, Vec3{0.75f, 0.15f, 0.04f}, frand(0.3f, 0.55f), frand(0.08f, 0.15f), -1.0f);
+            }
             Renderer::SpotLight sl;
-            sl.position = hand + Vec3{0.0f, 1.5f, 0.0f};
+            sl.position = tip + Vec3{0.0f, 1.5f, 0.0f};
             sl.direction = Vec3{0.0f, -1.0f, 0.0f};
             sl.color = Vec3{1.0f, 0.55f, 0.22f} * (2.4f * flick);
             sl.range = 8.0f;
-            const f32 half = glm::radians(70.0f);
-            sl.cone_outer_cos = std::cos(half);
-            sl.cone_inner_cos = std::cos(half * 0.5f);
+            sl.cone_outer_cos = std::cos(glm::radians(70.0f));
+            sl.cone_inner_cos = std::cos(glm::radians(35.0f));
             renderer_->add_light(sl);
+            break;
+        }
+        case kEnemySapper: { // SAPPER: a lumpy satchel charge strapped to its back, the fuse spitting sparks
+            if (it >= 0) {
+                const Mat4& torso = jmats[static_cast<usize>(it)];
+                box_on(torso, Vec3{0.0f, 0.32f, -0.22f}, Vec3{0.3f, 0.32f, 0.2f}, Vec4{0.24f, 0.19f, 0.13f, 1.0f});
+                box_on(torso, Vec3{0.0f, 0.32f, -0.33f}, Vec3{0.32f, 0.05f, 0.03f}, iron); // a strap
+                const Vec3 fuse = Vec3{torso * Vec4{0.08f, 0.56f, -0.22f, 1.0f}};
+                const f32 spark = 0.6f + 0.4f * std::sin(elapsed_ * 26.0f + en.position.x);
+                renderer_->draw_sprite(fuse, 0.12f * spark + 0.05f, Vec4{1.0f, 0.75f, 0.3f, 1.0f}, 0.7f);
+                emit(fuse, rand_dir() * frand(1.0f, 2.5f) + Vec3{0.0f, 1.0f, 0.0f}, Vec4{1.0f, 0.8f, 0.35f, 1.0f}, 0.25f, 0.04f, 1,
+                     6.0f);
+                fx_light(fuse, Vec3{1.0f, 0.6f, 0.2f}, 1.2f * spark, 4.0f);
+            }
+            break;
+        }
+        case 3u: { // ARCHER: a burning arrow nocked while it draws a bead
+            if (en.action == 2) {
+                const Vec3 hand = Vec3{hand_frame(m, jmats, BonePart::LowerArmL)[3]};
+                const Vec3 tip = hand + fwd * 0.35f;
+                renderer_->draw_sprite(tip, 0.13f, Vec4{1.0f, 0.55f, 0.2f, 0.85f}, 0.5f);
+                emit_ember(tip, Vec3{0.0f, frand(0.6f, 1.2f), 0.0f}, Vec3{1.0f, 0.8f, 0.4f}, Vec3{0.7f, 0.15f, 0.05f}, 0.35f,
+                           0.07f, -0.8f);
+                fx_light(tip, Vec3{1.0f, 0.55f, 0.2f}, 1.4f, 4.0f);
+            }
+            break;
+        }
+        default: break;
+    }
+
+    // The BRUTE's slam winding up: fissures of glowing heat race out through the ground to the edge of
+    // the blast and dust jumps along its rim - dodge clear before the maul comes down.
+    if (en.kind == 2u && en.action == 2) {
+        const Vec3 c{en.position.x, en.position.y + 0.06f, en.position.z};
+        const f32 puls = 0.55f + 0.45f * std::sin(elapsed_ * 14.0f);
+        for (int k = 0; k < 9; ++k) {
+            const f32 a = TwoPi * static_cast<f32>(k) / 9.0f + static_cast<f32>(en.id);
+            const Vec3 d{std::cos(a), 0.0f, std::sin(a)};
+            const Vec3 bend{-d.z, 0.0f, d.x};
+            const Vec3 mid = c + d * (kSlamRadius * 0.5f) + bend * 0.25f * std::sin(a * 3.0f);
+            const Vec4 heat{1.0f, 0.42f, 0.14f, (0.3f + 0.3f * night) * puls};
+            renderer_->draw_sprite(c + d * 0.4f, mid, 0.05f, heat, 0.4f);
+            renderer_->draw_sprite(mid, c + d * kSlamRadius, 0.04f, heat, 0.4f);
+        }
+        sprite_circle(c, Vec3{1.0f, 0.0f, 0.0f}, Vec3{0.0f, 0.0f, 1.0f}, kSlamRadius, 44, 0.05f,
+                      Vec4{1.0f, 0.4f, 0.14f, 0.5f * puls}, 0.7f);
+        if (frand() < 0.6f) {
+            const f32 a = frand(0.0f, TwoPi);
+            emit(c + Vec3{std::cos(a), 0.0f, std::sin(a)} * kSlamRadius, Vec3{0.0f, frand(0.8f, 1.8f), 0.0f},
+                 Vec4{0.55f, 0.48f, 0.4f, 0.45f}, 0.6f, frand(0.12f, 0.2f), 2, 3.0f);
+        }
+    }
+
+    // The berserk RAGE of the last one standing: embers boiling off its shoulders, hot breath steaming.
+    if (enraged) {
+        const Vec3 chest = en.position + Vec3{0.0f, 1.2f * scale, 0.0f};
+        for (int k = 0; k < 2; ++k) {
+            emit_ember(chest + Vec3{frand(-0.35f, 0.35f), frand(0.0f, 0.4f), frand(-0.35f, 0.35f)},
+                       Vec3{frand(-0.3f, 0.3f), frand(1.2f, 2.4f), frand(-0.3f, 0.3f)}, Vec3{1.0f, 0.55f, 0.2f},
+                       Vec3{0.55f, 0.05f, 0.02f}, frand(0.35f, 0.6f), frand(0.06f, 0.12f), -0.8f);
+        }
+        if (frand() < 0.25f) {
+            const Vec3 mouth = Vec3{head * Vec4{hc.x, hc.y - r * 0.3f, hc.z + r * 1.2f, 1.0f}};
+            emit(mouth, fwd * 0.8f + Vec3{0.0f, 0.5f, 0.0f}, Vec4{0.8f, 0.78f, 0.76f, 0.35f}, 0.6f, 0.12f, 0, -0.3f);
+        }
+        fx_light(chest, Vec3{1.0f, 0.3f, 0.12f}, 1.2f * rage, 4.0f);
+    }
+}
+
+void ClientApp::draw_wolf(EnemyVisual& v, const net::EnemyState& en, const Vec3& tint, const Mat4* pose_root) {
+    const bool alpha = en.kind == kEnemyAlpha;
+    const f32 s = enemy_scale(en.kind);
+    const f32 run = glm::clamp(v.speed / kWolfSpeed, 0.0f, 1.3f);
+    const bool crouch = en.action == 2;
+    const bool pounce = en.action == 4;
+    // The body: a loping bob at a run, crouched low + nose down coiled to spring, stretched out + lifted
+    // mid-pounce.
+    Mat4 base;
+    if (pose_root != nullptr) {
+        base = *pose_root;
+    } else {
+        const f32 bob = run * 0.07f * std::abs(std::sin(v.gait));
+        const f32 lift = pounce ? 0.35f : 0.0f;
+        const f32 sink = crouch ? 0.14f : 0.0f;
+        const f32 pitch = crouch ? -0.1f : pounce ? 0.16f : 0.04f * std::sin(v.gait * 2.0f) * run;
+        base = glm::translate(Mat4{1.0f}, en.position + Vec3{0.0f, bob + lift - sink, 0.0f}) *
+               glm::rotate(Mat4{1.0f}, -en.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
+               glm::rotate(Mat4{1.0f}, pitch, Vec3{0.0f, 0.0f, 1.0f}) * glm::scale(Mat4{1.0f}, Vec3{s});
+    }
+    const Vec4 fur{tint * (alpha ? 0.62f : 1.0f), 1.0f}; // the alpha's coat is near-black
+    renderer_->draw(wolf_body_mesh_, base, fur);
+    renderer_->draw(wolf_jaw_mesh_, base * glm::translate(Mat4{1.0f}, kWolfJaw) *
+                                        glm::rotate(Mat4{1.0f}, -0.6f * v.jaw, Vec3{0.0f, 0.0f, 1.0f}),
+                    fur);
+    // The legs: a bounding gallop (the fore pair together, the hind pair together), tucked under and
+    // braced when crouched, flung fore + aft mid-pounce.
+    for (int k = 0; k < 4; ++k) {
+        const bool front = k < 2;
+        f32 swing = std::sin(v.gait + (front ? 0.0f : Pi * 0.85f) + (k % 2 == 0 ? 0.0f : 0.35f)) * (0.2f + 0.55f * std::min(run, 1.0f));
+        if (crouch) {
+            swing = front ? 0.45f : -0.55f;
+        } else if (pounce) {
+            swing = front ? 1.15f : -1.05f;
+        }
+        renderer_->draw(wolf_leg_mesh_,
+                        base * glm::translate(Mat4{1.0f}, kWolfLegs[k]) * glm::rotate(Mat4{1.0f}, swing, Vec3{0.0f, 0.0f, 1.0f}),
+                        fur);
+    }
+    if (pose_root != nullptr) {
+        return; // a fallen wolf's eyes have gone dark
+    }
+    // Eyes burning out of the dark - amber, hotter on the alpha - blooming at night.
+    const f32 night = 1.0f - sun_intensity_;
+    for (const Vec3& e : kWolfEyes) {
+        const Vec3 p = Vec3{base * Vec4{e + Vec3{0.03f, 0.0f, 0.0f}, 1.0f}};
+        renderer_->draw_sprite(p, (0.045f + 0.03f * night) * s, Vec4{1.0f, alpha ? 0.45f : 0.78f, 0.15f, 0.8f + 0.4f * night},
+                               0.8f);
+    }
+    // Hot breath steaming from the snarl when it crouches.
+    if (crouch && frand() < 0.4f) {
+        const Vec3 mouth = Vec3{base * Vec4{1.1f, 0.85f, 0.0f, 1.0f}};
+        emit(mouth, Vec3{std::cos(en.yaw), 0.4f, std::sin(en.yaw)} * 0.8f, Vec4{0.85f, 0.85f, 0.85f, 0.3f}, 0.5f, 0.1f, 0, -0.2f);
+    }
+    // Torn-up earth kicked out behind a pounce.
+    if (pounce && frand() < 0.5f) {
+        emit(en.position + Vec3{0.0f, 0.1f, 0.0f}, Vec3{-std::cos(en.yaw), 1.2f, -std::sin(en.yaw)} * 1.5f,
+             Vec4{0.32f, 0.26f, 0.2f, 1.0f}, 0.5f, 0.07f, 0, 9.0f);
+    }
+}
+
+void ClientApp::draw_enemy_deaths(Timestep dt) {
+    // Bury the long-gone first: erasing shifts the rest down the vector, which must not happen after
+    // their meshes were submitted this frame (the renderer holds pointers to them until it records).
+    for (auto it = enemy_deaths_.begin(); it != enemy_deaths_.end();) {
+        if (it->t > 2.8f) {
+            retire_mesh(std::move(it->v.body_mesh));
+            retire_mesh(std::move(it->v.outfit_mesh));
+            it = enemy_deaths_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (EnemyDeath& d : enemy_deaths_) {
+        d.t += dt.seconds;
+        // It pitches over (a heavy body falls faster at the end), lies a moment, then sinks into the earth.
+        const f32 tip = glm::smoothstep(0.0f, 0.55f, d.t);
+        const f32 fall = tip * tip * 1.5f;
+        const f32 sink = glm::smoothstep(1.4f, 2.6f, d.t) * 1.4f * d.scale;
+        const Vec3 axis = glm::normalize(glm::cross(Vec3{0.0f, 1.0f, 0.0f}, d.fall));
+        const Mat4 topple = glm::translate(Mat4{1.0f}, d.pos - Vec3{0.0f, sink, 0.0f}) * glm::rotate(Mat4{1.0f}, fall, axis);
+        if (is_beast(d.v.kind)) {
+            net::EnemyState es;
+            es.kind = d.v.kind;
+            es.position = d.pos;
+            es.yaw = d.yaw;
+            const Mat4 root = topple * glm::rotate(Mat4{1.0f}, -d.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
+                              glm::scale(Mat4{1.0f}, Vec3{d.scale});
+            draw_wolf(d.v, es, Vec3{0.85f}, &root);
+            continue;
+        }
+        const Mat4 root = topple * glm::rotate(Mat4{1.0f}, HalfPi - d.yaw, Vec3{0.0f, 1.0f, 0.0f}) *
+                          glm::scale(Mat4{1.0f}, Vec3{d.scale});
+        const std::vector<Quat> pose = d.v.animator.pose(d.v.model);
+        const Vec3 tint = bandit_tint(d.v.kind) * 0.85f;
+        skin_and_draw(d.v.model, d.v.body_skin, d.v.body_mesh, root, pose, tint);
+        skin_and_draw(d.v.model, d.v.outfit_skin, d.v.outfit_mesh, root, pose, tint);
+        draw_rig(d.v.model, d.v.model.bone_matrices(root, pose), tint, /*attachments_only=*/true);
+        // A last puff of dust where it hits the ground.
+        if (d.t > 0.5f && d.t - dt.seconds <= 0.5f) {
+            emit_burst(d.pos + d.fall * 0.8f + Vec3{0.0f, 0.15f, 0.0f}, Vec4{0.55f, 0.48f, 0.4f, 0.4f}, 8, 1.8f, 0.9f, 0.24f, 2,
+                       0.6f);
         }
     }
 }
