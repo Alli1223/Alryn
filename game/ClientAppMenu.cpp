@@ -1155,13 +1155,17 @@ void ClientApp::update_menu_scene(Timestep dt) {
         return;
     }
     if (!menu_terrain_) {
-        // The showcase town: the first one found spiralling out from the world origin.
+        // The showcase town: the first walled market town found spiralling out from the world origin
+        // (not a hamlet's few cottages).
         std::optional<worldgen::Village> town;
-        for (int r = 0; r <= 6 && !town; ++r) {
+        for (int r = 0; r <= 8 && !town; ++r) {
             for (int vz = -r; vz <= r && !town; ++vz) {
                 for (int vx = -r; vx <= r && !town; ++vx) {
                     if (std::max(std::abs(vx), std::abs(vz)) == r) {
-                        town = worldgen::village_at(vx, vz, kMenuSeed);
+                        const auto v = worldgen::village_at(vx, vz, kMenuSeed);
+                        if (v && v->tier == worldgen::TownTier::Town) {
+                            town = v;
+                        }
                     }
                 }
             }

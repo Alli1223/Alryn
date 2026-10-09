@@ -112,6 +112,8 @@ void ClientApp::on_init() {
     wolf_leg_mesh_.create(renderer_->device(), build_wolf_leg());
     wolf_jaw_mesh_.create(renderer_->device(), build_wolf_jaw());
     tent_mesh_.create(renderer_->device(), build_camp_tent());      // a bandit camp's tents
+    goat_body_mesh_.create(renderer_->device(), build_goat_body());  // an errand's runaway goat
+    goat_leg_mesh_.create(renderer_->device(), build_goat_leg());
     // A unit rope segment (along +Y, 0..1) for the verlet harness traces; scaled per link.
     rope_mesh_.create(renderer_->device(),
                       primitives::box(Vec3{-0.5f, 0.0f, -0.5f}, Vec3{0.5f, 1.0f, 0.5f},
@@ -371,6 +373,8 @@ void ClientApp::return_to_menu() {
     }
     mesh_graveyard_.clear();
     pending_impacts_.clear();
+    caravan_smooth_.clear();
+    goat_gait_.clear();
     cancel_charge();
     have_snapshot_ = false;
     my_id_ = 0;
@@ -492,12 +496,15 @@ void ClientApp::on_update(Timestep dt) {
         update_sword_pacing(dt.seconds);
         update_charge(dt.seconds); // the held primary attack's heavy wind-up (+ a Knight's pending blow)
         update_quest_fx(dt);       // side-quest edges: progress pops, the completion banner
+        update_errand_fx(dt);      // the roadside errand's edges: taken, progress, the thanks + pay
         dev_setup_wait_ += dt.seconds;
         dev_quest_setup();         // (scripted screenshot runs only)
+        dev_road_setup();
         send_input();
         // Ease the wagons BEFORE the character visuals: a rider standing on the deck measures their
         // stride against this frame's cart step (see update_visuals).
         update_wagon_smooth(dt); // ease wagon render positions toward the snapshot (kills jitter)
+        update_caravans(dt);     // ...and the merchants' carts on the road
         update_visuals(dt);
         update_enemy_visuals(dt);
         update_villager_visuals(dt);
@@ -586,6 +593,8 @@ void ClientApp::on_render() {
     draw_enemies();
     draw_enemy_deaths(Timestep{frame_dt_}); // felled foes toppling + sinking away
     draw_quest_world();                     // the side quest's camp / X / petals / beacon
+    draw_errand_world();                    // the roadside errand's goat / satchels / stuck cart
+    draw_caravans();                        // merchants' carts + beasts on the road
     draw_gates();
     draw_bridges();
     draw_fires();
@@ -718,6 +727,7 @@ void ClientApp::on_render() {
     });
 
     draw_rain();    // world-space falling streaks (depth-tested against the scene)
+    draw_snowfall(); // ...or drifting snow, up in the high country
     draw_weather(); // screen-space lightning flash, behind the HUD
     draw_health_bars();
     draw_hud();
@@ -806,6 +816,8 @@ void ClientApp::on_shutdown() {
     wolf_leg_mesh_.destroy();
     wolf_jaw_mesh_.destroy();
     tent_mesh_.destroy();
+    goat_body_mesh_.destroy();
+    goat_leg_mesh_.destroy();
     rope_mesh_.destroy();
     goods_mesh_.destroy();
     cargo_weapons_mesh_.destroy();

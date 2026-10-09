@@ -48,6 +48,10 @@ void GameServer::stop() {
     server_.stop();
     players_.clear();
     town_spawn_cache_.clear(); // layouts depend on the world seed; a restart may use a new one
+    wayfarers_.clear();
+    way_groups_.clear();
+    errands_.clear();
+    route_cache_.clear();
 }
 
 Vec3 GameServer::spawn_point(net::PlayerId id) const {
@@ -74,8 +78,9 @@ Vec3 GameServer::spawn_point(net::PlayerId id) const {
                 }
                 if (const auto v = worldgen::village_at(ocx + dx, ocz + dz, seed)) {
                     // Only spawn in a town that's actually road-connected to others, so the player
-                    // always starts somewhere they can take a haul from (never a stranded town).
-                    if (roads::reachable_towns(v->center, seed, 1).empty()) {
+                    // always starts somewhere they can take a haul from (never a stranded town) - and one
+                    // with a market (a hamlet has no contracts square to start out from).
+                    if (!worldgen::has_market(*v) || roads::reachable_towns(v->center, seed, 1).empty()) {
                         continue;
                     }
                     const f32 d = glm::length(v->center);
@@ -202,6 +207,7 @@ void GameServer::tick(Timestep dt) {
                     deform(aim, kDigRadius, kDigAmount);
                     sp.dig_cd = kDigCooldown;
                     quest_dig(aim);
+                    errand_dig(aim);
                 }
                 // Raise a mound of earth (right mouse, Hunter / Mage): a little cover, near at hand.
                 if (e.input.add && sp.earth_cd <= 0.0f && reach <= kRaiseReach && wild) {
@@ -364,6 +370,8 @@ void GameServer::tick(Timestep dt) {
     prof_ms_[3] += ms_since(prof_mark); // townsfolk spawn scan + strolling
     update_contracts(dt, density); // the wagon-transport game loop (offers / haul / ambush)
     update_quests(dt, density);    // the notice board's side quests (camps, packs, treasure, petals)
+    update_wayfarers(dt, density); // travellers + merchant caravans on the roads round the party
+    update_errands(dt, density);   // the roadside traveller in trouble
     update_combat(dt, density);    // every hostile + the heroes' attacks landing
     prof_ms_[4] += ms_since(prof_mark); // contracts: wagon + cargo + ambush + quests + combat
 
@@ -449,6 +457,17 @@ void GameServer::tick(Timestep dt) {
     if (passenger_) {
         snapshot.villagers.push_back({passenger_->id, passenger_->position, passenger_->yaw, 255,
                                       passenger_->kind, 0, passenger_->appearance});
+    }
+    // The road's wayfarers (kind 5, their role picks the look) + any errand's waiting traveller (kind 6).
+    for (const Wayfarer& w : wayfarers_) {
+        net::VillagerState vs{w.body.id, w.body.position, w.body.yaw, 255, 5, 0, w.body.appearance};
+        vs.role = static_cast<u8>(w.role);
+        snapshot.villagers.push_back(vs);
+    }
+    for (const Errand& e : errands_) {
+        net::VillagerState vs{e.giver.id, e.giver.position, e.giver.yaw, 255, 6, 0, e.giver.appearance};
+        vs.role = static_cast<u8>(e.kind);
+        snapshot.villagers.push_back(vs);
     }
     // Ambushers ride in the existing enemy list (rendered red by the client).
     snapshot.enemies.reserve(ambush_.size());
@@ -572,7 +591,16 @@ void GameServer::tick(Timestep dt) {
     }
     snapshot.quest_items.reserve(quest_items_.size());
     for (const QuestItem& qi : quest_items_) {
-        snapshot.quest_items.push_back({qi.id, qi.position, qi.kind, qi.state});
+        snapshot.quest_items.push_back({qi.id, qi.position, qi.kind, qi.state, qi.yaw});
+    }
+    for (const WayGroup& g : way_groups_) {
+        if (g.caravan) {
+            snapshot.caravans.push_back({g.id, g.cart_pos, g.cart_yaw, g.beast_pos, g.beast_yaw, g.cart_type, g.beast, g.load});
+        }
+    }
+    for (const Errand& e : errands_) {
+        snapshot.errands.push_back({e.id, static_cast<u8>(e.kind), static_cast<u8>(e.phase), e.progress, e.goal, e.reward,
+                                    e.giver.id, e.giver.position, e.site});
     }
     // fires / barricades stay empty (siege dormant); outcome/phase/wave keep defaults.
     server_.broadcast_snapshot(snapshot);
@@ -617,19 +645,22 @@ const std::vector<GameServer::TownSpawn>& GameServer::town_spawns(const worldgen
     std::vector<TownSpawn> spawns;
     const auto vgates = detail::village_gate_points(v, seed);
     u32 hi = 0;
-    detail::for_each_house(v, seed, vgates, [&](const detail::HousePlot& h) {
+    for (const detail::HousePlot& h : detail::cached_town_plan(v, seed).houses) {
         const u32 id = (v.vseed * 2654435761u) ^ ((hi + 1u) * 40499u);
         ++hi;
-        // Stand them on the street just in front of their house.
-        Vec2 toward = v.center - h.pos;
-        const f32 len = glm::length(toward);
-        toward = len > 1e-3f ? toward / len : Vec2{0.0f, 1.0f};
-        const Vec2 sp = h.pos + toward * (detail::house_reach(h.variant) + 1.0f);
+        if (h.variant == kHouseKeep) {
+            continue; // nobody keeps house in the keep
+        }
+        // Stand them on the street in front of their house (its front faces the street).
+        const Vec2 front{std::sin(h.yaw), std::cos(h.yaw)};
+        const Vec2 sp = h.pos + front * (PropLibrary::house_half_extents(h.variant).y + 1.2f);
         spawns.push_back({id, 0, Vec3{sp.x, worldgen::height(sp.x, sp.y, seed), sp.y}, 0.0f});
-    });
+    }
 
-    // Garrison: ~half the towns post a few archer guards on their walls.
-    if (detail::hash01(detail::tree_hash(static_cast<int>(v.vseed), 7, 5151u)) < 0.5f) {
+    // Garrison: ~half the walled towns post a few archer guards on their walls (a city always does).
+    const bool garrison = v.tier == worldgen::TownTier::City ||
+                          (worldgen::has_wall(v) && detail::hash01(detail::tree_hash(static_cast<int>(v.vseed), 7, 5151u)) < 0.5f);
+    if (garrison) {
         for (int gidx = 0; gidx < kWallGuardsPerTown; ++gidx) {
             const u32 gid = (v.vseed * 2654435761u) ^
                             ((static_cast<u32>(gidx) + 1u) * 26171u) ^ 0xA5A50000u;
@@ -656,12 +687,30 @@ const std::vector<GameServer::TownSpawn>& GameServer::town_spawns(const worldgen
 void GameServer::update_townsfolk(Timestep dt, const DensitySampler& density) {
     const u32 seed = sampler_.seed();
 
-    // (Re)spawn pass. Throttled: it only needs to notice a town coming into a player's
-    // range, so a few scans a second is plenty - and the town layout itself comes from
-    // the once-per-town cache (town_spawns), so a scan is just id lookups.
+    // (Re)spawn pass. Throttled: it only needs to notice a town coming into a player's range, so a few
+    // scans a second is plenty - and the town layout itself comes from the once-per-town cache
+    // (town_spawns), so a scan is just distance checks. Only the homes NEAREST the heroes are lived in at
+    // any moment (a city has hundreds): the nearest kMaxTownsfolk within kTownsfolkRadius (+ the wall
+    // guards), and a townsperson no longer wanted is only sent indoors once out of sight.
     townsfolk_scan_cd_ -= dt.seconds;
     if (townsfolk_scan_cd_ <= 0.0f) {
         townsfolk_scan_cd_ = 0.25f;
+        struct Want {
+            f32 d;
+            const TownSpawn* sp;
+            Vec2 home;
+            f32 half;
+        };
+        std::vector<Want> want;
+        std::unordered_set<u32> towns_seen;
+        auto nearest_hero = [&](const Vec3& p) {
+            f32 best = 1e30f;
+            for (const auto& [pid, player] : players_) {
+                const Vec3 q = player.controller.position();
+                best = std::min(best, glm::length(Vec2{q.x - p.x, q.z - p.z}));
+            }
+            return best;
+        };
         for (const auto& [pid, player] : players_) {
             const Vec3 focus = player.controller.position();
             const int vcx = static_cast<int>(std::floor(focus.x / worldgen::village_cell));
@@ -669,27 +718,50 @@ void GameServer::update_townsfolk(Timestep dt, const DensitySampler& density) {
             for (int dz = -1; dz <= 1; ++dz) {
                 for (int dx = -1; dx <= 1; ++dx) {
                     const auto vv = worldgen::village_at(vcx + dx, vcz + dz, seed);
-                    if (!vv) {
+                    if (!vv || !towns_seen.insert(vv->vseed).second) {
                         continue;
                     }
                     for (const TownSpawn& sp : town_spawns(*vv)) {
-                        if (villagers_.count(sp.id) != 0u) {
-                            continue;
+                        const f32 d = nearest_hero(sp.position);
+                        if (d < kTownsfolkRadius) {
+                            want.push_back({d, &sp, vv->center, vv->half});
                         }
-                        Villager vg;
-                        vg.id = sp.id;
-                        vg.kind = sp.kind;
-                        vg.appearance = villager_look(sp.id);
-                        vg.position = sp.position;
-                        vg.target = vg.position;
-                        vg.home_center = vv->center;
-                        vg.home_half = vv->half;
-                        vg.yaw = sp.yaw;
-                        vg.rng = sp.id | 1u;
-                        villagers_.emplace(sp.id, std::move(vg));
                     }
                 }
             }
+        }
+        std::sort(want.begin(), want.end(), [](const Want& a, const Want& b) { return a.d < b.d; });
+        std::unordered_set<u32> wanted;
+        usize folk = 0;
+        for (const Want& w : want) {
+            if (w.sp->kind == 2 || folk < kMaxTownsfolk) {
+                wanted.insert(w.sp->id);
+                folk += w.sp->kind == 2 ? 0u : 1u;
+            }
+        }
+        for (auto it = villagers_.begin(); it != villagers_.end();) {
+            if (wanted.count(it->first) == 0u && nearest_hero(it->second.position) > kTownsfolkKeep) {
+                it = villagers_.erase(it); // home for the night (respawns deterministically when wanted)
+            } else {
+                ++it;
+            }
+        }
+        for (const Want& w : want) {
+            const TownSpawn& sp = *w.sp;
+            if (wanted.count(sp.id) == 0u || villagers_.count(sp.id) != 0u) {
+                continue;
+            }
+            Villager vg;
+            vg.id = sp.id;
+            vg.kind = sp.kind;
+            vg.appearance = villager_look(sp.id);
+            vg.position = sp.position;
+            vg.target = vg.position;
+            vg.home_center = w.home;
+            vg.home_half = w.half;
+            vg.yaw = sp.yaw;
+            vg.rng = sp.id | 1u;
+            villagers_.emplace(sp.id, std::move(vg));
         }
     }
 
@@ -775,7 +847,7 @@ void GameServer::update_townsfolk(Timestep dt, const DensitySampler& density) {
                 if (glm::length(p - vg.home_center) > vg.home_half * 0.85f) {
                     return true; // outside the town
                 }
-                if (glm::length(p - vg.home_center) < detail::kMarketHalf + 1.0f) {
+                if (glm::length(p - vg.home_center) < detail::kMarketHalf + 1.0f && vg.home_half > 20.0f) {
                     return true; // keep out of the central market plaza (don't path into the stalls)
                 }
                 if (roads::distance(p.x, p.y, seed) < roads::road_half_width) {

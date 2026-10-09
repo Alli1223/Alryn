@@ -95,12 +95,23 @@ inline constexpr u32 kHouseVariants = 8;
 inline constexpr u32 kHouseTownhouse = kHouseVariants + 0; // 8
 inline constexpr u32 kHousePub = kHouseVariants + 1;       // 9
 inline constexpr u32 kHouseBlacksmith = kHouseVariants + 2; // 10
-inline constexpr u32 kHouseDefs = kHouseVariants + 3;      // total entries in houses()
+inline constexpr u32 kHouseChapel = kHouseVariants + 3;    // 11: a stone chapel + bell tower (towns, cities)
+inline constexpr u32 kHouseKeep = kHouseVariants + 4;      // 12: a city's great stone keep
+inline constexpr u32 kHouseDefs = kHouseVariants + 5;      // distinct buildings (one season)
+
+// SNOWBOUND towns (above the snowline) build every structure's snow-capped twin: `houses()` holds the
+// kHouseDefs buildings and then their snowy versions at variant + kSnowHouses; walls and gate towers
+// likewise at + kSnowWalls / + kSnowGates, and the market at kSnowMarket.
+inline constexpr u32 kSnowHouses = kHouseDefs;
+inline constexpr u8 kSnowWalls = 2;
+inline constexpr u8 kSnowGates = 2;
+inline constexpr u8 kSnowMarket = 1;
 
 // How many distinct Decor props `PropLibrary` builds (barrel, crates, hay, market stall,
 // signpost, trough, woodpile, sacks, street bench, flower cart, banner poles (crimson / blue), notice
-// board, flower barrel, pennant bunting). The town scatter picks a specific one by index.
-inline constexpr u32 kDecorVariants = 15;
+// board, flower barrel, pennant bunting, a fire brazier, a snowman). The town scatter picks a specific
+// one by index.
+inline constexpr u32 kDecorVariants = 17;
 inline constexpr u8 kDecorBench = 8;
 inline constexpr u8 kDecorFlowerCart = 9;
 inline constexpr u8 kDecorBannerRed = 10;
@@ -108,6 +119,8 @@ inline constexpr u8 kDecorBannerBlue = 11;
 inline constexpr u8 kDecorNoticeBoard = 12;
 inline constexpr u8 kDecorFlowerBarrel = 13;
 inline constexpr u8 kDecorBunting = 14; // a unit-long string of pennants (stretched to its span)
+inline constexpr u8 kDecorBrazier = 15; // an iron fire-basket on a post: a warm blaze + light by night
+inline constexpr u8 kDecorSnowman = 16; // the townsfolk's snowman (snowbound towns)
 
 struct PropInstance {
     PropCategory category = PropCategory::Bush;

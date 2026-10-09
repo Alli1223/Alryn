@@ -177,6 +177,17 @@ inline const Vec3 kDeerLegs[4] = {
     {-0.4f, kDeerLegHipY, -0.13f},
 };
 
+// A GOAT (an errand's runaway, led home by the party): a stocky body + a leg drawn x4. Faces local +X.
+MeshData build_goat_body();
+MeshData build_goat_leg();
+inline constexpr f32 kGoatLegHipY = 0.5f;
+inline const Vec3 kGoatLegs[4] = {
+    {0.2f, kGoatLegHipY, 0.1f},
+    {0.2f, kGoatLegHipY, -0.1f},
+    {-0.28f, kGoatLegHipY, 0.1f},
+    {-0.28f, kGoatLegHipY, -0.1f},
+};
+
 // A small low-poly fish (ambient wildlife in the water): a laterally-flattened spindle body with
 // a forked tail + dorsal/pectoral fins, facing local +X. Built in a light base colour so the
 // client can tint it per-fish by biome (bright tropical vs silver/dark freshwater).

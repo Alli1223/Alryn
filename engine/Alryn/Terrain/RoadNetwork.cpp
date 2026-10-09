@@ -84,10 +84,12 @@ std::vector<Vec2> route_impl(const Vec2& pa, const Vec2& pb, u32 seed) {
         return {};
     }
     const Vec2 perp = Vec2{-along.y, along.x} / span;
+    // A longer road gets more points, so its curves stay smooth (towns are far apart now).
+    const int npts = glm::clamp(static_cast<int>(std::round(span / 14.0f)), road_points, 72);
 
-    std::vector<f32> off(road_points + 1, 0.0f); // lateral offset along `perp` per point
+    std::vector<f32> off(npts + 1, 0.0f); // lateral offset along `perp` per point
     auto point_at = [&](int i) {
-        const f32 t = static_cast<f32>(i) / static_cast<f32>(road_points);
+        const f32 t = static_cast<f32>(i) / static_cast<f32>(npts);
         return pa + along * t + perp * off[i];
     };
     auto in_water = [&](const Vec2& p) {
@@ -100,8 +102,8 @@ std::vector<Vec2> route_impl(const Vec2& pa, const Vec2& pb, u32 seed) {
     constexpr f32 eps = 1.5f;
     constexpr f32 step = 8.0f;
     for (int it = 0; it < 24; ++it) {
-        for (int i = 1; i < road_points; ++i) {
-            const Vec2 base = pa + along * (static_cast<f32>(i) / static_cast<f32>(road_points));
+        for (int i = 1; i < npts; ++i) {
+            const Vec2 base = pa + along * (static_cast<f32>(i) / static_cast<f32>(npts));
             const Vec2 here = base + perp * off[i];
             const f32 c0 = water_cost(here - perp * eps, seed);
             const f32 c1 = water_cost(here + perp * eps, seed);
@@ -109,7 +111,7 @@ std::vector<Vec2> route_impl(const Vec2& pa, const Vec2& pb, u32 seed) {
             off[i] = glm::clamp(off[i], -max_off, max_off);
         }
         std::vector<f32> sm = off; // smooth so the road curves rather than zig-zags
-        for (int i = 1; i < road_points; ++i) {
+        for (int i = 1; i < npts; ++i) {
             sm[i] = 0.5f * off[i] + 0.25f * (off[i - 1] + off[i + 1]);
         }
         off.swap(sm);
@@ -124,8 +126,8 @@ std::vector<Vec2> route_impl(const Vec2& pa, const Vec2& pb, u32 seed) {
     const f32 ph1 = hash01u(eh ^ 0x9E3779B9u) * TwoPi;
     const f32 ph2 = hash01u(eh ^ 0x12345679u) * TwoPi;
     constexpr f32 a2 = 0.35f;
-    for (int i = 1; i < road_points; ++i) {
-        const f32 t = static_cast<f32>(i) / static_cast<f32>(road_points);
+    for (int i = 1; i < npts; ++i) {
+        const f32 t = static_cast<f32>(i) / static_cast<f32>(npts);
         const f32 env = std::sin(Pi * t);
         const f32 wig = std::sin(t * static_cast<f32>(waves1) * Pi + ph1) +
                         a2 * std::sin(t * static_cast<f32>(waves2) * Pi + ph2);
@@ -134,8 +136,8 @@ std::vector<Vec2> route_impl(const Vec2& pa, const Vec2& pb, u32 seed) {
     }
     // Nudge meandered points back off water (gradient only; no smoothing, to keep curves).
     for (int it = 0; it < 8; ++it) {
-        for (int i = 1; i < road_points; ++i) {
-            const Vec2 base = pa + along * (static_cast<f32>(i) / static_cast<f32>(road_points));
+        for (int i = 1; i < npts; ++i) {
+            const Vec2 base = pa + along * (static_cast<f32>(i) / static_cast<f32>(npts));
             const Vec2 here = base + perp * off[i];
             const f32 c0 = water_cost(here - perp * eps, seed);
             const f32 c1 = water_cost(here + perp * eps, seed);
@@ -148,7 +150,7 @@ std::vector<Vec2> route_impl(const Vec2& pa, const Vec2& pb, u32 seed) {
     // lateral offset, town ends pinned at 0, keeps the shape but rounds the bends.
     for (int pass = 0; pass < 5; ++pass) {
         std::vector<f32> sm = off;
-        for (int i = 1; i < road_points; ++i) {
+        for (int i = 1; i < npts; ++i) {
             sm[i] = 0.5f * off[i] + 0.25f * (off[i - 1] + off[i + 1]);
         }
         off.swap(sm);
@@ -156,19 +158,19 @@ std::vector<Vec2> route_impl(const Vec2& pa, const Vec2& pb, u32 seed) {
 
     // Any point now in water snaps back to the validated dry path, so smoothing/meander can
     // never drown a road; if the underlying dry route itself crosses water, drop the edge.
-    for (int i = 1; i < road_points; ++i) {
+    for (int i = 1; i < npts; ++i) {
         if (in_water(point_at(i))) {
             off[i] = dry_off[i];
         }
     }
-    for (int i = 0; i <= road_points; ++i) {
+    for (int i = 0; i <= npts; ++i) {
         if (in_water(point_at(i))) {
             return {};
         }
     }
 
-    std::vector<Vec2> pts(road_points + 1);
-    for (int i = 0; i <= road_points; ++i) {
+    std::vector<Vec2> pts(npts + 1);
+    for (int i = 0; i <= npts; ++i) {
         pts[i] = point_at(i);
     }
     return pts;
@@ -635,6 +637,18 @@ Vec2 tangent(f32 x, f32 z, u32 seed) {
     return len > 1e-6f ? dir / len : Vec2{1.0f, 0.0f};
 }
 
+std::optional<Vec2> nearest_point(f32 x, f32 z, u32 seed) {
+    Segment s;
+    f32 d;
+    if (!nearest(x, z, seed, s, d)) {
+        return std::nullopt;
+    }
+    const Vec2 ab = s.b - s.a;
+    const f32 len2 = glm::dot(ab, ab);
+    const f32 t = len2 > 1e-6f ? glm::clamp(glm::dot(Vec2{x, z} - s.a, ab) / len2, 0.0f, 1.0f) : 0.0f;
+    return s.a + ab * t;
+}
+
 f32 amount(const Vec3& p, f32 up, u32 seed) {
     if (p.y < worldgen::water_level + 0.5f) {
         return 0.0f;
@@ -652,7 +666,7 @@ Vec3 tint_surface(Vec3 color, const Vec3& p, f32 up, u32 seed) {
         // dirt road right under the market stalls (the "objects on the road" look). The plaza stays a
         // clear square; the town's own ring road (tinted separately by town_path_*) carries traffic
         // around the market, and the hired cart detours along it.
-        if (const auto v = worldgen::village_containing(p.x, p.z, seed)) {
+        if (const auto v = worldgen::village_containing(p.x, p.z, seed); v && worldgen::has_market(*v)) {
             constexpr f32 plaza = 10.0f; // ~ the market footprint (kMarketHalf) + a touch
             const f32 d = glm::length(v->center - Vec2{p.x, p.z});
             on *= glm::smoothstep(plaza - 3.5f, plaza, d); // fade the road out toward the plaza centre
@@ -784,8 +798,12 @@ std::vector<Vec2> route_through_towns(const Vec2& a, const Vec2& b, u32 seed) {
     // through it snags. Arc the path around the plaza on the ring-road radius instead. The two end
     // towns are left alone: the cart starts beyond the source market and delivers at the dest plaza
     // edge (kDeliverRadius), and the road should still visibly reach both towns.
+    // (A hamlet has no market - its lane runs straight through past the well.)
     for (usize i = 1; i + 1 < cells.size(); ++i) {
-        out = detour_around_plaza(out, cell_center(seed, cells[i]));
+        const auto t = town_at(cells[i].cx, cells[i].cz, seed);
+        if (t && worldgen::has_market(*t)) {
+            out = detour_around_plaza(out, t->center);
+        }
     }
     return out;
 }

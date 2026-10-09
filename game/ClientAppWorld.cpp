@@ -1030,7 +1030,7 @@ void ClientApp::update_villager_visuals(Timestep dt) {
         return;
     }
     for (const net::VillagerState& vl : snapshot_.villagers) {
-        PlayerVisual& v = ensure_villager_visual(vl.id, vl.appearance, vl.kind);
+        PlayerVisual& v = ensure_villager_visual(vl.id, vl.appearance, vl.kind, vl.role);
         f32 measured = 0.0f;
         if (v.has_last && dt.seconds > 0.0001f) {
             Vec3 d = vl.position - v.last_pos;
@@ -1057,7 +1057,7 @@ void ClientApp::update_villager_visuals(Timestep dt) {
 
 ClientApp::PlayerVisual& ClientApp::ensure_villager_visual(u32 id,
                                                            const CharacterAppearance& appearance,
-                                                           u8 kind) {
+                                                           u8 kind, u8 role) {
     const auto it = villager_visuals_.find(id);
     if (it != villager_visuals_.end()) {
         return it->second;
@@ -1074,6 +1074,26 @@ ClientApp::PlayerVisual& ClientApp::ensure_villager_visual(u32 id,
         v.body_skin = build_body_mesh(v.model);
         v.outfit_skin = build_outfit_mesh(v.model, OutfitKind::Plate, eq);
         setup_noble_cape(v);
+    } else if (kind == 5 && static_cast<WayfarerRole>(role) != WayfarerRole::Merchant) {
+        // A WAYFARER dressed for the road by their calling: a traveller's leathers, a pilgrim's habit, a
+        // caravan guard's gambeson, an adventurer in whatever their trade wears - in muted road colours.
+        const auto wr = static_cast<WayfarerRole>(role);
+        const u32 h = id * 2654435761u;
+        OutfitKind ok = OutfitKind::Leather;
+        if (wr == WayfarerRole::Pilgrim) {
+            ok = OutfitKind::Holy;
+        } else if (wr == WayfarerRole::Guard) {
+            ok = OutfitKind::Plate;
+        } else if (wr == WayfarerRole::Adventurer) {
+            static constexpr OutfitKind kTrade[] = {OutfitKind::Plate, OutfitKind::Leather, OutfitKind::Robe, OutfitKind::Leather};
+            ok = kTrade[(h >> 20) % 4u];
+        }
+        eq.outfit_tier = static_cast<u8>(wr == WayfarerRole::Adventurer && ((h >> 9) & 1u) ? EquipmentTier::Fine : EquipmentTier::Worn);
+        static constexpr u8 kRoadTints[] = {2, 7, 1, 4, 0, 6};
+        eq.outfit_tint = kRoadTints[(h >> 24) % 6u];
+        apply_outfit(v.model, ok, eq);
+        v.body_skin = build_body_mesh(v.model);
+        v.outfit_skin = build_outfit_mesh(v.model, ok, eq);
     } else {
         // Generic peasant garb (a belted tunic + hose + headwear), varied per NPC: the tint's bits pick
         // the tunic, the headwear (hood / coif / straw hat / bare) and the hood's dye.
@@ -1126,7 +1146,9 @@ void ClientApp::draw_villagers() {
             // it red rather than gilding it like the plate.
             draw_cloth(v, root, v.model.joint_matrices(root, pose), Vec3{1.0f}, base.y);
         }
-        if (vl.kind == 1) {
+        if (vl.kind == 5 || vl.kind == 6) {
+            draw_wayfarer_kit(vl, v, root, pose); // packs, staffs, a pilgrim's lantern, a guard's spear
+        } else if (vl.kind == 1) {
             draw_held_spear(v.model, mats);
         } else if (vl.kind == 2) {
             const std::vector<Bone>& bones = v.model.bones();

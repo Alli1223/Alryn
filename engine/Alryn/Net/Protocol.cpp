@@ -217,6 +217,7 @@ void write(ByteWriter& w, const Snapshot& s) {
         w.write_u8(vl.kind);
         w.write_u8(vl.shield);
         write_appearance(w, vl.appearance);
+        w.write_u8(vl.role);
     }
     w.write_u16(static_cast<u16>(s.fires.size()));
     for (const FireState& f : s.fires) {
@@ -297,6 +298,30 @@ void write(ByteWriter& w, const Snapshot& s) {
         w.write_vec3(it.position);
         w.write_u8(it.kind);
         w.write_u8(it.state);
+        w.write_f32(it.yaw);
+    }
+    w.write_u16(static_cast<u16>(s.caravans.size()));
+    for (const CaravanState& c : s.caravans) {
+        w.write_u32(c.id);
+        w.write_vec3(c.position);
+        w.write_f32(c.yaw);
+        w.write_vec3(c.beast_pos);
+        w.write_f32(c.beast_yaw);
+        w.write_u8(c.type);
+        w.write_u8(c.beast);
+        w.write_u8(c.load);
+    }
+    w.write_u16(static_cast<u16>(s.errands.size()));
+    for (const ErrandState& e : s.errands) {
+        w.write_u32(e.id);
+        w.write_u8(e.kind);
+        w.write_u8(e.phase);
+        w.write_u8(e.progress);
+        w.write_u8(e.goal);
+        w.write_u32(e.reward);
+        w.write_u32(e.giver_id);
+        w.write_vec3(e.giver);
+        w.write_vec3(e.site);
     }
 }
 
@@ -388,6 +413,7 @@ bool read(ByteReader& r, Snapshot& s) {
         vl.kind = r.read_u8();
         vl.shield = r.read_u8();
         read_appearance(r, vl.appearance);
+        vl.role = r.read_u8();
         s.villagers.push_back(vl);
     }
     const u16 fire_count = r.read_u16();
@@ -504,7 +530,39 @@ bool read(ByteReader& r, Snapshot& s) {
         it.position = r.read_vec3();
         it.kind = r.read_u8();
         it.state = r.read_u8();
+        it.yaw = r.read_f32();
         s.quest_items.push_back(it);
+    }
+    const u16 caravan_count = r.read_u16();
+    s.caravans.clear();
+    s.caravans.reserve(caravan_count);
+    for (u16 i = 0; i < caravan_count && r.ok(); ++i) {
+        CaravanState c;
+        c.id = r.read_u32();
+        c.position = r.read_vec3();
+        c.yaw = r.read_f32();
+        c.beast_pos = r.read_vec3();
+        c.beast_yaw = r.read_f32();
+        c.type = r.read_u8();
+        c.beast = r.read_u8();
+        c.load = r.read_u8();
+        s.caravans.push_back(c);
+    }
+    const u16 errand_count = r.read_u16();
+    s.errands.clear();
+    s.errands.reserve(errand_count);
+    for (u16 i = 0; i < errand_count && r.ok(); ++i) {
+        ErrandState e;
+        e.id = r.read_u32();
+        e.kind = r.read_u8();
+        e.phase = r.read_u8();
+        e.progress = r.read_u8();
+        e.goal = r.read_u8();
+        e.reward = r.read_u32();
+        e.giver_id = r.read_u32();
+        e.giver = r.read_vec3();
+        e.site = r.read_vec3();
+        s.errands.push_back(e);
     }
     return r.ok();
 }

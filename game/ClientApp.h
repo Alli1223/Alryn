@@ -772,7 +772,7 @@ private:
     // left the snapshot.
     void update_villager_visuals(Timestep dt);
 
-    PlayerVisual& ensure_villager_visual(u32 id, const CharacterAppearance& appearance, u8 kind = 0);
+    PlayerVisual& ensure_villager_visual(u32 id, const CharacterAppearance& appearance, u8 kind = 0, u8 role = 0);
 
     void draw_villagers();
 
@@ -823,6 +823,30 @@ private:
     void dev_quest_setup();
     bool dev_setup_done_ = false;
     f32 dev_setup_wait_ = 0.0f;
+
+    // ---- Life on the roads (ClientAppRoads.cpp) -----------------------------------------------------
+    // A wayfarer's kit by its role (a pack + staff, a pilgrim's lantern by night, a guard's spear ...).
+    void draw_wayfarer_kit(const net::VillagerState& vl, PlayerVisual& v, const Mat4& root, const std::vector<Quat>& pose);
+    // The merchant caravans rolling between towns: their carts (eased, wheels turning), beasts + loads.
+    void update_caravans(Timestep dt);
+    void draw_caravans();
+    // The roadside traveller's errand: the one in the snapshot (nullptr if none); E by them takes it on.
+    const net::ErrandState* current_errand() const;
+    bool errand_talk();
+    void update_errand_fx(Timestep dt);
+    void draw_errand_world(); // the goat / satchels / stuck cart + the traveller's bundle and fire
+    void draw_errand_hud(ui::DrawList& draw, f32 W, f32 H, f32 ts);
+    // A waypoint diamond over `at` (an edge pointer when off-screen) with its distance.
+    void draw_waypoint(ui::DrawList& draw, f32 W, f32 H, f32 ts, const Vec3& at, const Vec4& col, f32 hide_within);
+    // Snow drifting down in the high country (the peaks + the alpine plateaus' snowbound towns).
+    void draw_snowfall();
+    // Scripted screenshots: ALRYN_SCREEN=city / snowtown / hamlet / village stands the hero in the nearest
+    // such settlement; =road / caravan sets them out on the road with traffic coming; =errand puts a
+    // traveller in trouble ahead (ALRYN_ERRAND_KIND 0..4, ALRYN_ERRAND_TAKE=1 takes it at once).
+    void dev_road_setup();
+    bool dev_road_done_ = false;
+    bool dev_road_placed_ = false;
+    Vec2 dev_road_dir_{1.0f, 0.0f};
 
     // ---- Enemy looks (ClientAppWorld.cpp) -------------------------------------------------------------
     // A dire wolf (or the alpha, `alpha`): a lean low-poly quadruped with hackles, a snapping jaw and
@@ -1199,6 +1223,7 @@ private:
     u32 town_vseed_ = 0;            // the town the local player stands in (0 = out on the roads)
     f32 town_banner_ = 0.0f;        // "you have arrived" banner timer
     std::string town_banner_name_;  // the town it announces
+    std::string town_banner_sub_;   // ...and what kind of place it is (a hamlet / a snowbound city ...)
     u8 pending_buy_ = 0;       // shop: the gear tier we're trying to buy up to (sent in PlayerInput.buy)
     u8 pending_buy_rig_ = 0;   // shop: the wagon-rig level we're trying to buy up to (PlayerInput.buy_rig)
     ui::Rect wardrobe_buy_rect_ = {};        // the "buy upgrade" button (from draw_wardrobe)
@@ -1289,6 +1314,33 @@ private:
     Mesh wolf_leg_mesh_;
     Mesh wolf_jaw_mesh_;
     Mesh tent_mesh_;        // a bandit camp's ragged A-frame tent
+    Mesh goat_body_mesh_;   // an errand's runaway goat (legs drawn x4)
+    Mesh goat_leg_mesh_;
+    struct GoatGait {
+        Vec3 prev{0.0f};
+        f32 phase = 0.0f;
+        bool init = false;
+    };
+    std::unordered_map<u32, GoatGait> goat_gait_;
+    // A merchant caravan's eased render state (the cart + its beast) and the gait of its wheels + legs.
+    struct CaravanSmooth {
+        Vec3 pos{0.0f};
+        Vec3 beast{0.0f};
+        Vec3 prev_beast{0.0f};
+        f32 roll = 0.0f;
+        f32 gait = 0.0f;
+        bool init = false;
+    };
+    std::unordered_map<u32, CaravanSmooth> caravan_smooth_;
+    // The errand's edges (taken / progress / done) + what its traveller says.
+    u32 last_errand_id_ = 0;
+    u8 last_errand_phase_ = 255;
+    u8 last_errand_progress_ = 0;
+    f32 errand_banner_ = 0.0f;
+    std::string errand_banner_text_;
+    std::string errand_say_;
+    f32 errand_say_t_ = 0.0f;
+    f32 snow_amt_ = 0.0f; // eased snowfall strength (the high country)
     // Controller state. `using_gamepad_` is the active input device (auto-switched: any pad activity
     // selects it, any mouse motion selects KBM) and decides whether the aim follows the right stick
     // or the cursor. The trigger edges are tracked here because triggers are analog axes, not buttons.

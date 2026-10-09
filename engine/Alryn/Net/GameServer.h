@@ -9,6 +9,7 @@
 #include <Alryn/Game/Progression.h>
 #include <Alryn/Game/Roles.h>
 #include <Alryn/Game/SideQuest.h>
+#include <Alryn/Game/Wayfarer.h>
 #include <Alryn/Net/NetServer.h>
 #include <Alryn/Net/Protocol.h>
 #include <Alryn/Physics/CharacterController.h>
@@ -18,6 +19,7 @@
 #include <Alryn/World/PropLibrary.h>
 
 #include <algorithm>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -373,13 +375,14 @@ public:
         f32 banner = 0.0f;  // Complete: seconds the banner still shows
     };
     // A quest's pickups: a moonpetal (kind 0) or the treasure chest (kind 1: state 0 buried under the X,
-    // 1 unearthed, 2 opened).
+    // 1 unearthed, 2 opened) - and an errand's (see QuestItemState).
     struct QuestItem {
         u32 id = 0;
-        u32 quest = 0;
+        u32 quest = 0;       // the board quest (or the errand) it belongs to
         Vec3 position{0.0f};
-        u8 kind = 0;
+        u8 kind = 0;         // 0 moonpetal, 1 chest; an errand's 2 goat, 3 satchel, 4 stuck cart
         u8 state = 0;
+        f32 yaw = 0.0f;
     };
     const std::vector<QuestRun>& quests() const { return quests_; }
     const std::vector<QuestItem>& quest_items() const { return quest_items_; }
@@ -393,6 +396,73 @@ public:
     void debug_spawn_bestiary(const Vec3& at, f32 yaw, std::span<const u8> kinds = {}, bool frozen = false);
     // Where a town's notice board stands (the side quests are read there).
     static Vec3 notice_board(const worldgen::Village& town, u32 seed);
+
+    // --- Life on the roads (Game/Wayfarer.h; see Game/Wayfarers.cpp) ---
+    // A road between two towns as a walkable polyline, with the distance along it at every vertex.
+    struct RoadRoute {
+        std::vector<Vec2> pts;
+        std::vector<f32> cum;
+        f32 length = 0.0f;
+        f32 stop_lo = 0.0f; // walking toward the start, a traveller stops here (just inside its town's gate)
+        f32 stop_hi = 0.0f; // ...toward the end, here
+        Vec2 at(f32 s) const;      // the point `s` metres along (clamped to the ends)
+        Vec2 heading(f32 s) const; // the unit direction of travel there (start -> end)
+        f32 project(const Vec2& p) const; // the distance along of the point nearest `p`
+    };
+    // A wayfarer walking a road: a body (position / yaw / pace / look) that keeps to its right of the
+    // road, a group it travels with (a band, or a caravan's merchant + guards) and where it's bound.
+    struct Wayfarer {
+        Villager body;
+        std::shared_ptr<const RoadRoute> route;
+        u32 group = 0;
+        WayfarerRole role = WayfarerRole::Traveller;
+        f32 slot = 0.0f;    // its place in the group, metres behind (+) / ahead (-) of the group's lead point
+        f32 lateral = kWayfarerKeepRight; // how far right of the centreline it walks
+        f32 dodge = 0.0f;   // extra sidestep round a hero / the cart in the way
+    };
+    // A caravan's cart + its beast, and the group's shared progress along the road (every member of a
+    // group - caravan or band - walks the same `along`).
+    struct WayGroup {
+        u32 id = 0;
+        std::shared_ptr<const RoadRoute> route;
+        f32 along = 0.0f;   // the lead point's distance along the route
+        f32 dir = 1.0f;     // +1 toward the route's end, -1 toward its start
+        f32 speed = kWayfarerSpeed;
+        f32 hurry = 0.0f;   // seconds left fleeing raiders (a quicker pace)
+        bool caravan = false;
+        u8 cart_type = 0;
+        u8 beast = 0;       // 0 ox, 1 horse
+        u8 load = 0;
+        Vec3 cart_pos{0.0f};
+        f32 cart_yaw = 0.0f;
+        Vec3 beast_pos{0.0f};
+        f32 beast_yaw = 0.0f;
+        bool arrived = false;
+    };
+    // A roadside errand (ErrandKind): the traveller waiting by the road, what's wanted, how it's going.
+    struct Errand {
+        u32 id = 0;
+        ErrandKind kind = ErrandKind::LostGoat;
+        QuestPhase phase = QuestPhase::Offered;
+        u8 danger = 1;
+        u8 progress = 0;
+        u8 goal = 1;
+        u32 reward = 0;
+        u32 xp = 0;
+        Villager giver;     // the traveller (stands by the road; a kind-6 villager)
+        Vec3 site{0.0f};    // where the help's needed
+        Vec2 road_dir{1.0f, 0.0f}; // the road's heading at the giver (toward the party's travel)
+        f32 banner = 0.0f;  // Complete: seconds the thanks still shows
+        net::PlayerId leader = 0; // LostGoat: the hero the goat is following
+    };
+    const std::vector<Wayfarer>& wayfarers() const { return wayfarers_; }
+    const std::vector<WayGroup>& way_groups() const { return way_groups_; }
+    const std::vector<Errand>& errands() const { return errands_; }
+    // Debug / tests / screenshots: a traveller in trouble (of `kind`) waits by the road nearest `near`, a
+    // little ahead along it; and a group of wayfarers (`caravan` or a walking band) set out toward `near`.
+    bool debug_spawn_errand(ErrandKind kind, const Vec3& near, const Vec2& toward = Vec2{0.0f});
+    bool debug_spawn_wayfarers(const Vec3& near, bool caravan, f32 ahead = 30.0f);
+    void set_road_life(bool on) { road_life_ = on; } // (tests switch the director off for a quiet world)
 
 private:
     Vec3 spawn_point(net::PlayerId id) const;
@@ -434,6 +504,18 @@ private:
     void quest_foe_felled(u32 quest);                            // a camp raider / wolf down: progress
     void quest_dig(const Vec3& at);                              // a spade strike: does it hit the X?
     std::optional<Vec3> quest_site(const worldgen::Village& town, u32 salt) const;
+    // --- Life on the roads (Game/Wayfarers.cpp) ---
+    void update_wayfarers(Timestep dt, const DensitySampler& density); // spawn + walk the road traffic
+    void update_errands(Timestep dt, const DensitySampler& density);   // the roadside traveller's errand
+    std::shared_ptr<const RoadRoute> road_route(const Vec2& a, const Vec2& b); // a town-to-town road (cached)
+    bool spawn_way_group(const Vec3& near, bool force_caravan, f32 fixed_ahead);
+    bool spawn_errand(ErrandKind kind, const Vec3& near, const Vec2& toward);
+    void wake_errand(Errand& e, const DensitySampler& density); // the goat / brigands / cart / satchels / wolves
+    void finish_errand(Errand& e);
+    bool errand_foe_felled(u32 errand);         // a brigand / wolf of an errand down (true if it was one)
+    void errand_dig(const Vec3& at);            // a spade strike: is it by the stuck cart's wheel?
+    bool errand_owns(u32 id) const;             // is this id an errand's (its foes + items)?
+    f32 way_rand();                             // the road director's dice
     // --- Progression (Game/Progress.cpp) ---
     void assign_color(net::PlayerId id);              // the first identity colour no one else has
     void sync_identity(net::PlayerId id, ServerPlayer& player); // name + colour preference, each tick
@@ -536,6 +618,20 @@ private:
     u32 quest_town_vseed_ = 0; // the town whose board the offers came from
     u32 quest_round_ = 0;      // bumps per finished / abandoned quest, so a board's next offers differ
     u32 next_quest_item_ = 1;
+    // --- Life on the roads ---
+    std::vector<Wayfarer> wayfarers_;
+    std::vector<WayGroup> way_groups_;
+    std::vector<Errand> errands_;
+    std::unordered_map<u64, std::shared_ptr<const RoadRoute>> route_cache_; // town pair -> road
+    f32 wayfarer_scan_cd_ = 1.0f;
+    f32 errand_cd_ = kErrandFirstDelay;
+    Vec3 errand_probe_{0.0f};  // the party's centroid at the last look (which way it's heading)
+    Vec2 party_heading_{0.0f}; // smoothed direction of travel
+    u32 next_wayfarer_id_ = 1;
+    u32 next_errand_id_ = 1;
+    u8 last_errand_kind_ = 255;
+    u32 way_rng_ = 0x9E3779B9u;
+    bool road_life_ = true;
     u32 next_enemy_id_ = 1;
     u32 wave_ = 0;            // = nights survived
     u32 spawn_index_ = 0;     // distinct layout per wave spawn

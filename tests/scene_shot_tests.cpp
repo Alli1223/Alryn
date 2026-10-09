@@ -446,6 +446,49 @@ TEST_CASE("Scene shot: medieval village houses render") {
     MESSAGE(wrote);
 }
 
+// Every town building in its snowbound twin (houses, the landmark townhouse / pub / smithy / chapel /
+// keep), plus the brazier, the snowman and a snowy wall + tower, seen from the game's high angle
+// (snow_buildings.ppm): the quick check that the snow sits on the roofs and nothing renders inside out.
+TEST_CASE("Scene shot: the snowbound buildings, braziers + snowmen") {
+    test::OffscreenRenderer renderer;
+    if (!renderer.init(1200, 560)) {
+        MESSAGE("No Vulkan device/shaders - skipping snowbound buildings shot");
+        return;
+    }
+    PropLibrary lib;
+    std::vector<test::OffscreenRenderer::Draw> draws;
+    auto add_def = [&](const PropDef& def, const Mat4& m) {
+        for (const PropPart& part : def.parts) {
+            if (part.layer == PropLayer::Glow) {
+                continue;
+            }
+            if (Mesh* mesh = renderer.upload(part.mesh)) {
+                draws.push_back({mesh, m, part.layer == PropLayer::Emissive ? Vec4{1.5f, 1.4f, 1.1f, 1.0f} : Vec4{1.0f}});
+            }
+        }
+    };
+    if (Mesh* g = renderer.upload(primitives::grid(40, 2.0f, Vec3{0.6f, 0.68f, 0.86f}))) {
+        draws.push_back({g, glm::translate(Mat4{1.0f}, Vec3{-40.0f, 0.0f, -40.0f}), Vec4{1.0f}});
+    }
+    for (u32 i = 0; i < kHouseDefs; ++i) {
+        const f32 x = (static_cast<f32>(i % 7) - 3.0f) * 10.5f;
+        const f32 z = static_cast<f32>(i / 7) * 13.0f - 6.0f;
+        add_def(lib.houses()[i + kSnowHouses], glm::translate(Mat4{1.0f}, Vec3{x, 0.0f, z}));
+    }
+    add_def(lib.decor()[kDecorBrazier], glm::translate(Mat4{1.0f}, Vec3{-34.0f, 0.0f, 16.0f}));
+    add_def(lib.decor()[kDecorSnowman], glm::translate(Mat4{1.0f}, Vec3{-31.0f, 0.0f, 16.0f}));
+    add_def(lib.walls()[kSnowWalls], glm::translate(Mat4{1.0f}, Vec3{-26.0f, 0.0f, 16.0f}));
+    add_def(lib.gates()[kSnowGates], glm::translate(Mat4{1.0f}, Vec3{-21.0f, 0.0f, 16.0f}));
+    add_def(lib.gates()[kSnowGates + 1], glm::translate(Mat4{1.0f}, Vec3{-17.0f, 0.0f, 16.0f}));
+    add_def(lib.bridges()[0], glm::translate(Mat4{1.0f}, Vec3{-10.0f, 0.0f, 16.0f}));
+    REQUIRE_FALSE(draws.empty());
+    const Mat4 view = look_at(Vec3{2.0f, 38.0f, 44.0f}, Vec3{0.0f, 0.0f, 3.0f}, Vec3{0.0f, 1.0f, 0.0f});
+    const Mat4 proj = perspective(radians(50.0f), static_cast<f32>(renderer.width()) / renderer.height(), 0.1f, 300.0f);
+    const std::string path = (executable_dir() / "snow_buildings.ppm").string();
+    renderer.render(draws, view, proj, Vec3{0.62f, 0.7f, 0.84f}, glm::normalize(Vec3{0.4f, 0.9f, 0.5f}), path);
+    MESSAGE("Wrote " << path);
+}
+
 TEST_CASE("Scene shot: real-world towns + the roads between them") {
     test::OffscreenRenderer renderer;
     if (!renderer.init(1100, 760)) {
@@ -503,6 +546,64 @@ TEST_CASE("Scene shot: real-world towns + the roads between them") {
         const Vec3 tgt = dir * (span * 0.35f) + Vec3{0.0f, 2.0f, 0.0f};
         render_world(renderer, seed, fc, span, (executable_dir() / "world_road.ppm").string(),
                      1.0f, 1.0f, &eye, &tgt);
+    }
+}
+
+// One settlement of every tier - a hamlet, a village, a town and a great city - plus a snowbound town up
+// on an alpine plateau, each framed whole from above (world_tier0..3.ppm, world_snowy.ppm): the quick way
+// to judge their sizes, street styles + the snow without walking there.
+TEST_CASE("Scene shot: settlement tiers + a snowbound town") {
+    test::OffscreenRenderer renderer;
+    if (!renderer.init(1100, 760)) {
+        MESSAGE("No Vulkan device/shaders - skipping settlement shots");
+        return;
+    }
+    std::optional<worldgen::Village> found[4];
+    std::optional<worldgen::Village> snowy;
+    u32 snowy_seed = 0;
+    const u32 seed = 4242u;
+    for (int r = 0; r <= 14; ++r) {
+        for (int vz = -r; vz <= r; ++vz) {
+            for (int vx = -r; vx <= r; ++vx) {
+                if (std::max(std::abs(vx), std::abs(vz)) != r) {
+                    continue;
+                }
+                if (const auto v = worldgen::village_at(vx, vz, seed)) {
+                    auto& slot = found[static_cast<int>(v->tier)];
+                    if (!slot && !v->snowy) {
+                        slot = v;
+                    }
+                }
+            }
+        }
+    }
+    for (const u32 s : {4242u, 1u, 77u, 9u}) {
+        for (int vz = -14; vz <= 14 && !snowy; ++vz) {
+            for (int vx = -14; vx <= 14 && !snowy; ++vx) {
+                if (const auto v = worldgen::village_at(vx, vz, s); v && v->snowy && v->tier != worldgen::TownTier::Hamlet) {
+                    snowy = v;
+                    snowy_seed = s;
+                }
+            }
+        }
+        if (snowy) {
+            break;
+        }
+    }
+    for (int t = 0; t < 4; ++t) {
+        if (found[t]) {
+            const worldgen::Village& v = *found[t];
+            MESSAGE("tier " << t << " at " << v.center.x << "," << v.center.y << " half " << v.half << " houses "
+                            << detail::cached_town_plan(v, seed).houses.size());
+            render_world(renderer, seed, v.center, v.half * 1.25f + 6.0f,
+                         (executable_dir() / ("world_tier" + std::to_string(t) + ".ppm")).string(), 1.7f, 0.6f);
+        }
+    }
+    if (snowy) {
+        MESSAGE("snowy (seed " << snowy_seed << ") at " << snowy->center.x << "," << snowy->center.y << " tier "
+                               << static_cast<int>(snowy->tier) << " ground " << snowy->ground);
+        render_world(renderer, snowy_seed, snowy->center, snowy->half * 1.2f + 6.0f,
+                     (executable_dir() / "world_snowy.ppm").string(), 1.5f, 0.7f);
     }
 }
 

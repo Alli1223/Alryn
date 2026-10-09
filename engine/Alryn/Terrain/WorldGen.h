@@ -36,12 +36,35 @@ inline f32 river_amount(f32 x, f32 z, u32 seed) {
 }
 inline bool in_river(f32 x, f32 z, u32 seed) { return river_amount(x, z, seed) > 0.5f; }
 
+// --- Snow -----------------------------------------------------------------
+// Snow lies on everything above the snowline: the peaks and the high alpine plateaus. 0 below it ..
+// 1 fully snowbound. Shared by the surface colour, the biome classifier, the towns that settle up
+// there (Village::snowy) and the client's snowfall, so they all agree on where winter is.
+inline constexpr f32 snowline_lo = 8.5f;  // the first dusting
+inline constexpr f32 snowline_hi = 12.5f; // deep snow from here up
+inline f32 snow_cover(f32 h) { return glm::smoothstep(snowline_lo, snowline_hi, h); }
+
+// --- Alpine plateaus ------------------------------------------------------
+// Some mountain massifs hold a broad SHELF of gentle upland - a snowbound plateau ringed by crags,
+// climbed to over a long escarpment - where hardy towns settle above the snowline. 0 off the shelf ..
+// 1 on it. `region` is base_height's continental/mountain field (so the shelves sit in the high
+// country, not out on the coastal lowlands).
+inline f32 plateau_amount(f32 x, f32 z, u32 seed, f32 region) {
+    const f32 massif = glm::smoothstep(0.16f, 0.38f, region);
+    if (massif <= 0.0f) {
+        return 0.0f;
+    }
+    const f32 shelf = noise::fbm2d(x * 0.0036f, z * 0.0036f, 2, 2.0f, 0.5f, seed + 919u);
+    return massif * glm::smoothstep(-0.12f, 0.12f, shelf);
+}
+
 // The NATURAL surface height at (x, z): blends ocean / lowland / big mountain ranges from a
 // low-frequency "region" field, layers rolling hills + craggy ridge peaks + finer detail on land,
-// then carves winding river channels - a varied landscape with mountains between the valleys.
-// This is the land BEFORE anything is built on it: the town layout (village sites, streets, house
-// plots) and the road network are planned from it. Everything that sits on / walks the ground
-// uses height() below instead, which levels this under each town building.
+// lifts the odd massif into a snowbound alpine PLATEAU, then carves winding river channels - a varied
+// landscape with mountains between the valleys. This is the land BEFORE anything is built on it: the
+// town layout (village sites, streets, house plots) and the road network are planned from it.
+// Everything that sits on / walks the ground uses height() below instead, which levels this under each
+// town building.
 inline f32 base_height(f32 x, f32 z, u32 seed) {
     const f32 region = noise::fbm2d(x * 0.006f, z * 0.006f, 3, 2.0f, 0.5f, seed + 101u);
     // Land-dominated (only the lowest region is ocean), so the continents are broad + connectable -
@@ -64,6 +87,14 @@ inline f32 base_height(f32 x, f32 z, u32 seed) {
     const f32 land_amp = glm::mix(2.2f, 10.0f, mountainous) * continental + 0.4f;
     f32 h = base + continental * hills * 2.8f + mountainous * mountainous * ridge * 13.0f +
             land_amp * (detail * 0.7f + fine * 0.22f);
+
+    // An alpine plateau: the massif's craggy relief eases into a broad, gently rolling shelf high above
+    // the valleys (above the snowline), its level drifting slowly so neighbouring shelves differ.
+    if (const f32 shelf = plateau_amount(x, z, seed, region); shelf > 0.0f) {
+        const f32 level = 14.0f + 2.5f * noise::fbm2d(x * 0.0025f, z * 0.0025f, 2, 2.0f, 0.5f, seed + 929u);
+        const f32 upland = level + hills * 1.5f + detail * 0.8f + fine * 0.22f;
+        h = glm::mix(h, upland, glm::smoothstep(0.0f, 1.0f, shelf) * continental);
+    }
 
     // Carve winding river channels into the land (the water plane fills them; roads bridge them).
     const f32 river = river_amount(x, z, seed) * continental;
@@ -188,80 +219,58 @@ inline const char* biome_name(Biome b) {
 }
 
 // --- Villages -------------------------------------------------------------
-// Medieval towns sit on flat, above-water ground, sparsely scattered on a coarse
-// grid. The placement lives here (it only needs the height field + hash) so terrain
-// colouring and the scatters can ask "am I in a village?"; the actual buildings are
-// laid out in World/Village.h.
-inline constexpr f32 village_cell = 170.0f;     // grid spacing of candidate towns
-inline constexpr f32 village_half = 38.0f;      // half-width of a typical (medium) town
-inline constexpr f32 village_half_max = 44.0f;  // a large town's half-width
+// Medieval settlements sit on flat, above-water ground, sparsely scattered on a coarse grid - long
+// lonely roads between them. They come in four TIERS, from a hamlet of a few cottages round a well to
+// a walled city of hundreds of homes, and each lays its streets out in its own STYLE. The placement
+// lives here (it only needs the height field + hash) so terrain colouring and the scatters can ask
+// "am I in a village?"; the actual buildings are laid out in World/Village.h.
+inline constexpr f32 village_cell = 250.0f;     // grid spacing of candidate towns
+inline constexpr f32 village_half_max = 100.0f;  // a great city's half-width (the largest settlement)
+// A settlement this high up sits above the snowline: snow on its roofs + streets, braziers by night.
+inline constexpr f32 snow_town_ground = 10.5f;
+
+enum class TownTier : u8 {
+    Hamlet = 0,  // a handful of cottages round a well, no wall
+    Village = 1, // a lane of homes + a small market
+    Town = 2,    // the walled market town
+    City = 3,    // a great walled city: ring after ring of streets, hundreds of homes, a keep
+};
+inline const char* town_tier_name(TownTier t) {
+    switch (t) {
+        case TownTier::Hamlet: return "HAMLET";
+        case TownTier::Village: return "VILLAGE";
+        case TownTier::Town: return "TOWN";
+        case TownTier::City: return "CITY";
+    }
+    return "TOWN";
+}
+
+// How a settlement's streets are laid out (World/Village.h town_streets).
+enum class TownLayout : u8 {
+    Lane = 0,   // one high street through the middle + a few short lanes off it
+    Radial = 1, // a ring road round the market + avenues out to the gates + spokes
+    Grid = 2,   // a planned grid of streets (turned to the town's own heading)
+    Rings = 3,  // a city: concentric ring roads crossed by radial avenues
+};
 
 struct Village {
     Vec2 center{0.0f}; // xz of the town centre
     f32 ground = 0.0f; // ground height at the centre
-    f32 half = village_half;
-    u32 vseed = 0; // per-village layout seed
+    f32 half = 38.0f;  // the settlement's half-width
+    u32 vseed = 0;     // per-village layout seed
+    TownTier tier = TownTier::Town;
+    TownLayout layout = TownLayout::Radial;
+    bool snowy = false; // above the snowline (snowbound roofs + streets, braziers)
 };
 
-// The town whose origin falls in coarse cell (vcx,vcz), if the ground suits it. Towns
-// come in three sizes (small/medium/large), chosen per cell; a bigger town needs a
-// wider patch of flat ground, so large towns are rarer.
-inline std::optional<Village> village_at(int vcx, int vcz, u32 seed) {
-    const u32 salt = seed + 313u;
-    // Settlement density varies across the world: a low-frequency field carves out WILDERNESS
-    // bands where towns are far rarer, so some towns sit way out on their own (longer, lonelier
-    // hauls) instead of every region being evenly dotted. `keep` is ~1 in settled land, ~0 in the
-    // wild; the per-cell hash must fall under it to grow a town.
-    const f32 settle = noise::fbm2d(static_cast<f32>(vcx) * 0.16f, static_cast<f32>(vcz) * 0.16f,
-                                    2, 2.0f, 0.5f, seed + 777u);
-    const f32 keep = glm::smoothstep(-0.40f, 0.18f, settle);
-    if (detail::hash01(detail::tree_hash(vcx, vcz, salt)) > 0.62f * (0.45f + 0.55f * keep)) {
-        return std::nullopt; // only some cells grow a town (sparser out in the wild)
-    }
-    const f32 sz = detail::hash01(detail::tree_hash(vcx, vcz, salt + 8u));
-    // Sprawling medieval towns: small / medium / large half-widths. A bigger town needs a
-    // wider patch of buildable ground, so large towns are rarer. The max is capped so two
-    // adjacent towns can never overlap at the grid spacing + jitter.
-    const f32 half = sz < 0.45f ? 30.0f : (sz < 0.82f ? 38.0f : 44.0f);
-    const f32 jx = (detail::hash01(detail::tree_hash(vcx, vcz, salt + 1u)) - 0.5f) * village_cell * 0.3f;
-    const f32 jz = (detail::hash01(detail::tree_hash(vcx, vcz, salt + 2u)) - 0.5f) * village_cell * 0.3f;
-    const f32 cx = (static_cast<f32>(vcx) + 0.5f) * village_cell + jx;
-    const f32 cz = (static_cast<f32>(vcz) + 0.5f) * village_cell + jz;
-    const f32 gh = base_height(cx, cz, seed);
-    if (gh < water_level + 2.0f || gh > 9.0f) {
-        return std::nullopt; // not in a buildable valley (above water, below the mountain slopes)
-    }
-    for (f32 ox : {-half, 0.0f, half}) {
-        for (f32 oz : {-half, 0.0f, half}) {
-            if (std::abs(base_height(cx + ox, cz + oz, seed) - gh) > 3.6f) {
-                return std::nullopt; // not flat enough for a town of this size
-            }
-        }
-    }
-    // Reject a site a river threads through: a town straddling the carved channel floats its market
-    // stalls + drops its wagons in the water. The flat check above already rejects a river running
-    // near the footprint's edge/corner samples (height() carves the channel); this covers the gap
-    // across the core (market + wagon depot + inner houses). The river is the zero-contour of
-    // river_field, so a sign flip between the centre and a core-ring sample means a river runs
-    // between them; an in-channel sample (river_amount) catches one tangent to the ring.
-    {
-        const f32 rc = river_field(cx, cz, seed);
-        if (river_amount(cx, cz, seed) > 0.2f) {
-            return std::nullopt; // the centre itself is in a channel
-        }
-        const f32 rr = half * 0.55f; // covers the market (9), wagon spots (~12) + the inner houses
-        for (int i = 0; i < 12; ++i) {
-            const f32 a = TwoPi * static_cast<f32>(i) / 12.0f;
-            const f32 rx = cx + std::cos(a) * rr;
-            const f32 rz = cz + std::sin(a) * rr;
-            const f32 rf = river_field(rx, rz, seed);
-            if (std::abs(rf) < 0.024f || (rf < 0.0f) != (rc < 0.0f)) {
-                return std::nullopt; // a river runs through the town's core
-            }
-        }
-    }
-    return Village{Vec2{cx, cz}, gh, half, detail::tree_hash(vcx, vcz, salt + 7u)};
-}
+// Does this settlement have a market square (a hamlet only has a well on its green)? / Is it walled?
+inline bool has_market(const Village& v) { return v.tier != TownTier::Hamlet; }
+inline bool has_wall(const Village& v) { return v.tier != TownTier::Hamlet; }
+
+// The settlement whose origin falls in coarse cell (vcx,vcz), if the ground suits it (and no great
+// city next door has claimed the land). Deterministic + cached (Terrain/WorldGen.cpp) - it's asked
+// per terrain vertex, and a cell's answer depends on its neighbours (a city keeps them clear).
+std::optional<Village> village_at(int vcx, int vcz, u32 seed);
 
 // Distance from a town's centre to its wall at world-angle `ang`. Each town has its own
 // shape (from its vseed): a blend of round and square, modulated by low-frequency angular
@@ -355,7 +364,7 @@ inline Vec3 surface_color(const Vec3& p, const Vec3& normal, u32 seed) {
     // Snow up high: it clings to everything but the sheer cliff faces (a gentle-ground-only
     // gate left whole peaks reading as cream rock/sand), and what rock still shows through
     // cools toward blue-grey granite so the summits read cold.
-    const f32 alt = glm::smoothstep(8.5f, 12.5f, h);
+    const f32 alt = snow_cover(h);
     const f32 snow_amt = alt * glm::smoothstep(0.30f, 0.58f, up);
     color = glm::mix(color, Vec3{0.47f, 0.50f, 0.58f}, alt * (1.0f - snow_amt) * 0.8f); // exposed granite
     color = glm::mix(color, snow, snow_amt);
@@ -403,11 +412,22 @@ inline Vec3 surface_color(const Vec3& p, const Vec3& normal, u32 seed) {
             const f32 verge = glm::smoothstep(r + 7.0f, r - 4.0f, glm::length(d));
             if (verge > 0.001f) {
                 const f32 worn = noise::fbm2d(p.x * 0.13f, p.z * 0.13f, 2, 2.0f, 0.5f, seed + 909u);
-                const Vec3 town_grass{0.31f, 0.56f, 0.22f}; // bright storybook green over most of the open ground
-                const Vec3 town_grass2{0.40f, 0.63f, 0.26f}; // sunnier clearing green (variation, not mud)
-                const Vec3 town_dirt{0.47f, 0.36f, 0.23f};  // warm bare earth only on the most-trodden spots
-                Vec3 town_ground = glm::mix(town_grass, town_grass2, glm::smoothstep(-0.2f, 0.45f, worn));
-                town_ground = glm::mix(town_ground, town_dirt, glm::smoothstep(0.74f, 1.05f, worn));
+                Vec3 town_ground;
+                if (v->snowy) {
+                    // A snowbound town: drifts over the commons, trodden down to grey slush where the
+                    // townsfolk walk, with the odd patch of frozen earth showing through.
+                    const Vec3 drift{0.60f, 0.69f, 0.88f};
+                    const Vec3 drift2{0.66f, 0.73f, 0.90f};
+                    const Vec3 slush{0.46f, 0.48f, 0.55f};
+                    town_ground = glm::mix(drift, drift2, glm::smoothstep(-0.2f, 0.45f, worn));
+                    town_ground = glm::mix(town_ground, slush, glm::smoothstep(0.55f, 0.95f, worn) * 0.7f);
+                } else {
+                    const Vec3 town_grass{0.31f, 0.56f, 0.22f}; // bright storybook green over most of the open ground
+                    const Vec3 town_grass2{0.40f, 0.63f, 0.26f}; // sunnier clearing green (variation, not mud)
+                    const Vec3 town_dirt{0.47f, 0.36f, 0.23f};  // warm bare earth only on the most-trodden spots
+                    town_ground = glm::mix(town_grass, town_grass2, glm::smoothstep(-0.2f, 0.45f, worn));
+                    town_ground = glm::mix(town_ground, town_dirt, glm::smoothstep(0.74f, 1.05f, worn));
+                }
                 color = glm::mix(color, town_ground, glm::smoothstep(0.55f, 0.78f, up) * verge);
             }
         }

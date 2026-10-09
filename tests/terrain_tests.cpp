@@ -722,8 +722,8 @@ TEST_CASE("Village: decorative props don't spawn on the roads") {
             }
             ++towns_checked;
             const auto gates = detail::village_gate_points(*v, seed);
-            std::array<detail::Street, 20> streets;
-            const int nstreets = detail::town_streets(*v, seed, gates, streets);
+            const std::vector<detail::Street> streets = detail::town_streets(*v, seed, gates);
+            const int nstreets = static_cast<int>(streets.size());
             for (const PropInstance& p : village_props(*v, seed)) {
                 const bool decorative =
                     p.category == PropCategory::Lantern || p.category == PropCategory::Planter ||
@@ -977,7 +977,7 @@ TEST_CASE("Village: medieval cottage / wall / gate building blocks") {
 
     // Ordinary home variants (cottages, longhouses, two-storey, manors...) + the special
     // landmark buildings (townhouse / pub / blacksmith) at indices kHouseVariants..
-    CHECK(lib.houses().size() == kHouseDefs);
+    CHECK(lib.houses().size() == 2u * kHouseDefs); // every building + its snowbound twin
     // Each ordinary home: a roof/shell part (fades when inside) + emissive (hearth fire / candle /
     // lamp glow) + a real footprint, interior lights, a bed spot inside, and no fake glow.
     for (u32 i = 0; i < kHouseVariants; ++i) {
@@ -1023,11 +1023,14 @@ TEST_CASE("Village: medieval cottage / wall / gate building blocks") {
 
 TEST_CASE("Village: towns are placed, laid out deterministically, with houses + gates") {
     const u32 seed = 4242u;
-    // Find a town somewhere on the village grid.
+    // Find a walled market town somewhere on the village grid.
     std::optional<worldgen::Village> found;
     for (int vz = -8; vz < 8 && !found; ++vz) {
         for (int vx = -8; vx < 8 && !found; ++vx) {
-            found = worldgen::village_at(vx, vz, seed);
+            const auto v = worldgen::village_at(vx, vz, seed);
+            if (v && v->tier == worldgen::TownTier::Town) {
+                found = v;
+            }
         }
     }
     REQUIRE(found.has_value());
@@ -1041,18 +1044,23 @@ TEST_CASE("Village: towns are placed, laid out deterministically, with houses + 
     int houses = 0, walls = 0, gates = 0, markets = 0;
     Vec3 market_pos{0.0f};
     std::vector<Vec3> house_pos;
+    std::vector<detail::Footprint> house_fp;
     for (const PropInstance& p : props) {
-        if (p.category == PropCategory::House) { ++houses; house_pos.push_back(p.position); }
+        if (p.category == PropCategory::House) {
+            ++houses;
+            house_pos.push_back(p.position);
+            house_fp.emplace_back(Vec2{p.position.x, p.position.z}, p.yaw, PropLibrary::house_half_extents(p.variant));
+        }
         else if (p.category == PropCategory::Wall) ++walls;
         else if (p.category == PropCategory::Gate) ++gates;
         else if (p.category == PropCategory::Market) { ++markets; market_pos = p.position; }
     }
     CHECK(houses >= 4);
-    // Houses never spawn on top of each other (overlap rejection keeps them apart)...
+    // Houses never spawn on top of each other (their footprints never overlap, though a terrace stands
+    // shoulder to shoulder)...
     for (usize i = 0; i < house_pos.size(); ++i) {
         for (usize j = i + 1; j < house_pos.size(); ++j) {
-            const Vec2 d{house_pos[i].x - house_pos[j].x, house_pos[i].z - house_pos[j].z};
-            CHECK(glm::length(d) >= 6.0f);
+            CHECK_FALSE(detail::footprints_overlap(house_fp[i], house_fp[j], 0.1f));
         }
         // ...and they stay inside the town's (organic) wall, never poking through it.
         const Vec2 d{house_pos[i].x - found->center.x, house_pos[i].z - found->center.y};

@@ -139,15 +139,18 @@ inline constexpr u8 kStatusRallied = 8u;  // spurred on by a nearby warlord
 inline constexpr u8 kStatusQuest = 16u;   // a side quest's foe (guarding a camp / den)
 
 // A live villager or town guard, broadcast each tick. Appearance rides along so every
-// client renders the right look without local generation. `kind`: 0 = villager, 1 = guard.
+// client renders the right look without local generation. `kind`: 0 = villager, 1 = guard, 2 = wall
+// archer, 3 = a hired carriage driver (seated), 4 = a noble passenger, 5 = a WAYFARER on the road (`role` =
+// WayfarerRole), 6 = an ERRAND's traveller waiting by the road (`role` = ErrandKind).
 struct VillagerState {
     u32 id = 0;
     Vec3 position{0.0f};
     f32 yaw = 0.0f;
     u8 health = 0; // 0..255 scaled from max
-    u8 kind = 0;   // 0 = villager, 1 = guard
+    u8 kind = 0;
     u8 shield = 0; // Aegis shield strength 0..255 (0 = none) -> shield sphere
     CharacterAppearance appearance;
+    u8 role = 0;
 };
 
 // A player-built barricade (defensive obstacle), broadcast so clients render it.
@@ -253,12 +256,41 @@ struct QuestState {
     Vec3 board{0.0f}; // the notice board it's pinned on
 };
 // A side quest's pickup: a moonpetal (kind 0), or the treasure chest (kind 1; state 0 = still buried
-// under the X, 1 = unearthed, 2 = opened).
+// under the X, 1 = unearthed, 2 = opened) - or an errand's: the runaway goat (kind 2; state 0 loose,
+// 1 being led, 2 home), a spilled satchel (kind 3), the cart stuck in the mud (kind 4; 0 stuck, 1 freed).
 struct QuestItemState {
     u32 id = 0;
     Vec3 position{0.0f};
     u8 kind = 0;
     u8 state = 0;
+    f32 yaw = 0.0f; // the way it faces (the goat, the cart)
+};
+
+// A merchant's CARAVAN on the road between towns: its cart (pulled by an ox or a horse), broadcast so the
+// client draws the traffic. Whoever walks with it rides along in the villager list (kind 5).
+struct CaravanState {
+    u32 id = 0;
+    Vec3 position{0.0f};  // the cart
+    f32 yaw = 0.0f;       // forward = (cos, sin) in xz, like WagonState
+    Vec3 beast_pos{0.0f}; // the ox / horse in the traces
+    f32 beast_yaw = 0.0f;
+    u8 type = 0;  // VehicleType of the cart
+    u8 beast = 0; // 0 = an ox, 1 = a horse
+    u8 load = 0;  // the cargo look (CargoKind)
+};
+
+// A roadside ERRAND: a traveller in trouble beside the road (Offered - walk up and talk), the help under
+// way (Active), or done (Complete: the thanks + the pay shown for a moment).
+struct ErrandState {
+    u32 id = 0;
+    u8 kind = 0;  // ErrandKind
+    u8 phase = 0; // QuestPhase
+    u8 progress = 0;
+    u8 goal = 1;
+    u32 reward = 0;
+    u32 giver_id = 0; // the traveller (a kind-6 villager)
+    Vec3 giver{0.0f};
+    Vec3 site{0.0f};  // where the help is needed (the goat ran / the brigands camp / the cart sank ...)
 };
 
 struct Snapshot {
@@ -289,7 +321,9 @@ struct Snapshot {
     std::vector<WallState> walls;   // raised rock walls (Mage); colliders NPCs route around
     std::vector<BubbleState> bubbles; // Cleric max-Aegis domes that block enemy ranged attacks
     std::vector<QuestState> quests;   // the notice board's side quests (+ the one under way)
-    std::vector<QuestItemState> quest_items; // moonpetals to pick, the buried chest
+    std::vector<QuestItemState> quest_items; // moonpetals to pick, the buried chest (+ errands' goats ...)
+    std::vector<CaravanState> caravans;      // merchants' carts on the roads round the party
+    std::vector<ErrandState> errands;        // the roadside traveller's errand (offered / under way / done)
 };
 
 struct Welcome {

@@ -22,6 +22,12 @@ inline constexpr f32 kVillagerFleeSpeed = 2.4f;  // panicked run - slower than a
                                                  // player intervenes (that's the point)
 inline constexpr f32 kVillagerRadius = 0.35f;
 inline constexpr f32 kVillagerFleeRadius = 9.0f; // notices an enemy within this range
+// Townsfolk only live in the homes nearest the heroes (a city has hundreds of them): the nearest
+// kMaxTownsfolk within kTownsfolkRadius are out and about; one no longer wanted is only sent indoors
+// once it's further than kTownsfolkKeep from every hero (out of sight, so nobody pops away in view).
+inline constexpr f32 kTownsfolkRadius = 70.0f;
+inline constexpr usize kMaxTownsfolk = 44;
+inline constexpr f32 kTownsfolkKeep = 45.0f;
 
 // Town wall guards (Villager.kind == 2): stationary archers stationed on the walls of some
 // towns. They loose friendly arrows (Projectile.kind 3) at enemies that come within range -

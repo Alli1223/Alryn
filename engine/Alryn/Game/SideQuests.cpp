@@ -413,7 +413,8 @@ void GameServer::update_quests(Timestep dt, const DensitySampler& density) {
     }
     std::erase_if(quests_, [](const QuestRun& q) { return q.phase == QuestPhase::Complete && q.banner <= 0.0f; });
     std::erase_if(ambush_, [&](const Enemy& e) {
-        if (e.quest == 0 || std::any_of(quests_.begin(), quests_.end(), [&](const QuestRun& q) { return q.id == e.quest; })) {
+        if (e.quest == 0 || errand_owns(e.quest) ||
+            std::any_of(quests_.begin(), quests_.end(), [&](const QuestRun& q) { return q.id == e.quest; })) {
             return false;
         }
         for (const auto& [id, pl] : players_) {

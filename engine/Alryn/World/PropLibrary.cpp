@@ -3,9 +3,14 @@
 #include <Alryn/Renderer/MeshPrimitives.h>
 #include <Alryn/Terrain/RoadNetwork.h> // shared bridge deck geometry (build_plank_bridge)
 
+#include <algorithm>
 #include <utility>
 
 namespace alryn {
+
+namespace {
+void make_snowy_house(PropDef& def); // (defined further down, with the other snow helpers)
+} // namespace
 
 PropDef PropLibrary::build_bush(int variant) {
     PropDef def;
@@ -296,7 +301,9 @@ f32 gable_roof(MeshData& shell, f32 w, f32 d, f32 h, f32 rr, f32 oh, bool thatch
             const f32 sB = glm::mix(-W, W, static_cast<f32>(sg + 1) / seg);
             const f32 s0 = sA + 0.018f, s1 = sB - 0.018f;                   // tiles (small gaps)
             auto pt = [&](f32 s, f32 t) { return glm::mix(eavePt(s, dir), ridgePt(s), t); };
-            const Vec3 n = glm::normalize(glm::cross(pt(s1, 0.0f) - pt(s0, 0.0f), pt(s0, 1.0f) - pt(s0, 0.0f))) * dir;
+            // (P swaps x and z for a ridge along z - a mirror - which flips the cross product's sense.)
+            const Vec3 n = glm::normalize(glm::cross(pt(s1, 0.0f) - pt(s0, 0.0f), pt(s0, 1.0f) - pt(s0, 0.0f))) * dir *
+                           (gx ? 1.0f : -1.0f);
             // a solid dark under-deck spanning the whole strip, so the gaps between tiles read as
             // shadow rather than see-through to the interior / gable behind.
             quadN(glm::mix(eavePt(sA, dir), ridgePt(sA), 0.0f) + n * (b * 0.4f),
@@ -680,7 +687,9 @@ void add_leanto(MeshData& shell, MeshData& op, const Vec3& wall_col, const Vec3&
     // mono-pitch slope from the main eave (at xi, height h-0.1) down to the outer wall (at xo, lh)
     const Vec3 a{xi, h - 0.1f, -dz - 0.12f}, b2{xo, lh + 0.12f, -dz - 0.12f};
     const Vec3 c2{xo, lh + 0.12f, dz + 0.12f}, dd{xi, h - 0.1f, dz + 0.12f};
-    add_quad(shell, a, b2, c2, dd, roof * 0.92f);
+    const Vec3 under = (a + c2) * 0.5f - Vec3{0.0f, 1.0f, 0.0f}; // the slope faces up, away from here
+    emit_tri(shell, a, b2, c2, under, roof * 0.92f);
+    emit_tri(shell, a, c2, dd, under, roof * 0.92f);
     add_box(shell, {std::min(xo, xo - side * 0.16f), lh + 0.05f, -dz - 0.14f}, {std::max(xo, xo - side * 0.16f), lh + 0.2f, dz + 0.14f}, trim); // eave fascia
 }
 } // namespace
@@ -806,7 +815,10 @@ constexpr HouseStyle kHouseStyles[kHouseVariants] = {
 // The (w,d) footprint half-extents of a house variant, so the village layout can keep
 // houses from intersecting walls, the market and each other without building the mesh.
 Vec2 PropLibrary::house_half_extents(u32 variant) {
+    variant %= kHouseDefs; // a snowbound twin stands on the same footprint
     if (variant == kHouseTownhouse) return Vec2{2.25f, 2.2f};  // jettied top storey extent
+    if (variant == kHouseChapel) return Vec2{3.2f, 5.1f};      // the nave + its buttresses
+    if (variant == kHouseKeep) return Vec2{5.1f, 5.1f};        // the keep + its corner turrets
     if (variant == kHousePub) return Vec2{3.0f, 2.6f};
     if (variant == kHouseBlacksmith) return Vec2{3.1f, 2.7f};
     const HouseStyle& st = kHouseStyles[variant % kHouseVariants];
@@ -819,6 +831,13 @@ Vec2 PropLibrary::house_half_extents(u32 variant) {
 // resident sleeps), interior lights and a dollhouse shell that fades when you step in.
 // Indices kHouseVariants.. dispatch to the special landmark buildings.
 PropDef PropLibrary::build_house(u32 variant) {
+    if (variant >= kHouseDefs) { // a snowbound town's twin (see kSnowHouses)
+        PropDef def = build_house(variant % kHouseDefs);
+        make_snowy_house(def);
+        return def;
+    }
+    if (variant == kHouseChapel) return build_chapel();
+    if (variant == kHouseKeep) return build_keep();
     if (variant == kHouseTownhouse) return build_townhouse();
     if (variant == kHousePub) return build_pub();
     if (variant == kHouseBlacksmith) return build_blacksmith();
@@ -1912,10 +1931,11 @@ PropDef PropLibrary::build_bridge() {
     }
     // A little pitched roof over the walkway.
     const f32 ry = dy + 0.5f;
-    add_quad(m, {-hl, ry, -hw - 0.15f}, {hl, ry, -hw - 0.15f}, {hl, ry + 0.5f, 0.0f},
-             {-hl, ry + 0.5f, 0.0f}, wood * 1.05f);
-    add_quad(m, {hl, ry, hw + 0.15f}, {-hl, ry, hw + 0.15f}, {-hl, ry + 0.5f, 0.0f},
-             {hl, ry + 0.5f, 0.0f}, wood * 0.95f);
+    const Vec3 under{0.0f, ry - 0.5f, 0.0f}; // both slopes face up + out, away from beneath the ridge
+    emit_tri(m, {-hl, ry, -hw - 0.15f}, {hl, ry, -hw - 0.15f}, {hl, ry + 0.5f, 0.0f}, under, wood * 1.05f);
+    emit_tri(m, {-hl, ry, -hw - 0.15f}, {hl, ry + 0.5f, 0.0f}, {-hl, ry + 0.5f, 0.0f}, under, wood * 1.05f);
+    emit_tri(m, {hl, ry, hw + 0.15f}, {-hl, ry, hw + 0.15f}, {-hl, ry + 0.5f, 0.0f}, under, wood * 0.95f);
+    emit_tri(m, {hl, ry, hw + 0.15f}, {-hl, ry + 0.5f, 0.0f}, {hl, ry + 0.5f, 0.0f}, under, wood * 0.95f);
     def.parts.push_back({std::move(m), PropLayer::Opaque});
     BoxCollider c; // the deck + posts block the gap underneath only lightly; post the ends
     c.center = Vec3{0.0f, 0.0f, 0.0f};
@@ -2424,6 +2444,12 @@ PropDef PropLibrary::build_fountain() {
 // prop with a collider where you'd bump into it. Placed by the village layout around houses,
 // along the streets and in the market plaza.
 PropDef PropLibrary::build_decor(int variant) {
+    if (variant % static_cast<int>(kDecorVariants) == kDecorBrazier) {
+        return build_brazier();
+    }
+    if (variant % static_cast<int>(kDecorVariants) == kDecorSnowman) {
+        return build_snowman();
+    }
     PropDef def;
     const Vec3 wood{0.42f, 0.29f, 0.16f};
     const Vec3 dark{0.27f, 0.18f, 0.10f};
@@ -3301,6 +3327,149 @@ PropDef PropLibrary::build_stone_bridge() {
 
 namespace {
 
+// Appends `src` (any primitive) to `dst` through the transform `xf` (normals rotated with it).
+void add_mesh(MeshData& dst, const MeshData& src, const Mat4& xf, const Vec3& color) {
+    const Mat3 nrm = glm::transpose(glm::inverse(Mat3{xf}));
+    const u32 base = static_cast<u32>(dst.vertices.size());
+    for (const Vertex& v : src.vertices) {
+        dst.vertices.push_back({Vec3{xf * Vec4{v.position, 1.0f}}, glm::normalize(nrm * v.normal), color, 0.0f});
+    }
+    for (u32 i : src.indices) {
+        dst.indices.push_back(base + i);
+    }
+}
+// An upright `sides`-sided prism (a round tower / post) centred on (c.x, c.z), from y0 to y1.
+void add_prism(MeshData& m, const Vec3& c, f32 r, f32 y0, f32 y1, int sides, const Vec3& col) {
+    const Vec3 mid{c.x, (y0 + y1) * 0.5f, c.z};
+    for (int i = 0; i < sides; ++i) {
+        const f32 a0 = TwoPi * static_cast<f32>(i) / static_cast<f32>(sides);
+        const f32 a1 = TwoPi * static_cast<f32>(i + 1) / static_cast<f32>(sides);
+        const Vec3 p0{c.x + std::cos(a0) * r, y0, c.z + std::sin(a0) * r};
+        const Vec3 p1{c.x + std::cos(a1) * r, y0, c.z + std::sin(a1) * r};
+        const Vec3 q0{p0.x, y1, p0.z}, q1{p1.x, y1, p1.z};
+        const Vec3 shade = col * (0.9f + 0.12f * static_cast<f32>(i % 2));
+        emit_tri(m, p0, p1, q1, mid, shade);
+        emit_tri(m, p0, q1, q0, mid, shade);
+        emit_tri(m, q0, q1, Vec3{c.x, y1, c.z}, Vec3{c.x, y1 - 1.0f, c.z}, col); // top cap
+    }
+}
+// A cone / spire (`sides` facets) on a base circle at height y0, rising to its point at y0 + h.
+void add_cone(MeshData& m, const Vec3& c, f32 r, f32 y0, f32 h, int sides, const Vec3& col) {
+    const Vec3 apex{c.x, y0 + h, c.z};
+    const Vec3 inner{c.x, y0 + h * 0.3f, c.z};
+    for (int i = 0; i < sides; ++i) {
+        const f32 a0 = TwoPi * static_cast<f32>(i) / static_cast<f32>(sides);
+        const f32 a1 = TwoPi * static_cast<f32>(i + 1) / static_cast<f32>(sides);
+        const Vec3 p0{c.x + std::cos(a0) * r, y0, c.z + std::sin(a0) * r};
+        const Vec3 p1{c.x + std::cos(a1) * r, y0, c.z + std::sin(a1) * r};
+        emit_tri(m, p0, p1, apex, inner, col * (0.88f + 0.14f * static_cast<f32>(i % 2)));
+    }
+}
+// An iron fire basket at height `y` (bowl + glowing coals + licking flame tongues) into op / em.
+void add_fire_basket(MeshData& op, MeshData& em, const Vec3& c, f32 scale) {
+    const Vec3 iron{0.17f, 0.15f, 0.15f};
+    const Vec3 coal{1.0f, 0.5f, 0.16f};
+    const Vec3 fire{1.0f, 0.6f, 0.2f};
+    const f32 s = scale;
+    const Vec3 ctr{c.x, c.y + 0.14f * s, c.z};
+    for (int i = 0; i < 8; ++i) { // the bowl, flaring out to its rim
+        const f32 a0 = TwoPi * static_cast<f32>(i) / 8.0f, a1 = TwoPi * static_cast<f32>(i + 1) / 8.0f;
+        const Vec3 b0 = c + Vec3{std::cos(a0) * 0.1f * s, 0.0f, std::sin(a0) * 0.1f * s};
+        const Vec3 b1 = c + Vec3{std::cos(a1) * 0.1f * s, 0.0f, std::sin(a1) * 0.1f * s};
+        const Vec3 t0 = c + Vec3{std::cos(a0) * 0.24f * s, 0.3f * s, std::sin(a0) * 0.24f * s};
+        const Vec3 t1 = c + Vec3{std::cos(a1) * 0.24f * s, 0.3f * s, std::sin(a1) * 0.24f * s};
+        emit_tri(op, b0, b1, t1, ctr, iron);
+        emit_tri(op, b0, t1, t0, ctr, iron);
+    }
+    add_box(em, c + Vec3{-0.18f, 0.17f, -0.18f} * s, c + Vec3{0.18f, 0.29f, 0.18f} * s, coal);
+    auto tongue = [&](const Vec3& base, f32 h, f32 w, const Vec3& col) {
+        const Vec3 tip = base + Vec3{0.0f, h, 0.0f};
+        const Vec3 a = base + Vec3{-w, 0.0f, -w}, b = base + Vec3{w, 0.0f, -w};
+        const Vec3 cc = base + Vec3{w, 0.0f, w}, d = base + Vec3{-w, 0.0f, w};
+        emit_tri(em, a, b, tip, base, col);
+        emit_tri(em, b, cc, tip, base, col);
+        emit_tri(em, cc, d, tip, base, col);
+        emit_tri(em, d, a, tip, base, col);
+    };
+    tongue(c + Vec3{0.0f, 0.27f, 0.0f} * s, 0.5f * s, 0.13f * s, fire);
+    tongue(c + Vec3{0.09f, 0.27f, 0.05f} * s, 0.32f * s, 0.08f * s, fire * 0.95f);
+    tongue(c + Vec3{-0.08f, 0.27f, -0.06f} * s, 0.36f * s, 0.08f * s, Vec3{1.3f, 0.85f, 0.3f});
+}
+
+// Lays SNOW over every sky-facing surface of a def above `min_y`: each upward-facing triangle of its
+// opaque / roof-shell parts gets a slightly lifted, cool-white twin (in the same layer, so a house's
+// snowy roof still fades with its shell when you step inside). Kept below the renderer's blow-out
+// range + leaning blue, so it reads as snow and not cream (see worldgen snow).
+void add_snow(PropDef& def, f32 min_y) {
+    std::vector<PropPart> caps;
+    for (const PropPart& part : def.parts) {
+        if (part.layer != PropLayer::Opaque && part.layer != PropLayer::Roof) {
+            continue;
+        }
+        MeshData snow;
+        const MeshData& m = part.mesh;
+        for (usize i = 0; i + 2 < m.indices.size(); i += 3) {
+            const Vertex& a = m.vertices[m.indices[i]];
+            const Vertex& b = m.vertices[m.indices[i + 1]];
+            const Vertex& c = m.vertices[m.indices[i + 2]];
+            const Vec3 n = a.normal;
+            if (n.y < 0.42f || std::min({a.position.y, b.position.y, c.position.y}) < min_y) {
+                continue; // walls, undersides + everything down at ground level stay clear
+            }
+            const f32 lift = 0.035f + 0.05f * n.y;
+            const Vec3 off = n * lift + Vec3{0.0f, 0.02f, 0.0f};
+            const f32 j = hashf(static_cast<u32>(std::lround((a.position.x + a.position.z) * 31.0f + a.position.y * 17.0f)));
+            const Vec3 col = glm::mix(Vec3{0.56f, 0.64f, 0.82f}, Vec3{0.68f, 0.75f, 0.92f}, glm::smoothstep(0.42f, 0.9f, n.y)) *
+                             (0.95f + 0.08f * j);
+            const u32 base = static_cast<u32>(snow.vertices.size());
+            snow.vertices.push_back({a.position + off, n, col, 0.0f});
+            snow.vertices.push_back({b.position + off, n, col, 0.0f});
+            snow.vertices.push_back({c.position + off, n, col, 0.0f});
+            snow.indices.insert(snow.indices.end(), {base, base + 1, base + 2});
+        }
+        if (!snow.indices.empty()) {
+            caps.push_back({std::move(snow), part.layer});
+        }
+    }
+    for (PropPart& p : caps) {
+        def.parts.push_back(std::move(p));
+    }
+}
+
+// The snowbound twin of a town building: snow on its roof and every ledge, a lantern hung by the door
+// against the long nights and a hearth stoked up for the cold (a warmer, brighter fire glow).
+void make_snowy_house(PropDef& def) {
+    // Everything sky-facing from head height up: the roofs (porches + lean-tos included), chimney caps,
+    // dormers, hoods - but not the sills, steps + yard clutter below (nor the furniture indoors).
+    add_snow(def, 1.6f);
+    // Firelit windows glow warmer + brighter against the long winter nights.
+    for (PropPart& part : def.parts) {
+        if (part.layer == PropLayer::Emissive) {
+            for (Vertex& v : part.mesh.vertices) {
+                v.color *= Vec3{1.3f, 1.18f, 1.0f};
+            }
+        }
+    }
+    MeshData op, em;
+    const Vec3 at{0.95f, 2.05f, def.door_spot.z - 0.58f};
+    add_box(op, at - Vec3{0.04f, 0.26f, 0.04f}, at + Vec3{0.04f, 0.3f, 0.04f}, Vec3{0.16f, 0.13f, 0.1f});
+    add_box(op, at + Vec3{-0.03f, 0.26f, -0.3f}, at + Vec3{0.03f, 0.31f, 0.0f}, Vec3{0.16f, 0.13f, 0.1f}); // bracket
+    add_box(em, at - Vec3{0.08f, 0.11f, 0.08f}, at + Vec3{0.08f, 0.11f, 0.08f}, Vec3{1.5f, 1.12f, 0.55f});
+    PropLight l;
+    l.offset = at + Vec3{0.0f, 0.0f, 0.2f};
+    l.direction = glm::normalize(Vec3{0.0f, -0.6f, 1.0f});
+    l.color = Vec3{1.0f, 0.74f, 0.42f};
+    l.range = 9.0f;
+    l.intensity = 2.2f;
+    l.cone_deg = 150.0f;
+    for (PropLight& h : def.lights) {
+        h.intensity *= 1.25f; // stoked for the cold
+    }
+    def.lights.push_back(l);
+    def.parts.push_back({std::move(op), PropLayer::Opaque});
+    def.parts.push_back({std::move(em), PropLayer::Emissive});
+}
+
 // Bake per-def vertex AO: every Opaque/Roof part is darkened by hemisphere rays cast
 // against all Opaque/Roof parts of the same def, so eaves shade walls, doorways fall
 // dark and clutter sits INTO its surroundings instead of floating on them. Emissive/
@@ -3324,6 +3493,322 @@ void bake_def_ao(PropDef& def) {
 }
 
 } // namespace
+
+// A stone CHAPEL: a tall nave (long along z) under a steep slate roof, buttressed, with lit lancet
+// windows down its sides, and a square bell tower over the west door crowned with an octagonal spire
+// and a gilded cross. Every town and city raises one; the door lantern lights its steps.
+PropDef PropLibrary::build_chapel() {
+    PropDef def;
+    def.name = "chapel";
+    MeshData op, em;
+    const Vec3 stone{0.62f, 0.62f, 0.63f};
+    const Vec3 slate{0.30f, 0.34f, 0.42f};
+    const Vec3 trim{0.20f, 0.18f, 0.18f};
+    const Vec3 dark{0.12f, 0.1f, 0.1f};
+    const Vec3 glass{1.05f, 0.74f, 0.42f};
+    const Vec3 gold{0.86f, 0.68f, 0.26f};
+    const f32 w = 2.9f, d = 5.0f, h = 4.4f;
+    const f32 tz0 = d - 3.0f, tz1 = d; // the tower over the front (+z) end
+    const f32 tw = 1.5f, th = 9.0f;
+
+    // The nave, behind the tower.
+    add_box(op, {-w, 0.0f, -d}, {w, h, tz0}, stone);
+    stone_face(op, false, w, 1.0f, -d, tz0, 0.0f, h, stone, 301u);
+    stone_face(op, false, -w, -1.0f, -d, tz0, 0.0f, h, stone, 302u);
+    stone_face(op, true, -d, -1.0f, -w, w, 0.0f, h, stone, 303u);
+    add_box(op, {-w - 0.12f, 0.0f, -d - 0.12f}, {w + 0.12f, 0.45f, tz0}, stone * 0.92f); // plinth
+    for (const f32 z : {-d + 0.2f, -d + 2.3f, 0.4f, tz0 - 0.3f}) { // buttresses down both sides
+        for (const f32 sx : {-1.0f, 1.0f}) {
+            add_box(op, {sx > 0.0f ? w : -w - 0.32f, 0.0f, z - 0.22f}, {sx > 0.0f ? w + 0.32f : -w, h * 0.8f, z + 0.22f},
+                    stone * 0.94f);
+            add_box(op, {sx > 0.0f ? w : -w - 0.2f, h * 0.8f, z - 0.2f}, {sx > 0.0f ? w + 0.2f : -w, h * 0.92f, z + 0.2f},
+                    stone * 0.9f);
+        }
+    }
+    // Tall lancet windows between the buttresses, glowing warm (candles within).
+    for (const f32 z : {-d + 1.25f, -0.75f, 1.35f}) {
+        for (const f32 sx : {-1.0f, 1.0f}) {
+            const f32 x0 = sx > 0.0f ? w - 0.02f : -w - 0.06f, x1 = sx > 0.0f ? w + 0.06f : -w + 0.02f;
+            add_box(em, {x0, 1.3f, z - 0.26f}, {x1, 3.1f, z + 0.26f}, glass);
+            add_box(op, {x0 - 0.02f, 3.1f, z - 0.36f}, {x1 + 0.02f, 3.32f, z + 0.36f}, trim); // hood
+            add_box(op, {x0, 2.1f, z - 0.27f}, {x1 + 0.01f, 2.16f, z + 0.27f}, trim);         // transom
+        }
+    }
+    // A steep slate roof over the nave: built with its ridge along x (gable_roof's well-trodden path),
+    // then turned to run down the nave and slid back over it.
+    {
+        MeshData roof;
+        const f32 nd = (tz0 + d) * 0.5f; // nave half-length
+        gable_roof(roof, nd, w, h, 2.8f, 0.45f, false, slate, trim, stone, 77u);
+        const Mat4 xf = glm::translate(Mat4{1.0f}, Vec3{0.0f, 0.0f, (tz0 - d) * 0.5f}) *
+                        glm::rotate(Mat4{1.0f}, HalfPi, Vec3{0.0f, 1.0f, 0.0f});
+        const Mat3 rot{xf};
+        for (Vertex& v : roof.vertices) {
+            v.position = Vec3{xf * Vec4{v.position, 1.0f}};
+            v.normal = rot * v.normal;
+        }
+        const u32 base = static_cast<u32>(op.vertices.size());
+        op.vertices.insert(op.vertices.end(), roof.vertices.begin(), roof.vertices.end());
+        for (u32 i : roof.indices) {
+            op.indices.push_back(base + i);
+        }
+    }
+    // The bell tower: a square stone shaft, a deep arched west door, a rose window, an open belfry with
+    // its bell, a corbelled parapet and the spire.
+    add_box(op, {-tw, 0.0f, tz0}, {tw, th, tz1}, stone * 0.97f);
+    stone_face(op, true, tz1, 1.0f, -tw, tw, 0.0f, th, stone, 304u);
+    stone_face(op, false, tw, 1.0f, tz0, tz1, h, th, stone, 305u);
+    stone_face(op, false, -tw, -1.0f, tz0, tz1, h, th, stone, 306u);
+    add_box(op, {-0.62f, 0.0f, tz1 - 0.35f}, {0.62f, 2.4f, tz1 + 0.03f}, dark); // door recess
+    add_box(op, {-0.5f, 2.4f, tz1 - 0.33f}, {0.5f, 2.62f, tz1 + 0.03f}, dark);   // arch steps
+    add_box(op, {-0.34f, 2.62f, tz1 - 0.33f}, {0.34f, 2.8f, tz1 + 0.03f}, dark);
+    for (int i = 0; i < 4; ++i) { // plank door leaves
+        const f32 x0 = glm::mix(-0.54f, 0.54f, static_cast<f32>(i) / 4.0f);
+        const f32 x1 = glm::mix(-0.54f, 0.54f, static_cast<f32>(i + 1) / 4.0f) - 0.02f;
+        add_box(op, {x0, 0.04f, tz1 - 0.2f}, {x1, 2.36f, tz1 - 0.12f},
+                Vec3{0.36f, 0.23f, 0.13f} * (0.9f + 0.12f * static_cast<f32>(i % 2)));
+    }
+    add_box(op, {-0.8f, 0.0f, tz1}, {0.8f, 0.14f, tz1 + 0.7f}, stone * 0.9f); // the step
+    for (int i = 0; i < 8; ++i) {                                               // the rose window
+        const f32 a0 = TwoPi * static_cast<f32>(i) / 8.0f, a1 = TwoPi * static_cast<f32>(i + 1) / 8.0f;
+        const Vec3 c{0.0f, 4.0f, tz1 + 0.04f};
+        add_tri(em, c, c + Vec3{std::cos(a0) * 0.55f, std::sin(a0) * 0.55f, 0.0f},
+                c + Vec3{std::cos(a1) * 0.55f, std::sin(a1) * 0.55f, 0.0f},
+                i % 2 == 0 ? glass : glass * Vec3{0.75f, 0.6f, 1.1f});
+    }
+    add_box(op, {-0.04f, 3.45f, tz1 + 0.02f}, {0.04f, 4.55f, tz1 + 0.07f}, trim);
+    add_box(op, {-0.55f, 3.96f, tz1 + 0.02f}, {0.55f, 4.04f, tz1 + 0.07f}, trim);
+    // The belfry: an opening in each face (dark), the bronze bell hung inside.
+    const f32 tzm = (tz0 + tz1) * 0.5f;
+    add_box(op, {-0.5f, 6.6f, tz1 - 0.3f}, {0.5f, 8.0f, tz1 + 0.03f}, dark);
+    add_box(op, {tw - 0.3f, 6.6f, tzm - 0.5f}, {tw + 0.03f, 8.0f, tzm + 0.5f}, dark);
+    add_box(op, {-tw - 0.03f, 6.6f, tzm - 0.5f}, {-tw + 0.3f, 8.0f, tzm + 0.5f}, dark);
+    add_cone(op, Vec3{0.0f, 0.0f, tzm}, 0.42f, 6.9f, 0.75f, 8, gold * 0.85f); // the bell
+    add_box(op, {-tw - 0.12f, th, tz0 - 0.12f}, {tw + 0.12f, th + 0.18f, tz1 + 0.12f}, stone * 1.04f); // parapet
+    for (const f32 cx : {-tw, tw}) { // little corner pinnacles
+        for (const f32 cz : {tz0, tz1}) {
+            add_prism(op, Vec3{cx, 0.0f, cz}, 0.16f, th + 0.18f, th + 0.6f, 6, stone);
+            add_cone(op, Vec3{cx, 0.0f, cz}, 0.2f, th + 0.6f, 0.55f, 6, slate);
+        }
+    }
+    add_cone(op, Vec3{0.0f, 0.0f, tzm}, tw * 0.95f, th + 0.18f, 4.6f, 8, slate); // the spire
+    const Vec3 cross_c{0.0f, th + 4.75f, tzm};
+    add_box(op, cross_c + Vec3{-0.05f, 0.0f, -0.05f}, cross_c + Vec3{0.05f, 0.75f, 0.05f}, gold);
+    add_box(op, cross_c + Vec3{-0.26f, 0.42f, -0.05f}, cross_c + Vec3{0.26f, 0.52f, 0.05f}, gold);
+
+    add_wall_lantern(op, em, def, Vec3{1.0f, 2.3f, tz1 + 0.14f}, Vec3{0.0f, 0.0f, 1.0f});
+    PropLight inner; // candlelight in the nave, spilling out of the lancets
+    inner.offset = Vec3{0.0f, 2.6f, -1.0f};
+    inner.direction = Vec3{0.0f, -0.3f, 1.0f};
+    inner.color = Vec3{1.0f, 0.76f, 0.46f};
+    inner.range = 11.0f;
+    inner.intensity = 2.4f;
+    inner.cone_deg = 175.0f;
+    def.lights.push_back(inner);
+
+    BoxCollider nave;
+    nave.center = Vec3{0.0f, 0.0f, (tz0 - d) * 0.5f};
+    nave.half_extents = Vec2{w + 0.32f, (tz0 + d) * 0.5f};
+    nave.height = h;
+    def.colliders.push_back(nave);
+    BoxCollider tower;
+    tower.center = Vec3{0.0f, 0.0f, tzm};
+    tower.half_extents = Vec2{tw, (tz1 - tz0) * 0.5f};
+    tower.height = th;
+    def.colliders.push_back(tower);
+    def.footprint = Vec2{w, d};
+    def.wall_height = h;
+    def.door_spot = Vec3{0.0f, 0.0f, d + 0.9f};
+    def.parts.push_back({std::move(op), PropLayer::Opaque});
+    def.parts.push_back({std::move(em), PropLayer::Emissive});
+    return def;
+}
+
+// A great city's KEEP: a massive square stone tower on a battered base, round corner turrets under
+// conical slate caps, a crenellated roof-walk with fire braziers, arrow slits and lit windows, and a
+// portcullised gate hung with the city's banners.
+PropDef PropLibrary::build_keep() {
+    PropDef def;
+    def.name = "keep";
+    MeshData op, em;
+    const Vec3 stone{0.53f, 0.55f, 0.6f};
+    const Vec3 slate{0.28f, 0.31f, 0.4f};
+    const Vec3 dark{0.1f, 0.1f, 0.12f};
+    const Vec3 iron{0.18f, 0.17f, 0.17f};
+    const Vec3 lit{1.0f, 0.8f, 0.44f};
+    const Vec3 banner{0.62f, 0.12f, 0.12f};
+    const Vec3 gold{0.86f, 0.68f, 0.26f};
+    const f32 r = 4.0f, h = 10.5f, tr = 1.05f;
+
+    add_box(op, {-r - 0.4f, 0.0f, -r - 0.4f}, {r + 0.4f, 1.1f, r + 0.4f}, stone * 0.9f); // battered base
+    add_box(op, {-r, 0.0f, -r}, {r, h, r}, stone);
+    stone_face(op, true, r, 1.0f, -r, r, 1.1f, h, stone, 401u);
+    stone_face(op, true, -r, -1.0f, -r, r, 1.1f, h, stone, 402u);
+    stone_face(op, false, r, 1.0f, -r, r, 1.1f, h, stone, 403u);
+    stone_face(op, false, -r, -1.0f, -r, r, 1.1f, h, stone, 404u);
+    add_box(op, {-r - 0.1f, h * 0.55f, -r - 0.1f}, {r + 0.1f, h * 0.55f + 0.16f, r + 0.1f}, stone * 1.05f); // string course
+    // The roof-walk: a parapet lip + merlons round all four sides.
+    add_box(op, {-r - 0.18f, h, -r - 0.18f}, {r + 0.18f, h + 0.2f, r + 0.18f}, stone * 1.05f);
+    for (int i = -3; i <= 3; ++i) {
+        const f32 o = static_cast<f32>(i) * 1.05f;
+        const f32 m0 = h + 0.2f, m1 = h + 0.75f, e = r + 0.18f;
+        add_box(op, {o - 0.3f, m0, e - 0.26f}, {o + 0.3f, m1, e}, stone);
+        add_box(op, {o - 0.3f, m0, -e}, {o + 0.3f, m1, -e + 0.26f}, stone);
+        add_box(op, {e - 0.26f, m0, o - 0.3f}, {e, m1, o + 0.3f}, stone);
+        add_box(op, {-e, m0, o - 0.3f}, {-e + 0.26f, m1, o + 0.3f}, stone);
+    }
+    // Round corner turrets rising past the roof-walk, under conical slate caps, each with a lit window.
+    for (const f32 sx : {-1.0f, 1.0f}) {
+        for (const f32 sz : {-1.0f, 1.0f}) {
+            const Vec3 c{sx * r, 0.0f, sz * r};
+            add_prism(op, c, tr, 0.0f, h + 1.7f, 10, stone * 0.97f);
+            add_prism(op, c, tr + 0.14f, h + 1.7f, h + 1.95f, 10, stone * 1.04f);
+            add_cone(op, c, tr + 0.25f, h + 1.95f, 2.4f, 10, slate);
+            const Vec3 wc = c + Vec3{sx * (tr - 0.02f), h + 0.7f, 0.0f};
+            add_box(em, wc - Vec3{0.06f, 0.3f, 0.14f}, wc + Vec3{0.06f, 0.3f, 0.14f}, lit);
+        }
+    }
+    // Arrow slits + lit windows on every face.
+    for (int f = 0; f < 4; ++f) {
+        const Vec3 out = f == 0 ? Vec3{0.0f, 0.0f, 1.0f}
+                         : f == 1 ? Vec3{0.0f, 0.0f, -1.0f}
+                         : f == 2 ? Vec3{1.0f, 0.0f, 0.0f}
+                                  : Vec3{-1.0f, 0.0f, 0.0f};
+        const Vec3 across{std::abs(out.z), 0.0f, std::abs(out.x)};
+        for (const f32 a : {-2.2f, 2.2f}) {
+            const Vec3 sc = out * (r + 0.02f) + across * a;
+            const Vec3 lo_s = sc + Vec3{0.0f, 3.0f, 0.0f} - across * 0.07f - out * 0.12f;
+            const Vec3 hi_s = sc + Vec3{0.0f, 4.2f, 0.0f} + across * 0.07f + out * 0.04f;
+            add_box(op, glm::min(lo_s, hi_s), glm::max(lo_s, hi_s), dark);
+            const Vec3 lo_w = sc + Vec3{0.0f, 7.2f, 0.0f} - across * 0.32f - out * 0.1f;
+            const Vec3 hi_w = sc + Vec3{0.0f, 8.4f, 0.0f} + across * 0.32f + out * 0.05f;
+            add_box(em, glm::min(lo_w, hi_w), glm::max(lo_w, hi_w), lit);
+            const Vec3 lo_h = sc + Vec3{0.0f, 8.4f, 0.0f} - across * 0.42f;
+            const Vec3 hi_h = sc + Vec3{0.0f, 8.6f, 0.0f} + across * 0.42f + out * 0.12f;
+            add_box(op, glm::min(lo_h, hi_h), glm::max(lo_h, hi_h), stone * 0.9f); // window hood
+        }
+    }
+    // The gate (front, +z): a deep arch with an iron portcullis half-raised.
+    add_box(op, {-1.1f, 0.0f, r - 0.5f}, {1.1f, 3.4f, r + 0.04f}, dark);
+    add_box(op, {-0.85f, 3.4f, r - 0.48f}, {0.85f, 3.75f, r + 0.04f}, dark);
+    for (int i = -3; i <= 3; ++i) {
+        const f32 x = static_cast<f32>(i) * 0.3f;
+        add_box(op, {x - 0.03f, 1.2f, r - 0.2f}, {x + 0.03f, 3.5f, r - 0.14f}, iron);
+    }
+    for (int j = 0; j < 4; ++j) {
+        const f32 y = 1.4f + static_cast<f32>(j) * 0.55f;
+        add_box(op, {-1.0f, y - 0.03f, r - 0.2f}, {1.0f, y + 0.03f, r - 0.14f}, iron);
+    }
+    // The city's banners hung down the front, either side of the gate.
+    for (const f32 x : {-2.6f, 2.6f}) {
+        const f32 z = r + 0.06f;
+        add_box(op, {x - 0.62f, h - 0.6f, z - 0.02f}, {x + 0.62f, h - 0.45f, z + 0.1f}, iron); // the pole
+        add_quad(op, {x - 0.55f, h - 0.55f, z + 0.04f}, {x - 0.55f, h - 4.6f, z + 0.04f}, {x, h - 5.1f, z + 0.04f},
+                 {x, h - 0.55f, z + 0.04f}, banner);
+        add_quad(op, {x, h - 0.55f, z + 0.04f}, {x, h - 5.1f, z + 0.04f}, {x + 0.55f, h - 4.6f, z + 0.04f},
+                 {x + 0.55f, h - 0.55f, z + 0.04f}, banner * 0.92f);
+        add_box(op, {x - 0.16f, h - 2.6f, z + 0.05f}, {x + 0.16f, h - 2.1f, z + 0.08f}, gold); // the device
+    }
+    // Fire braziers blazing on the roof-walk's front corners.
+    for (const f32 x : {-2.4f, 2.4f}) {
+        add_box(op, {x - 0.06f, h + 0.2f, r - 0.86f}, {x + 0.06f, h + 0.55f, r - 0.74f}, iron);
+        add_fire_basket(op, em, Vec3{x, h + 0.55f, r - 0.8f}, 1.2f);
+        PropLight l;
+        l.offset = Vec3{x, h + 1.4f, r - 0.8f};
+        l.direction = Vec3{0.0f, -1.0f, 0.3f};
+        l.color = Vec3{1.0f, 0.66f, 0.32f};
+        l.range = 16.0f;
+        l.intensity = 2.2f;
+        l.cone_deg = 160.0f;
+        def.lights.push_back(l);
+    }
+    BoxCollider c;
+    c.half_extents = Vec2{r + tr, r + tr};
+    c.height = h;
+    def.colliders.push_back(c);
+    def.footprint = Vec2{r + tr, r + tr};
+    def.wall_height = h;
+    def.door_spot = Vec3{0.0f, 0.0f, r + 1.4f};
+    def.parts.push_back({std::move(op), PropLayer::Opaque});
+    def.parts.push_back({std::move(em), PropLayer::Emissive});
+    return def;
+}
+
+// A street BRAZIER (Decor kDecorBrazier): an iron fire-basket on a stout post, blazing - the warm
+// lights a snowbound town keeps burning along its streets.
+PropDef PropLibrary::build_brazier() {
+    PropDef def;
+    def.name = "brazier";
+    MeshData op, em;
+    const Vec3 iron{0.17f, 0.15f, 0.15f};
+    add_box(op, {-0.32f, 0.0f, -0.32f}, {0.32f, 0.12f, 0.32f}, Vec3{0.42f, 0.42f, 0.44f}); // a stone footing
+    add_prism(op, Vec3{0.0f}, 0.07f, 0.12f, 1.25f, 6, iron);
+    for (int i = 0; i < 3; ++i) { // three splayed legs
+        const f32 a = TwoPi * static_cast<f32>(i) / 3.0f;
+        add_beam(op, Vec3{std::cos(a) * 0.3f, 0.1f, std::sin(a) * 0.3f}, Vec3{0.0f, 0.7f, 0.0f}, 0.03f, iron);
+    }
+    add_fire_basket(op, em, Vec3{0.0f, 1.22f, 0.0f}, 1.25f);
+    PropLight l;
+    l.offset = Vec3{0.0f, 1.9f, 0.0f};
+    l.direction = Vec3{0.0f, -1.0f, 0.0f};
+    l.color = Vec3{1.0f, 0.64f, 0.3f};
+    l.range = 12.0f;
+    l.intensity = 2.3f;
+    l.cone_deg = 170.0f;
+    def.lights.push_back(l);
+    BoxCollider c;
+    c.half_extents = Vec2{0.3f, 0.3f};
+    c.height = 1.4f;
+    def.colliders.push_back(c);
+    def.parts.push_back({std::move(op), PropLayer::Opaque});
+    def.parts.push_back({std::move(em), PropLayer::Emissive});
+    return def;
+}
+
+// A SNOWMAN (Decor kDecorSnowman): three rolled snowballs, coal eyes + buttons, a carrot nose, stick
+// arms, a knitted scarf and a battered hat - the townsfolk's handiwork in a snowbound town.
+PropDef PropLibrary::build_snowman() {
+    PropDef def;
+    def.name = "snowman";
+    MeshData m;
+    const Vec3 snow{0.66f, 0.73f, 0.9f};
+    const Vec3 coal{0.08f, 0.08f, 0.09f};
+    const MeshData ball = primitives::sphere(9, 6);
+    auto sphere_at = [&](const Vec3& c, f32 d, const Vec3& col) {
+        add_mesh(m, ball, glm::translate(Mat4{1.0f}, c) * glm::scale(Mat4{1.0f}, Vec3{d}), col);
+    };
+    sphere_at({0.0f, 0.4f, 0.0f}, 0.92f, snow);
+    sphere_at({0.0f, 1.02f, 0.0f}, 0.66f, snow * 1.02f);
+    sphere_at({0.0f, 1.5f, 0.0f}, 0.46f, snow * 1.04f);
+    for (const f32 x : {-0.09f, 0.09f}) { // coal eyes
+        add_box(m, {x - 0.03f, 1.55f, 0.2f}, {x + 0.03f, 1.61f, 0.24f}, coal);
+    }
+    for (const f32 y : {0.88f, 1.04f, 1.2f}) { // coal buttons
+        const f32 z = 0.3f - std::abs(y - 1.04f) * 0.5f;
+        add_box(m, {-0.03f, y, z}, {0.03f, y + 0.06f, z + 0.04f}, coal);
+    }
+    // The carrot nose, poking out the front.
+    const Vec3 tip{0.0f, 1.5f, 0.46f};
+    const Vec3 nose_c{0.0f, 1.5f, 0.3f};
+    emit_tri(m, {-0.04f, 1.47f, 0.22f}, {0.04f, 1.47f, 0.22f}, tip, nose_c, Vec3{0.9f, 0.42f, 0.12f});
+    emit_tri(m, {0.04f, 1.47f, 0.22f}, {0.0f, 1.54f, 0.22f}, tip, nose_c, Vec3{0.84f, 0.38f, 0.1f});
+    emit_tri(m, {0.0f, 1.54f, 0.22f}, {-0.04f, 1.47f, 0.22f}, tip, nose_c, Vec3{0.88f, 0.4f, 0.11f});
+    // Stick arms.
+    const Vec3 twig{0.3f, 0.2f, 0.12f};
+    add_beam(m, Vec3{0.28f, 1.1f, 0.0f}, Vec3{0.75f, 1.42f, 0.05f}, 0.025f, twig);
+    add_beam(m, Vec3{-0.28f, 1.1f, 0.0f}, Vec3{-0.72f, 1.3f, 0.12f}, 0.025f, twig);
+    // A red knitted scarf + a battered black hat.
+    add_prism(m, Vec3{0.0f}, 0.28f, 1.26f, 1.36f, 10, Vec3{0.7f, 0.14f, 0.12f});
+    add_box(m, {0.12f, 0.96f, 0.18f}, {0.26f, 1.3f, 0.26f}, Vec3{0.66f, 0.13f, 0.11f}); // the scarf's tail
+    add_prism(m, Vec3{0.0f}, 0.27f, 1.68f, 1.71f, 10, coal * 1.6f);
+    add_prism(m, Vec3{0.0f}, 0.17f, 1.71f, 1.98f, 10, coal * 1.6f);
+    def.parts.push_back({std::move(m), PropLayer::Opaque});
+    BoxCollider c;
+    c.half_extents = Vec2{0.42f, 0.42f};
+    c.height = 1.6f;
+    def.colliders.push_back(c);
+    return def;
+}
 
 PropLibrary::PropLibrary(bool bake_ao) {
     for (int i = 0; i < 3; ++i) {
@@ -3385,6 +3870,29 @@ PropLibrary::PropLibrary(bool bake_ao) {
                 bake_def_ao(def);
             }
         }
+    }
+
+    // Snowbound towns' twins of every building, wall and gate tower + the market (kSnowHouses ...): the
+    // AO-baked originals with snow laid over them (the snow itself needs no AO).
+    for (u32 i = 0; i < kHouseDefs; ++i) {
+        PropDef snowy = houses_[i];
+        make_snowy_house(snowy);
+        houses_.push_back(std::move(snowy));
+    }
+    for (usize i = 0; i < 2; ++i) {
+        PropDef snowy = walls_[i];
+        add_snow(snowy, 0.45f);
+        walls_.push_back(std::move(snowy));
+    }
+    for (usize i = 0; i < 2; ++i) {
+        PropDef snowy = gates_[i];
+        add_snow(snowy, 0.5f);
+        gates_.push_back(std::move(snowy));
+    }
+    {
+        PropDef snowy = markets_[0];
+        add_snow(snowy, 0.8f);
+        markets_.push_back(std::move(snowy));
     }
 }
 

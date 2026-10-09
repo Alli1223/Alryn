@@ -1309,7 +1309,7 @@ std::optional<Vec3> GameServer::town_house_door(Vec2 town_center, u32 pick) {
         return std::nullopt;
     }
     std::vector<Vec3> doors;
-    for (const PropInstance& pr : village_props(*v, seed)) {
+    for (const PropInstance& pr : cached_village_props(*v, seed)) {
         if (pr.category != PropCategory::House) {
             continue;
         }
@@ -2103,6 +2103,7 @@ void GameServer::update_combat(Timestep dt, const DensitySampler& density) {
             award_kill(e.position, e.kind); // XP for every hero near the fight (+ the journey tally)
             if (e.quest != 0) {
                 quest_foe_felled(e.quest);
+                errand_foe_felled(e.quest);
             }
         }
     }
