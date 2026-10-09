@@ -62,6 +62,8 @@ public:
     static PropDef build_blacksmith(); // workshop w/ open forge + anvil (house variant)
     static PropDef build_chapel();     // stone chapel + bell tower + spire (house variant, towns + cities)
     static PropDef build_keep();       // a city's great keep: corner turrets, banners, braziers (house variant)
+    static PropDef build_bakery();     // a bakery: a domed bread oven, loaves, a stall out front (house variant)
+    static PropDef build_shop();       // a merchant's shop: shelves of goods, a counter, an awning (house variant)
     static PropDef build_brazier();    // a street fire-basket on a post (decor variant kDecorBrazier)
     static PropDef build_snowman();    // a snowbound town's snowman (decor variant kDecorSnowman)
     static PropDef build_wall(int variant);  // stone perimeter wall segment

@@ -422,8 +422,8 @@ TEST_CASE("Scene shot: medieval village houses render") {
         const PropDef& house = lib.houses()[variants[i]];
         const Vec3 pos{static_cast<f32>(i) * 8.0f - 12.0f, 0.0f, 0.0f};
         for (const PropPart& part : house.parts) {
-            if (part.layer == PropLayer::Emissive) {
-                continue; // skip the interior glow for an exterior shot
+            if (part.layer == PropLayer::Emissive || part.layer == PropLayer::Glow) {
+                continue; // skip the interior glow (+ the night-time window spill) for a daylit exterior shot
             }
             add(part.mesh, pos);
         }

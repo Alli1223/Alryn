@@ -686,6 +686,12 @@ void ClientApp::draw_enemy_deaths(Timestep dt) {
 // networked player / villager / enemy is close, else shut (0). Client-side + visual only.
 void ClientApp::update_gates(Timestep dt) {
     gates_.clear();
+    // Forget the house doors nobody has drawn for a while (we've walked on) - they're all shut by then.
+    if (door_open_.size() > 64u) {
+        for (auto it = door_open_.begin(); it != door_open_.end();) {
+            it = elapsed_ - it->second.seen > 4.0f ? door_open_.erase(it) : std::next(it);
+        }
+    }
     if (!have_snapshot_ || world_seed_ == 0) {
         return;
     }
@@ -880,6 +886,46 @@ f32 ClientApp::house_burn(const Vec3& p) const {
     return burn;
 }
 
+f32 ClientApp::door_open(const PropInstance& p, const Mat4& m, const GpuPropPart& part) {
+    const Vec3 feet = local_feet();
+    const Vec3 c = Vec3{m * Vec4{part.center, 1.0f}};
+    if (!have_snapshot_ || glm::length(Vec2{c.x - feet.x, c.z - feet.z}) > 48.0f) {
+        return 0.0f; // far off: nobody would see it move
+    }
+    // How near the closest body is to the leaf, measured in the building's own frame: along the door
+    // (beyond the leaf's edge, counted double - so someone at the bar or by the hearth inside doesn't
+    // hold it ajar) and straight out from it (in front or behind).
+    const f32 cs = std::cos(p.yaw), sn = std::sin(p.yaw);
+    const f32 inv = 1.0f / std::max(p.scale, 0.01f);
+    f32 nd = 1e9f;
+    auto consider = [&](const Vec3& q) {
+        const Vec3 rel = q - p.position;
+        if (std::abs(rel.y - part.center.y * p.scale) > 3.5f) {
+            return; // up on a wall-walk, down in a cellar
+        }
+        const Vec2 lp = Vec2{rel.x * cs - rel.z * sn, rel.x * sn + rel.z * cs} * inv;
+        const f32 along = std::max(0.0f, std::abs(lp.x - part.center.x) - part.reach) * 2.0f;
+        const f32 across = std::abs(lp.y - part.center.z);
+        nd = std::min(nd, glm::length(Vec2{along, across}));
+    };
+    consider(feet);
+    for (const net::PlayerState& pl : snapshot_.players) consider(pl.position);
+    for (const net::VillagerState& vl : snapshot_.villagers) consider(vl.position);
+    for (const net::EnemyState& en : snapshot_.enemies) consider(en.position);
+    // (A portcullis hangs deep in a keep's thick wall: it starts grinding up from further off.)
+    const f32 range = part.lift > 0.0f ? 1.2f : 0.0f;
+    const f32 target = glm::smoothstep(2.9f + range, 1.5f + range, nd);
+    const u64 key = (static_cast<u64>(static_cast<u32>(static_cast<i32>(std::lround(c.x * 8.0f)))) << 32) |
+                    static_cast<u64>(static_cast<u32>(static_cast<i32>(std::lround(c.z * 8.0f))));
+    DoorAnim& a = door_open_[key];
+    // Swung open briskly as someone comes up to it; eased shut more slowly behind them (a portcullis
+    // grinds up + down at its own pace).
+    const f32 rate = (part.lift > 0.0f ? 1.6f : 1.0f) * (target > a.open ? 4.5f : 2.0f);
+    a.open = glm::mix(a.open, target, glm::clamp(frame_dt_ * rate, 0.0f, 1.0f));
+    a.seen = elapsed_;
+    return glm::smoothstep(0.0f, 1.0f, a.open);
+}
+
 void ClientApp::draw_prop(const PropInstance& p) {
     const std::vector<GpuProp>& set =
         p.category == PropCategory::Bush      ? gpu_bushes_
@@ -956,6 +1002,18 @@ void ClientApp::draw_prop(const PropInstance& p) {
             if (night > 0.05f && cozy > 0.05f) {
                 renderer_->draw_glow(part.mesh, m, Vec4{1.0f, 1.0f, 1.0f, night * 0.6f * cozy});
             }
+        } else if (part.layer == PropLayer::Door) {
+            // A hinged door swings about its hinge post; a portcullis rises into the wall above.
+            const f32 o = door_open(p, m, part);
+            Mat4 dm = m;
+            if (o > 0.001f) {
+                dm = part.lift > 0.0f
+                         ? m * glm::translate(Mat4{1.0f}, Vec3{0.0f, part.lift * o, 0.0f})
+                         : m * glm::translate(Mat4{1.0f}, part.hinge) *
+                               glm::rotate(Mat4{1.0f}, part.swing * o, Vec3{0.0f, 1.0f, 0.0f}) *
+                               glm::translate(Mat4{1.0f}, -part.hinge);
+            }
+            renderer_->draw(part.mesh, dm, char_tint);
         } else if (part.layer == PropLayer::Roof) {
             if (inside) {
                 renderer_->draw_transparent(part.mesh, m, Vec4{charcoal, 0.18f});
@@ -995,8 +1053,11 @@ void ClientApp::draw_prop(const PropInstance& p) {
             const bool wild_lantern =
                 p.category == PropCategory::Lantern &&
                 !worldgen::inside_village(p.position.x, p.position.z, world_seed_, 2.0f);
-            sl.indoor = (p.category == PropCategory::House);
-            sl.cast_shadow = (p.category == PropCategory::House) || wild_lantern;
+            // A building's OUTSIDE lights (the glow spilling from its windows onto the street, a lantern
+            // by the door) aren't walled in: they join the cheap unshadowed pool like a town lantern.
+            const bool walled_in = p.category == PropCategory::House && !pl.spill;
+            sl.indoor = walled_in;
+            sl.cast_shadow = walled_in || wild_lantern;
             renderer_->add_light(sl);
         }
     }

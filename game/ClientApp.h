@@ -1132,6 +1132,13 @@ private:
     struct GpuPropPart {
         Mesh mesh;
         PropLayer layer = PropLayer::Opaque;
+        // A Door part (see PropPart): how it opens - swung about `hinge`, or lifted - plus the centre
+        // + half-width of the shut leaf, which "someone is near the door" is measured from.
+        Vec3 hinge{0.0f};
+        f32 swing = 0.0f;
+        f32 lift = 0.0f;
+        Vec3 center{0.0f};
+        f32 reach = 0.0f;
     };
     struct GpuProp {
         std::vector<GpuPropPart> parts;
@@ -1140,6 +1147,10 @@ private:
         f32 wall_height = 0.0f;
         Vec3 chimney_spot{0.0f};       // local chimney-pot top (zero = no hearth smoke)
     };
+    // How far open (0 shut .. 1 open) the door `part` of prop instance `p` (drawn with `m`) is: it
+    // eases open while anyone - a hero, a townsperson, a traveller, a raider - stands near it, and
+    // swings shut once they've gone. Client-side + visual only (doorways never block).
+    f32 door_open(const PropInstance& p, const Mat4& m, const GpuPropPart& part);
 
     std::unordered_map<net::PlayerId, PlayerVisual> visuals_;
     std::unordered_map<u32, EnemyVisual> enemy_visuals_;     // networked hostile NPCs
@@ -1193,6 +1204,13 @@ private:
     };
     std::vector<GateVisual> gates_;
     std::unordered_map<u64, f32> gate_open_; // eased open amount, keyed by gate position hash
+    // Every house door near the player: its eased open amount + when it was last drawn (stale ones
+    // are pruned in update_gates). Keyed by the door's quantised world position.
+    struct DoorAnim {
+        f32 open = 0.0f;
+        f32 seen = 0.0f;
+    };
+    std::unordered_map<u64, DoorAnim> door_open_;
 
     f32 elapsed_ = 0.0f;
     f32 haul_elapsed_ = 0.0f; // seconds the active haul has run (client-side, for the rush-bonus HUD)

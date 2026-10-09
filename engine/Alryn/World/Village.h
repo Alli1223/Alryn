@@ -658,6 +658,10 @@ inline void for_each_house(const worldgen::Village& v, u32 seed, const std::vect
                     var = static_cast<u8>(kHousePub);
                 } else if (!hamlet && (idx == 9 || (city && idx % 59 == 40))) {
                     var = static_cast<u8>(kHouseBlacksmith);
+                } else if (!hamlet && (idx == 6 || (city && idx % 41 == 20))) {
+                    var = static_cast<u8>(kHouseBakery); // every village has its baker
+                } else if (!hamlet && (idx == 14 || (city && idx % 37 == 12))) {
+                    var = static_cast<u8>(kHouseShop);
                 } else if (hh % (inner ? 3u : 7u) == 0u) {
                     var = static_cast<u8>(kHouseTownhouse);
                 } else {
@@ -1210,7 +1214,7 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
             continue; // only ~half the houses get a goods pile out front
         }
         const detail::HousePlot& h = plots[hi];
-        if (h.variant >= kHouseChapel) {
+        if (is_landmark(h.variant)) {
             continue; // the chapel + keep keep their fronts clear
         }
         const Vec2 front{std::sin(h.yaw), std::cos(h.yaw)}; // the way the house faces (toward the street)
@@ -1236,7 +1240,7 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
             continue;
         }
         const detail::HousePlot& h = plots[hi];
-        if (h.variant >= kHouseChapel) {
+        if (is_landmark(h.variant)) {
             continue;
         }
         const Vec2 front{std::sin(h.yaw), std::cos(h.yaw)};
@@ -1263,7 +1267,7 @@ inline std::vector<PropInstance> village_props(const worldgen::Village& v, u32 s
             continue;
         }
         const detail::HousePlot& h = plots[hi];
-        if (h.variant >= kHouseChapel) {
+        if (is_landmark(h.variant)) {
             continue;
         }
         const Vec2 front{std::sin(h.yaw), std::cos(h.yaw)}; // the way the house faces (the street)

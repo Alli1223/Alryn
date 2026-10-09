@@ -176,6 +176,18 @@ void ClientApp::on_init() {
                 GpuPropPart gpp;
                 gpp.mesh.create(renderer_->device(), part.mesh);
                 gpp.layer = part.layer;
+                gpp.hinge = part.hinge;
+                gpp.swing = part.swing;
+                gpp.lift = part.lift;
+                if (part.layer == PropLayer::Door) {
+                    Vec3 lo{1e9f}, hi{-1e9f};
+                    for (const Vertex& v : part.mesh.vertices) {
+                        lo = glm::min(lo, v.position);
+                        hi = glm::max(hi, v.position);
+                    }
+                    gpp.center = (lo + hi) * 0.5f;
+                    gpp.reach = std::max(hi.x - lo.x, hi.z - lo.z) * 0.5f;
+                }
                 gp.parts.push_back(std::move(gpp));
             }
             gp.lights = def.lights;

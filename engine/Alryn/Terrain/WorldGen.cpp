@@ -290,6 +290,8 @@ Pads town_pads(const Village& v, u32 seed) {
         p.hi = e + Vec2{kYard};
         if (h.variant == kHousePub) {
             p.hi += Vec2{2.0f, 3.6f}; // the beer garden, off the front-right
+        } else if (h.variant == kHouseBakery || h.variant == kHouseShop) {
+            p.hi.y += 0.5f; // the bread stall / the awning + wares out front
         }
         p.reach = glm::length(glm::max(-p.lo, p.hi)) + kSkirt;
         p.base = base_height(h.pos.x, h.pos.y, seed);

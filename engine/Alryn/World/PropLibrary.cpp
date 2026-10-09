@@ -10,6 +10,7 @@ namespace alryn {
 
 namespace {
 void make_snowy_house(PropDef& def); // (defined further down, with the other snow helpers)
+void add_mesh(MeshData& dst, const MeshData& src, const Mat4& xf, const Vec3& color);
 } // namespace
 
 PropDef PropLibrary::build_bush(int variant) {
@@ -632,66 +633,6 @@ void add_flagstones(MeshData& m, const Vec3& c, f32 r) {
         add_box(m, {fx - sz, 0.0f, fz - sz}, {fx + sz, 0.05f, fz + sz}, s * (0.86f + 0.24f * hashf(i * 13u + 5u)));
     }
 }
-// A projecting front-gable porch over the door (lower than the main ridge) - gives the house a
-// cross-gable / T-shaped "stance" with the door tucked under it. Adds to `shell` (the fade roof
-// shell), with stone footings into `op`.
-void add_front_gable(MeshData& shell, MeshData& op, MeshData& em, const Vec3& wall_col,
-                     const Vec3& roof, const Vec3& trim, const Vec3& frame, const Vec3& found,
-                     const Vec3& glow, f32 w, f32 d, f32 h, bool half_timber, bool thatch, u32 seed) {
-    const f32 bw = std::min(0.95f, w * 0.42f); // bay half-width (x)
-    const f32 pd = bw + 0.3f;                  // projection half-depth (z) > bw so the ridge runs z
-    const f32 ph = std::min(h - 0.1f, 2.55f);
-    const f32 xc = -w * 0.4f;                  // offset to the front-left, leaving the door clear
-    const f32 zc = d + pd - 0.12f;
-    const f32 zfront = zc + pd;
-    // a CLOSED projecting bay: front + two side walls (open at the back into the house), so it reads
-    // as a cross-gable wing, not a dark porch.
-    add_box(shell, {xc - bw, 0.0f, d - 0.1f}, {xc - bw + 0.14f, ph, zfront}, wall_col);  // left side
-    add_box(shell, {xc + bw - 0.14f, 0.0f, d - 0.1f}, {xc + bw, ph, zfront}, wall_col);  // right side
-    add_box(shell, {xc - bw, 0.0f, zfront - 0.14f}, {xc + bw, ph, zfront}, wall_col);    // front
-    // footing - run on down into the ground: the bay reaches past the house's levelled pad, where the
-    // ground starts easing back to its natural slope, so no gap opens beneath it
-    add_box(op, {xc - bw - 0.05f, -0.6f, d - 0.08f}, {xc + bw + 0.05f, 0.5f, zfront + 0.05f}, found);
-    if (half_timber) {
-        timber_frame(shell, true, zfront, 1.0f, xc - bw, xc + bw, 0.0f, ph, 0.45f, frame);
-        timber_frame(shell, false, xc - bw, -1.0f, d - 0.05f, zfront - 0.05f, 0.0f, ph, 0.0f, frame);
-        timber_frame(shell, false, xc + bw, 1.0f, d - 0.05f, zfront - 0.05f, 0.0f, ph, 0.0f, frame);
-    }
-    lit_window(op, em, {xc, 1.3f, zfront + 0.06f}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1}, 0.36f, 0.42f, glow, frame);
-    MeshData wr; // build the bay gable centred (ridge along z), then translate to the bay
-    gable_roof(wr, bw, pd, ph, pd, 0.42f, thatch, roof, trim, wall_col, seed);
-    for (auto& v : wr.vertices) {
-        v.position.x += xc;
-        v.position.z += zc;
-    }
-    const u32 base = static_cast<u32>(shell.vertices.size());
-    shell.vertices.insert(shell.vertices.end(), wr.vertices.begin(), wr.vertices.end());
-    for (u32 i : wr.indices) {
-        shell.indices.push_back(base + i);
-    }
-}
-// A lean-to (catslide) shed roof projecting from one side (`side`=+1/-1), lower than the main eave -
-// breaks the box with a lower roof section. Adds a low outer wall + a mono-pitch slope.
-void add_leanto(MeshData& shell, MeshData& op, const Vec3& wall_col, const Vec3& roof,
-                const Vec3& trim, const Vec3& found, f32 w, f32 d, f32 h, f32 side) {
-    const f32 lw = 1.35f;           // projection
-    const f32 lh = h * 0.55f;       // outer (low) wall height
-    const f32 dz = d * 0.78f;       // it runs along most of the side
-    const f32 xo = side * (w + lw); // outer wall x
-    const f32 xi = side * w;        // inner (against the house) x
-    const f32 lo = std::min(xo, xi), hix = std::max(xo, xi);
-    add_box(op, {lo - 0.05f, -0.6f, -dz - 0.05f}, {hix + 0.05f, 0.45f, dz + 0.05f}, found);      // footing (into the ground)
-    add_box(shell, {std::min(xo, xo - side * 0.14f), 0.0f, -dz}, {std::max(xo, xo - side * 0.14f), lh, dz}, wall_col); // outer wall
-    add_box(shell, {lo, 0.0f, -dz - 0.06f}, {hix, lh, -dz}, wall_col);                            // end walls
-    add_box(shell, {lo, 0.0f, dz}, {hix, lh, dz + 0.06f}, wall_col);
-    // mono-pitch slope from the main eave (at xi, height h-0.1) down to the outer wall (at xo, lh)
-    const Vec3 a{xi, h - 0.1f, -dz - 0.12f}, b2{xo, lh + 0.12f, -dz - 0.12f};
-    const Vec3 c2{xo, lh + 0.12f, dz + 0.12f}, dd{xi, h - 0.1f, dz + 0.12f};
-    const Vec3 under = (a + c2) * 0.5f - Vec3{0.0f, 1.0f, 0.0f}; // the slope faces up, away from here
-    emit_tri(shell, a, b2, c2, under, roof * 0.92f);
-    emit_tri(shell, a, c2, dd, under, roof * 0.92f);
-    add_box(shell, {std::min(xo, xo - side * 0.16f), lh + 0.05f, -dz - 0.14f}, {std::max(xo, xo - side * 0.16f), lh + 0.2f, dz + 0.14f}, trim); // eave fascia
-}
 } // namespace
 
 // A single fence POST (a stout little pillar with a chamfer cap). Rails connect one post
@@ -789,71 +730,261 @@ PropDef PropLibrary::build_lantern_post() {
 }
 
 namespace {
-// A medieval house style: half-extents (w,d), per-storey height, storey count, gable
-// rise and a material flavour (0 wattle-and-daub, 1 stone, 2 dark timber). `thatch`
-// picks a golden straw roof vs stepped shingle tiles. Varying these gives small/large,
-// squat/tall and one/two-storey homes.
-struct HouseStyle {
+// Shared medieval palette for the special buildings (townhouse / pub / blacksmith / bakery / shop).
+const Vec3 kDaub{0.96f, 0.89f, 0.70f};   // warm lime-washed daub infill
+const Vec3 kFrame{0.23f, 0.14f, 0.08f};  // dark exposed oak timber
+const Vec3 kStone{0.62f, 0.62f, 0.64f};  // light grey fieldstone
+const Vec3 kTrim{0.20f, 0.13f, 0.09f};   // dark roof trim
+const Vec3 kRoofBrown{0.58f, 0.32f, 0.17f}; // rich warm brown shingle
+const Vec3 kGlow{1.0f, 0.82f, 0.42f};    // warm lit window
+const Vec3 kWoodDk{0.38f, 0.26f, 0.15f};
+
+// A wall-mounted lantern: a bracket, a glass box (emissive) and a warm spot light. Adds to op + em,
+// and pushes a PropLight (an outdoor one - it hangs outside the walls). `at` is the glass centre;
+// `outward` the wall normal it hangs off.
+void add_wall_lantern(MeshData& op, MeshData& em, PropDef& def, const Vec3& at, const Vec3& outward) {
+    add_box(op, at - Vec3{0.04f, 0.26f, 0.04f}, at + Vec3{0.04f, 0.3f, 0.04f}, Vec3{0.16f, 0.13f, 0.1f});
+    add_box(em, at - Vec3{0.07f, 0.1f, 0.07f}, at + Vec3{0.07f, 0.1f, 0.07f}, Vec3{1.5f, 1.15f, 0.55f});
+    PropLight l;
+    l.offset = at + outward * 0.1f;
+    l.direction = glm::normalize(outward - Vec3{0.0f, 0.3f, 0.0f});
+    l.color = Vec3{1.0f, 0.78f, 0.45f};
+    l.range = 9.0f;
+    l.intensity = 2.4f;
+    l.cone_deg = 150.0f;
+    l.spill = true;
+    def.lights.push_back(l);
+}
+
+// A box collider over [lo, hi] (prop-local) that blocks from lo.y up to hi.y - so an upper storey's
+// wall only blocks up there, not across the doorway beneath it.
+void add_collider(PropDef& def, const Vec3& lo, const Vec3& hi) {
+    BoxCollider c;
+    c.center = Vec3{(lo.x + hi.x) * 0.5f, lo.y, (lo.z + hi.z) * 0.5f};
+    c.half_extents = Vec2{(hi.x - lo.x) * 0.5f, (hi.z - lo.z) * 0.5f};
+    c.height = hi.y - lo.y;
+    def.colliders.push_back(c);
+}
+
+// A planked door leaf (vertical boards, two battens, an iron handle by its free edge), modelled SHUT
+// across the doorway from x0 (its hinge side) to x1 on the front face z = fz, as its own animated Door
+// part that swings INTO the building (-z) as it opens (or `outward`). The frame round it is the caller's.
+void add_door_leaf(PropDef& def, f32 x0, f32 x1, f32 fz, f32 dh, const Vec3& wood, bool outward = false) {
+    MeshData leaf;
+    const f32 lo = std::min(x0, x1), hi = std::max(x0, x1);
+    const int planks = std::max(2, static_cast<int>(std::round((hi - lo) / 0.27f)));
+    for (int i = 0; i < planks; ++i) {
+        const f32 a = glm::mix(lo + 0.02f, hi - 0.02f, static_cast<f32>(i) / static_cast<f32>(planks));
+        const f32 b = glm::mix(lo + 0.02f, hi - 0.02f, static_cast<f32>(i + 1) / static_cast<f32>(planks)) - 0.015f;
+        add_box(leaf, {a, 0.03f, fz - 0.04f}, {b, dh - 0.03f, fz + 0.04f}, wood * (0.88f + 0.14f * static_cast<f32>(i % 2)));
+    }
+    add_box(leaf, {lo + 0.03f, 0.34f, fz + 0.035f}, {hi - 0.03f, 0.49f, fz + 0.075f}, wood * 0.7f);      // lower batten
+    add_box(leaf, {lo + 0.03f, dh - 0.55f, fz + 0.035f}, {hi - 0.03f, dh - 0.4f, fz + 0.075f}, wood * 0.7f); // upper batten
+    const f32 hx = x1 > x0 ? hi - 0.17f : lo + 0.07f;
+    add_box(leaf, {hx, 0.98f, fz + 0.06f}, {hx + 0.1f, 1.12f, fz + 0.12f}, Vec3{0.12f, 0.12f, 0.13f}); // handle
+    PropPart part;
+    part.mesh = std::move(leaf);
+    part.layer = PropLayer::Door;
+    part.hinge = Vec3{x0, 0.0f, fz};
+    part.swing = (x1 > x0 ? 1.0f : -1.0f) * (outward ? -1.62f : 1.62f); // ~93 degrees, in (or out)
+    def.parts.push_back(std::move(part));
+}
+
+// A doorway's proud timber frame (jambs + lintel) on the front face z = fz.
+void add_door_frame(MeshData& op, f32 dw, f32 dh, f32 fz, const Vec3& frame) {
+    add_box(op, {-dw - 0.1f, 0.0f, fz - 0.06f}, {-dw, dh + 0.1f, fz + 0.12f}, frame);
+    add_box(op, {dw, 0.0f, fz - 0.06f}, {dw + 0.1f, dh + 0.1f, fz + 0.12f}, frame);
+    add_box(op, {-dw - 0.1f, dh, fz - 0.06f}, {dw + 0.1f, dh + 0.1f, fz + 0.12f}, frame);
+}
+
+// A quad with its own colour at each corner, drawn double-sided (an additive glow sheet).
+void glow_quad(MeshData& m, const Vec3& a, const Vec3& b, const Vec3& c, const Vec3& d, const Vec3& ca, const Vec3& cb,
+               const Vec3& cc, const Vec3& cd) {
+    Vec3 n = glm::cross(b - a, c - a);
+    n = glm::length(n) > 1e-6f ? glm::normalize(n) : Vec3{0.0f, 1.0f, 0.0f};
+    const u32 base = static_cast<u32>(m.vertices.size());
+    m.vertices.push_back({a, n, ca, 0.0f});
+    m.vertices.push_back({b, n, cb, 0.0f});
+    m.vertices.push_back({c, n, cc, 0.0f});
+    m.vertices.push_back({d, n, cd, 0.0f});
+    m.indices.insert(m.indices.end(), {base, base + 1, base + 2, base + 2, base + 3, base,   // front
+                                       base, base + 2, base + 1, base + 2, base, base + 3}); // back
+}
+
+// The warm light of a lit window spilling OUT of the building after dark: a soft additive shaft from
+// the sill down to the ground beneath and a pool of light on the ground there (the Glow part - drawn
+// only at night), and (`light`) a real unshadowed spot just outside, so the ground + whoever's standing
+// there are lit. `win` is the window centre on the OUTER wall face, `sill` its bottom edge's height.
+void add_window_spill(PropDef& def, MeshData& glow, const Vec3& win, const Vec3& across, const Vec3& outward, f32 hw,
+                      f32 sill, bool light) {
+    const Vec3 warm{1.0f, 0.62f, 0.3f};
+    const Vec3 none{0.0f};
+    const f32 reach = 1.7f + sill * 0.35f;
+    const Vec3 foot = Vec3{win.x, 0.06f, win.z} + outward * 0.1f;
+    const Vec3 nl = foot - across * (hw * 1.15f), nr = foot + across * (hw * 1.15f);
+    const Vec3 fl = foot + outward * reach - across * (hw * 2.0f), fr = foot + outward * reach + across * (hw * 2.0f);
+    glow_quad(glow, nl, nr, fr, fl, warm * 0.32f, warm * 0.32f, none, none); // the pool on the ground
+    const Vec3 sl = Vec3{win.x, sill, win.z} + outward * 0.08f - across * hw;
+    const Vec3 sr = Vec3{win.x, sill, win.z} + outward * 0.08f + across * hw;
+    glow_quad(glow, sl, sr, fr, fl, warm * 0.15f, warm * 0.15f, none, none); // the shaft down to it
+    if (light) {
+        PropLight l;
+        l.offset = Vec3{win.x, sill + 0.1f, win.z} + outward * 0.45f;
+        l.direction = glm::normalize(outward * 0.85f + Vec3{0.0f, -1.0f, 0.0f});
+        l.color = Vec3{1.0f, 0.7f, 0.4f};
+        l.range = 6.5f;
+        l.intensity = 1.35f;
+        l.cone_deg = 125.0f;
+        l.spill = true;
+        def.lights.push_back(l);
+    }
+}
+
+// How a home's ground floor is furnished.
+enum class Furnish : u8 {
+    Cottage, // a hearth, a table + candle, the resident's bed
+    Tavern,  // a hearth, a bar counter with casks behind it, tables + stools with tankards
+    Bakery,  // a great domed bread oven, a kneading table heaped with loaves, flour sacks, bread shelves
+    Shop,    // shelves of goods along the walls, a counter by the door
+};
+
+// A medieval home's build: half-extents (w,d) of its ground floor, per-storey height, storey count,
+// gable rise, a material flavour (0 wattle-and-daub, 1 stone, 2 dark timber, 3 a stone ground floor
+// under daub + timber), `thatch` for a golden straw roof (else stepped shingles), `jetty` - each upper
+// storey overhangs the one below by this - and how it's furnished. Varying these gives small/large,
+// squat/tall, one- to three-storey homes.
+struct HomeSpec {
     f32 w, d, story_h;
     int stories;
     f32 roof_rise;
     int material;
     bool thatch;
+    f32 jetty = 0.0f;
+    Furnish furnish = Furnish::Cottage;
 };
-constexpr HouseStyle kHouseStyles[kHouseVariants] = {
-    {3.2f, 2.8f, 2.4f, 1, 1.9f, 0, true},  // classic thatched cottage
-    {4.7f, 2.6f, 2.3f, 1, 1.4f, 0, false}, // long house (wide, shingled)
-    {2.7f, 2.7f, 2.3f, 2, 1.1f, 1, false}, // stone townhouse, two storeys
-    {3.0f, 3.0f, 2.4f, 2, 1.6f, 2, false}, // timber two-storey, shingled
-    {4.1f, 3.4f, 2.6f, 1, 2.1f, 0, false}, // manor (big, steep tiled roof)
-    {2.5f, 2.3f, 2.2f, 1, 1.7f, 1, true},  // small stone hut, thatched
-    {3.3f, 2.5f, 2.3f, 2, 1.3f, 0, false}, // tall narrow cottage, shingled
-    {3.8f, 2.9f, 2.4f, 1, 1.9f, 2, true},  // timber-framed hall, thatched
+constexpr HomeSpec kHouseStyles[kHouseVariants] = {
+    {3.2f, 2.8f, 2.4f, 1, 1.9f, 0, true},                // classic thatched cottage
+    {4.7f, 2.6f, 2.3f, 1, 1.4f, 0, false},               // long house (wide, shingled)
+    {2.7f, 2.7f, 2.3f, 2, 1.1f, 1, false},               // stone townhouse, two storeys
+    {3.0f, 3.0f, 2.4f, 2, 1.6f, 2, false},               // timber two-storey, shingled
+    {4.1f, 3.4f, 2.6f, 1, 2.1f, 0, false},               // manor (big, steep tiled roof)
+    {2.5f, 2.3f, 2.2f, 1, 1.7f, 1, true},                // small stone hut, thatched
+    {3.3f, 2.5f, 2.3f, 2, 1.3f, 0, false},               // tall narrow cottage, shingled
+    {3.8f, 2.9f, 2.4f, 1, 1.9f, 2, true},                // timber-framed hall, thatched
+    {3.3f, 2.6f, 2.4f, 2, 1.5f, 3, false, 0.3f},         // jettied merchant's house over a stone ground floor
+    {2.4f, 2.2f, 2.2f, 1, 1.6f, 0, true},                // a tiny thatched croft
+    {4.4f, 3.0f, 2.5f, 2, 1.7f, 1, false},               // a big stone farmhouse
+    {3.5f, 2.6f, 2.3f, 2, 1.5f, 2, true, 0.25f},         // jettied timber house, thatched
+    {5.2f, 2.8f, 2.4f, 1, 1.6f, 3, false},               // a stone + timber longhall
+    {2.8f, 2.6f, 2.25f, 3, 1.3f, 3, false, 0.2f},        // a tall three-storey jettied house
 };
-} // namespace
+// The special buildings that are homes underneath (their extras are added on top).
+constexpr HomeSpec kTownhouseSpec{2.0f, 1.95f, 2.3f, 3, 1.8f, 3, false, 0.2f};
+constexpr HomeSpec kPubSpec{3.0f, 2.6f, 2.4f, 2, 1.9f, 3, false, 0.0f, Furnish::Tavern};
+constexpr HomeSpec kBakerySpec{3.1f, 2.6f, 2.4f, 1, 1.7f, 1, true, 0.0f, Furnish::Bakery};
+constexpr HomeSpec kShopSpec{3.0f, 2.6f, 2.3f, 2, 1.5f, 3, false, 0.25f, Furnish::Shop};
 
-// The (w,d) footprint half-extents of a house variant, so the village layout can keep
-// houses from intersecting walls, the market and each other without building the mesh.
-Vec2 PropLibrary::house_half_extents(u32 variant) {
-    variant %= kHouseDefs; // a snowbound twin stands on the same footprint
-    if (variant == kHouseTownhouse) return Vec2{2.25f, 2.2f};  // jettied top storey extent
-    if (variant == kHouseChapel) return Vec2{3.2f, 5.1f};      // the nave + its buttresses
-    if (variant == kHouseKeep) return Vec2{5.1f, 5.1f};        // the keep + its corner turrets
-    if (variant == kHousePub) return Vec2{3.0f, 2.6f};
-    if (variant == kHouseBlacksmith) return Vec2{3.1f, 2.7f};
-    const HouseStyle& st = kHouseStyles[variant % kHouseVariants];
-    return Vec2{st.w, st.d};
+// A storey's half-extents (an upper storey jetties out over the one below, up to two steps).
+Vec2 storey_extents(const HomeSpec& st, int s) {
+    const f32 j = st.jetty * static_cast<f32>(std::min(s, 2));
+    return Vec2{st.w + j, st.d + j};
+}
+Vec2 home_extents(const HomeSpec& st) { return storey_extents(st, st.stories - 1); }
+
+// A projecting front-gable bay off the front-left of the house (lower than the main ridge) - gives the
+// house a cross-gable / T-shaped "stance". Kept clear of the doorway (|x| <= dw); its walls collide.
+// Adds to `shell` (the fade roof shell), with stone footings into `op`.
+void add_front_gable(PropDef& def, MeshData& shell, MeshData& op, MeshData& em, MeshData& glow, const Vec3& wall_col,
+                     const Vec3& roof, const Vec3& trim, const Vec3& frame, const Vec3& found, const Vec3& glowc, f32 w, f32 d,
+                     f32 h, f32 dw, bool half_timber, bool thatch, u32 seed) {
+    const f32 bw = std::min(0.95f, (w - dw - 0.3f) * 0.5f); // bay half-width (x)
+    if (bw < 0.55f) {
+        return; // too narrow a front for a bay beside the door
+    }
+    const f32 pd = bw + 0.3f;                  // projection half-depth (z) > bw so the ridge runs z
+    const f32 ph = std::min(h - 0.1f, 2.55f);
+    const f32 xc = -w + bw + 0.12f;            // tucked into the front-left corner, clear of the door
+    const f32 zc = d + pd - 0.12f;
+    const f32 zfront = zc + pd;
+    // a CLOSED projecting bay: front + two side walls (open at the back onto the house front).
+    add_box(shell, {xc - bw, 0.0f, d - 0.1f}, {xc - bw + 0.14f, ph, zfront}, wall_col);  // left side
+    add_box(shell, {xc + bw - 0.14f, 0.0f, d - 0.1f}, {xc + bw, ph, zfront}, wall_col);  // right side
+    add_box(shell, {xc - bw, 0.0f, zfront - 0.14f}, {xc + bw, ph, zfront}, wall_col);    // front
+    add_collider(def, {xc - bw, 0.0f, d}, {xc + bw, ph, zfront});
+    // footing - run on down into the ground: the bay reaches past the house's levelled pad, where the
+    // ground starts easing back to its natural slope, so no gap opens beneath it
+    add_box(op, {xc - bw - 0.05f, -0.6f, d - 0.08f}, {xc + bw + 0.05f, 0.5f, zfront + 0.05f}, found);
+    if (half_timber) {
+        timber_frame(shell, true, zfront, 1.0f, xc - bw, xc + bw, 0.0f, ph, 0.45f, frame);
+        timber_frame(shell, false, xc - bw, -1.0f, d - 0.05f, zfront - 0.05f, 0.0f, ph, 0.0f, frame);
+        timber_frame(shell, false, xc + bw, 1.0f, d - 0.05f, zfront - 0.05f, 0.0f, ph, 0.0f, frame);
+    }
+    lit_window(op, em, {xc, 1.3f, zfront + 0.06f}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1}, 0.36f, 0.42f, glowc, frame);
+    add_window_spill(def, glow, {xc, 1.3f, zfront + 0.02f}, {1, 0, 0}, {0, 0, 1}, 0.36f, 0.88f, false);
+    MeshData wr; // build the bay gable centred (ridge along z), then translate to the bay
+    gable_roof(wr, bw, pd, ph, pd, 0.42f, thatch, roof, trim, wall_col, seed);
+    for (auto& v : wr.vertices) {
+        v.position.x += xc;
+        v.position.z += zc;
+    }
+    const u32 base = static_cast<u32>(shell.vertices.size());
+    shell.vertices.insert(shell.vertices.end(), wr.vertices.begin(), wr.vertices.end());
+    for (u32 i : wr.indices) {
+        shell.indices.push_back(base + i);
+    }
+}
+// A lean-to (catslide) shed roof projecting from one side (`side`=+1/-1), lower than the main eave -
+// breaks the box with a lower roof section. Adds a low outer wall + a mono-pitch slope (it collides).
+void add_leanto(PropDef& def, MeshData& shell, MeshData& op, const Vec3& wall_col, const Vec3& roof, const Vec3& trim,
+                const Vec3& found, f32 w, f32 d, f32 h, f32 side) {
+    const f32 lw = 1.35f;           // projection
+    const f32 lh = h * 0.55f;       // outer (low) wall height
+    const f32 dz = d * 0.78f;       // it runs along most of the side
+    const f32 xo = side * (w + lw); // outer wall x
+    const f32 xi = side * w;        // inner (against the house) x
+    const f32 lo = std::min(xo, xi), hix = std::max(xo, xi);
+    add_box(op, {lo - 0.05f, -0.6f, -dz - 0.05f}, {hix + 0.05f, 0.45f, dz + 0.05f}, found);      // footing (into the ground)
+    add_box(shell, {std::min(xo, xo - side * 0.14f), 0.0f, -dz}, {std::max(xo, xo - side * 0.14f), lh, dz}, wall_col); // outer wall
+    add_box(shell, {lo, 0.0f, -dz - 0.06f}, {hix, lh, -dz}, wall_col);                            // end walls
+    add_box(shell, {lo, 0.0f, dz}, {hix, lh, dz + 0.06f}, wall_col);
+    add_collider(def, {lo, 0.0f, -dz - 0.06f}, {hix, lh, dz + 0.06f});
+    // mono-pitch slope from the main eave (at xi, height h-0.1) down to the outer wall (at xo, lh)
+    const Vec3 a{xi, h - 0.1f, -dz - 0.12f}, b2{xo, lh + 0.12f, -dz - 0.12f};
+    const Vec3 c2{xo, lh + 0.12f, dz + 0.12f}, dd{xi, h - 0.1f, dz + 0.12f};
+    const Vec3 under = (a + c2) * 0.5f - Vec3{0.0f, 1.0f, 0.0f}; // the slope faces up, away from here
+    emit_tri(shell, a, b2, c2, under, roof * 0.92f);
+    emit_tri(shell, a, c2, dd, under, roof * 0.92f);
+    add_box(shell, {std::min(xo, xo - side * 0.16f), lh + 0.05f, -dz - 0.14f}, {std::max(xo, xo - side * 0.16f), lh + 0.2f, dz + 0.14f}, trim); // eave fascia
 }
 
-// A medieval village house, varied by `variant` (see kHouseStyles): cottages,
-// longhouses, two-storey townhouses and manors in daub / stone / timber. Real window
-// openings per storey, a furnished ground floor (hearth + fire + a bed where the
-// resident sleeps), interior lights and a dollhouse shell that fades when you step in.
-// Indices kHouseVariants.. dispatch to the special landmark buildings.
-PropDef PropLibrary::build_house(u32 variant) {
-    if (variant >= kHouseDefs) { // a snowbound town's twin (see kSnowHouses)
-        PropDef def = build_house(variant % kHouseDefs);
-        make_snowy_house(def);
-        return def;
-    }
-    if (variant == kHouseChapel) return build_chapel();
-    if (variant == kHouseKeep) return build_keep();
-    if (variant == kHouseTownhouse) return build_townhouse();
-    if (variant == kHousePub) return build_pub();
-    if (variant == kHouseBlacksmith) return build_blacksmith();
-    const HouseStyle st = kHouseStyles[variant % kHouseVariants];
+// A medieval home built from `st` (see HomeSpec): real walls with window openings per storey (each
+// window glowing at night + spilling its light onto the ground outside), a doorway with a hinged
+// planked door that swings open as anyone comes near, floors between the storeys, a stone foundation,
+// exposed half-timbering, a swooping shingle / thatch roof with a dormer, a front-gable bay or a
+// lean-to for character, the cosy yard dressing, and a ground floor furnished by `st.furnish`. The
+// whole shell (walls + roof + floors) fades when you step inside (dollhouse view), and every wall
+// collides only over its own storey's height - so the doorway beneath an upper storey stays open.
+PropDef build_home(const HomeSpec& st, u32 variant, const char* name) {
     PropDef def;
-    def.name = "house";
+    def.name = name;
 
-    const f32 w = st.w;          // half width (x)
-    const f32 d = st.d;          // half depth (z); +z is the front
+    const f32 w = st.w;          // ground floor half width (x)
+    const f32 d = st.d;          // ground floor half depth (z); +z is the front
     const f32 sh = st.story_h;   // per-storey wall height
     const f32 h = sh * static_cast<f32>(st.stories); // total wall height
     const f32 t = 0.18f;         // wall thickness
-    const f32 dw = 0.55f;        // front-door half-width
-    const f32 dh = 1.95f;        // door height
+    const f32 dw = 0.62f;        // front-door half-width (wide enough to walk through comfortably)
+    const f32 dh = 1.98f;        // door height
     const f32 rr = st.roof_rise * 1.22f; // gable rise (steepened toward the reference look)
     const f32 oh = 0.62f;                // roof overhang (eaves project past the walls)
+    const Vec2 top = home_extents(st);   // the top storey's extents (the roof sits on these)
+    // Per-variant massing so houses aren't plain boxes: some cottages get a projecting front-gable bay
+    // (front-left), some a lower lean-to to one side. (A jettied front has no room for either.) The
+    // windows they cover don't spill light outside.
+    const int massing = static_cast<int>(variant % 3u);
+    const bool plain = st.jetty <= 0.0f && st.furnish == Furnish::Cottage;
+    const bool bay = plain && massing == 0 && (w - dw - 0.3f) * 0.5f >= 0.55f;
+    const f32 leanto_side = plain && massing == 1 ? ((variant & 1u) ? 1.0f : -1.0f) : 0.0f;
 
     auto rnd = [&](u32 s) {
         u32 v = (variant * 2654435761u + s * 0x9E3779B9u);
@@ -863,85 +994,82 @@ PropDef PropLibrary::build_house(u32 variant) {
     };
     // Bright lime-washed daub infill (cottages) - clean and creamy like the reference - mossy
     // fieldstone, and dark oak.
-    static const Vec3 daub_cols[] = {{0.97f, 0.91f, 0.74f}, {0.96f, 0.87f, 0.66f},
-                                     {0.95f, 0.83f, 0.60f}};
+    static const Vec3 daub_cols[] = {{0.97f, 0.91f, 0.74f}, {0.96f, 0.87f, 0.66f}, {0.95f, 0.83f, 0.60f}};
     const Vec3 stone{0.62f, 0.56f, 0.45f};      // warm lime-mortared fieldstone (walls)
     const Vec3 found_stone{0.47f, 0.51f, 0.58f}; // cooler blue-grey foundation stone (contrasts daub)
     const Vec3 timber{0.24f, 0.16f, 0.10f};
     const Vec3 frame_col{0.20f, 0.13f, 0.08f}; // exposed oak half-timbering
-    const Vec3 wall_col = st.material == 1 ? stone
-                          : st.material == 2 ? glm::mix(daub_cols[variant % 3], timber, 0.22f)
-                                             : daub_cols[variant % 3];
+    const Vec3 daub = daub_cols[variant % 3];
+    // A storey's wall colour + whether it shows half-timbering (material 3: stone below, daub above).
+    auto storey_col = [&](int s) {
+        if (st.material == 1 || (st.material == 3 && s == 0)) {
+            return stone;
+        }
+        return st.material == 2 ? glm::mix(daub, timber, 0.22f) : daub;
+    };
+    auto storey_timbered = [&](int s) { return st.material == 0 || st.material == 2 || (st.material == 3 && s > 0); };
+    const Vec3 wall_col = storey_col(st.stories - 1); // the gables + dormers match the top storey
     const Vec3 plank{0.55f, 0.38f, 0.22f};    // honey oak floorboards (lighter than the furniture)
     const Vec3 flagstone{0.58f, 0.55f, 0.50f}; // warm grey flags (the stone houses' floors)
     const Vec3 subfloor{0.15f, 0.11f, 0.07f};  // the dark joints between boards / flags
-    // Roofs come in two builds: chunky stepped wood/clay shingles in a warm earthy palette
-    // (browns, terracotta, weathered wood, muted slate) or a golden straw thatch - matching the
-    // Synty-style reference (a town of brown-shingled + thatched cottages, not gaudy slates).
+    // Roofs come in two builds: chunky stepped wood/clay shingles in a warm earthy palette (browns,
+    // terracotta, weathered wood, muted slate) or a golden straw thatch.
     const bool thatch = st.thatch;
     static const Vec3 shingle_palette[] = {
-        {0.58f, 0.31f, 0.16f}, // rich warm brown shingle (reference image 1)
-        {0.86f, 0.45f, 0.18f}, // vivid terracotta clay
-        {0.72f, 0.25f, 0.17f}, // deep red clay tile
-        {0.55f, 0.37f, 0.18f}, // weathered wood shingle
-        {0.31f, 0.45f, 0.62f}, // blue slate
-        {0.32f, 0.52f, 0.36f}, // mossy green slate
+        {0.58f, 0.31f, 0.16f}, {0.86f, 0.45f, 0.18f}, {0.72f, 0.25f, 0.17f},
+        {0.55f, 0.37f, 0.18f}, {0.31f, 0.45f, 0.62f}, {0.32f, 0.52f, 0.36f},
     };
     const Vec3 thatch_col{0.92f, 0.71f, 0.30f}; // golden straw
     const Vec3 roof_base = thatch ? thatch_col : shingle_palette[(variant * 3u + 1u) % 6u];
     const Vec3 roof = glm::mix(roof_base, roof_base * 0.86f, rnd(1));
-    const Vec3 trim{0.19f, 0.13f, 0.09f};       // dark timber roof trim (fascia / barge / ridge cap)
-    const bool half_timber = st.material != 1;  // daub + timber houses get exposed framing
+    const Vec3 trim{0.19f, 0.13f, 0.09f};
     const Vec3 wood{0.40f, 0.28f, 0.16f};
     const Vec3 fire{1.0f, 0.55f, 0.15f};
     const Vec3 win_glow{1.0f, 0.82f, 0.42f};
 
-    // shell (walls + roof + floors, fades when you're inside), opaque furniture, emissive.
-    MeshData shell, op, em;
+    // shell (walls + roof + floors, fades when you're inside), opaque furniture, emissive, the window
+    // light spill (glow).
+    MeshData shell, op, em, glow;
 
-    auto wall = [&](const Vec3& lo, const Vec3& hi) {
-        add_box(shell, lo, hi, wall_col);
-        BoxCollider c;
-        c.center = Vec3{(lo.x + hi.x) * 0.5f, 0.0f, (lo.z + hi.z) * 0.5f};
-        c.half_extents = Vec2{(hi.x - lo.x) * 0.5f, (hi.z - lo.z) * 0.5f};
-        c.height = h;
-        def.colliders.push_back(c);
-    };
-    // A wall with a window opening cut out (up to 4 sub-boxes) + a warm lit pane with a
-    // mullion cross behind it. `along_x` = wall runs along x; `c` is the window centre on
-    // that axis, [y0,y1] its height. A full-wall collider still blocks movement.
-    const f32 ww = 0.6f;       // window half-width
+    const f32 ww = 0.6f; // window half-width
     const Vec3 mull{0.14f, 0.10f, 0.07f};
-    auto win_wall = [&](const Vec3& lo, const Vec3& hi, bool along_x, f32 c, f32 y0, f32 y1) {
+    // A wall with a window opening cut out (up to 4 sub-boxes) + a warm lit pane with a mullion cross
+    // behind it, and a collider over the wall's own storey. `along_x` = wall runs along x; `c` is the
+    // window centre on that axis, [y0,y1] its height. A ground-floor window also spills its light out.
+    auto win_wall = [&](const Vec3& lo, const Vec3& hi, bool along_x, f32 c, f32 y0, f32 y1, const Vec3& col, bool ground,
+                        bool spill_light) {
         if (along_x) {
-            if (c - ww > lo.x) add_box(shell, lo, {c - ww, hi.y, hi.z}, wall_col);
-            if (c + ww < hi.x) add_box(shell, {c + ww, lo.y, lo.z}, hi, wall_col);
-            add_box(shell, {c - ww, lo.y, lo.z}, {c + ww, y0, hi.z}, wall_col);
-            add_box(shell, {c - ww, y1, lo.z}, {c + ww, hi.y, hi.z}, wall_col);
+            if (c - ww > lo.x) add_box(shell, lo, {c - ww, hi.y, hi.z}, col);
+            if (c + ww < hi.x) add_box(shell, {c + ww, lo.y, lo.z}, hi, col);
+            add_box(shell, {c - ww, lo.y, lo.z}, {c + ww, y0, hi.z}, col);
+            add_box(shell, {c - ww, y1, lo.z}, {c + ww, hi.y, hi.z}, col);
         } else {
-            if (c - ww > lo.z) add_box(shell, lo, {hi.x, hi.y, c - ww}, wall_col);
-            if (c + ww < hi.z) add_box(shell, {lo.x, lo.y, c + ww}, hi, wall_col);
-            add_box(shell, {lo.x, lo.y, c - ww}, {hi.x, y0, c + ww}, wall_col);
-            add_box(shell, {lo.x, y1, c - ww}, {hi.x, hi.y, c + ww}, wall_col);
+            if (c - ww > lo.z) add_box(shell, lo, {hi.x, hi.y, c - ww}, col);
+            if (c + ww < hi.z) add_box(shell, {lo.x, lo.y, c + ww}, hi, col);
+            add_box(shell, {lo.x, lo.y, c - ww}, {hi.x, y0, c + ww}, col);
+            add_box(shell, {lo.x, y1, c - ww}, {hi.x, hi.y, c + ww}, col);
         }
         // Lit pane + mullion at the opening's inner face.
         const Vec3 up{0.0f, 1.0f, 0.0f};
         const f32 whh = (y1 - y0) * 0.5f;
         const f32 my = (y0 + y1) * 0.5f;
         Vec3 ctr, across, outward;
+        f32 outer;
         if (along_x) {
             const bool front = lo.z > 0.0f;
             ctr = Vec3{c, my, front ? hi.z - t : lo.z + t};
             across = Vec3{1.0f, 0.0f, 0.0f};
             outward = Vec3{0.0f, 0.0f, front ? 1.0f : -1.0f};
+            outer = front ? hi.z : lo.z;
         } else {
             const bool right = lo.x > 0.0f;
             ctr = Vec3{right ? lo.x + t : hi.x - t, my, c};
             across = Vec3{0.0f, 0.0f, 1.0f};
             outward = Vec3{right ? 1.0f : -1.0f, 0.0f, 0.0f};
+            outer = right ? hi.x : lo.x;
         }
-        add_quad(em, ctr - across * ww - up * whh, ctr + across * ww - up * whh,
-                 ctr + across * ww + up * whh, ctr - across * ww + up * whh, win_glow);
+        add_quad(em, ctr - across * ww - up * whh, ctr + across * ww - up * whh, ctr + across * ww + up * whh,
+                 ctr - across * ww + up * whh, win_glow);
         const Vec3 o = outward * 0.05f;
         add_quad(op, ctr - across * 0.04f - up * whh + o, ctr + across * 0.04f - up * whh + o,
                  ctr + across * 0.04f + up * whh + o, ctr - across * 0.04f + up * whh + o, mull);
@@ -955,30 +1083,34 @@ PropDef PropLibrary::build_house(u32 variant) {
                      ctr + across * a1 + up * u1 + of, ctr + across * a0 + up * u1 + of, frame_col);
         };
         fquad(-ww - fb, ww + fb, whh, whh + fb);   // top rail
-        fquad(-ww - fb, ww + fb, -whh - fb, -whh);  // bottom rail
-        fquad(-ww - fb, -ww, -whh - fb, whh + fb);  // left jamb
-        fquad(ww, ww + fb, -whh - fb, whh + fb);    // right jamb
-        BoxCollider col;
-        col.center = Vec3{(lo.x + hi.x) * 0.5f, 0.0f, (lo.z + hi.z) * 0.5f};
-        col.half_extents = Vec2{(hi.x - lo.x) * 0.5f, (hi.z - lo.z) * 0.5f};
-        col.height = h;
-        def.colliders.push_back(col);
+        fquad(-ww - fb, ww + fb, -whh - fb, -whh); // bottom rail
+        fquad(-ww - fb, -ww, -whh - fb, whh + fb); // left jamb
+        fquad(ww, ww + fb, -whh - fb, whh + fb);   // right jamb
+        add_collider(def, lo, hi);
+        if (ground) {
+            Vec3 face = ctr;
+            if (along_x) {
+                face.z = outer;
+            } else {
+                face.x = outer;
+            }
+            add_window_spill(def, glow, face, across, outward, ww, y0, spill_light);
+        }
+    };
+    auto wall = [&](const Vec3& lo, const Vec3& hi, const Vec3& col) {
+        add_box(shell, lo, hi, col);
+        add_collider(def, lo, hi);
     };
     auto furn = [&](const Vec3& lo, const Vec3& hi, const Vec3& c) {
         add_box(op, lo, hi, c);
-        BoxCollider col;
-        col.center = Vec3{(lo.x + hi.x) * 0.5f, 0.0f, (lo.z + hi.z) * 0.5f};
-        col.half_extents = Vec2{(hi.x - lo.x) * 0.5f, (hi.z - lo.z) * 0.5f};
-        col.height = hi.y;
-        def.colliders.push_back(col);
+        add_collider(def, Vec3{lo.x, 0.0f, lo.z}, hi);
     };
 
-    // ---- The ground floor: floorboards (flagstones in the stone houses) over a dark sub-floor that
-    // shows through the joints. The ground under a house is levelled flat (worldgen::height), so the
-    // floor lies right on it rather than being buried by the slope it stands on.
+    // ---- The ground floor: floorboards (flagstones in a stone ground floor) over a dark sub-floor
+    // that shows through the joints. The ground under a house is levelled flat (worldgen::height), so
+    // the floor lies right on it rather than being buried by the slope it stands on.
     add_box(op, {-w, -0.3f, -d}, {w, 0.02f, d}, subfloor);
-    if (st.material == 1) {
-        // Flagstones: rows of ~0.75 m slabs, every other row offset half a slab, each shade-jittered.
+    if (st.material == 1 || st.material == 3) {
         const int nx = std::max(3, static_cast<int>(std::round(2.0f * w / 0.75f)));
         const int nz = std::max(3, static_cast<int>(std::round(2.0f * d / 0.75f)));
         const f32 sx = 2.0f * w / static_cast<f32>(nx);
@@ -994,16 +1126,15 @@ PropDef PropLibrary::build_house(u32 variant) {
                     continue;
                 }
                 const f32 shade = 0.82f + 0.26f * rnd(300u + static_cast<u32>(j * 31 + i + 1));
-                add_box(op, {x0 + gap, 0.02f, z0 + gap}, {x1 - gap, 0.055f, z0 + sz - gap},
-                        flagstone * shade);
+                add_box(op, {x0 + gap, 0.02f, z0 + gap}, {x1 - gap, 0.055f, z0 + sz - gap}, flagstone * shade);
             }
         }
     } else {
         // Boards run along the house's long axis, each with one butt joint at a hashed spot so the
         // joints stagger across the floor.
         const bool along_x = w >= d;
-        const f32 len = along_x ? w : d;  // half-length along the boards
-        const f32 span = along_x ? d : w; // half-width across them
+        const f32 len = along_x ? w : d;
+        const f32 span = along_x ? d : w;
         const int boards = std::max(4, static_cast<int>(std::round(2.0f * span / 0.32f)));
         constexpr f32 gap = 0.012f;
         for (int i = 0; i < boards; ++i) {
@@ -1023,49 +1154,44 @@ PropDef PropLibrary::build_house(u32 variant) {
         }
     }
 
-    // Build each storey's four walls. The ground floor's front wall is split around the
-    // door; every wall gets a centred window. (For a wider front, two windows.)
+    // Build each storey's four walls (an upper storey jetties out over the one below). The ground
+    // floor's front wall is split around the door; every wall gets a centred window (light spills out
+    // of the ground floor's).
     for (int s = 0; s < st.stories; ++s) {
+        const Vec2 e = storey_extents(st, s);
+        const f32 ws = e.x, ds = e.y;
+        const Vec3 col = storey_col(s);
         const f32 y0 = static_cast<f32>(s) * sh;
         const f32 y1 = y0 + sh;
         const f32 wy0 = y0 + 0.85f, wy1 = std::min(y1 - 0.2f, y0 + 2.0f);
-        win_wall({-w, y0, -d}, {w, y1, -d + t}, true, 0.0f, wy0, wy1);   // back
-        win_wall({-w, y0, -d}, {-w + t, y1, d}, false, 0.0f, wy0, wy1);  // left
-        win_wall({w - t, y0, -d}, {w, y1, d}, false, 0.0f, wy0, wy1);    // right
-        if (s == 0) {
-            win_wall({-w, y0, d - t}, {-dw, y1, d}, true, (-w - dw) * 0.5f, wy0, wy1); // front-L
-            wall({dw, y0, d - t}, {w, y1, d});                                          // front-R
-            add_box(shell, {-dw, dh, d - t}, {dw, y1, d}, wall_col);                    // door lintel
+        const bool ground = s == 0;
+        win_wall({-ws, y0, -ds}, {ws, y1, -ds + t}, true, 0.0f, wy0, wy1, col, ground, false); // back
+        win_wall({-ws, y0, -ds}, {-ws + t, y1, ds}, false, 0.0f, wy0, wy1, col, ground && leanto_side >= 0.0f, true); // left
+        win_wall({ws - t, y0, -ds}, {ws, y1, ds}, false, 0.0f, wy0, wy1, col, ground && leanto_side <= 0.0f, true);   // right
+        if (ground) {
+            win_wall({-ws, y0, ds - t}, {-dw, y1, ds}, true, (-ws - dw) * 0.5f, wy0, wy1, col, !bay, true); // front-L
+            wall({dw, y0, ds - t}, {ws, y1, ds}, col);                                                       // front-R
+            add_box(shell, {-dw, dh, ds - t}, {dw, y1, ds}, col);                                            // door lintel
         } else {
-            win_wall({-w, y0, d - t}, {w, y1, d}, true, 0.0f, wy0, wy1); // upper front window
+            win_wall({-ws, y0, ds - t}, {ws, y1, ds}, true, 0.0f, wy0, wy1, col, false, false); // upper front window
+            // The floor of this storey (in the fading shell, so the interior stays visible), and - jettied
+            // out - a dark soffit band under the overhang.
+            const Vec2 pe = storey_extents(st, s - 1);
+            add_box(shell, {-ws + t, y0 - 0.12f, -ds + t}, {ws - t, y0, ds - t}, timber);
+            if (st.jetty > 0.0f && (ws > pe.x + 0.01f)) {
+                add_box(shell, {-ws, y0 - 0.16f, -ds}, {ws, y0, ds}, timber * 0.9f);
+            }
         }
         // A storey-band timber rim.
-        add_box(shell, {-w, y1 - 0.1f, -d}, {w, y1, -d + t}, timber);
-        add_box(shell, {-w, y1 - 0.1f, d - t}, {w, y1, d}, timber);
-    }
-    // A floor slab between storeys (part of the fade shell so the interior stays visible).
-    if (st.stories == 2) {
-        add_box(shell, {-w + t, sh - 0.12f, -d + t}, {w - t, sh, d - t}, timber);
+        add_box(shell, {-ws, y1 - 0.1f, -ds}, {ws, y1, -ds + t}, timber);
+        add_box(shell, {-ws, y1 - 0.1f, ds - t}, {ws, y1, ds}, timber);
     }
 
-    // ---- Exposed timber framing (half-timbered / Tudor look) on the daub + timber
-    // houses: corner posts, sill/head plates, studs and a diagonal brace per panel, all
-    // standing slightly proud of the lime-washed infill. Stone houses stay bare masonry.
-    if (half_timber) {
+    // ---- Exposed timber framing (half-timbered / Tudor look) on the daub + timber storeys: corner
+    // posts, sill/head plates, studs and a diagonal brace per panel, all standing slightly proud of the
+    // lime-washed infill. Stone storeys stay bare masonry.
+    {
         constexpr f32 proud = 0.09f;
-        auto post = [&](f32 sx, f32 sz) {
-            const f32 x0 = sx > 0.0f ? w - 0.08f : -w - proud;
-            const f32 x1 = sx > 0.0f ? w + proud : -w + 0.08f;
-            const f32 z0 = sz > 0.0f ? d - 0.08f : -d - proud;
-            const f32 z1 = sz > 0.0f ? d + proud : -d + 0.08f;
-            add_box(shell, {x0, 0.0f, z0}, {x1, h, z1}, frame_col);
-        };
-        post(1, 1);
-        post(1, -1);
-        post(-1, 1);
-        post(-1, -1);
-        // Frames one wall panel (a storey of one face): bold plates, evenly-spaced studs + a
-        // diagonal brace - the prominent exposed timbering of the reference.
         auto panel = [&](bool along_x, f32 face, f32 out, f32 a_lo, f32 a_hi, f32 y0, f32 y1) {
             const f32 p0 = std::min(face, face + out * proud);
             const f32 p1 = std::max(face, face + out * proud);
@@ -1076,8 +1202,8 @@ PropDef PropLibrary::build_house(u32 variant) {
                     add_box(shell, {p0, yl, al}, {p1, yh, ah}, frame_col);
                 }
             };
-            bar(a_lo, a_hi, y0, y0 + 0.15f);  // sill plate
-            bar(a_lo, a_hi, y1 - 0.15f, y1);  // head plate
+            bar(a_lo, a_hi, y0, y0 + 0.15f); // sill plate
+            bar(a_lo, a_hi, y1 - 0.15f, y1); // head plate
             const int studs = std::max(3, static_cast<int>(std::round((a_hi - a_lo) / 0.72f)));
             for (int i = 0; i <= studs; ++i) {
                 const f32 a = glm::mix(a_lo, a_hi, static_cast<f32>(i) / static_cast<f32>(studs));
@@ -1086,7 +1212,6 @@ PropDef PropLibrary::build_house(u32 variant) {
                 }
                 bar(a - 0.08f, a + 0.08f, y0, y1);
             }
-            // Diagonal corner braces (the classic Tudor cross-timber), one each side of the opening.
             const f32 pf = face + out * proud;
             auto brace = [&](Vec2 q0, Vec2 q1) {
                 Vec2 dir = q1 - q0;
@@ -1094,156 +1219,258 @@ PropDef PropLibrary::build_house(u32 variant) {
                 if (dl <= 0.4f) return;
                 dir /= dl;
                 const Vec2 nrm{-dir.y * 0.09f, dir.x * 0.09f};
-                auto P = [&](const Vec2& v) {
-                    return along_x ? Vec3{v.x, v.y, pf} : Vec3{pf, v.y, v.x};
-                };
+                auto P = [&](const Vec2& v) { return along_x ? Vec3{v.x, v.y, pf} : Vec3{pf, v.y, v.x}; };
                 add_quad(shell, P(q0 + nrm), P(q1 + nrm), P(q1 - nrm), P(q0 - nrm), frame_col);
             };
-            brace({a_lo + 0.18f, y1 - 0.18f}, {a_lo + 1.1f, y0 + 0.18f}); // left brace (down-out)
-            brace({a_hi - 0.18f, y1 - 0.18f}, {a_hi - 1.1f, y0 + 0.18f}); // right brace
+            brace({a_lo + 0.18f, y1 - 0.18f}, {a_lo + 1.1f, y0 + 0.18f});
+            brace({a_hi - 0.18f, y1 - 0.18f}, {a_hi - 1.1f, y0 + 0.18f});
         };
         for (int s = 0; s < st.stories; ++s) {
+            if (!storey_timbered(s)) {
+                continue;
+            }
+            const Vec2 e = storey_extents(st, s);
             const f32 y0 = static_cast<f32>(s) * sh;
             const f32 y1 = y0 + sh;
-            panel(true, d, 1.0f, -w + 0.12f, w - 0.12f, y0, y1);    // front
-            panel(true, -d, -1.0f, -w + 0.12f, w - 0.12f, y0, y1);  // back
-            panel(false, w, 1.0f, -d + 0.12f, d - 0.12f, y0, y1);   // right
-            panel(false, -w, -1.0f, -d + 0.12f, d - 0.12f, y0, y1); // left
+            for (const f32 sx : {-1.0f, 1.0f}) { // corner posts for this storey
+                for (const f32 sz : {-1.0f, 1.0f}) {
+                    const f32 x0 = sx > 0.0f ? e.x - 0.08f : -e.x - proud, x1 = sx > 0.0f ? e.x + proud : -e.x + 0.08f;
+                    const f32 z0 = sz > 0.0f ? e.y - 0.08f : -e.y - proud, z1 = sz > 0.0f ? e.y + proud : -e.y + 0.08f;
+                    add_box(shell, {x0, y0, z0}, {x1, y1, z1}, frame_col);
+                }
+            }
+            panel(true, e.y, 1.0f, -e.x + 0.12f, e.x - 0.12f, y0, y1);   // front
+            panel(true, -e.y, -1.0f, -e.x + 0.12f, e.x - 0.12f, y0, y1); // back
+            panel(false, e.x, 1.0f, -e.y + 0.12f, e.y - 0.12f, y0, y1);  // right
+            panel(false, -e.x, -1.0f, -e.y + 0.12f, e.y - 0.12f, y0, y1); // left
         }
     }
 
-    // ---- Stone foundation: mortared fieldstone, proud of the daub/timber above, built in a wider
-    // base plinth + a main course (a stepped stone base) with per-segment shade jitter so it reads
-    // as stacked stone, not a smooth plinth. The front face is split around the doorway.
+    // ---- Stone foundation: mortared fieldstone, proud of the walls above, built in a wider base
+    // plinth + a main course with per-segment shade jitter. The front face is split around the doorway
+    // (and the doorstep is low enough to stride over).
     {
-        const f32 fy = std::min(1.4f, h * 0.4f); // foundation height (taller on 2-storey homes)
-        const f32 fo = 0.16f;                    // clearly proud of the wall face above
-        const f32 po = fo + 0.07f, ph = 0.24f;   // plinth (wider, short bottom course)
+        const f32 fy = std::min(1.4f, h * 0.4f);
+        const f32 fo = 0.16f;
+        const f32 po = fo + 0.07f, ph = 0.24f;
         auto fc = [&](u32 s) { return found_stone * (0.86f + 0.2f * rnd(s)); };
-        add_box(op, {-w - po, 0.0f, -d - po}, {w + po, ph, -d + po}, fc(90)); // base plinth: back
-        add_box(op, {-w - po, 0.0f, -d}, {-w + po, ph, d}, fc(91));           //   left
-        add_box(op, {w - po, 0.0f, -d}, {w + po, ph, d}, fc(92));             //   right
-        add_box(op, {-w - po, 0.0f, d - po}, {w + po, ph, d + po}, fc(93));   //   front (doorstep)
-        add_box(op, {-w - fo, ph, -d - fo}, {w + fo, fy, -d + fo}, fc(94));   // main course: back
-        add_box(op, {-w - fo, ph, -d}, {-w + fo, fy, d}, fc(95));             //   left
-        add_box(op, {w - fo, ph, -d}, {w + fo, fy, d}, fc(96));               //   right
-        add_box(op, {-w - fo, ph, d - fo}, {-dw - 0.06f, fy, d + fo}, fc(97)); //  front L of door
-        add_box(op, {dw + 0.06f, ph, d - fo}, {w + fo, fy, d + fo}, fc(98));   //  front R of door
+        add_box(op, {-w - po, 0.0f, -d - po}, {w + po, ph, -d + po}, fc(90));
+        add_box(op, {-w - po, 0.0f, -d}, {-w + po, ph, d}, fc(91));
+        add_box(op, {w - po, 0.0f, -d}, {w + po, ph, d}, fc(92));
+        add_box(op, {-w - po, 0.0f, d - po}, {-dw - 0.06f, ph, d + po}, fc(93));
+        add_box(op, {dw + 0.06f, 0.0f, d - po}, {w + po, ph, d + po}, fc(93));
+        add_box(op, {-w - fo, ph, -d - fo}, {w + fo, fy, -d + fo}, fc(94));
+        add_box(op, {-w - fo, ph, -d}, {-w + fo, fy, d}, fc(95));
+        add_box(op, {w - fo, ph, -d}, {w + fo, fy, d}, fc(96));
+        add_box(op, {-w - fo, ph, d - fo}, {-dw - 0.06f, fy, d + fo}, fc(97));
+        add_box(op, {dw + 0.06f, ph, d - fo}, {w + fo, fy, d + fo}, fc(98));
     }
 
-    // ---- A planked front door (vertical boards + cross battens + an iron handle) in a proud
-    // timber frame, filling the doorway. Opaque so it stays when the roof shell fades.
-    {
-        const Vec3 doorwood{0.36f, 0.23f, 0.13f};
-        const f32 dz0 = d - 0.02f, dz1 = d + 0.07f; // leaf just proud of the front face
-        const f32 fz1 = d + 0.12f;
-        add_box(op, {-dw - 0.1f, 0.0f, dz0}, {-dw, dh + 0.1f, fz1}, frame_col);     // left jamb
-        add_box(op, {dw, 0.0f, dz0}, {dw + 0.1f, dh + 0.1f, fz1}, frame_col);       // right jamb
-        add_box(op, {-dw - 0.1f, dh, dz0}, {dw + 0.1f, dh + 0.1f, fz1}, frame_col); // lintel
-        const int planks = 4;
-        for (int i = 0; i < planks; ++i) {
-            const f32 x0 = glm::mix(-dw + 0.04f, dw - 0.04f, static_cast<f32>(i) / planks);
-            const f32 x1 =
-                glm::mix(-dw + 0.04f, dw - 0.04f, static_cast<f32>(i + 1) / planks) - 0.02f;
-            add_box(op, {x0, 0.04f, dz0}, {x1, dh - 0.04f, dz1},
-                    doorwood * (0.88f + 0.14f * static_cast<f32>(i % 2)));
-        }
-        add_box(op, {-dw + 0.02f, 0.34f, dz1 - 0.01f}, {dw - 0.02f, 0.49f, dz1 + 0.04f},
-                doorwood * 0.7f); // lower batten
-        add_box(op, {-dw + 0.02f, dh - 0.55f, dz1 - 0.01f}, {dw - 0.02f, dh - 0.4f, dz1 + 0.04f},
-                doorwood * 0.7f); // upper batten
-        add_box(op, {dw - 0.2f, 0.98f, dz1}, {dw - 0.1f, 1.12f, dz1 + 0.07f},
-                Vec3{0.12f, 0.12f, 0.13f}); // iron handle
-    }
+    // ---- The front door: a proud timber frame (op) round a planked leaf that swings open (Door part).
+    add_door_frame(op, dw, dh, d, frame_col);
+    add_door_leaf(def, -dw, dw, d + 0.02f, dh, Vec3{0.36f, 0.23f, 0.13f});
 
-    // ---- Gable roof: the swooping, individually-tiled shingle/thatch roof (shared `gable_roof`
-    // helper - ridge sags, eave corners kick up, tiles jittered per course for the hand-built look).
-    const bool gable_x = w >= d;
-    const f32 zf = d + oh;
-    gable_roof(shell, w, d, h, rr, oh, thatch, roof, trim, wall_col, variant * 13u + 5u);
+    // ---- Gable roof: the swooping, individually-tiled shingle/thatch roof over the top storey.
+    const bool gable_x = top.x >= top.y;
+    const f32 zf = top.y + oh;
+    gable_roof(shell, top.x, top.y, h, rr, oh, thatch, roof, trim, wall_col, variant * 13u + 5u);
 
-    // ---- A front dormer (a small gabled window poking up out of the roof) on taller, gable-fronted
-    // houses - the distinctive reference detail. A daub body sits on the front slope with a lit
-    // mullioned window and its own little hip roof.
+    // ---- A front dormer (a small gabled lit window poking up out of the roof) on taller, gable-fronted
+    // houses - the distinctive reference detail.
     if (gable_x && st.stories >= 2) {
-        const f32 dz = d * 0.40f;                          // how far forward along the roof
-        const f32 dy = h + rr * (1.0f - dz / zf) - 0.12f;  // roof height there (sit slightly into it)
+        const f32 dz = top.y * 0.40f;
+        const f32 dy = h + rr * (1.0f - dz / zf) - 0.12f;
         const f32 dhw = 0.52f, body = 0.95f, depth = 0.55f;
-        const f32 fz = dz + depth; // the dormer's front face
-        add_box(op, {-dhw, dy, dz}, {dhw, dy + body, fz}, wall_col); // body
-        add_box(em, {-dhw + 0.12f, dy + 0.22f, fz}, {dhw - 0.12f, dy + body - 0.1f, fz + 0.05f},
-                win_glow); // lit pane
-        add_box(op, {-0.04f, dy + 0.22f, fz}, {0.04f, dy + body - 0.1f, fz + 0.06f},
-                frame_col); // mullion
-        const Vec3 apex{0.0f, dy + body + 0.42f, (dz + fz) * 0.5f}; // little hip roof to an apex
+        const f32 fz = dz + depth;
+        add_box(op, {-dhw, dy, dz}, {dhw, dy + body, fz}, wall_col);
+        add_box(em, {-dhw + 0.12f, dy + 0.22f, fz}, {dhw - 0.12f, dy + body - 0.1f, fz + 0.05f}, win_glow);
+        add_box(op, {-0.04f, dy + 0.22f, fz}, {0.04f, dy + body - 0.1f, fz + 0.06f}, frame_col);
+        const Vec3 apex{0.0f, dy + body + 0.42f, (dz + fz) * 0.5f};
         const Vec3 fl{-dhw - 0.08f, dy + body, fz + 0.08f}, fr{dhw + 0.08f, dy + body, fz + 0.08f};
         const Vec3 bl{-dhw - 0.08f, dy + body, dz - 0.08f}, br{dhw + 0.08f, dy + body, dz - 0.08f};
-        add_tri(shell, fl, fr, apex, roof);
-        add_tri(shell, fr, br, apex, roof);
-        add_tri(shell, br, bl, apex, roof);
-        add_tri(shell, bl, fl, apex, roof);
+        const Vec3 under{0.0f, dy + body - 0.5f, (dz + fz) * 0.5f};
+        emit_tri(shell, fl, fr, apex, under, roof);
+        emit_tri(shell, fr, br, apex, under, roof);
+        emit_tri(shell, br, bl, apex, under, roof);
+        emit_tri(shell, bl, fl, apex, under, roof);
     }
 
-    // ---- Per-variant roof massing so houses aren't plain boxes: some get a projecting front-gable
-    // porch (a cross-gable / T stance with the door tucked under it), some a lower lean-to to one
-    // side. With the dormer above, the roofline reads varied + characterful.
-    const int massing = static_cast<int>(variant % 3u);
-    if (massing == 0) {
-        add_front_gable(shell, op, em, wall_col, roof, trim, frame_col, found_stone, win_glow, w, d, h,
-                        half_timber, thatch, variant * 17u + 3u);
-    } else if (massing == 1) {
-        add_leanto(shell, op, wall_col, roof, trim, found_stone, w, d, h, (variant & 1u) ? 1.0f : -1.0f);
+    // ---- The massing (see above): a front-gable bay or a lean-to.
+    if (bay) {
+        add_front_gable(def, shell, op, em, glow, wall_col, roof, trim, frame_col, found_stone, win_glow, w, d, h, dw,
+                        storey_timbered(0), thatch, variant * 17u + 3u);
+    } else if (leanto_side != 0.0f) {
+        add_leanto(def, shell, op, storey_col(0), roof, trim, found_stone, w, d, h, leanto_side);
     }
 
-    // ---- Yard details around the house (the cosy reference touches): stone steps at the door, a
-    // barrel + a stacked woodpile by the wall, a short garden fence, plant pots, a bush and grass
-    // tufts. Kept close to the walls so they read as the house's own little plot.
+    // ---- Yard details around the house (the cosy reference touches): stone steps at the door, a barrel
+    // + a stacked woodpile by the wall, a short garden fence, plant pots, a bush and grass tufts - kept
+    // clear of the doorway.
     add_stone_steps(op, 0.0f, d + 0.1f, dw + 0.12f);
-    add_barrel(op, {-w + 0.45f, 0.0f, d + 0.5f}, 0.3f, 0.78f);
+    add_barrel(op, bay ? Vec3{-w - 0.5f, 0.0f, 0.3f} : Vec3{-w + 0.45f, 0.0f, d + 0.5f}, 0.3f, 0.78f);
     add_woodpile(op, {w - 0.6f, 0.0f, d + 0.45f}, 0.95f, 3);
     add_fence_run(op, {w + 0.35f, 0.0f, d + 0.15f}, {w + 1.45f, 0.0f, d + 0.15f});
     add_plant_pot(op, {-w - 0.4f, 0.0f, d - 0.45f}, 0.16f, (variant % 2u) == 0u);
-    add_leafy_bush(op, {w + 0.6f, 0.0f, -d + 0.7f}, 0.32f);
+    add_leafy_bush(op, leanto_side > 0.0f ? Vec3{w + 0.5f, 0.0f, -d - 0.45f} : Vec3{w + 0.6f, 0.0f, -d + 0.7f}, 0.32f);
     add_grass_tuft(op, {w + 0.55f, 0.0f, d - 0.2f});
     add_grass_tuft(op, {-w - 0.5f, 0.0f, d - 0.9f});
     add_grass_tuft(op, {w + 0.95f, 0.0f, d - 0.4f});
 
-    // ---- Ground floor: a stone hearth with fire + chimney (back-left), a table, and
-    // the resident's straw bed (back-right, where the villager sleeps). ----
-    add_box(op, {-w + t, 0.0f, -d + t}, {-w + t + 1.2f, 1.4f, -d + t + 0.6f}, stone); // hearth
-    // A stout stone chimney stack against the back wall, built from a few slightly offset + shaded
-    // courses so it reads as stacked masonry, with a corbelled cap and a clay pot (reference look).
-    const Vec3 chim_stone{0.48f, 0.49f, 0.52f}; // cool grey fieldstone (matches the foundation)
-    const f32 ccx = -w + t + 0.42f, ccz = -d + t + 0.35f; // stack centre (back-left)
-    const f32 ctop = h + rr + 0.5f;                       // a touch above the ridge cap
-    const int ccourses = 4;
-    for (int k = 0; k < ccourses; ++k) {
-        const f32 y0 = glm::mix(1.3f, ctop, static_cast<f32>(k) / static_cast<f32>(ccourses));
-        const f32 y1 = glm::mix(1.3f, ctop, static_cast<f32>(k + 1) / static_cast<f32>(ccourses));
-        const f32 hw = 0.44f, hd = 0.4f;
-        const f32 jx = (rnd(70 + static_cast<u32>(k)) - 0.5f) * 0.1f; // per-course facet jitter
+    // ---- The hearth + chimney (back-left) every home has: a stone hearth with its fire, a stout stone
+    // stack against the back wall in a few offset courses, a corbelled cap and a clay pot.
+    const Vec3 chim_stone{0.48f, 0.49f, 0.52f};
+    const f32 ccx = -w + t + 0.42f, ccz = -d + t + 0.35f;
+    const f32 ctop = h + rr + 0.5f;
+    if (st.furnish != Furnish::Bakery) {
+        furn({-w + t, 0.0f, -d + t}, {-w + t + 1.2f, 1.4f, -d + t + 0.6f}, stone); // hearth
+        add_box(em, {-w + t + 0.15f, 0.08f, -d + t + 0.1f}, {-w + t + 1.0f, 0.5f, -d + t + 0.5f}, fire);
+    }
+    for (int k = 0; k < 4; ++k) {
+        const f32 y0 = glm::mix(1.3f, ctop, static_cast<f32>(k) / 4.0f);
+        const f32 y1 = glm::mix(1.3f, ctop, static_cast<f32>(k + 1) / 4.0f);
+        const f32 jx = (rnd(70 + static_cast<u32>(k)) - 0.5f) * 0.1f;
         const f32 jz = (rnd(80 + static_cast<u32>(k)) - 0.5f) * 0.1f;
-        add_box(op, {ccx - hw + jx, y0, ccz - hd + jz}, {ccx + hw + jx, y1 + 0.02f, ccz + hd + jz},
+        // (The stack rises against the back wall of the GROUND storey; a jettied storey wraps round it.)
+        add_box(op, {ccx - 0.44f + jx, y0, ccz - 0.4f + jz}, {ccx + 0.44f + jx, y1 + 0.02f, ccz + 0.4f + jz},
                 chim_stone * (0.9f + 0.16f * static_cast<f32>(k % 2)));
     }
-    add_box(op, {ccx - 0.54f, ctop, ccz - 0.5f}, {ccx + 0.54f, ctop + 0.16f, ccz + 0.5f},
-            chim_stone * 0.82f); // corbelled cap
-    add_box(op, {ccx - 0.2f, ctop + 0.16f, ccz - 0.2f}, {ccx + 0.2f, ctop + 0.44f, ccz + 0.2f},
-            Vec3{0.55f, 0.28f, 0.2f}); // clay pot
-    def.chimney_spot = Vec3{ccx, ctop + 0.5f, ccz}; // hearth smoke rises from the pot
-    add_box(em, {-w + t + 0.15f, 0.08f, -d + t + 0.1f}, {-w + t + 1.0f, 0.5f, -d + t + 0.5f}, fire);
-    furn({-0.55f, 0.0f, -0.3f}, {0.55f, 0.74f, 0.6f}, wood); // table
+    add_box(op, {ccx - 0.54f, ctop, ccz - 0.5f}, {ccx + 0.54f, ctop + 0.16f, ccz + 0.5f}, chim_stone * 0.82f);
+    add_box(op, {ccx - 0.2f, ctop + 0.16f, ccz - 0.2f}, {ccx + 0.2f, ctop + 0.44f, ccz + 0.2f}, Vec3{0.55f, 0.28f, 0.2f});
+    def.chimney_spot = Vec3{ccx, ctop + 0.5f, ccz};
 
+    // ---- Furnishings, by the home's trade. ----
     const f32 bx0 = w - t - 1.45f, bx1 = w - t;
-    furn({bx0, 0.0f, -d + t}, {bx1, 0.45f, -d + t + 1.9f}, wood); // bed frame
-    add_box(op, {bx0 + 0.02f, 0.45f, -d + t}, {bx1 - 0.02f, 0.6f, -d + t + 1.6f},
-            Vec3{0.78f, 0.70f, 0.42f}); // straw mattress
-    add_box(op, {bx0, 0.45f, -d + t}, {bx1, 0.72f, -d + t + 0.34f}, Vec3{0.7f, 0.62f, 0.4f}); // pillow
+    switch (st.furnish) {
+        case Furnish::Cottage: {
+            furn({-0.55f, 0.0f, -0.3f}, {0.55f, 0.74f, 0.6f}, wood); // table
+            add_box(em, {-0.08f, 0.76f, 0.0f}, {0.08f, 0.96f, 0.16f}, win_glow);                 // candle flame
+            add_box(op, {-0.06f, 0.74f, 0.02f}, {0.06f, 0.84f, 0.14f}, Vec3{0.9f, 0.86f, 0.7f}); // candle
+            for (const f32 sx : {-0.8f, 0.8f}) {                                                 // two stools
+                add_box(op, {sx - 0.18f, 0.0f, 0.0f}, {sx + 0.18f, 0.45f, 0.36f}, wood * 0.85f);
+            }
+            furn({bx0, 0.0f, -d + t}, {bx1, 0.45f, -d + t + 1.9f}, wood); // bed frame
+            add_box(op, {bx0 + 0.02f, 0.45f, -d + t}, {bx1 - 0.02f, 0.6f, -d + t + 1.6f}, Vec3{0.78f, 0.70f, 0.42f}); // mattress
+            add_box(op, {bx0, 0.45f, -d + t}, {bx1, 0.72f, -d + t + 0.34f}, Vec3{0.7f, 0.62f, 0.4f});                 // pillow
+            add_box(op, {bx0 + 0.04f, 0.6f, -d + t + 0.6f}, {bx1 - 0.04f, 0.66f, -d + t + 1.55f},
+                    glm::mix(Vec3{0.55f, 0.2f, 0.18f}, Vec3{0.25f, 0.35f, 0.55f}, rnd(9))); // a woollen blanket
+            def.bed_spot = Vec3{w - t - 0.7f, 0.0f, -d + t + 0.9f};
+            break;
+        }
+        case Furnish::Tavern: {
+            // The bar: a counter along the right side, casks racked behind it, tankards along the top.
+            const f32 cx0 = w - t - 1.55f, cx1 = w - t - 1.0f;
+            furn({cx0, 0.0f, -d + t + 0.9f}, {cx1, 1.05f, d - 1.3f}, wood * 0.9f);
+            add_box(op, {cx0 - 0.06f, 1.05f, -d + t + 0.85f}, {cx1 + 0.06f, 1.12f, d - 1.25f}, wood * 1.15f); // bar top
+            for (int i = 0; i < 3; ++i) {
+                const f32 z = -d + t + 1.3f + static_cast<f32>(i) * 0.8f;
+                add_barrel(op, {w - t - 0.45f, 0.0f, z}, 0.3f, 0.82f);
+                add_tankard(op, {(cx0 + cx1) * 0.5f, 1.12f, z - 0.2f});
+            }
+            add_collider(def, {w - t - 0.8f, 0.0f, -d + t + 0.9f}, {w - t, 0.85f, d - 1.3f}); // the cask rack
+            // Two tables with stools in the room, a tankard or two on each.
+            for (int i = 0; i < 2; ++i) {
+                const Vec3 tc{-w + 1.55f, 0.0f, -0.6f + static_cast<f32>(i) * 1.7f};
+                furn({tc.x - 0.5f, 0.0f, tc.z - 0.4f}, {tc.x + 0.5f, 0.74f, tc.z + 0.4f}, wood);
+                add_tankard(op, {tc.x - 0.2f, 0.74f, tc.z});
+                add_tankard(op, {tc.x + 0.18f, 0.74f, tc.z + 0.12f});
+                for (const f32 sx : {-0.78f, 0.78f}) {
+                    add_box(op, {tc.x + sx - 0.16f, 0.0f, tc.z - 0.16f}, {tc.x + sx + 0.16f, 0.45f, tc.z + 0.16f}, wood * 0.85f);
+                }
+            }
+            def.bed_spot = Vec3{w - t - 0.5f, 0.0f, d - 0.8f}; // the keeper, behind the bar
+            break;
+        }
+        case Furnish::Bakery: {
+            // The great domed BREAD OVEN in the back-left corner: a brick dome on a stone plinth, its
+            // mouth glowing at the front, a flue up into the chimney.
+            const Vec3 brick{0.66f, 0.36f, 0.24f};
+            const Vec3 oc{-w + t + 0.95f, 0.0f, -d + t + 0.9f};
+            furn({oc.x - 0.85f, 0.0f, oc.z - 0.85f}, {oc.x + 0.85f, 0.7f, oc.z + 0.85f}, stone * 0.9f); // plinth
+            add_mesh(op, primitives::sphere(10, 6), glm::translate(Mat4{1.0f}, oc + Vec3{0.0f, 0.75f, 0.0f}) *
+                                                        glm::scale(Mat4{1.0f}, Vec3{1.55f, 1.25f, 1.55f}), brick);
+            add_box(op, {oc.x - 0.36f, 0.72f, oc.z + 0.62f}, {oc.x + 0.36f, 1.22f, oc.z + 0.82f}, Vec3{0.08f, 0.06f, 0.05f}); // mouth
+            add_box(em, {oc.x - 0.3f, 0.74f, oc.z + 0.6f}, {oc.x + 0.3f, 1.12f, oc.z + 0.8f}, Vec3{1.4f, 0.7f, 0.25f});    // embers
+                    // A long kneading table heaped with loaves; shelves of bread on the back wall; flour sacks.
+            furn({-0.3f, 0.0f, -0.45f}, {1.4f, 0.82f, 0.45f}, wood);
+            for (int i = 0; i < 6; ++i) {
+                const f32 lx = -0.15f + static_cast<f32>(i % 3) * 0.5f, lz = -0.2f + static_cast<f32>(i / 3) * 0.38f;
+                add_mesh(op, primitives::sphere(7, 4), glm::translate(Mat4{1.0f}, Vec3{lx, 0.9f, lz}) *
+                                                           glm::scale(Mat4{1.0f}, Vec3{0.34f, 0.16f, 0.2f}),
+                         Vec3{0.78f, 0.52f, 0.24f});
+            }
+            for (int k = 0; k < 2; ++k) {
+                const f32 sy = 1.0f + static_cast<f32>(k) * 0.55f;
+                add_box(op, {w - t - 2.2f, sy, -d + t}, {w - t - 0.2f, sy + 0.05f, -d + t + 0.4f}, wood * 0.9f);
+                for (int i = 0; i < 4; ++i) {
+                    add_mesh(op, primitives::sphere(7, 4),
+                             glm::translate(Mat4{1.0f}, Vec3{w - t - 2.0f + static_cast<f32>(i) * 0.5f, sy + 0.12f, -d + t + 0.2f}) *
+                                 glm::scale(Mat4{1.0f}, Vec3{0.32f, 0.15f, 0.2f}),
+                             Vec3{0.74f, 0.5f, 0.22f} * (0.9f + 0.1f * static_cast<f32>(i % 2)));
+                }
+            }
+            for (int i = 0; i < 3; ++i) {
+                add_box(op, {w - t - 0.55f, 0.0f, -0.4f + static_cast<f32>(i) * 0.5f}, {w - t - 0.1f, 0.6f, -0.02f + static_cast<f32>(i) * 0.5f},
+                        Vec3{0.86f, 0.82f, 0.72f}); // flour sacks
+            }
+            add_collider(def, {w - t - 0.55f, 0.0f, -0.4f}, {w - t, 0.6f, 0.98f});
+            PropLight ovenl;
+            ovenl.offset = oc + Vec3{0.0f, 1.0f, 1.1f};
+            ovenl.direction = Vec3{0.3f, -0.2f, 1.0f};
+            ovenl.color = Vec3{1.0f, 0.55f, 0.22f};
+            ovenl.range = 9.0f;
+            ovenl.intensity = 3.4f;
+            ovenl.cone_deg = 170.0f;
+            def.lights.push_back(ovenl);
+            def.bed_spot = Vec3{0.6f, 0.0f, -0.95f}; // the baker, behind the kneading table
+            break;
+        }
+        case Furnish::Shop: {
+            // Shelves of goods along the back + left walls, a counter by the door on the right.
+            static const Vec3 goods[] = {{0.62f, 0.2f, 0.18f}, {0.25f, 0.4f, 0.6f}, {0.8f, 0.68f, 0.3f},
+                                         {0.32f, 0.5f, 0.3f}, {0.55f, 0.42f, 0.28f}, {0.7f, 0.7f, 0.66f}};
+            auto shelf_run = [&](bool along_x, f32 face, f32 a0, f32 a1) {
+                if (a1 - a0 < 0.5f) {
+                    return;
+                }
+                if (along_x) {
+                    add_collider(def, {a0, 0.0f, face}, {a1, 1.9f, face + 0.42f});
+                } else {
+                    add_collider(def, {face, 0.0f, a0}, {face + 0.42f, 1.9f, a1});
+                }
+                for (int k = 0; k < 3; ++k) {
+                    const f32 sy = 0.5f + static_cast<f32>(k) * 0.55f;
+                    if (along_x) {
+                        add_box(op, {a0, sy, face}, {a1, sy + 0.05f, face + 0.42f}, wood * 0.9f);
+                    } else {
+                        add_box(op, {face, sy, a0}, {face + 0.42f, sy + 0.05f, a1}, wood * 0.9f);
+                    }
+                    const int n = static_cast<int>((a1 - a0) / 0.32f);
+                    for (int i = 0; i < n; ++i) {
+                        const f32 a = a0 + 0.12f + static_cast<f32>(i) * 0.32f;
+                        const f32 gh = 0.14f + 0.18f * rnd(600u + static_cast<u32>(k * 31 + i));
+                        const Vec3 gc = goods[(static_cast<u32>(i) * 7u + static_cast<u32>(k) * 3u + variant) % 6u];
+                        if (along_x) {
+                            add_box(op, {a, sy + 0.05f, face + 0.08f}, {a + 0.2f, sy + 0.05f + gh, face + 0.34f}, gc);
+                        } else {
+                            add_box(op, {face + 0.08f, sy + 0.05f, a}, {face + 0.34f, sy + 0.05f + gh, a + 0.2f}, gc);
+                        }
+                    }
+                }
+            };
+            // (each run leaves the wall's window clear)
+            shelf_run(true, -d + t, -w + t + 1.3f, -ww - 0.12f);
+            shelf_run(true, -d + t, ww + 0.12f, w - t - 0.1f);
+            shelf_run(false, -w + t, -d + t + 0.9f, -ww - 0.12f);
+            shelf_run(false, -w + t, ww + 0.12f, d - 1.2f);
+            furn({dw + 0.25f, 0.0f, d - 1.75f}, {w - t - 0.2f, 0.95f, d - 1.2f}, wood * 0.95f); // the counter
+            add_box(op, {dw + 0.4f, 0.95f, d - 1.65f}, {dw + 0.62f, 1.1f, d - 1.45f}, Vec3{0.75f, 0.6f, 0.2f}); // scales
+            def.bed_spot = Vec3{w - t - 0.6f, 0.0f, -0.4f}; // the shopkeeper, behind the counter
+            break;
+        }
+    }
 
-    // ---- Interior lights (hearth fire + a near-ceiling lamp on each storey), plus a
-    // candle on the table. With the real openings they spill warm light + shadows out. ----
-    add_box(em, {-0.08f, 0.76f, 0.0f}, {0.08f, 0.96f, 0.16f}, win_glow);                  // candle flame
-    add_box(op, {-0.06f, 0.74f, 0.02f}, {0.06f, 0.84f, 0.14f}, Vec3{0.9f, 0.86f, 0.7f});  // candle
+    // ---- Interior lights (hearth fire + a near-ceiling lamp on the top storey) - walled in, so they
+    // shine out only through the openings (a shadow-mapped indoor light).
     PropLight hearth;
     hearth.offset = Vec3{-w + t + 0.7f, 1.0f, -d + t + 0.5f};
     hearth.direction = glm::normalize(Vec3{0.5f, -0.1f, 1.0f});
@@ -1252,7 +1479,7 @@ PropDef PropLibrary::build_house(u32 variant) {
     hearth.intensity = 4.2f;
     hearth.cone_deg = 160.0f;
     def.lights.push_back(hearth);
-    PropLight lamp; // lights the top storey (or the rest of a one-storey home)
+    PropLight lamp;
     lamp.offset = Vec3{0.6f, h - 0.25f, 0.2f};
     lamp.direction = glm::normalize(Vec3{0.0f, -1.0f, 0.1f});
     lamp.color = Vec3{1.0f, 0.82f, 0.55f};
@@ -1265,208 +1492,76 @@ PropDef PropLibrary::build_house(u32 variant) {
     def.parts.push_back({std::move(op), PropLayer::Opaque});
     def.parts.push_back({std::move(em), PropLayer::Emissive});
     def.parts.push_back({std::move(shell), PropLayer::Roof});
+    def.parts.push_back({std::move(glow), PropLayer::Glow});
     def.footprint = Vec2{w, d};
     def.wall_height = h;
-    def.bed_spot = Vec3{w - t - 0.7f, 0.0f, -d + t + 0.9f}; // on the bed
-    def.door_spot = Vec3{0.0f, 0.0f, d + 0.7f};            // just outside the front door
+    def.door_spot = Vec3{0.0f, 0.0f, d + 0.8f};       // just outside the front door
+    def.inside_spot = Vec3{0.0f, 0.0f, d - t - 0.75f}; // just inside it
     return def;
-}
-
-namespace {
-// Shared medieval palette for the special buildings (townhouse / pub / blacksmith).
-const Vec3 kDaub{0.96f, 0.89f, 0.70f};   // warm lime-washed daub infill
-const Vec3 kFrame{0.23f, 0.14f, 0.08f};  // dark exposed oak timber
-const Vec3 kStone{0.62f, 0.62f, 0.64f};  // light grey fieldstone
-const Vec3 kTrim{0.20f, 0.13f, 0.09f};   // dark roof trim
-const Vec3 kRoofBrown{0.58f, 0.32f, 0.17f}; // rich warm brown shingle
-const Vec3 kGlow{1.0f, 0.82f, 0.42f};    // warm lit window
-const Vec3 kWoodDk{0.38f, 0.26f, 0.15f};
-
-// A wall-mounted lantern: a bracket, a glass box (emissive) and a warm spot light. Adds to op + em,
-// and pushes a PropLight. `at` is the glass centre; `outward` the wall normal it hangs off.
-void add_wall_lantern(MeshData& op, MeshData& em, PropDef& def, const Vec3& at, const Vec3& outward) {
-    add_box(op, at - Vec3{0.04f, 0.26f, 0.04f}, at + Vec3{0.04f, 0.3f, 0.04f}, Vec3{0.16f, 0.13f, 0.1f});
-    add_box(em, at - Vec3{0.07f, 0.1f, 0.07f}, at + Vec3{0.07f, 0.1f, 0.07f}, Vec3{1.5f, 1.15f, 0.55f});
-    PropLight l;
-    l.offset = at + outward * 0.1f;
-    l.direction = glm::normalize(outward - Vec3{0.0f, 0.3f, 0.0f});
-    l.color = Vec3{1.0f, 0.78f, 0.45f};
-    l.range = 9.0f;
-    l.intensity = 2.4f;
-    l.cone_deg = 150.0f;
-    def.lights.push_back(l);
-}
-
-// A planked door (vertical boards + battens + iron handle) in a proud timber frame, on the front
-// face (+z) at z=`fz`, centred on x, half-width `dw`, height `dh`.
-void add_plank_door(MeshData& op, f32 fz, f32 dw, f32 dh) {
-    add_box(op, {-dw - 0.1f, 0.0f, fz}, {-dw, dh + 0.1f, fz + 0.16f}, kFrame);
-    add_box(op, {dw, 0.0f, fz}, {dw + 0.1f, dh + 0.1f, fz + 0.16f}, kFrame);
-    add_box(op, {-dw - 0.1f, dh, fz}, {dw + 0.1f, dh + 0.1f, fz + 0.16f}, kFrame);
-    for (int i = 0; i < 4; ++i) {
-        const f32 x0 = glm::mix(-dw + 0.04f, dw - 0.04f, static_cast<f32>(i) / 4.0f);
-        const f32 x1 = glm::mix(-dw + 0.04f, dw - 0.04f, static_cast<f32>(i + 1) / 4.0f) - 0.02f;
-        add_box(op, {x0, 0.04f, fz - 0.02f}, {x1, dh - 0.04f, fz + 0.09f},
-                kWoodDk * (0.9f + 0.14f * static_cast<f32>(i % 2)));
-    }
-    add_box(op, {-dw + 0.02f, 0.34f, fz + 0.08f}, {dw - 0.02f, 0.47f, fz + 0.12f}, kWoodDk * 0.7f);
-    add_box(op, {dw - 0.2f, 0.96f, fz + 0.09f}, {dw - 0.1f, 1.1f, fz + 0.14f}, Vec3{0.12f, 0.12f, 0.13f});
 }
 } // namespace
 
-// A tall, narrow three-storey TOWNHOUSE: a stone ground floor, two jettied (overhanging) timber-
-// framed upper storeys with lit windows, a steep shingled roof and a stone chimney.
-PropDef PropLibrary::build_townhouse() {
-    PropDef def;
-    def.name = "townhouse";
-    MeshData op, em;
-    const f32 sh = 2.3f;
-    const int stories = 3;
-    const f32 w0 = 1.85f, d0 = 1.8f, jut = 0.2f;
-    auto half = [&](int s) {
-        const f32 j = jut * static_cast<f32>(std::min(s, 2));
-        return Vec2{w0 + j, d0 + j};
-    };
-    const f32 wo = 0.1f; // window proud offset
-    const Vec3 UP{0.0f, 1.0f, 0.0f};
-
-    f32 y = 0.0f;
-    for (int s = 0; s < stories; ++s) {
-        const Vec2 e = half(s);
-        const bool ground = (s == 0);
-        add_box(op, {-e.x, y, -e.y}, {e.x, y + sh, e.y}, ground ? kStone : kDaub);
-        if (s > 0) { // jetty soffit: a dark beam band under the overhang
-            add_box(op, {-e.x, y - 0.13f, -e.y}, {e.x, y, e.y}, kFrame * 1.05f);
-        }
-        if (ground) {
-            stone_face(op, true, e.y, 1.0f, -e.x, e.x, y, y + sh, kStone, 11);
-            stone_face(op, true, -e.y, -1.0f, -e.x, e.x, y, y + sh, kStone, 12);
-            stone_face(op, false, e.x, 1.0f, -e.y, e.y, y, y + sh, kStone, 13);
-            stone_face(op, false, -e.x, -1.0f, -e.y, e.y, y, y + sh, kStone, 14);
-        } else {
-            timber_frame(op, true, e.y, 1.0f, -e.x + 0.04f, e.x - 0.04f, y, y + sh, 0.0f, kFrame);
-            timber_frame(op, true, -e.y, -1.0f, -e.x + 0.04f, e.x - 0.04f, y, y + sh, 0.0f, kFrame);
-            timber_frame(op, false, e.x, 1.0f, -e.y + 0.04f, e.y - 0.04f, y, y + sh, 0.0f, kFrame);
-            timber_frame(op, false, -e.x, -1.0f, -e.y + 0.04f, e.y - 0.04f, y, y + sh, 0.0f, kFrame);
-        }
-        const f32 wy = y + sh * 0.52f;
-        if (ground) {
-            lit_window(op, em, {e.x * 0.55f, wy, e.y + wo}, {1, 0, 0}, UP, {0, 0, 1}, 0.3f, 0.4f, kGlow, kFrame);
-        } else {
-            lit_window(op, em, {-e.x * 0.5f, wy, e.y + wo}, {1, 0, 0}, UP, {0, 0, 1}, 0.32f, 0.44f, kGlow, kFrame);
-            lit_window(op, em, {e.x * 0.5f, wy, e.y + wo}, {1, 0, 0}, UP, {0, 0, 1}, 0.32f, 0.44f, kGlow, kFrame);
-        }
-        lit_window(op, em, {e.x + wo, wy, 0}, {0, 0, 1}, UP, {1, 0, 0}, 0.32f, 0.44f, kGlow, kFrame);
-        y += sh;
-    }
-    const f32 wallTop = static_cast<f32>(stories) * sh;
-    const Vec2 et = half(stories - 1);
-    add_plank_door(op, d0, 0.42f, 1.9f);
-    const f32 apex = gable_roof(op, et.x, et.y, wallTop, et.x, 0.5f, false, kRoofBrown, kTrim, kDaub, 31);
-    add_box(op, {et.x - 0.72f, wallTop - 0.5f, -et.y + 0.2f}, {et.x - 0.12f, apex + 0.5f, -et.y + 0.8f}, kStone * 0.9f);
-    add_box(op, {et.x - 0.8f, apex + 0.5f, -et.y + 0.12f}, {et.x - 0.04f, apex + 0.66f, -et.y + 0.88f}, kStone * 0.78f);
-
-    PropLight l;
-    l.offset = Vec3{0.0f, wallTop * 0.5f, 0.0f};
-    l.direction = Vec3{0.0f, -0.2f, 1.0f};
-    l.color = Vec3{1.0f, 0.8f, 0.5f};
-    l.range = 12.0f;
-    l.intensity = 2.6f;
-    l.cone_deg = 175.0f;
-    def.lights.push_back(l);
-    BoxCollider col;
-    col.center = Vec3{0.0f, 0.0f, 0.0f};
-    col.half_extents = Vec2{et.x, et.y};
-    col.height = wallTop;
-    def.colliders.push_back(col);
-    def.footprint = Vec2{et.x, et.y};
-    def.wall_height = wallTop;
-    def.bed_spot = Vec3{0.0f, 0.0f, 0.0f};
-    def.door_spot = Vec3{0.0f, 0.0f, d0 + 0.8f};
-    def.parts.push_back({std::move(op), PropLayer::Opaque});
-    def.parts.push_back({std::move(em), PropLayer::Emissive});
-    return def;
+// The (w,d) footprint half-extents of a house variant, so the village layout can keep
+// houses from intersecting walls, the market and each other without building the mesh.
+Vec2 PropLibrary::house_half_extents(u32 variant) {
+    variant %= kHouseDefs; // a snowbound twin stands on the same footprint
+    if (variant == kHouseTownhouse) return home_extents(kTownhouseSpec);
+    if (variant == kHouseChapel) return Vec2{3.2f, 5.1f}; // the nave + its buttresses
+    if (variant == kHouseKeep) return Vec2{5.1f, 5.1f};   // the keep + its corner turrets
+    if (variant == kHousePub) return home_extents(kPubSpec);
+    if (variant == kHouseBlacksmith) return Vec2{3.42f, 2.92f}; // the jettied upper storey
+    if (variant == kHouseBakery) return home_extents(kBakerySpec);
+    if (variant == kHouseShop) return home_extents(kShopSpec);
+    return home_extents(kHouseStyles[variant % kHouseVariants]);
 }
 
-// A two-storey village PUB: a stone ground floor + timber-framed upper, a shingled roof with a
-// front dormer, a hanging tavern sign on a bracket, glowing windows, a door lantern and a couple of
-// barrels in the beer garden.
+// A medieval village house, varied by `variant` (see kHouseStyles): cottages, crofts, longhouses,
+// farmhouses, jettied merchants' houses, two- and three-storey townhouses, manors in daub / stone /
+// timber - every one with a hinged door you can walk through, a furnished interior and windows that
+// spill their light out after dark. Indices kHouseVariants.. dispatch to the special buildings.
+PropDef PropLibrary::build_house(u32 variant) {
+    if (variant >= kHouseDefs) { // a snowbound town's twin (see kSnowHouses)
+        PropDef def = build_house(variant % kHouseDefs);
+        make_snowy_house(def);
+        return def;
+    }
+    if (variant == kHouseChapel) return build_chapel();
+    if (variant == kHouseKeep) return build_keep();
+    if (variant == kHouseTownhouse) return build_townhouse();
+    if (variant == kHousePub) return build_pub();
+    if (variant == kHouseBlacksmith) return build_blacksmith();
+    if (variant == kHouseBakery) return build_bakery();
+    if (variant == kHouseShop) return build_shop();
+    return build_home(kHouseStyles[variant % kHouseVariants], variant, "house");
+}
+
+// A tall, narrow three-storey TOWNHOUSE: a stone ground floor under two jettied (overhanging)
+// timber-framed upper storeys with lit windows, a steep shingled roof and a stone chimney - a home
+// like any other inside (hearth, table, bed).
+PropDef PropLibrary::build_townhouse() {
+    return build_home(kTownhouseSpec, 31u, "townhouse");
+}
+
+// The village PUB: a stone ground floor under a timber-framed upper storey, a shingled roof with a
+// dormer, a hanging tavern sign on a bracket, glowing windows, a door lantern, a beer garden off the
+// front-right - and inside, a bar with casks racked behind it and tables to drink at.
 PropDef PropLibrary::build_pub() {
-    PropDef def;
-    def.name = "pub";
+    PropDef def = build_home(kPubSpec, 41u, "pub");
     MeshData op, em;
-    const f32 w = 3.0f, d = 2.6f, sh = 2.4f;
-    const int stories = 2;
-    const f32 wo = 0.1f;
-    const Vec3 UP{0.0f, 1.0f, 0.0f};
-    const f32 wallTop = static_cast<f32>(stories) * sh;
-
-    f32 y = 0.0f;
-    for (int s = 0; s < stories; ++s) {
-        const bool ground = (s == 0);
-        add_box(op, {-w, y, -d}, {w, y + sh, d}, ground ? kStone : kDaub);
-        if (ground) {
-            stone_face(op, true, d, 1.0f, -w, w, y, y + sh, kStone, 21);
-            stone_face(op, true, -d, -1.0f, -w, w, y, y + sh, kStone, 22);
-            stone_face(op, false, w, 1.0f, -d, d, y, y + sh, kStone, 23);
-            stone_face(op, false, -w, -1.0f, -d, d, y, y + sh, kStone, 24);
-        } else {
-            add_box(op, {-w, y - 0.1f, -d}, {w, y, d}, kFrame * 1.05f); // mid floor band
-            timber_frame(op, true, d, 1.0f, -w + 0.04f, w - 0.04f, y, y + sh, 0.55f, kFrame);
-            timber_frame(op, true, -d, -1.0f, -w + 0.04f, w - 0.04f, y, y + sh, 0.0f, kFrame);
-            timber_frame(op, false, w, 1.0f, -d + 0.04f, d - 0.04f, y, y + sh, 0.0f, kFrame);
-            timber_frame(op, false, -w, -1.0f, -d + 0.04f, d - 0.04f, y, y + sh, 0.0f, kFrame);
-        }
-        const f32 wy = y + sh * 0.5f;
-        if (ground) {
-            lit_window(op, em, {-w * 0.55f, wy, d + wo}, {1, 0, 0}, UP, {0, 0, 1}, 0.34f, 0.4f, kGlow, kFrame);
-            lit_window(op, em, {w * 0.55f, wy, d + wo}, {1, 0, 0}, UP, {0, 0, 1}, 0.34f, 0.4f, kGlow, kFrame);
-        } else {
-            lit_window(op, em, {-w * 0.5f, wy, d + wo}, {1, 0, 0}, UP, {0, 0, 1}, 0.34f, 0.46f, kGlow, kFrame);
-            lit_window(op, em, {w * 0.5f, wy, d + wo}, {1, 0, 0}, UP, {0, 0, 1}, 0.34f, 0.46f, kGlow, kFrame);
-        }
-        lit_window(op, em, {w + wo, wy, 0}, {0, 0, 1}, UP, {1, 0, 0}, 0.34f, 0.44f, kGlow, kFrame);
-        lit_window(op, em, {-w - wo, wy, 0.0f}, {0, 0, 1}, UP, {-1, 0, 0}, 0.34f, 0.44f, kGlow, kFrame);
-        y += sh;
-    }
-    add_plank_door(op, d, 0.5f, 2.0f);
-    add_box(em, {-0.46f, 0.1f, d - 0.05f}, {0.46f, 1.9f, d + 0.04f}, Vec3{1.2f, 0.85f, 0.45f}); // doorway glow
-
-    const f32 apex = gable_roof(op, w, d, wallTop, w * 0.78f, 0.6f, false, kRoofBrown, kTrim, kDaub, 41);
-    // front dormer (a little gabled lit window poking from the front roof slope)
-    {
-        const f32 zf = d + 0.6f, rr = w * 0.78f;
-        const f32 dz = d * 0.45f;
-        const f32 dy = wallTop + rr * (1.0f - dz / zf) - 0.12f;
-        const f32 dhw = 0.5f, body = 0.9f, depth = 0.5f, fz = dz + depth;
-        add_box(op, {-dhw, dy, dz}, {dhw, dy + body, fz}, kDaub);
-        add_box(em, {-dhw + 0.1f, dy + 0.2f, fz}, {dhw - 0.1f, dy + body - 0.1f, fz + 0.05f}, kGlow);
-        timber_frame(op, true, fz, 1.0f, -dhw, dhw, dy, dy + body, 0.3f, kFrame);
-        const Vec3 ap{0.0f, dy + body + 0.4f, (dz + fz) * 0.5f};
-        const Vec3 fl{-dhw - 0.08f, dy + body, fz + 0.08f}, fr{dhw + 0.08f, dy + body, fz + 0.08f};
-        const Vec3 bl{-dhw - 0.08f, dy + body, dz - 0.08f}, br{dhw + 0.08f, dy + body, dz - 0.08f};
-        add_tri(op, fl, fr, ap, kRoofBrown);
-        add_tri(op, fr, br, ap, kRoofBrown);
-        add_tri(op, br, bl, ap, kRoofBrown);
-        add_tri(op, bl, fl, ap, kRoofBrown);
-    }
-    // chimney
-    add_box(op, {-w + 0.3f, wallTop - 0.4f, -d + 0.25f}, {-w + 0.95f, apex + 0.55f, -d + 0.85f}, kStone * 0.88f);
-    add_box(op, {-w + 0.22f, apex + 0.55f, -d + 0.17f}, {-w + 1.03f, apex + 0.72f, -d + 0.93f}, kStone * 0.76f);
-    def.chimney_spot = Vec3{-w + 0.625f, apex + 0.75f, -d + 0.55f}; // pub hearth smoke
-
+    const f32 w = kPubSpec.w, d = kPubSpec.d;
+    const f32 wallTop = kPubSpec.story_h * static_cast<f32>(kPubSpec.stories);
     // hanging tavern sign: a bracket arm off the upper front-left, two chains + a board
     {
         const f32 ax = -w + 0.3f, ay = wallTop + 0.5f, az = d;
         add_box(op, {ax - 0.08f, ay - 0.08f, az}, {ax + 0.08f, ay + 0.08f, az + 1.1f}, kWoodDk); // arm
-        add_box(op, {ax - 0.02f, ay - 0.5f, az + 0.78f}, {ax + 0.02f, ay, az + 0.82f}, Vec3{0.2f, 0.2f, 0.22f}); // chain L
-        add_box(op, {ax - 0.02f, ay - 0.5f, az + 1.0f}, {ax + 0.02f, ay, az + 1.04f}, Vec3{0.2f, 0.2f, 0.22f}); // chain R
-        add_box(op, {ax - 0.32f, ay - 1.0f, az + 0.74f}, {ax + 0.32f, ay - 0.5f, az + 1.08f}, kWoodDk * 0.9f); // board frame
-        add_box(em, {ax - 0.26f, ay - 0.94f, az + 1.08f}, {ax + 0.26f, ay - 0.56f, az + 1.12f}, Vec3{0.5f, 0.6f, 0.72f}); // emblem panel
+        add_box(op, {ax - 0.02f, ay - 0.5f, az + 0.78f}, {ax + 0.02f, ay, az + 0.82f}, Vec3{0.2f, 0.2f, 0.22f});
+        add_box(op, {ax - 0.02f, ay - 0.5f, az + 1.0f}, {ax + 0.02f, ay, az + 1.04f}, Vec3{0.2f, 0.2f, 0.22f});
+        add_box(op, {ax - 0.32f, ay - 1.0f, az + 0.74f}, {ax + 0.32f, ay - 0.5f, az + 1.08f}, kWoodDk * 0.9f);
+        add_box(em, {ax - 0.26f, ay - 0.94f, az + 1.08f}, {ax + 0.26f, ay - 0.56f, az + 1.12f}, Vec3{0.5f, 0.6f, 0.72f});
     }
-    // ---- The beer garden, off to the front-right (+x): trestle picnic tables with tankards on
-    // top, barrels, terracotta flower pots, leafy bushes, tufts of grass and a low boundary fence.
-    add_wall_lantern(op, em, def, {0.85f, 1.7f, d + 0.12f}, {0.0f, 0.0f, 1.0f});
+    add_wall_lantern(op, em, def, {0.95f, 1.75f, d + 0.12f}, {0.0f, 0.0f, 1.0f});
+    // ---- The beer garden, off to the front-right (+x): trestle picnic tables with tankards on top,
+    // barrels, terracotta flower pots, leafy bushes, tufts of grass and a low boundary fence.
     for (int ti = 0; ti < 2; ++ti) {
         const Vec3 tc{w + 1.5f, 0.0f, d + 0.6f + static_cast<f32>(ti) * 2.5f};
         add_picnic_table(op, tc);
@@ -1474,36 +1569,81 @@ PropDef PropLibrary::build_pub() {
         add_tankard(op, {tc.x + 0.22f, 0.69f, tc.z + 0.3f});
         add_tankard(op, {tc.x + 0.08f, 0.69f, tc.z - 0.1f});
     }
-    add_barrel(op, {-w - 0.55f, 0.0f, d + 0.4f}, 0.32f, 0.82f);
-    add_barrel(op, {-w - 0.5f, 0.0f, d + 1.1f}, 0.3f, 0.74f);
     add_barrel(op, {w + 0.5f, 0.0f, d + 4.0f}, 0.32f, 0.82f);
-    add_plant_pot(op, {w + 0.42f, 0.0f, d + 0.4f}, 0.18f, true);
     add_plant_pot(op, {w + 2.75f, 0.0f, d + 1.6f}, 0.16f, true);
-    add_leafy_bush(op, {w + 0.62f, 0.0f, -d + 0.9f}, 0.34f);
-    add_leafy_bush(op, {-w - 0.72f, 0.0f, -d + 1.1f}, 0.3f);
-    add_grass_tuft(op, {w + 1.0f, 0.0f, d - 0.3f});
-    add_grass_tuft(op, {-w - 0.62f, 0.0f, d - 0.6f});
     add_grass_tuft(op, {w + 2.3f, 0.0f, d + 3.4f});
     add_grass_tuft(op, {w + 0.9f, 0.0f, d + 4.3f});
     add_fence_run(op, {w + 0.3f, 0.0f, d + 4.6f}, {w + 2.9f, 0.0f, d + 4.6f});
+    def.parts.push_back({std::move(op), PropLayer::Opaque});
+    def.parts.push_back({std::move(em), PropLayer::Emissive});
+    return def;
+}
 
-    PropLight interior;
-    interior.offset = Vec3{0.0f, wallTop * 0.4f, 0.0f};
-    interior.direction = Vec3{0.0f, -0.2f, 1.0f};
-    interior.color = Vec3{1.0f, 0.78f, 0.45f};
-    interior.range = 13.0f;
-    interior.intensity = 3.2f;
-    interior.cone_deg = 175.0f;
-    def.lights.push_back(interior);
-    BoxCollider col;
-    col.center = Vec3{0.0f, 0.0f, 0.0f};
-    col.half_extents = Vec2{w, d};
-    col.height = wallTop;
-    def.colliders.push_back(col);
-    def.footprint = Vec2{w, d};
-    def.wall_height = wallTop;
-    def.bed_spot = Vec3{0.0f, 0.0f, 0.0f};
-    def.door_spot = Vec3{0.0f, 0.0f, d + 0.9f};
+// A BAKERY: a stone, thatched shop-house with the great domed bread oven glowing inside, loaves heaped
+// on the kneading table + racked on the shelves, flour sacks by the wall - and outside, a hanging sign
+// with a golden loaf and a stall table of fresh bread by the door.
+PropDef PropLibrary::build_bakery() {
+    PropDef def = build_home(kBakerySpec, 53u, "bakery");
+    MeshData op;
+    const f32 w = kBakerySpec.w, d = kBakerySpec.d;
+    // The sign: a bracket off the front-right corner with a board + a golden loaf on it.
+    const f32 ax = w - 0.3f, ay = 2.35f, az = d;
+    add_box(op, {ax - 0.06f, ay - 0.06f, az}, {ax + 0.06f, ay + 0.06f, az + 0.9f}, kWoodDk);
+    add_box(op, {ax - 0.28f, ay - 0.7f, az + 0.56f}, {ax + 0.28f, ay - 0.2f, az + 0.86f}, kWoodDk * 0.9f);
+    add_mesh(op, primitives::sphere(8, 5), glm::translate(Mat4{1.0f}, Vec3{ax, ay - 0.45f, az + 0.9f}) *
+                                               glm::scale(Mat4{1.0f}, Vec3{0.4f, 0.2f, 0.12f}),
+             Vec3{0.86f, 0.62f, 0.26f});
+    // A stall table of loaves out front, left of the door.
+    const Vec3 sc{-w + 0.9f, 0.0f, d + 1.0f};
+    add_box(op, {sc.x - 0.6f, 0.7f, sc.z - 0.35f}, {sc.x + 0.6f, 0.78f, sc.z + 0.35f}, kWoodDk * 1.1f);
+    for (const f32 lx : {-0.5f, 0.5f}) {
+        add_box(op, {sc.x + lx - 0.05f, 0.0f, sc.z - 0.3f}, {sc.x + lx + 0.05f, 0.7f, sc.z - 0.2f}, kWoodDk);
+        add_box(op, {sc.x + lx - 0.05f, 0.0f, sc.z + 0.2f}, {sc.x + lx + 0.05f, 0.7f, sc.z + 0.3f}, kWoodDk);
+    }
+    for (int i = 0; i < 5; ++i) {
+        add_mesh(op, primitives::sphere(7, 4),
+                 glm::translate(Mat4{1.0f}, Vec3{sc.x - 0.42f + static_cast<f32>(i) * 0.21f, 0.86f, sc.z + (i % 2 ? 0.1f : -0.12f)}) *
+                     glm::scale(Mat4{1.0f}, Vec3{0.24f, 0.13f, 0.16f}),
+                 Vec3{0.8f, 0.55f, 0.24f});
+    }
+    add_collider(def, {sc.x - 0.6f, 0.0f, sc.z - 0.35f}, {sc.x + 0.6f, 0.8f, sc.z + 0.35f});
+    def.parts.push_back({std::move(op), PropLayer::Opaque});
+    return def;
+}
+
+// A merchant's SHOP: a stone ground floor under a jettied timber upper storey, a striped awning over the
+// front window, crates + barrels of wares set out by the door and a hanging sign - and inside, shelves
+// of goods along the walls and a counter with the merchant's scales.
+PropDef PropLibrary::build_shop() {
+    PropDef def = build_home(kShopSpec, 67u, "shop");
+    MeshData op, em;
+    const f32 w = kShopSpec.w, d = kShopSpec.d;
+    // The striped awning over the front-left window (canvas strips on a slope, on two posts).
+    const f32 x0 = -w + 0.15f, x1 = -0.85f;
+    const f32 ytop = 2.25f, ylow = 1.85f, zout = d + 1.25f;
+    const int strips = std::max(3, static_cast<int>((x1 - x0) / 0.32f));
+    for (int i = 0; i < strips; ++i) {
+        const f32 a = glm::mix(x0, x1, static_cast<f32>(i) / static_cast<f32>(strips));
+        const f32 b = glm::mix(x0, x1, static_cast<f32>(i + 1) / static_cast<f32>(strips));
+        const Vec3 col = i % 2 == 0 ? Vec3{0.72f, 0.2f, 0.18f} : Vec3{0.92f, 0.88f, 0.78f};
+        const Vec3 under{(a + b) * 0.5f, ylow - 1.0f, d + 0.6f};
+        emit_tri(op, {a, ytop, d + 0.05f}, {b, ytop, d + 0.05f}, {b, ylow, zout}, under, col);
+        emit_tri(op, {a, ytop, d + 0.05f}, {b, ylow, zout}, {a, ylow, zout}, under, col);
+    }
+    for (const f32 px : {x0 + 0.05f, x1 - 0.05f}) {
+        add_box(op, {px - 0.04f, 0.0f, zout - 0.06f}, {px + 0.04f, ylow, zout + 0.02f}, kWoodDk);
+    }
+    // Wares out front: crates + a barrel under the awning.
+    add_box(op, {x0 + 0.2f, 0.0f, d + 0.4f}, {x0 + 0.75f, 0.5f, d + 0.95f}, Vec3{0.5f, 0.36f, 0.2f});
+    add_box(op, {x0 + 0.28f, 0.5f, d + 0.48f}, {x0 + 0.68f, 0.62f, d + 0.88f}, Vec3{0.8f, 0.3f, 0.2f}); // apples
+    add_barrel(op, {x1 - 0.35f, 0.0f, d + 0.7f}, 0.28f, 0.75f);
+    add_collider(def, {x0 + 0.2f, 0.0f, d + 0.4f}, {x0 + 0.75f, 0.6f, d + 0.95f});
+    // The sign: a board hung off the front-right corner.
+    const f32 ax = w - 0.3f, ay = 2.25f + kShopSpec.jetty, az = d + kShopSpec.jetty;
+    add_box(op, {ax - 0.06f, ay - 0.06f, az}, {ax + 0.06f, ay + 0.06f, az + 0.85f}, kWoodDk);
+    add_box(op, {ax - 0.3f, ay - 0.62f, az + 0.5f}, {ax + 0.3f, ay - 0.16f, az + 0.82f}, kWoodDk * 0.9f);
+    add_box(em, {ax - 0.2f, ay - 0.54f, az + 0.82f}, {ax + 0.2f, ay - 0.24f, az + 0.85f}, Vec3{0.85f, 0.7f, 0.3f});
+    add_wall_lantern(op, em, def, {0.95f, 1.8f, d + 0.12f}, {0.0f, 0.0f, 1.0f});
     def.parts.push_back({std::move(op), PropLayer::Opaque});
     def.parts.push_back({std::move(em), PropLayer::Emissive});
     return def;
@@ -1516,7 +1656,7 @@ PropDef PropLibrary::build_pub() {
 PropDef PropLibrary::build_blacksmith() {
     PropDef def;
     def.name = "blacksmith";
-    MeshData op, em, glow;
+    MeshData op, em, glow, shell;
     const f32 w = 3.2f, d = 2.7f;
     const f32 sg = 2.4f, su = 1.8f; // ground + upper storey heights
     const f32 t = 0.2f, jut = 0.22f;
@@ -1564,19 +1704,26 @@ PropDef PropLibrary::build_blacksmith() {
     add_box(op, {bayR - 0.13f, 0.0f, d - 0.14f}, {bayR + 0.04f, sg, d + 0.04f}, kWoodDk);      // right post
     add_box(op, {-w + t, sg - 0.3f, d - 0.14f}, {bayR + 0.04f, sg, d + 0.04f}, kWoodDk);       // lintel beam
     add_box(op, {bayR - 0.55f, sg - 0.32f, d - 0.16f}, {bayR, sg, d - 0.02f}, kWoodDk * 0.9f); // corner brace
+    // Big planked bay doors hung on the posts, folding open (outward) whenever anyone comes near.
+    {
+        const f32 x0 = -w + t + 0.13f, x1 = bayR - 0.13f, xm = (x0 + x1) * 0.5f;
+        add_door_leaf(def, x0, xm - 0.01f, d + 0.09f, sg - 0.34f, kWoodDk * 1.15f, true);
+        add_door_leaf(def, x1, xm + 0.01f, d + 0.09f, sg - 0.34f, kWoodDk * 1.15f, true);
+    }
 
     // ---- Upper storey: jettied (overhanging) timber-framed daub over the whole footprint ----
     const f32 uw = w + jut, ud = d + jut, ut = sg + su;
-    add_box(op, {-uw, sg, -ud}, {uw, ut, ud}, kDaub);
-    add_box(op, {-uw, sg - 0.16f, -ud}, {uw, sg, ud}, kFrame); // jetty soffit band
-    timber_frame(op, true, ud, 1.0f, -uw + 0.04f, uw - 0.04f, sg, ut, 0.55f, kFrame);
-    timber_frame(op, true, -ud, -1.0f, -uw + 0.04f, uw - 0.04f, sg, ut, 0.0f, kFrame);
-    timber_frame(op, false, uw, 1.0f, -ud + 0.04f, ud - 0.04f, sg, ut, 0.0f, kFrame);
-    timber_frame(op, false, -uw, -1.0f, -ud + 0.04f, ud - 0.04f, sg, ut, 0.0f, kFrame);
-    lit_window(op, em, {uw * 0.45f, sg + su * 0.5f, ud + wo}, {1, 0, 0}, UP, {0, 0, 1}, 0.34f, 0.42f, kGlow, kFrame);
+    // (In the fading shell, with the roof: step into the workshop and the upper storey fades away.)
+    add_box(shell, {-uw, sg, -ud}, {uw, ut, ud}, kDaub);
+    add_box(shell, {-uw, sg - 0.16f, -ud}, {uw, sg, ud}, kFrame); // jetty soffit band
+    timber_frame(shell, true, ud, 1.0f, -uw + 0.04f, uw - 0.04f, sg, ut, 0.55f, kFrame);
+    timber_frame(shell, true, -ud, -1.0f, -uw + 0.04f, uw - 0.04f, sg, ut, 0.0f, kFrame);
+    timber_frame(shell, false, uw, 1.0f, -ud + 0.04f, ud - 0.04f, sg, ut, 0.0f, kFrame);
+    timber_frame(shell, false, -uw, -1.0f, -ud + 0.04f, ud - 0.04f, sg, ut, 0.0f, kFrame);
+    lit_window(shell, em, {uw * 0.45f, sg + su * 0.5f, ud + wo}, {1, 0, 0}, UP, {0, 0, 1}, 0.34f, 0.42f, kGlow, kFrame);
 
     // ---- Grey slate roof ----
-    const f32 apex = gable_roof(op, uw, ud, ut, uw * 0.64f, 0.55f, false, slate, kTrim, kDaub, 51);
+    const f32 apex = gable_roof(shell, uw, ud, ut, uw * 0.64f, 0.55f, false, slate, kTrim, kDaub, 51);
 
     // ---- The big RED-BRICK forge chimney on the left, set toward the FRONT so the hearth + fire
     // sit right at the bay opening (visible from outside) - a tower with a crenellated top.
@@ -1599,6 +1746,7 @@ PropDef PropLibrary::build_blacksmith() {
         add_box(op, {cx + chw - 0.22f, cTop, bz}, {cx + chw, cTop + 0.4f, bz + sgd - 0.1f}, brick * 0.92f);
     }
     def.chimney_spot = Vec3{cx, cTop + 0.45f, cz}; // forge smoke billows from the tower
+    solid({cx - chw, 0.0f, cz - chd}, {cx + chw, cTop, cz + chd}); // (you can't walk into the tower)
 
     // ---- Stone forge hearth at the tower base, opening toward the bay (+z), with a roaring fire.
     const f32 hfz = cz + chd + 0.5f; // hearth front face (projects into the bay)
@@ -1642,8 +1790,8 @@ PropDef PropLibrary::build_blacksmith() {
 
     // ---- Yard props out front / to the sides ----
     add_handcart(op, {w + 0.7f, 0.0f, d - 0.4f});
-    add_barrel(op, {1.5f, 0.0f, d + 0.6f}, 0.3f, 0.82f);
-    add_box(op, {1.23f, 0.7f, d + 0.32f}, {1.77f, 0.78f, d + 0.88f}, Vec3{0.26f, 0.46f, 0.56f}); // barrel water
+    add_barrel(op, {2.2f, 0.0f, d + 0.6f}, 0.3f, 0.82f); // (clear of the bay door's swing)
+    add_box(op, {1.93f, 0.7f, d + 0.32f}, {2.47f, 0.78f, d + 0.88f}, Vec3{0.26f, 0.46f, 0.56f}); // barrel water
     add_woodpile(op, {-1.4f, 0.0f, d + 1.0f}, 0.95f, 2);
     add_flagstones(op, {-0.2f, 0.0f, d + 0.7f}, 1.1f);
     add_grass_tuft(op, {-w - 0.5f, 0.0f, -d + 0.7f});
@@ -1651,13 +1799,17 @@ PropDef PropLibrary::build_blacksmith() {
     add_leafy_bush(op, {-w - 0.55f, 0.0f, -d + 0.8f}, 0.3f);
     add_wall_lantern(op, em, def, {w + 0.02f, 1.9f, d - 0.6f}, {1.0f, 0.0f, 0.0f});
 
+    add_window_spill(def, glow, {(bayR + w) * 0.5f, 1.4f, d}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, 0.34f, 1.0f, true);
+
     def.footprint = Vec2{w, d};
     def.wall_height = ut;
     def.bed_spot = Vec3{w - 0.85f, 0.0f, -d + 0.6f}; // inside the enclosed corner (right)
-    def.door_spot = Vec3{0.0f, 0.0f, d + 1.2f};       // walk in through the open bay
+    def.door_spot = Vec3{-0.5f, 0.0f, d + 1.0f};      // walk in through the open bay
+    def.inside_spot = Vec3{-0.6f, 0.0f, 0.9f};        // between the anvil and the forge
     def.parts.push_back({std::move(op), PropLayer::Opaque});
     def.parts.push_back({std::move(em), PropLayer::Emissive});
     def.parts.push_back({std::move(glow), PropLayer::Glow});
+    def.parts.push_back({std::move(shell), PropLayer::Roof});
     return def;
 }
 
@@ -3462,6 +3614,7 @@ void make_snowy_house(PropDef& def) {
     l.range = 9.0f;
     l.intensity = 2.2f;
     l.cone_deg = 150.0f;
+    l.spill = true;
     for (PropLight& h : def.lights) {
         h.intensity *= 1.25f; // stoked for the cold
     }
@@ -3486,7 +3639,7 @@ void bake_def_ao(PropDef& def) {
         return;
     }
     for (PropPart& p : def.parts) {
-        if (p.layer == PropLayer::Opaque || p.layer == PropLayer::Roof) {
+        if (p.layer == PropLayer::Opaque || p.layer == PropLayer::Roof || p.layer == PropLayer::Door) {
             p.mesh.bake_vertex_ao(occluders);
         }
     }
@@ -3496,42 +3649,80 @@ void bake_def_ao(PropDef& def) {
 
 // A stone CHAPEL: a tall nave (long along z) under a steep slate roof, buttressed, with lit lancet
 // windows down its sides, and a square bell tower over the west door crowned with an octagonal spire
-// and a gilded cross. Every town and city raises one; the door lantern lights its steps.
+// and a gilded cross. Through its double doors you step into the tower's vestibule (the bell rope hangs
+// there) and on through an arch into the nave: pews either side of the aisle and an altar lit with
+// candles under a great gilded cross. Every town and city raises one; the door lantern lights its steps.
 PropDef PropLibrary::build_chapel() {
     PropDef def;
     def.name = "chapel";
-    MeshData op, em;
+    MeshData shell, op, em, glow;
     const Vec3 stone{0.62f, 0.62f, 0.63f};
     const Vec3 slate{0.30f, 0.34f, 0.42f};
     const Vec3 trim{0.20f, 0.18f, 0.18f};
     const Vec3 dark{0.12f, 0.1f, 0.1f};
     const Vec3 glass{1.05f, 0.74f, 0.42f};
     const Vec3 gold{0.86f, 0.68f, 0.26f};
-    const f32 w = 2.9f, d = 5.0f, h = 4.4f;
+    const Vec3 wood{0.36f, 0.23f, 0.13f};
+    const f32 w = 2.9f, d = 5.0f, h = 4.4f, t = 0.3f;
     const f32 tz0 = d - 3.0f, tz1 = d; // the tower over the front (+z) end
     const f32 tw = 1.5f, th = 9.0f;
+    const f32 dw = 0.62f, dh = 2.4f; // the west door
+    const f32 aw = 0.75f, ah = 2.75f; // the arch from the vestibule into the nave
+    const f32 vh = 3.3f;              // the vestibule's ceiling
+    auto wall = [&](const Vec3& lo, const Vec3& hi, const Vec3& col) {
+        add_box(shell, lo, hi, col);
+        add_collider(def, lo, hi);
+    };
 
-    // The nave, behind the tower.
-    add_box(op, {-w, 0.0f, -d}, {w, h, tz0}, stone);
-    stone_face(op, false, w, 1.0f, -d, tz0, 0.0f, h, stone, 301u);
-    stone_face(op, false, -w, -1.0f, -d, tz0, 0.0f, h, stone, 302u);
-    stone_face(op, true, -d, -1.0f, -w, w, 0.0f, h, stone, 303u);
-    add_box(op, {-w - 0.12f, 0.0f, -d - 0.12f}, {w + 0.12f, 0.45f, tz0}, stone * 0.92f); // plinth
-    for (const f32 z : {-d + 0.2f, -d + 2.3f, 0.4f, tz0 - 0.3f}) { // buttresses down both sides
-        for (const f32 sx : {-1.0f, 1.0f}) {
-            add_box(op, {sx > 0.0f ? w : -w - 0.32f, 0.0f, z - 0.22f}, {sx > 0.0f ? w + 0.32f : -w, h * 0.8f, z + 0.22f},
-                    stone * 0.94f);
-            add_box(op, {sx > 0.0f ? w : -w - 0.2f, h * 0.8f, z - 0.2f}, {sx > 0.0f ? w + 0.2f : -w, h * 0.92f, z + 0.2f},
-                    stone * 0.9f);
+    // ---- A flagged floor through the nave + vestibule, over dark joints.
+    add_box(op, {-w, -0.3f, -d}, {w, 0.02f, tz1}, stone * 0.35f);
+    {
+        const int nx = 7, nz = 16;
+        const f32 sx = 2.0f * (w - t) / static_cast<f32>(nx), sz = (tz1 - t + d - t) / static_cast<f32>(nz);
+        for (int j = 0; j < nz; ++j) {
+            for (int i = 0; i < nx; ++i) {
+                const f32 x0 = -w + t + static_cast<f32>(i) * sx, z0 = -d + t + static_cast<f32>(j) * sz;
+                add_box(op, {x0 + 0.03f, 0.02f, z0 + 0.03f}, {x0 + sx - 0.03f, 0.05f, z0 + sz - 0.03f},
+                        stone * (0.78f + 0.2f * hashf(900u + static_cast<u32>(j * 13 + i))));
+            }
         }
     }
-    // Tall lancet windows between the buttresses, glowing warm (candles within).
+
+    // ---- The nave: dressed-stone walls on a low plinth, buttressed down both sides. Its front wall
+    // opens through an arch into the tower's vestibule.
+    wall({-w, 0.0f, -d}, {-w + t, h, tz0}, stone);   // left
+    wall({w - t, 0.0f, -d}, {w, h, tz0}, stone);     // right
+    wall({-w, 0.0f, -d}, {w, h, -d + t}, stone);     // back (the altar end)
+    wall({-w, 0.0f, tz0 - t}, {-aw, h, tz0}, stone); // front, either side of the arch
+    wall({aw, 0.0f, tz0 - t}, {w, h, tz0}, stone);
+    add_box(shell, {-aw, ah, tz0 - t}, {aw, h, tz0}, stone); // over the arch
+    stone_face(shell, false, w, 1.0f, -d, tz0, 0.0f, h, stone, 301u);
+    stone_face(shell, false, -w, -1.0f, -d, tz0, 0.0f, h, stone, 302u);
+    stone_face(shell, true, -d, -1.0f, -w, w, 0.0f, h, stone, 303u);
+    add_box(op, {-w - 0.12f, 0.0f, -d - 0.12f}, {w + 0.12f, 0.45f, -d}, stone * 0.92f); // plinth: back
+    add_box(op, {-w - 0.12f, 0.0f, -d}, {-w, 0.45f, tz0}, stone * 0.92f);              //   left
+    add_box(op, {w, 0.0f, -d}, {w + 0.12f, 0.45f, tz0}, stone * 0.92f);                //   right
+    for (const f32 z : {-d + 0.2f, -d + 2.3f, 0.4f, tz0 - 0.3f}) { // buttresses down both sides
+        for (const f32 sx : {-1.0f, 1.0f}) {
+            const f32 x0 = sx > 0.0f ? w : -w - 0.32f, x1 = sx > 0.0f ? w + 0.32f : -w;
+            add_box(shell, {x0, 0.0f, z - 0.22f}, {x1, h * 0.8f, z + 0.22f}, stone * 0.94f);
+            add_box(shell, {sx > 0.0f ? w : -w - 0.2f, h * 0.8f, z - 0.2f}, {sx > 0.0f ? w + 0.2f : -w, h * 0.92f, z + 0.2f},
+                    stone * 0.9f);
+            add_collider(def, {x0, 0.0f, z - 0.22f}, {x1, h * 0.8f, z + 0.22f});
+        }
+    }
+    // Tall lancet windows between the buttresses, glowing warm (candles within) inside and out, each
+    // spilling its light onto the ground below (the middle pair light it for real).
     for (const f32 z : {-d + 1.25f, -0.75f, 1.35f}) {
         for (const f32 sx : {-1.0f, 1.0f}) {
             const f32 x0 = sx > 0.0f ? w - 0.02f : -w - 0.06f, x1 = sx > 0.0f ? w + 0.06f : -w + 0.02f;
             add_box(em, {x0, 1.3f, z - 0.26f}, {x1, 3.1f, z + 0.26f}, glass);
-            add_box(op, {x0 - 0.02f, 3.1f, z - 0.36f}, {x1 + 0.02f, 3.32f, z + 0.36f}, trim); // hood
-            add_box(op, {x0, 2.1f, z - 0.27f}, {x1 + 0.01f, 2.16f, z + 0.27f}, trim);         // transom
+            const f32 i0 = sx > 0.0f ? w - t - 0.04f : -w + t, i1 = sx > 0.0f ? w - t : -w + t + 0.04f;
+            add_box(em, {i0, 1.3f, z - 0.26f}, {i1, 3.1f, z + 0.26f}, glass * 0.8f); // the inner face
+            add_box(shell, {x0 - 0.02f, 3.1f, z - 0.36f}, {x1 + 0.02f, 3.32f, z + 0.36f}, trim); // hood
+            add_box(shell, {x0, 2.1f, z - 0.27f}, {x1 + 0.01f, 2.16f, z + 0.27f}, trim);         // transom
+            add_window_spill(def, glow, {sx * w, 2.2f, z}, {0.0f, 0.0f, 1.0f}, {sx, 0.0f, 0.0f}, 0.34f, 1.3f,
+                             z == -0.75f);
         }
     }
     // A steep slate roof over the nave: built with its ridge along x (gable_roof's well-trodden path),
@@ -3547,125 +3738,192 @@ PropDef PropLibrary::build_chapel() {
             v.position = Vec3{xf * Vec4{v.position, 1.0f}};
             v.normal = rot * v.normal;
         }
-        const u32 base = static_cast<u32>(op.vertices.size());
-        op.vertices.insert(op.vertices.end(), roof.vertices.begin(), roof.vertices.end());
+        const u32 base = static_cast<u32>(shell.vertices.size());
+        shell.vertices.insert(shell.vertices.end(), roof.vertices.begin(), roof.vertices.end());
         for (u32 i : roof.indices) {
-            op.indices.push_back(base + i);
+            shell.indices.push_back(base + i);
         }
     }
-    // The bell tower: a square stone shaft, a deep arched west door, a rose window, an open belfry with
-    // its bell, a corbelled parapet and the spire.
-    add_box(op, {-tw, 0.0f, tz0}, {tw, th, tz1}, stone * 0.97f);
-    stone_face(op, true, tz1, 1.0f, -tw, tw, 0.0f, th, stone, 304u);
-    stone_face(op, false, tw, 1.0f, tz0, tz1, h, th, stone, 305u);
-    stone_face(op, false, -tw, -1.0f, tz0, tz1, h, th, stone, 306u);
-    add_box(op, {-0.62f, 0.0f, tz1 - 0.35f}, {0.62f, 2.4f, tz1 + 0.03f}, dark); // door recess
-    add_box(op, {-0.5f, 2.4f, tz1 - 0.33f}, {0.5f, 2.62f, tz1 + 0.03f}, dark);   // arch steps
-    add_box(op, {-0.34f, 2.62f, tz1 - 0.33f}, {0.34f, 2.8f, tz1 + 0.03f}, dark);
-    for (int i = 0; i < 4; ++i) { // plank door leaves
-        const f32 x0 = glm::mix(-0.54f, 0.54f, static_cast<f32>(i) / 4.0f);
-        const f32 x1 = glm::mix(-0.54f, 0.54f, static_cast<f32>(i + 1) / 4.0f) - 0.02f;
-        add_box(op, {x0, 0.04f, tz1 - 0.2f}, {x1, 2.36f, tz1 - 0.12f},
-                Vec3{0.36f, 0.23f, 0.13f} * (0.9f + 0.12f * static_cast<f32>(i % 2)));
+
+    // ---- The bell tower: hollow at its foot (the vestibule, entered through the west door), a solid
+    // stone shaft above, a rose window, an open belfry with its bell, a corbelled parapet + the spire.
+    const Vec3 tstone = stone * 0.97f;
+    wall({-tw, 0.0f, tz0}, {-tw + t, vh, tz1}, tstone); // left
+    wall({tw - t, 0.0f, tz0}, {tw, vh, tz1}, tstone);   // right
+    wall({-tw, 0.0f, tz1 - t}, {-dw, vh, tz1}, tstone); // front, either side of the door
+    wall({dw, 0.0f, tz1 - t}, {tw, vh, tz1}, tstone);
+    add_box(shell, {-dw, dh, tz1 - t}, {dw, vh, tz1}, tstone); // over the door
+    add_box(shell, {-tw, vh, tz0}, {tw, th, tz1}, tstone);     // the shaft
+    stone_face(shell, true, tz1, 1.0f, -tw, tw, dh + 0.5f, th, stone, 304u);
+    stone_face(shell, true, tz1, 1.0f, -tw, -dw - 0.14f, 0.0f, dh + 0.5f, stone, 307u);
+    stone_face(shell, true, tz1, 1.0f, dw + 0.14f, tw, 0.0f, dh + 0.5f, stone, 308u);
+    stone_face(shell, false, tw, 1.0f, tz0, tz1, 0.0f, th, stone, 305u);
+    stone_face(shell, false, -tw, -1.0f, tz0, tz1, 0.0f, th, stone, 306u);
+    // The west door: a pointed stone hood over a pair of planked leaves that swing in.
+    add_door_frame(op, dw, dh, tz1, trim);
+    for (int i = 0; i < 3; ++i) {
+        const f32 hw = dw + 0.2f - static_cast<f32>(i) * 0.24f;
+        add_box(shell, {-hw, dh + 0.1f + static_cast<f32>(i) * 0.16f, tz1}, {hw, dh + 0.26f + static_cast<f32>(i) * 0.16f, tz1 + 0.12f},
+                stone * 0.86f);
     }
+    add_door_leaf(def, -dw, 0.0f, tz1 - 0.06f, dh - 0.02f, wood);
+    add_door_leaf(def, dw, 0.0f, tz1 - 0.06f, dh - 0.02f, wood);
     add_box(op, {-0.8f, 0.0f, tz1}, {0.8f, 0.14f, tz1 + 0.7f}, stone * 0.9f); // the step
     for (int i = 0; i < 8; ++i) {                                               // the rose window
         const f32 a0 = TwoPi * static_cast<f32>(i) / 8.0f, a1 = TwoPi * static_cast<f32>(i + 1) / 8.0f;
-        const Vec3 c{0.0f, 4.0f, tz1 + 0.04f};
+        const Vec3 c{0.0f, 4.2f, tz1 + 0.04f};
         add_tri(em, c, c + Vec3{std::cos(a0) * 0.55f, std::sin(a0) * 0.55f, 0.0f},
                 c + Vec3{std::cos(a1) * 0.55f, std::sin(a1) * 0.55f, 0.0f},
                 i % 2 == 0 ? glass : glass * Vec3{0.75f, 0.6f, 1.1f});
     }
-    add_box(op, {-0.04f, 3.45f, tz1 + 0.02f}, {0.04f, 4.55f, tz1 + 0.07f}, trim);
-    add_box(op, {-0.55f, 3.96f, tz1 + 0.02f}, {0.55f, 4.04f, tz1 + 0.07f}, trim);
+    add_box(shell, {-0.04f, 3.65f, tz1 + 0.02f}, {0.04f, 4.75f, tz1 + 0.07f}, trim);
+    add_box(shell, {-0.55f, 4.16f, tz1 + 0.02f}, {0.55f, 4.24f, tz1 + 0.07f}, trim);
     // The belfry: an opening in each face (dark), the bronze bell hung inside.
     const f32 tzm = (tz0 + tz1) * 0.5f;
-    add_box(op, {-0.5f, 6.6f, tz1 - 0.3f}, {0.5f, 8.0f, tz1 + 0.03f}, dark);
-    add_box(op, {tw - 0.3f, 6.6f, tzm - 0.5f}, {tw + 0.03f, 8.0f, tzm + 0.5f}, dark);
-    add_box(op, {-tw - 0.03f, 6.6f, tzm - 0.5f}, {-tw + 0.3f, 8.0f, tzm + 0.5f}, dark);
-    add_cone(op, Vec3{0.0f, 0.0f, tzm}, 0.42f, 6.9f, 0.75f, 8, gold * 0.85f); // the bell
-    add_box(op, {-tw - 0.12f, th, tz0 - 0.12f}, {tw + 0.12f, th + 0.18f, tz1 + 0.12f}, stone * 1.04f); // parapet
+    add_box(shell, {-0.5f, 6.6f, tz1 - 0.3f}, {0.5f, 8.0f, tz1 + 0.03f}, dark);
+    add_box(shell, {tw - 0.3f, 6.6f, tzm - 0.5f}, {tw + 0.03f, 8.0f, tzm + 0.5f}, dark);
+    add_box(shell, {-tw - 0.03f, 6.6f, tzm - 0.5f}, {-tw + 0.3f, 8.0f, tzm + 0.5f}, dark);
+    add_cone(shell, Vec3{0.0f, 0.0f, tzm}, 0.42f, 6.9f, 0.75f, 8, gold * 0.85f); // the bell
+    add_box(shell, {-tw - 0.12f, th, tz0 - 0.12f}, {tw + 0.12f, th + 0.18f, tz1 + 0.12f}, stone * 1.04f); // parapet
     for (const f32 cx : {-tw, tw}) { // little corner pinnacles
         for (const f32 cz : {tz0, tz1}) {
-            add_prism(op, Vec3{cx, 0.0f, cz}, 0.16f, th + 0.18f, th + 0.6f, 6, stone);
-            add_cone(op, Vec3{cx, 0.0f, cz}, 0.2f, th + 0.6f, 0.55f, 6, slate);
+            add_prism(shell, Vec3{cx, 0.0f, cz}, 0.16f, th + 0.18f, th + 0.6f, 6, stone);
+            add_cone(shell, Vec3{cx, 0.0f, cz}, 0.2f, th + 0.6f, 0.55f, 6, slate);
         }
     }
-    add_cone(op, Vec3{0.0f, 0.0f, tzm}, tw * 0.95f, th + 0.18f, 4.6f, 8, slate); // the spire
+    add_cone(shell, Vec3{0.0f, 0.0f, tzm}, tw * 0.95f, th + 0.18f, 4.6f, 8, slate); // the spire
     const Vec3 cross_c{0.0f, th + 4.75f, tzm};
-    add_box(op, cross_c + Vec3{-0.05f, 0.0f, -0.05f}, cross_c + Vec3{0.05f, 0.75f, 0.05f}, gold);
-    add_box(op, cross_c + Vec3{-0.26f, 0.42f, -0.05f}, cross_c + Vec3{0.26f, 0.52f, 0.05f}, gold);
+    add_box(shell, cross_c + Vec3{-0.05f, 0.0f, -0.05f}, cross_c + Vec3{0.05f, 0.75f, 0.05f}, gold);
+    add_box(shell, cross_c + Vec3{-0.26f, 0.42f, -0.05f}, cross_c + Vec3{0.26f, 0.52f, 0.05f}, gold);
+    add_box(shell, {-tw + t, vh - 0.25f, tz0}, {tw - t, vh, tz1 - t}, wood * 0.8f); // the vestibule's ceiling
+    // The bell rope, hanging down through the vestibule ceiling.
+    add_box(op, {0.86f, 0.95f, 3.28f}, {0.9f, vh - 0.25f, 3.32f}, Vec3{0.72f, 0.6f, 0.4f});
+    add_box(op, {0.83f, 0.75f, 3.25f}, {0.93f, 0.97f, 3.35f}, Vec3{0.62f, 0.2f, 0.18f});
+
+    // ---- The nave within: pews either side of the aisle, and the altar on its dais at the far end with
+    // candles on it + tall candlestands, under a great gilded cross.
+    for (int i = 0; i < 4; ++i) {
+        const f32 zc = -2.9f + static_cast<f32>(i) * 1.05f;
+        for (const f32 sx : {-1.0f, 1.0f}) {
+            const f32 x0 = sx > 0.0f ? 0.92f : -w + t + 0.15f, x1 = sx > 0.0f ? w - t - 0.15f : -0.92f;
+            add_box(op, {x0, 0.42f, zc - 0.22f}, {x1, 0.5f, zc + 0.22f}, wood * 1.1f);   // seat
+            add_box(op, {x0, 0.5f, zc + 0.14f}, {x1, 1.0f, zc + 0.22f}, wood);           // back
+            add_box(op, {x0, 0.0f, zc - 0.22f}, {x0 + 0.07f, 0.92f, zc + 0.22f}, wood * 0.85f); // ends
+            add_box(op, {x1 - 0.07f, 0.0f, zc - 0.22f}, {x1, 0.92f, zc + 0.22f}, wood * 0.85f);
+            add_collider(def, {x0, 0.0f, zc - 0.22f}, {x1, 1.0f, zc + 0.22f});
+        }
+    }
+    const f32 az = -d + t; // the altar end's inner face
+    add_box(op, {-1.7f, 0.0f, az}, {1.7f, 0.16f, az + 1.7f}, stone * 0.85f); // the dais
+    add_box(op, {-0.9f, 0.16f, az + 0.35f}, {0.9f, 1.0f, az + 1.0f}, stone * 1.05f); // the altar
+    add_box(op, {-0.95f, 1.0f, az + 0.3f}, {0.95f, 1.05f, az + 1.05f}, Vec3{0.92f, 0.9f, 0.84f}); // its cloth
+    add_box(op, {-0.3f, 0.5f, az + 1.0f}, {0.3f, 1.0f, az + 1.06f}, Vec3{0.6f, 0.12f, 0.14f});      // the frontal
+    add_collider(def, {-0.95f, 0.0f, az + 0.3f}, {0.95f, 1.05f, az + 1.05f});
+    for (const f32 cx : {-0.6f, -0.2f, 0.25f, 0.65f}) { // candles on the altar
+        const f32 ch = 0.14f + 0.08f * hashf(950u + static_cast<u32>(cx * 10.0f + 10.0f));
+        add_box(op, {cx - 0.04f, 1.05f, az + 0.6f}, {cx + 0.04f, 1.05f + ch, az + 0.68f}, Vec3{0.94f, 0.9f, 0.78f});
+        add_box(em, {cx - 0.03f, 1.05f + ch, az + 0.61f}, {cx + 0.03f, 1.13f + ch, az + 0.67f}, Vec3{1.4f, 1.0f, 0.5f});
+    }
+    for (const f32 sx : {-1.0f, 1.0f}) { // tall iron candlestands either side
+        const Vec3 c{sx * 1.35f, 0.16f, az + 0.8f};
+        add_box(op, c + Vec3{-0.16f, 0.0f, -0.16f}, c + Vec3{0.16f, 0.06f, 0.16f}, Vec3{0.16f, 0.15f, 0.15f});
+        add_box(op, c + Vec3{-0.03f, 0.0f, -0.03f}, c + Vec3{0.03f, 1.3f, 0.03f}, Vec3{0.16f, 0.15f, 0.15f});
+        add_box(op, c + Vec3{-0.05f, 1.3f, -0.05f}, c + Vec3{0.05f, 1.5f, 0.05f}, Vec3{0.94f, 0.9f, 0.78f});
+        add_box(em, c + Vec3{-0.035f, 1.5f, -0.035f}, c + Vec3{0.035f, 1.62f, 0.035f}, Vec3{1.4f, 1.0f, 0.5f});
+    }
+    add_box(op, {-0.08f, 1.5f, az}, {0.08f, 3.7f, az + 0.06f}, gold);   // the great cross
+    add_box(op, {-0.6f, 2.85f, az}, {0.6f, 3.0f, az + 0.06f}, gold);
+    for (const f32 sx : {-1.0f, 1.0f}) { // hangings on the end wall
+        add_box(op, {sx * 2.0f - 0.35f, 1.3f, az}, {sx * 2.0f + 0.35f, 3.6f, az + 0.04f}, Vec3{0.24f, 0.3f, 0.55f});
+        add_box(op, {sx * 2.0f - 0.1f, 2.3f, az + 0.04f}, {sx * 2.0f + 0.1f, 2.6f, az + 0.06f}, gold);
+    }
 
     add_wall_lantern(op, em, def, Vec3{1.0f, 2.3f, tz1 + 0.14f}, Vec3{0.0f, 0.0f, 1.0f});
-    PropLight inner; // candlelight in the nave, spilling out of the lancets
-    inner.offset = Vec3{0.0f, 2.6f, -1.0f};
-    inner.direction = Vec3{0.0f, -0.3f, 1.0f};
+    PropLight inner; // candlelight in the nave
+    inner.offset = Vec3{0.0f, 3.4f, -0.5f};
+    inner.direction = glm::normalize(Vec3{0.0f, -1.0f, -0.4f});
     inner.color = Vec3{1.0f, 0.76f, 0.46f};
     inner.range = 11.0f;
-    inner.intensity = 2.4f;
+    inner.intensity = 3.2f;
     inner.cone_deg = 175.0f;
     def.lights.push_back(inner);
 
-    BoxCollider nave;
-    nave.center = Vec3{0.0f, 0.0f, (tz0 - d) * 0.5f};
-    nave.half_extents = Vec2{w + 0.32f, (tz0 + d) * 0.5f};
-    nave.height = h;
-    def.colliders.push_back(nave);
-    BoxCollider tower;
-    tower.center = Vec3{0.0f, 0.0f, tzm};
-    tower.half_extents = Vec2{tw, (tz1 - tz0) * 0.5f};
-    tower.height = th;
-    def.colliders.push_back(tower);
     def.footprint = Vec2{w, d};
     def.wall_height = h;
     def.door_spot = Vec3{0.0f, 0.0f, d + 0.9f};
+    def.inside_spot = Vec3{0.0f, 0.0f, 1.15f}; // in the nave, behind the last pews
+    def.bed_spot = Vec3{0.0f, 0.0f, az + 1.5f}; // the priest, before the altar
     def.parts.push_back({std::move(op), PropLayer::Opaque});
     def.parts.push_back({std::move(em), PropLayer::Emissive});
+    def.parts.push_back({std::move(shell), PropLayer::Roof});
+    def.parts.push_back({std::move(glow), PropLayer::Glow});
     return def;
 }
 
 // A great city's KEEP: a massive square stone tower on a battered base, round corner turrets under
 // conical slate caps, a crenellated roof-walk with fire braziers, arrow slits and lit windows, and a
-// portcullised gate hung with the city's banners.
+// gate hung with the city's banners whose iron portcullis rises as anyone comes near - into the GREAT
+// HALL within: a long feasting table, the lord's throne on its dais, braziers and banners.
 PropDef PropLibrary::build_keep() {
     PropDef def;
     def.name = "keep";
-    MeshData op, em;
+    MeshData shell, op, em, glow;
     const Vec3 stone{0.53f, 0.55f, 0.6f};
     const Vec3 slate{0.28f, 0.31f, 0.4f};
-    const Vec3 dark{0.1f, 0.1f, 0.12f};
     const Vec3 iron{0.18f, 0.17f, 0.17f};
     const Vec3 lit{1.0f, 0.8f, 0.44f};
     const Vec3 banner{0.62f, 0.12f, 0.12f};
     const Vec3 gold{0.86f, 0.68f, 0.26f};
-    const f32 r = 4.0f, h = 10.5f, tr = 1.05f;
+    const Vec3 wood{0.36f, 0.24f, 0.14f};
+    const f32 r = 4.0f, h = 10.5f, tr = 1.05f, t = 0.55f;
+    const f32 gw = 1.1f, gh = 3.4f; // the gate arch (half-width, height)
+    const f32 hh = 4.4f;            // the great hall's ceiling
+    const f32 bo = 0.4f, bh = 1.1f; // the battered base: how far it stands out, how high
 
-    add_box(op, {-r - 0.4f, 0.0f, -r - 0.4f}, {r + 0.4f, 1.1f, r + 0.4f}, stone * 0.9f); // battered base
-    add_box(op, {-r, 0.0f, -r}, {r, h, r}, stone);
-    stone_face(op, true, r, 1.0f, -r, r, 1.1f, h, stone, 401u);
-    stone_face(op, true, -r, -1.0f, -r, r, 1.1f, h, stone, 402u);
-    stone_face(op, false, r, 1.0f, -r, r, 1.1f, h, stone, 403u);
-    stone_face(op, false, -r, -1.0f, -r, r, 1.1f, h, stone, 404u);
-    add_box(op, {-r - 0.1f, h * 0.55f, -r - 0.1f}, {r + 0.1f, h * 0.55f + 0.16f, r + 0.1f}, stone * 1.05f); // string course
+    // ---- The walls (on a battered base, split at the gate), with a collider over each + its base.
+    auto wall = [&](const Vec3& lo, const Vec3& hi, const Vec3& clo, const Vec3& chi) {
+        add_box(shell, lo, hi, stone);
+        add_collider(def, clo, chi);
+    };
+    wall({-r, 0.0f, -r}, {r, h, -r + t}, {-r - bo, 0.0f, -r - bo}, {r + bo, h, -r + t});       // back
+    wall({-r, 0.0f, -r}, {-r + t, h, r}, {-r - bo, 0.0f, -r - bo}, {-r + t, h, r + bo});       // left
+    wall({r - t, 0.0f, -r}, {r, h, r}, {r - t, 0.0f, -r - bo}, {r + bo, h, r + bo});           // right
+    wall({-r, 0.0f, r - t}, {-gw, h, r}, {-r - bo, 0.0f, r - t}, {-gw, h, r + bo});            // front, by the gate
+    wall({gw, 0.0f, r - t}, {r, h, r}, {gw, 0.0f, r - t}, {r + bo, h, r + bo});
+    add_box(shell, {-gw, gh, r - t}, {gw, h, r}, stone); // over the gate
+    add_box(shell, {-r + t, hh, -r + t}, {r - t, hh + 0.3f, r - t}, wood * 0.7f); // the hall's ceiling
+    add_box(op, {-r - bo, 0.0f, -r - bo}, {r + bo, bh, -r + t}, stone * 0.9f); // the battered base
+    add_box(op, {-r - bo, 0.0f, -r + t}, {-r + t, bh, r + bo}, stone * 0.9f);
+    add_box(op, {r - t, 0.0f, -r + t}, {r + bo, bh, r + bo}, stone * 0.9f);
+    add_box(op, {-r + t, 0.0f, r - t}, {-gw, bh, r + bo}, stone * 0.9f);
+    add_box(op, {gw, 0.0f, r - t}, {r - t, bh, r + bo}, stone * 0.9f);
+    stone_face(shell, true, r, 1.0f, -r, r, gh + 0.3f, h, stone, 401u);
+    stone_face(shell, true, r, 1.0f, -r, -gw - 0.24f, bh, gh + 0.3f, stone, 405u);
+    stone_face(shell, true, r, 1.0f, gw + 0.24f, r, bh, gh + 0.3f, stone, 406u);
+    stone_face(shell, true, -r, -1.0f, -r, r, bh, h, stone, 402u);
+    stone_face(shell, false, r, 1.0f, -r, r, bh, h, stone, 403u);
+    stone_face(shell, false, -r, -1.0f, -r, r, bh, h, stone, 404u);
+    add_box(shell, {-r - 0.1f, h * 0.55f, -r - 0.1f}, {r + 0.1f, h * 0.55f + 0.16f, r + 0.1f}, stone * 1.05f); // string course
     // The roof-walk: a parapet lip + merlons round all four sides.
-    add_box(op, {-r - 0.18f, h, -r - 0.18f}, {r + 0.18f, h + 0.2f, r + 0.18f}, stone * 1.05f);
+    add_box(shell, {-r - 0.18f, h, -r - 0.18f}, {r + 0.18f, h + 0.2f, r + 0.18f}, stone * 1.05f);
     for (int i = -3; i <= 3; ++i) {
         const f32 o = static_cast<f32>(i) * 1.05f;
         const f32 m0 = h + 0.2f, m1 = h + 0.75f, e = r + 0.18f;
-        add_box(op, {o - 0.3f, m0, e - 0.26f}, {o + 0.3f, m1, e}, stone);
-        add_box(op, {o - 0.3f, m0, -e}, {o + 0.3f, m1, -e + 0.26f}, stone);
-        add_box(op, {e - 0.26f, m0, o - 0.3f}, {e, m1, o + 0.3f}, stone);
-        add_box(op, {-e, m0, o - 0.3f}, {-e + 0.26f, m1, o + 0.3f}, stone);
+        add_box(shell, {o - 0.3f, m0, e - 0.26f}, {o + 0.3f, m1, e}, stone);
+        add_box(shell, {o - 0.3f, m0, -e}, {o + 0.3f, m1, -e + 0.26f}, stone);
+        add_box(shell, {e - 0.26f, m0, o - 0.3f}, {e, m1, o + 0.3f}, stone);
+        add_box(shell, {-e, m0, o - 0.3f}, {-e + 0.26f, m1, o + 0.3f}, stone);
     }
     // Round corner turrets rising past the roof-walk, under conical slate caps, each with a lit window.
     for (const f32 sx : {-1.0f, 1.0f}) {
         for (const f32 sz : {-1.0f, 1.0f}) {
             const Vec3 c{sx * r, 0.0f, sz * r};
-            add_prism(op, c, tr, 0.0f, h + 1.7f, 10, stone * 0.97f);
-            add_prism(op, c, tr + 0.14f, h + 1.7f, h + 1.95f, 10, stone * 1.04f);
-            add_cone(op, c, tr + 0.25f, h + 1.95f, 2.4f, 10, slate);
+            add_prism(shell, c, tr, 0.0f, h + 1.7f, 10, stone * 0.97f);
+            add_prism(shell, c, tr + 0.14f, h + 1.7f, h + 1.95f, 10, stone * 1.04f);
+            add_cone(shell, c, tr + 0.25f, h + 1.95f, 2.4f, 10, slate);
             const Vec3 wc = c + Vec3{sx * (tr - 0.02f), h + 0.7f, 0.0f};
             add_box(em, wc - Vec3{0.06f, 0.3f, 0.14f}, wc + Vec3{0.06f, 0.3f, 0.14f}, lit);
+            add_collider(def, c - Vec3{tr, 0.0f, tr}, c + Vec3{tr, h, tr});
         }
     }
     // Arrow slits + lit windows on every face.
@@ -3679,37 +3937,49 @@ PropDef PropLibrary::build_keep() {
             const Vec3 sc = out * (r + 0.02f) + across * a;
             const Vec3 lo_s = sc + Vec3{0.0f, 3.0f, 0.0f} - across * 0.07f - out * 0.12f;
             const Vec3 hi_s = sc + Vec3{0.0f, 4.2f, 0.0f} + across * 0.07f + out * 0.04f;
-            add_box(op, glm::min(lo_s, hi_s), glm::max(lo_s, hi_s), dark);
+            add_box(shell, glm::min(lo_s, hi_s), glm::max(lo_s, hi_s), Vec3{0.1f, 0.1f, 0.12f});
             const Vec3 lo_w = sc + Vec3{0.0f, 7.2f, 0.0f} - across * 0.32f - out * 0.1f;
             const Vec3 hi_w = sc + Vec3{0.0f, 8.4f, 0.0f} + across * 0.32f + out * 0.05f;
             add_box(em, glm::min(lo_w, hi_w), glm::max(lo_w, hi_w), lit);
             const Vec3 lo_h = sc + Vec3{0.0f, 8.4f, 0.0f} - across * 0.42f;
             const Vec3 hi_h = sc + Vec3{0.0f, 8.6f, 0.0f} + across * 0.42f + out * 0.12f;
-            add_box(op, glm::min(lo_h, hi_h), glm::max(lo_h, hi_h), stone * 0.9f); // window hood
+            add_box(shell, glm::min(lo_h, hi_h), glm::max(lo_h, hi_h), stone * 0.9f); // window hood
         }
     }
-    // The gate (front, +z): a deep arch with an iron portcullis half-raised.
-    add_box(op, {-1.1f, 0.0f, r - 0.5f}, {1.1f, 3.4f, r + 0.04f}, dark);
-    add_box(op, {-0.85f, 3.4f, r - 0.48f}, {0.85f, 3.75f, r + 0.04f}, dark);
-    for (int i = -3; i <= 3; ++i) {
-        const f32 x = static_cast<f32>(i) * 0.3f;
-        add_box(op, {x - 0.03f, 1.2f, r - 0.2f}, {x + 0.03f, 3.5f, r - 0.14f}, iron);
-    }
-    for (int j = 0; j < 4; ++j) {
-        const f32 y = 1.4f + static_cast<f32>(j) * 0.55f;
-        add_box(op, {-1.0f, y - 0.03f, r - 0.2f}, {1.0f, y + 0.03f, r - 0.14f}, iron);
+    // The gate (front, +z): a dressed-stone arch round the opening, and the iron PORTCULLIS - a Door
+    // part that rises up into the wall above as anyone comes near.
+    add_box(shell, {-gw - 0.24f, 0.0f, r}, {-gw, gh + 0.24f, r + 0.12f}, stone * 0.82f);
+    add_box(shell, {gw, 0.0f, r}, {gw + 0.24f, gh + 0.24f, r + 0.12f}, stone * 0.82f);
+    add_box(shell, {-gw, gh, r}, {gw, gh + 0.24f, r + 0.12f}, stone * 0.82f);
+    {
+        MeshData gate;
+        const f32 gz = r - 0.32f;
+        for (int i = -3; i <= 3; ++i) {
+            const f32 x = static_cast<f32>(i) * 0.3f;
+            add_box(gate, {x - 0.035f, 0.12f, gz - 0.035f}, {x + 0.035f, gh - 0.02f, gz + 0.035f}, iron);
+            add_box(gate, {x - 0.02f, 0.0f, gz - 0.02f}, {x + 0.02f, 0.12f, gz + 0.02f}, iron * 0.8f); // the spike
+        }
+        for (int j = 0; j < 5; ++j) {
+            const f32 y = 0.45f + static_cast<f32>(j) * 0.62f;
+            add_box(gate, {-gw + 0.06f, y - 0.035f, gz - 0.05f}, {gw - 0.06f, y + 0.035f, gz + 0.05f}, iron);
+        }
+        PropPart part;
+        part.mesh = std::move(gate);
+        part.layer = PropLayer::Door;
+        part.lift = gh - 0.35f;
+        def.parts.push_back(std::move(part));
     }
     // The city's banners hung down the front, either side of the gate.
     for (const f32 x : {-2.6f, 2.6f}) {
         const f32 z = r + 0.06f;
-        add_box(op, {x - 0.62f, h - 0.6f, z - 0.02f}, {x + 0.62f, h - 0.45f, z + 0.1f}, iron); // the pole
-        add_quad(op, {x - 0.55f, h - 0.55f, z + 0.04f}, {x - 0.55f, h - 4.6f, z + 0.04f}, {x, h - 5.1f, z + 0.04f},
+        add_box(shell, {x - 0.62f, h - 0.6f, z - 0.02f}, {x + 0.62f, h - 0.45f, z + 0.1f}, iron); // the pole
+        add_quad(shell, {x - 0.55f, h - 0.55f, z + 0.04f}, {x - 0.55f, h - 4.6f, z + 0.04f}, {x, h - 5.1f, z + 0.04f},
                  {x, h - 0.55f, z + 0.04f}, banner);
-        add_quad(op, {x, h - 0.55f, z + 0.04f}, {x, h - 5.1f, z + 0.04f}, {x + 0.55f, h - 4.6f, z + 0.04f},
+        add_quad(shell, {x, h - 0.55f, z + 0.04f}, {x, h - 5.1f, z + 0.04f}, {x + 0.55f, h - 4.6f, z + 0.04f},
                  {x + 0.55f, h - 0.55f, z + 0.04f}, banner * 0.92f);
-        add_box(op, {x - 0.16f, h - 2.6f, z + 0.05f}, {x + 0.16f, h - 2.1f, z + 0.08f}, gold); // the device
+        add_box(shell, {x - 0.16f, h - 2.6f, z + 0.05f}, {x + 0.16f, h - 2.1f, z + 0.08f}, gold); // the device
     }
-    // Fire braziers blazing on the roof-walk's front corners.
+    // Fire braziers blazing on the roof-walk's front corners (outdoor lights).
     for (const f32 x : {-2.4f, 2.4f}) {
         add_box(op, {x - 0.06f, h + 0.2f, r - 0.86f}, {x + 0.06f, h + 0.55f, r - 0.74f}, iron);
         add_fire_basket(op, em, Vec3{x, h + 0.55f, r - 0.8f}, 1.2f);
@@ -3720,17 +3990,90 @@ PropDef PropLibrary::build_keep() {
         l.range = 16.0f;
         l.intensity = 2.2f;
         l.cone_deg = 160.0f;
+        l.spill = true;
         def.lights.push_back(l);
     }
-    BoxCollider c;
-    c.half_extents = Vec2{r + tr, r + tr};
-    c.height = h;
-    def.colliders.push_back(c);
+
+    // ---- The great hall: a flagged floor, a long feasting table down the middle with benches, the
+    // lord's throne on its dais against the back wall between two banners, braziers burning either
+    // side of the gate, and the firelight spilling out through it.
+    const f32 in = r - t; // the hall's inner half-extent
+    add_box(op, {-in, -0.3f, -in}, {in, 0.02f, in}, stone * 0.4f);
+    add_box(op, {-gw, -0.3f, in}, {gw, 0.02f, r}, stone * 0.4f); // under the gate
+    {
+        const int n = 9;
+        const f32 s = 2.0f * in / static_cast<f32>(n);
+        for (int j = 0; j < n; ++j) {
+            for (int i = 0; i < n; ++i) {
+                const f32 x0 = -in + static_cast<f32>(i) * s, z0 = -in + static_cast<f32>(j) * s;
+                add_box(op, {x0 + 0.03f, 0.02f, z0 + 0.03f}, {x0 + s - 0.03f, 0.05f, z0 + s - 0.03f},
+                        stone * (0.8f + 0.22f * hashf(1200u + static_cast<u32>(j * 17 + i))));
+            }
+        }
+    }
+    const f32 tz = -1.1f; // the feasting table
+    add_box(op, {-2.2f, 0.72f, tz - 0.45f}, {2.2f, 0.82f, tz + 0.45f}, wood * 1.1f);
+    for (const f32 lx : {-2.0f, 2.0f}) {
+        for (const f32 lz : {-0.35f, 0.35f}) {
+            add_box(op, {lx - 0.06f, 0.0f, tz + lz - 0.06f}, {lx + 0.06f, 0.72f, tz + lz + 0.06f}, wood * 0.8f);
+        }
+    }
+    for (const f32 bz : {-0.8f, 0.8f}) { // benches either side
+        add_box(op, {-2.0f, 0.38f, tz + bz - 0.16f}, {2.0f, 0.46f, tz + bz + 0.16f}, wood);
+        for (const f32 lx : {-1.8f, 1.8f}) {
+            add_box(op, {lx - 0.05f, 0.0f, tz + bz - 0.12f}, {lx + 0.05f, 0.38f, tz + bz + 0.12f}, wood * 0.8f);
+        }
+    }
+    add_collider(def, {-2.2f, 0.0f, tz - 0.96f}, {2.2f, 0.82f, tz + 0.96f});
+    for (int i = 0; i < 5; ++i) { // tankards + platters down the table
+        const f32 x = -1.7f + static_cast<f32>(i) * 0.85f;
+        add_tankard(op, {x, 0.82f, tz + (i % 2 ? 0.18f : -0.2f)});
+        add_box(op, {x + 0.2f, 0.82f, tz - 0.12f}, {x + 0.52f, 0.85f, tz + 0.16f}, Vec3{0.7f, 0.68f, 0.62f});
+        add_mesh(op, primitives::sphere(7, 4), glm::translate(Mat4{1.0f}, Vec3{x + 0.36f, 0.9f, tz + 0.02f}) *
+                                                   glm::scale(Mat4{1.0f}, Vec3{0.22f, 0.12f, 0.16f}),
+                 i % 2 ? Vec3{0.78f, 0.52f, 0.24f} : Vec3{0.62f, 0.3f, 0.2f});
+    }
+    const f32 bz = -in; // the back wall's inner face
+    add_box(op, {-1.4f, 0.0f, bz}, {1.4f, 0.22f, bz + 1.5f}, stone * 0.85f); // the dais
+    add_box(op, {-0.5f, 0.22f, bz + 0.15f}, {0.5f, 2.3f, bz + 0.32f}, wood * 0.9f); // the throne's tall back
+    add_box(op, {-0.45f, 0.22f, bz + 0.32f}, {0.45f, 0.72f, bz + 0.95f}, wood * 0.9f); // its seat
+    add_box(op, {-0.38f, 0.72f, bz + 0.34f}, {0.38f, 0.8f, bz + 0.9f}, banner);      // the cushion
+    add_box(op, {-0.38f, 0.8f, bz + 0.32f}, {0.38f, 2.1f, bz + 0.36f}, banner);
+    for (const f32 sx : {-1.0f, 1.0f}) {
+        add_box(op, {sx * 0.5f - 0.08f, 0.72f, bz + 0.32f}, {sx * 0.5f + 0.08f, 1.05f, bz + 0.95f}, wood * 0.8f); // arms
+        add_box(op, {sx * 0.5f - 0.09f, 2.3f, bz + 0.15f}, {sx * 0.5f + 0.09f, 2.5f, bz + 0.33f}, gold);           // finials
+        // Banners on the back wall, and a shield either side.
+        add_box(op, {sx * 2.1f - 0.5f, 1.2f, bz}, {sx * 2.1f + 0.5f, 3.9f, bz + 0.04f}, banner);
+        add_box(op, {sx * 2.1f - 0.14f, 2.9f, bz + 0.04f}, {sx * 2.1f + 0.14f, 3.3f, bz + 0.07f}, gold);
+        add_shield(op, {sx * 1.15f, 1.6f, bz + 0.06f}, Vec3{0.35f, 0.5f, 0.66f});
+    }
+    add_collider(def, {-0.55f, 0.0f, bz}, {0.55f, 2.3f, bz + 0.95f});
+    for (const f32 sx : {-1.0f, 1.0f}) { // braziers either side of the gate
+        const Vec3 c{sx * 2.5f, 0.0f, 1.9f};
+        add_box(op, c + Vec3{-0.07f, 0.0f, -0.07f}, c + Vec3{0.07f, 0.95f, 0.07f}, iron);
+        add_box(op, c + Vec3{-0.22f, 0.0f, -0.22f}, c + Vec3{0.22f, 0.08f, 0.22f}, iron);
+        add_fire_basket(op, em, c + Vec3{0.0f, 0.95f, 0.0f}, 1.0f);
+        add_collider(def, c - Vec3{0.25f, 0.0f, 0.25f}, c + Vec3{0.25f, 1.3f, 0.25f});
+    }
+    PropLight hall; // the hall's firelight
+    hall.offset = Vec3{0.0f, hh - 0.4f, 0.4f};
+    hall.direction = glm::normalize(Vec3{0.0f, -1.0f, 0.15f});
+    hall.color = Vec3{1.0f, 0.66f, 0.36f};
+    hall.range = 12.0f;
+    hall.intensity = 4.0f;
+    hall.cone_deg = 172.0f;
+    def.lights.push_back(hall);
+    add_window_spill(def, glow, {0.0f, 1.7f, r}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, gw * 0.8f, 1.0f, true);
+
     def.footprint = Vec2{r + tr, r + tr};
     def.wall_height = h;
     def.door_spot = Vec3{0.0f, 0.0f, r + 1.4f};
+    def.inside_spot = Vec3{0.0f, 0.0f, 1.2f};
+    def.bed_spot = Vec3{0.0f, 0.0f, bz + 1.2f}; // the lord, before the throne
     def.parts.push_back({std::move(op), PropLayer::Opaque});
     def.parts.push_back({std::move(em), PropLayer::Emissive});
+    def.parts.push_back({std::move(shell), PropLayer::Roof});
+    def.parts.push_back({std::move(glow), PropLayer::Glow});
     return def;
 }
 

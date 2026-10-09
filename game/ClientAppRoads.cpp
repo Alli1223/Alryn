@@ -614,7 +614,7 @@ void ClientApp::dev_road_setup() {
         return;
     }
     if (scr != "city" && scr != "snowtown" && scr != "hamlet" && scr != "village" && scr != "road" && scr != "errand" &&
-        scr != "caravan") {
+        scr != "caravan" && scr != "door" && scr != "indoors") {
         dev_road_done_ = true;
         return;
     }
@@ -664,6 +664,49 @@ void ClientApp::dev_road_setup() {
             ALRYN_INFO("Dev: {} {} at {:.0f},{:.0f} (half {:.0f}, {} homes)", worldgen::town_tier_name(pick->tier),
                        pick->snowy ? "(snowbound)" : "", pick->center.x, pick->center.y, pick->half,
                        detail::cached_town_plan(*pick, world_seed_).houses.size());
+        }
+        dev_road_done_ = true;
+        return;
+    }
+    // ALRYN_SCREEN=door / indoors: on the doorstep of (or just inside) a building in the nearest town
+    // that has one - ALRYN_HOUSE=<variant> picks which (e.g. the chapel, the keep, the bakery), else the
+    // first ordinary home.
+    if (scr == "door" || scr == "indoors") {
+        const char* hv = std::getenv("ALRYN_HOUSE");
+        const u32 want = hv != nullptr ? static_cast<u32>(std::atoi(hv)) : kHouseDefs;
+        const int fcx = static_cast<int>(std::floor(feet.x / worldgen::village_cell));
+        const int fcz = static_cast<int>(std::floor(feet.z / worldgen::village_cell));
+        std::optional<detail::HousePlot> pick;
+        f32 best = -2.0f; // (the one whose front best faces the iso camera, so the shot sees its door)
+        for (int r = 0; r <= 16 && best < 0.9f; ++r) {
+            for (int dz = -r; dz <= r && best < 0.9f; ++dz) {
+                for (int dx = -r; dx <= r && best < 0.9f; ++dx) {
+                    if (std::max(std::abs(dx), std::abs(dz)) != r) {
+                        continue;
+                    }
+                    const auto v = worldgen::village_at(fcx + dx, fcz + dz, world_seed_);
+                    if (!v) {
+                        continue;
+                    }
+                    const Vec2 to_cam{std::cos(radians(iso::yaw_deg)), std::sin(radians(iso::yaw_deg))};
+                    for (const detail::HousePlot& h : detail::cached_town_plan(*v, world_seed_).houses) {
+                        const f32 facing = glm::dot(Vec2{std::sin(h.yaw), std::cos(h.yaw)}, to_cam);
+                        if ((want < kHouseDefs ? h.variant == want : h.variant < kHouseVariants) && facing > best) {
+                            pick = h;
+                            best = facing;
+                        }
+                    }
+                }
+            }
+        }
+        if (pick) {
+            const PropDef& def = prop_lib_.houses()[pick->variant];
+            const Vec3 l = scr == "door" ? def.door_spot + Vec3{0.0f, 0.0f, 0.6f} : def.inside_spot;
+            const f32 cs = std::cos(pick->yaw), sn = std::sin(pick->yaw);
+            const Vec2 p{pick->pos.x + l.x * cs + l.z * sn, pick->pos.y - l.x * sn + l.z * cs};
+            local_server_.debug_place_player(my_id_, Vec3{p.x, worldgen::height(p.x, p.y, world_seed_) + 0.6f, p.y});
+            ALRYN_INFO("Dev: {} the {} (variant {}) at {:.0f},{:.0f}", scr == "door" ? "at the door of" : "inside",
+                       def.name, pick->variant, pick->pos.x, pick->pos.y);
         }
         dev_road_done_ = true;
         return;
