@@ -28,8 +28,9 @@ inline constexpr int road_max_cells = 3;
 // Each town wants a road to its nearest this-many routable towns (an edge is built if EITHER side
 // wants it, so towns reliably get one and usually two-or-more connections).
 inline constexpr int road_links_per_town = 3;
-// Polyline resolution of a routed road (segments = road_points). Higher now that roads
-// meander, so the curves render + collide smoothly.
+// Polyline resolution of a routed road: at least this many segments (a long road gets more, ~one per
+// 14 m, so its meander stays smooth). Higher now that roads meander, so the curves render + collide
+// smoothly.
 inline constexpr int road_points = 28;
 
 // A straight piece of a road centreline in world xz.
@@ -67,6 +68,10 @@ f32 distance(f32 x, f32 z, u32 seed);
 
 // Unit direction ALONG the nearest road at (x,z). Replaces worldgen::path_tangent.
 Vec2 tangent(f32 x, f32 z, u32 seed);
+
+// The nearest point on any road centreline to (x,z), if a road is near (the travellers + errands walk
+// the roads with this).
+std::optional<Vec2> nearest_point(f32 x, f32 z, u32 seed);
 
 // 1 on the road (on gentle, above-water ground), fading to 0 at the edges. Replaces
 // worldgen::path_amount.

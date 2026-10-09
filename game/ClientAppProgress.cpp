@@ -683,6 +683,13 @@ void ClientApp::update_town_arrival(Timestep dt) {
         if (v->vseed != town_vseed_) {
             town_vseed_ = v->vseed;
             town_banner_name_ = town_name(Vec3{v->center.x, 0.0f, v->center.y});
+            {
+                const char* what = v->tier == worldgen::TownTier::Hamlet    ? "A QUIET HAMLET"
+                                   : v->tier == worldgen::TownTier::Village ? "A VILLAGE ON THE ROAD"
+                                   : v->tier == worldgen::TownTier::City    ? "THE GREAT CITY"
+                                                                            : "A MARKET TOWN";
+                town_banner_sub_ = v->snowy ? std::format("{}  -  SNOWBOUND IN THE HIGH COUNTRY", what) : what;
+            }
             for (char& c : town_banner_name_) {
                 c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
             }
@@ -716,8 +723,11 @@ void ClientApp::draw_journey_guide(ui::DrawList& draw, f32 W, f32 H) {
         draw.line(Vec2{W * 0.5f + 14.0f, y + size + 12.0f}, Vec2{W * 0.5f + tw * 0.5f, y + size + 12.0f}, 1.5f, rule);
         hud::stud(draw, Vec2{W * 0.5f, y + size + 12.0f}, 4.0f * a + 0.5f);
         const bool offering = snapshot_.contract_phase == static_cast<u8>(ContractPhase::Offer);
+        hud::text(draw, Vec2{W * 0.5f, y + size + 22.0f}, town_banner_sub_, size * 0.3f, hud::alpha(hud::kGold, a),
+                  ui::TextAlign::Center);
         const char* sub = offering ? "CONTRACTS WAIT IN THE MARKET SQUARE" : "SAFE BEHIND THE WALLS - FOR NOW";
-        hud::text(draw, Vec2{W * 0.5f, y + size + 24.0f}, sub, size * 0.24f, hud::alpha(th.text, a), ui::TextAlign::Center);
+        hud::text(draw, Vec2{W * 0.5f, y + size + 22.0f + size * 0.42f}, sub, size * 0.24f, hud::alpha(th.text, a),
+                  ui::TextAlign::Center);
     }
 
     // A new hero's next goal, marked in the world: the nearest contract wagon while the journey says

@@ -43,10 +43,13 @@ inline std::vector<TreeInstance> scatter_trees(int cx, int cz, f32 chunk_world, 
             const f32 wz = (static_cast<f32>(gz) + 0.5f) * cell + jz;
 
             const f32 gh = worldgen::height(wx, wz, seed);
-            if (gh < worldgen::water_level + 1.2f || gh > 12.5f) {
+            if (gh < worldgen::water_level + 1.2f || gh > 20.0f) {
                 continue; // in/near water, or above the tree line on the very summit
             }
             const worldgen::Biome biome = worldgen::biome_at(wx, wz, seed);
+            if (gh > 12.5f && (biome != worldgen::Biome::Snow || worldgen::slope(wx, wz, seed) > 1.1f)) {
+                continue; // up past the old tree line only the sheltered alpine shelves grow pines
+            }
             const f32 moist = worldgen::moisture(wx, wz, seed);
             if (moist < -0.1f && biome != worldgen::Biome::Snow) {
                 continue; // very dry ground stays open (the peaks' dryness doesn't count)
@@ -66,7 +69,11 @@ inline std::vector<TreeInstance> scatter_trees(int cx, int cz, f32 chunk_world, 
                 case worldgen::Biome::Mountains: density = 0.24f; break;
                 case worldgen::Biome::Bog: density = 0.18f; break;
                 case worldgen::Biome::Plains: density = 0.14f; break;
-                case worldgen::Biome::Snow: density = 0.10f; break;
+                case worldgen::Biome::Snow:
+                    // Lone pines on the white slopes; stands of them thicken over a sheltered plateau.
+                    density = gh > 12.5f ? 0.08f + 0.22f * glm::smoothstep(0.35f, 0.75f, noise::fbm2d(wx * 0.03f, wz * 0.03f, 2, 2.0f, 0.5f, seed + 991u) + 0.5f)
+                                         : 0.10f;
+                    break;
                 default: density = 0.45f + glm::clamp(moist, 0.0f, 0.7f) * 0.5f; break;
             }
             if (detail::hash01(h) > density) {
@@ -90,8 +97,8 @@ inline std::vector<TreeInstance> scatter_trees(int cx, int cz, f32 chunk_world, 
                 if (edge < 0.0f) {
                     // INSIDE the town: a few decorative trees in the open green spots - off the
                     // plaza, off the dirt streets/flagstones, and clear of any building.
-                    if (distc < detail::kMarketHalf + 4.0f) {
-                        continue; // keep the market plaza open
+                    if (distc < detail::plaza_half(*tv) + 4.0f) {
+                        continue; // keep the market plaza / the green open
                     }
                     if (town_path_amount(Vec3{wx, gh, wz}, 1.0f, seed) > 0.05f) {
                         continue; // off the streets
@@ -100,12 +107,12 @@ inline std::vector<TreeInstance> scatter_trees(int cx, int cz, f32 chunk_world, 
                         continue; // sparse - just a scattered few
                     }
                     bool near_building = false;
-                    const auto gates = detail::village_gate_points(*tv, seed);
-                    detail::for_each_house(*tv, seed, gates, [&](const detail::HousePlot& hp) {
+                    for (const detail::HousePlot& hp : detail::cached_town_plan(*tv, seed).houses) {
                         if (glm::length(hp.pos - Vec2{wx, wz}) < detail::house_reach(hp.variant) + 2.0f) {
                             near_building = true;
+                            break;
                         }
-                    });
+                    }
                     if (near_building) {
                         continue; // don't grow a tree through a house
                     }

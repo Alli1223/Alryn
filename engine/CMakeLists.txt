@@ -69,6 +69,7 @@ add_library(alryn STATIC
     Alryn/Game/Contracts.cpp
     Alryn/Game/Abilities.cpp
     Alryn/Game/SideQuests.cpp
+    Alryn/Game/Wayfarers.cpp
     Alryn/Game/Progress.cpp
     # ---- Combat ------------------------------------------------------------
     Alryn/Combat/SiegeMode.cpp

@@ -207,6 +207,9 @@ inline MeshData build_vegetation(int cx, int cz, f32 chunk_world, u32 seed) {
             const bool very_long = detail::hash01(detail::tree_hash(gx + k, gz, seed + 5906u)) < 0.16f;
             const f32 sy = very_long ? (1.5f + detail::hash01(detail::tree_hash(gx + k, gz, seed + 5907u)) * 0.45f)
                                      : (0.95f + detail::hash01(detail::tree_hash(gx + k, gz, seed + 5908u)) * 0.35f);
+            if (worldgen::under_building(wx + ox, wz + oz, seed, 0.45f)) {
+                continue; // a clump spread off the cell's centre still keeps out of the houses
+            }
             const f32 gh2 = worldgen::height(wx + ox, wz + oz, seed);
             place_at(primitives::meadow_grass(blades, g), wx + ox, wz + oz, gh2,
                      detail::hash01(detail::tree_hash(gx + k, gz, seed + 5909u)) * TwoPi, sc, sy, Vec3{1.0f});
@@ -272,6 +275,9 @@ inline MeshData build_vegetation(int cx, int cz, f32 chunk_world, u32 seed) {
             const f32 oz = (detail::hash01(detail::tree_hash(gx, gz * 9 + k, seed + 5512u)) - 0.5f) * 0.75f;
             const u32 bi = detail::tree_hash(gx + k * 13, gz, seed + 5504u) % 6u;
             const f32 sc = 0.85f + detail::hash01(detail::tree_hash(gx + k, gz, seed + 5505u)) * 0.7f;
+            if (worldgen::under_building(wx + ox, wz + oz, seed, 0.4f)) {
+                continue; // (as the meadow grass: each bloom keeps out of the houses)
+            }
             const f32 gh2 = worldgen::height(wx + ox, wz + oz, seed);
             place_at(primitives::flower(blossoms[bi]), wx + ox, wz + oz, gh2,
                      detail::hash01(detail::tree_hash(gx + k, gz, seed + 5507u)) * TwoPi, sc, 1.0f, Vec3{1.0f});

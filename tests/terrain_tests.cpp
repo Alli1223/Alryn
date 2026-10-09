@@ -7,6 +7,7 @@
 #include <Alryn/Renderer/Vulkan/VulkanInstance.h>
 #include <Alryn/Renderer/MeshPrimitives.h>
 #include <Alryn/Physics/CharacterController.h>
+#include <Alryn/Physics/Collider.h>
 #include <Alryn/Terrain/MarchingTetra.h>
 #include <Alryn/Terrain/StreamingTerrain.h>
 #include <Alryn/Terrain/Terrain.h>
@@ -722,8 +723,8 @@ TEST_CASE("Village: decorative props don't spawn on the roads") {
             }
             ++towns_checked;
             const auto gates = detail::village_gate_points(*v, seed);
-            std::array<detail::Street, 20> streets;
-            const int nstreets = detail::town_streets(*v, seed, gates, streets);
+            const std::vector<detail::Street> streets = detail::town_streets(*v, seed, gates);
+            const int nstreets = static_cast<int>(streets.size());
             for (const PropInstance& p : village_props(*v, seed)) {
                 const bool decorative =
                     p.category == PropCategory::Lantern || p.category == PropCategory::Planter ||
@@ -977,28 +978,30 @@ TEST_CASE("Village: medieval cottage / wall / gate building blocks") {
 
     // Ordinary home variants (cottages, longhouses, two-storey, manors...) + the special
     // landmark buildings (townhouse / pub / blacksmith) at indices kHouseVariants..
-    CHECK(lib.houses().size() == kHouseDefs);
+    CHECK(lib.houses().size() == 2u * kHouseDefs); // every building + its snowbound twin
     // Each ordinary home: a roof/shell part (fades when inside) + emissive (hearth fire / candle /
-    // lamp glow) + a real footprint, interior lights, a bed spot inside, and no fake glow.
+    // lamp glow) + the light its windows spill outside after dark + a real footprint, interior lights
+    // and a bed spot inside.
     for (u32 i = 0; i < kHouseVariants; ++i) {
         const PropDef& house = lib.houses()[i];
         CHECK(house.footprint.x > 0.0f);
         CHECK_FALSE(house.colliders.empty());
-        bool has_roof = false, has_fire = false;
+        bool has_roof = false, has_fire = false, has_spill = false;
         for (const PropPart& part : house.parts) {
             if (part.layer == PropLayer::Roof && !part.mesh.indices.empty()) has_roof = true;
             if (part.layer == PropLayer::Emissive && !part.mesh.indices.empty()) has_fire = true;
-            CHECK(part.layer != PropLayer::Glow);
+            if (part.layer == PropLayer::Glow && !part.mesh.indices.empty()) has_spill = true;
         }
         CHECK(has_roof);
         CHECK(has_fire);
+        CHECK(has_spill);
         CHECK(house.lights.size() >= 2);
         // The resident's bed spot sits inside the house footprint (so they sleep indoors).
         CHECK(std::abs(house.bed_spot.x) < house.footprint.x);
         CHECK(std::abs(house.bed_spot.z) < house.footprint.y);
     }
-    // The landmark buildings are solid (no fade-shell), but still have a footprint, colliders, a
-    // warm emissive part (lit windows / forge) and at least one light.
+    // The special buildings (townhouse, pub, smithy, chapel, keep, bakery, shop) have a footprint,
+    // colliders, a warm emissive part (lit windows / forge / oven) and at least one light.
     for (u32 i = kHouseVariants; i < kHouseDefs; ++i) {
         const PropDef& b = lib.houses()[i];
         CHECK(b.footprint.x > 0.0f);
@@ -1021,13 +1024,81 @@ TEST_CASE("Village: medieval cottage / wall / gate building blocks") {
     CHECK_FALSE(lib.wells()[0].parts.empty());
 }
 
+TEST_CASE("Village: every building has a door that opens + an interior you can walk into") {
+    PropLibrary lib{false};
+    REQUIRE(lib.houses().size() == 2u * kHouseDefs);
+    // A hero (a 0.4 m-radius, 1.7 m capsule) walking straight from the doorstep to the spot just inside,
+    // against the building's own colliders (placed exactly as the world places them).
+    auto blocked_at = [](const PropDef& def, const Vec3& at) {
+        for (const BoxCollider& bc : def.colliders) {
+            const Collider c = place_box(bc.center, bc.half_extents, bc.height, bc.yaw, Vec3{0.0f}, 0.0f, 1.0f);
+            const Vec2 xz{at.x, at.z};
+            if (glm::length(resolve_collider(c, xz, 0.4f, 0.0f, 1.7f) - xz) > 1e-3f) {
+                return true;
+            }
+        }
+        return false;
+    };
+    for (u32 i = 0; i < lib.houses().size(); ++i) {
+        const PropDef& b = lib.houses()[i];
+        INFO("building " << i << " (" << b.name << ")");
+        // A door (or a portcullis) that the client swings / lifts open as anyone comes near.
+        int doors = 0;
+        for (const PropPart& part : b.parts) {
+            CHECK_FALSE(part.mesh.indices.empty()); // (every part uploads real geometry)
+            if (part.layer == PropLayer::Door) {
+                ++doors;
+                CHECK_FALSE(part.mesh.indices.empty());
+                CHECK((std::abs(part.swing) > 1.0f || part.lift > 1.0f));
+            }
+        }
+        CHECK(doors >= 1);
+        // The doorstep is outside, the inside spot within the walls.
+        CHECK(std::abs(b.inside_spot.x) < b.footprint.x);
+        CHECK(std::abs(b.inside_spot.z) < b.footprint.y);
+        CHECK(b.door_spot.z > b.footprint.y);
+        const Vec3 from = b.door_spot, to = b.inside_spot;
+        const int steps = static_cast<int>(glm::length(to - from) / 0.05f) + 1;
+        bool clear = true;
+        for (int k = 0; k <= steps && clear; ++k) {
+            const Vec3 at = glm::mix(from, to, static_cast<f32>(k) / static_cast<f32>(steps));
+            if (blocked_at(b, at)) {
+                clear = false;
+                INFO("blocked at " << at.x << ", " << at.z);
+                CHECK(clear);
+            }
+        }
+        CHECK(clear);
+        // Its light shines out after dark: a lantern by the door / the glow spilling from its windows.
+        bool spills = false;
+        for (const PropLight& l : b.lights) {
+            spills = spills || l.spill;
+        }
+        CHECK(spills);
+    }
+    // The upper storey of a two-storey home only blocks up there: its walls don't reach down across
+    // the doorway beneath.
+    const PropDef& two = lib.houses()[2];
+    REQUIRE(two.wall_height > 4.0f);
+    for (const BoxCollider& bc : two.colliders) {
+        if (bc.center.y > 1.0f) {
+            CHECK(bc.center.y + bc.height <= two.wall_height + 0.01f);
+        } else {
+            CHECK(bc.height < two.wall_height * 0.75f);
+        }
+    }
+}
+
 TEST_CASE("Village: towns are placed, laid out deterministically, with houses + gates") {
     const u32 seed = 4242u;
-    // Find a town somewhere on the village grid.
+    // Find a walled market town somewhere on the village grid.
     std::optional<worldgen::Village> found;
     for (int vz = -8; vz < 8 && !found; ++vz) {
         for (int vx = -8; vx < 8 && !found; ++vx) {
-            found = worldgen::village_at(vx, vz, seed);
+            const auto v = worldgen::village_at(vx, vz, seed);
+            if (v && v->tier == worldgen::TownTier::Town) {
+                found = v;
+            }
         }
     }
     REQUIRE(found.has_value());
@@ -1041,18 +1112,23 @@ TEST_CASE("Village: towns are placed, laid out deterministically, with houses + 
     int houses = 0, walls = 0, gates = 0, markets = 0;
     Vec3 market_pos{0.0f};
     std::vector<Vec3> house_pos;
+    std::vector<detail::Footprint> house_fp;
     for (const PropInstance& p : props) {
-        if (p.category == PropCategory::House) { ++houses; house_pos.push_back(p.position); }
+        if (p.category == PropCategory::House) {
+            ++houses;
+            house_pos.push_back(p.position);
+            house_fp.emplace_back(Vec2{p.position.x, p.position.z}, p.yaw, PropLibrary::house_half_extents(p.variant));
+        }
         else if (p.category == PropCategory::Wall) ++walls;
         else if (p.category == PropCategory::Gate) ++gates;
         else if (p.category == PropCategory::Market) { ++markets; market_pos = p.position; }
     }
     CHECK(houses >= 4);
-    // Houses never spawn on top of each other (overlap rejection keeps them apart)...
+    // Houses never spawn on top of each other (their footprints never overlap, though a terrace stands
+    // shoulder to shoulder)...
     for (usize i = 0; i < house_pos.size(); ++i) {
         for (usize j = i + 1; j < house_pos.size(); ++j) {
-            const Vec2 d{house_pos[i].x - house_pos[j].x, house_pos[i].z - house_pos[j].z};
-            CHECK(glm::length(d) >= 6.0f);
+            CHECK_FALSE(detail::footprints_overlap(house_fp[i], house_fp[j], 0.1f));
         }
         // ...and they stay inside the town's (organic) wall, never poking through it.
         const Vec2 d{house_pos[i].x - found->center.x, house_pos[i].z - found->center.y};

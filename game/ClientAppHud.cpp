@@ -50,8 +50,8 @@ void ClientApp::draw_health_bars() {
             Vec3{0.92f, 0.26f, 0.2f});
     }
     for (const net::VillagerState& vl : snapshot_.villagers) {
-        if (vl.kind == 0 && vl.health >= 250) {
-            continue; // hide bars over healthy villagers (only show the hurt)
+        if ((vl.kind == 0 || vl.kind >= 5) && vl.health >= 250) {
+            continue; // hide bars over healthy villagers + travellers (only show the hurt)
         }
         const Vec3 col = vl.kind == 1 ? Vec3{0.45f, 0.72f, 0.96f} : Vec3{0.42f, 0.86f, 0.42f};
         bar(vl.position + Vec3{0.0f, 2.15f, 0.0f}, static_cast<f32>(vl.health) / 255.0f, col);
@@ -224,10 +224,26 @@ void ClientApp::draw_hud() {
         }
     };
 
+    // A roadside errand under way: its lines too.
+    auto add_errand = [&]() {
+        const net::ErrandState* e = current_errand();
+        if (e == nullptr || e->phase != static_cast<u8>(QuestPhase::Active)) {
+            return;
+        }
+        const auto kind = static_cast<ErrandKind>(e->kind);
+        add_text(std::format("ERRAND  -  {}", errand_title(kind)), ts * 0.56f, Vec4{0.95f, 0.88f, 0.62f, 1.0f}, 0.3f);
+        std::string line = errand_objective(kind);
+        if (e->goal > 1) {
+            line += std::format("   {} / {}", e->progress, e->goal);
+        }
+        add_rich(line, ts * 0.6f, ui::theme().text);
+    };
+
     // The hero's JOURNEY - the linear spine of goals - closes out the objective card: the current
     // step, what to do, and progress toward a counted goal.
     auto add_journey = [&]() {
         add_quest();
+        add_errand();
         const u8 step = std::min<u8>(live_progress_.journey, kJourneySteps);
         const JourneyStep js = journey_step(step);
         rows.push_back({ts * 0.55f, 0.0f, [&draw, ts](f32 x, f32 y) {
@@ -414,6 +430,7 @@ void ClientApp::draw_hud() {
     }
 
     draw_quest_hud(draw, W, H, ts); // the notice board's panel, the quest's waypoint + its triumph banner
+    draw_errand_hud(draw, W, H, ts); // the roadside traveller: their "!", what they ask, the way + the thanks
 
     // Settle banner: the haul's outcome, big and centred, in green or red.
     if (snapshot_.contract_outcome != 0) {
@@ -1234,6 +1251,17 @@ void ClientApp::draw_minimap(ui::DrawList& draw, const Vec3& feet, f32 W, f32 H)
         draw.line(Vec2{d.x + 6.0f, d.y}, Vec2{d.x, d.y + 6.0f}, 3.0f, qc);
         draw.line(Vec2{d.x, d.y + 6.0f}, Vec2{d.x - 6.0f, d.y}, 3.0f, qc);
         draw.line(Vec2{d.x - 6.0f, d.y}, Vec2{d.x, d.y - 6.0f}, 3.0f, qc);
+    }
+    // A roadside errand: a gold dot at the traveller (or where the help's needed, once it's under way).
+    if (const net::ErrandState* e = current_errand(); e != nullptr && e->phase != static_cast<u8>(QuestPhase::Complete)) {
+        const Vec3 at = e->phase == static_cast<u8>(QuestPhase::Active) ? e->site : e->giver;
+        Vec2 d = to_mm(Vec2{at.x, at.z});
+        const f32 r = sz * 0.5f - 7.0f;
+        if (const Vec2 off = d - c; glm::length(off) > r) {
+            d = c + glm::normalize(off) * r;
+        }
+        draw.rect(Vec4{d.x - 5.0f, d.y - 5.0f, 10.0f, 10.0f}, Vec4{0.08f, 0.05f, 0.02f, 0.9f}, 5.0f);
+        draw.rect(Vec4{d.x - 3.5f, d.y - 3.5f, 7.0f, 7.0f}, Vec4{1.0f, 0.88f, 0.5f, 1.0f}, 3.5f);
     }
     // Teammates, each in their identity colour (edge-clamped so you can always find them).
     for (const net::PlayerState& p : snapshot_.players) {

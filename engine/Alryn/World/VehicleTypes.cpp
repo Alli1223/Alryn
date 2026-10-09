@@ -445,6 +445,38 @@ MeshData build_deer_leg() {
     return m;
 }
 
+// A GOAT (an errand's runaway): a stocky nanny with a shaggy cream coat, brown patches, swept-back
+// horns, a little beard and a tufted tail - facing +X; the leg (drawn x4) hangs from its hip pivot.
+MeshData build_goat_body() {
+    MeshData m;
+    const Vec3 coat{0.86f, 0.82f, 0.72f};
+    const Vec3 patch{0.46f, 0.32f, 0.2f};
+    const Vec3 horn{0.36f, 0.3f, 0.24f};
+    const Vec3 dark{0.12f, 0.1f, 0.09f};
+    add_box(m, {-0.36f, 0.5f, -0.16f}, {0.3f, 0.84f, 0.16f}, coat);          // barrel
+    add_box(m, {-0.38f, 0.46f, -0.14f}, {0.28f, 0.54f, 0.14f}, coat * 0.92f); // shaggy belly fringe
+    add_box(m, {-0.1f, 0.72f, -0.165f}, {0.16f, 0.86f, 0.165f}, patch);      // a brown saddle patch
+    add_box(m, {0.22f, 0.7f, -0.08f}, {0.38f, 0.98f, 0.08f}, coat);          // neck
+    add_box(m, {0.32f, 0.88f, -0.08f}, {0.56f, 1.06f, 0.08f}, coat);         // head
+    add_box(m, {0.5f, 0.88f, -0.06f}, {0.64f, 1.0f, 0.06f}, coat * 0.95f);   // muzzle
+    add_box(m, {0.5f, 0.76f, -0.025f}, {0.56f, 0.9f, 0.025f}, coat * 0.8f);  // the beard
+    add_box(m, {0.6f, 0.95f, -0.04f}, {0.65f, 0.98f, 0.04f}, dark);           // nose
+    for (const f32 sz : {-1.0f, 1.0f}) {
+        add_box(m, {0.5f, 1.0f, sz * 0.05f - 0.012f}, {0.53f, 1.02f, sz * 0.05f + 0.012f}, dark); // eye
+        add_box(m, {0.36f, 0.98f, sz * 0.11f - 0.03f}, {0.46f, 1.02f, sz * 0.11f + 0.06f * sz}, coat * 0.9f); // ear
+        add_box(m, {0.36f, 1.04f, sz * 0.05f - 0.02f}, {0.42f, 1.18f, sz * 0.05f + 0.02f}, horn); // horn base
+        add_box(m, {0.26f, 1.14f, sz * 0.06f - 0.018f}, {0.38f, 1.2f, sz * 0.06f + 0.018f}, horn); // swept back
+    }
+    add_box(m, {-0.44f, 0.76f, -0.03f}, {-0.34f, 0.9f, 0.03f}, patch); // the tufted tail
+    return m;
+}
+MeshData build_goat_leg() {
+    MeshData m;
+    add_box(m, {-0.035f, -0.46f, -0.035f}, {0.035f, 0.0f, 0.035f}, Vec3{0.8f, 0.76f, 0.66f});
+    add_box(m, {-0.04f, -0.5f, -0.04f}, {0.04f, -0.46f, 0.04f}, Vec3{0.14f, 0.12f, 0.1f}); // hoof
+    return m;
+}
+
 // A crate of ARMS: a stout crate with spears + a sword standing in it, blades poking out the top.
 // Sized to the cargo crate footprint (kCargoHalf ~ 0.2), base sits at y = 0.
 MeshData build_cargo_weapons() {

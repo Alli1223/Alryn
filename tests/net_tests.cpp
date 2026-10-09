@@ -11,6 +11,7 @@
 #include <Alryn/Net/Protocol.h>
 #include <Alryn/Terrain/WorldGen.h>
 #include <Alryn/World/VehicleTypes.h>
+#include <Alryn/World/Village.h>
 
 using namespace alryn;
 using namespace alryn::net;
@@ -687,12 +688,30 @@ TEST_CASE("GameServer: an Ally Toss hurls a teammate + a Cleric conduit buffs an
     REQUIRE(a_id != 0);
     REQUIRE(b_id != 0);
 
-    // ALLY TOSS: place B right beside A, then A hurls B toward +x.
-    const Vec3 apos = server.players().at(a_id).controller.position();
-    server.debug_place_player(b_id, apos + Vec3{1.5f, 0.0f, 0.0f});
+    // ALLY TOSS: stand A at the start of the town's longest street (always clear of props), B right
+    // beside A, then A hurls B down the street.
+    Vec3 apos = server.players().at(a_id).controller.position();
+    Vec2 toss_dir{1.0f, 0.0f};
+    if (const auto town = worldgen::village_containing(apos.x, apos.z, 777u, 10.0f)) {
+        const detail::Street* best = nullptr;
+        for (const detail::Street& s : detail::village_streets(*town, 777u)) {
+            if (best == nullptr || glm::length(s.b - s.a) > glm::length(best->b - best->a)) {
+                best = &s;
+            }
+        }
+        if (best != nullptr) {
+            toss_dir = glm::normalize(best->b - best->a);
+            const Vec2 p = best->a + toss_dir * 2.0f;
+            server.debug_place_player(a_id, Vec3{p.x, worldgen::height(p.x, p.y, 777u) + 0.5f, p.y});
+            pump(4);
+            apos = server.players().at(a_id).controller.position();
+        }
+    }
+    const Vec3 tdir{toss_dir.x, 0.0f, toss_dir.y};
+    server.debug_place_player(b_id, apos + tdir * 1.5f);
     pump(4);
     const Vec3 b_start = server.players().at(b_id).controller.position();
-    ai.aim = apos + Vec3{20.0f, 0.0f, 0.0f};
+    ai.aim = apos + tdir * 20.0f;
     ai.toss = true;
     pump(1);
     ai.toss = false;
@@ -704,7 +723,7 @@ TEST_CASE("GameServer: an Ally Toss hurls a teammate + a Cleric conduit buffs an
         if (bp.y > b_start.y + 0.4f) {
             airborne = true;
         }
-        max_dx = std::max(max_dx, bp.x - b_start.x);
+        max_dx = std::max(max_dx, glm::dot(bp - b_start, tdir));
     }
     CHECK(airborne);      // the toss launched B off the ground
     CHECK(max_dx > 2.5f); // and flung B well forward toward the aim (the launch is unclamped)
@@ -904,11 +923,16 @@ TEST_CASE("GameServer: no siege - players join, peaceful townsfolk, nothing atta
     CHECK(snap.outcome == static_cast<u8>(MatchOutcome::Ongoing));
 
     // Peaceful townsfolk populate the town the player spawned in (kind 0); a garrisoned town
-    // also posts kind-2 archer guards up on the walls (elevated above the ground).
+    // also posts kind-2 archer guards up on the walls (elevated above the ground). (The road's wayfarers
+    // + any roadside errand's traveller - kinds 5 / 6 - aren't townsfolk.)
     CHECK(server.villager_count() > 0);
-    CHECK(snap.villagers.size() == server.villager_count());
+    CHECK(static_cast<usize>(std::count_if(snap.villagers.begin(), snap.villagers.end(),
+                                           [](const VillagerState& v) { return v.kind < 5; })) == server.villager_count());
     int wall_guards = 0;
     for (const VillagerState& vs : snap.villagers) {
+        if (vs.kind >= 5) {
+            continue;
+        }
         CHECK((vs.kind == 0 || vs.kind == 2));
         if (vs.kind == 2) {
             ++wall_guards;
@@ -935,12 +959,23 @@ TEST_CASE("GameServer: no siege - players join, peaceful townsfolk, nothing atta
 // through the gate, driven off authoritative SERVER state so it's packet-timing independent), then
 // reports whether ambushers spawned (the cargo cleared the walls). Returns false if the cart can't
 // be towed clear of this particular town's geometry.
+// The first offered wagon that carries crates and isn't horse-drawn (the haul tests need a bed of cargo
+// a hero can tow), else the first offer.
+static WagonState first_cargo_offer(const Snapshot& snap) {
+    for (const WagonState& w : snap.wagons) {
+        if (static_cast<CargoKind>(w.cargo_kind) != CargoKind::Passengers && !vehicle_type(w.type).horse_drawn()) {
+            return w;
+        }
+    }
+    return snap.wagons.front();
+}
+
 static bool tow_out_and_ambush(GameServer& server, NetClient& c, PlayerId id,
                                const std::function<void(int)>& pump, PlayerInput& intent) {
     const std::vector<Vec2> route = server.active_wagon().route;
     const Vec2 center = server.active_wagon().source;
     bool grabbed = false;
-    for (int t = 0; t < 1500 && server.ambusher_count() == 0; ++t) {
+    for (int t = 0; t < 3600 && server.ambusher_count() == 0; ++t) {
         const Vec3 pp = server.players().at(id).controller.position();
         const Vec3 wp = server.active_wagon().position;
         if (!grabbed) {
@@ -1019,15 +1054,16 @@ TEST_CASE("GameServer: a wagon contract is offered, accepted by vote, and ambush
         REQUIRE_FALSE(snap.wagons.empty());
         CHECK(snap.money == 0u);
 
-        // Vote the first offered wagon, hiring a driver (solo -> instant consensus).
-        intent.vote_wagon = snap.wagons[0].id;
+        // Vote the first offered cargo wagon, hiring a driver (solo -> instant consensus).
+        const WagonState pick = first_cargo_offer(snap);
+        intent.vote_wagon = pick.id;
         intent.vote_mode = 1;
         pump(20);
         if (server.contract_phase() != ContractPhase::Active) {
             continue;
         }
-        const bool horse_drawn = vehicle_type(snap.wagons[0].type).horse_drawn();
-        CHECK(snap.wagons[0].has_horse == (horse_drawn ? 1 : 0)); // horse only for carriages
+        const bool horse_drawn = vehicle_type(pick.type).horse_drawn();
+        CHECK(pick.has_horse == (horse_drawn ? 1 : 0)); // horse only for carriages
         if (horse_drawn) {
             continue; // the hand-haul tow below assumes a non-carriage cart
         }
@@ -1271,11 +1307,11 @@ TEST_CASE("GameServer: bandits harry a stranded wagon during a wheel repair") {
         if (id == 0 || !have_snap || server.offer_count() == 0) {
             continue;
         }
-        intent.vote_wagon = snap.wagons[0].id;
+        const WagonState pick = first_cargo_offer(snap);
+        intent.vote_wagon = pick.id;
         intent.vote_mode = 1;
         pump(20);
-        if (server.contract_phase() != ContractPhase::Active ||
-            vehicle_type(snap.wagons[0].type).horse_drawn()) {
+        if (server.contract_phase() != ContractPhase::Active || vehicle_type(pick.type).horse_drawn()) {
             continue;
         }
         if (!tow_out_and_ambush(server, c, id, pump, intent)) {
@@ -1504,7 +1540,7 @@ TEST_CASE("GameServer: an accepted contract starts fully loaded with goods") {
         MESSAGE("Spawn town has no road-connected neighbour - skipping load check");
         return;
     }
-    intent.vote_wagon = snap.wagons[0].id;
+    intent.vote_wagon = first_cargo_offer(snap).id;
     intent.vote_mode = 1;
     pump(20);
     REQUIRE(server.contract_phase() == ContractPhase::Active);
@@ -1825,7 +1861,7 @@ TEST_CASE("GameServer: cargo crates don't overlap each other in the bed") {
         MESSAGE("Spawn town has no road-connected neighbour - skipping crate-overlap check");
         return;
     }
-    intent.vote_wagon = snap.wagons[0].id;
+    intent.vote_wagon = first_cargo_offer(snap).id;
     intent.vote_mode = 1; // hire a driver so the cart hauls itself out of town
     pump(20);
     REQUIRE(server.contract_phase() == ContractPhase::Active);

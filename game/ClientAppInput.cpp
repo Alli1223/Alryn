@@ -437,7 +437,9 @@ void ClientApp::on_event(Event& event) {
         } else if (e.key() == key::Q) {
             pending_dig_ = true; // the spade: scoop out the earth at the aim (pits, treasure)
         } else if (e.key() == key::E) {
-            pending_grab_ = true; // hitch / unhitch the nearest wagon (manual haul)
+            if (!errand_talk()) {
+                pending_grab_ = true; // hitch / unhitch the nearest wagon (manual haul)
+            }
         } else if (e.key() == key::G && !e.is_repeat()) {
             pending_toss_ = true; // Ally Toss: hurl the nearest teammate toward the cursor
         } else if (e.key() == key::V) {
@@ -715,7 +717,9 @@ void ClientApp::apply_gamepad(Timestep dt) {
         pending_add_ = true; // build terrain
     }
     if (pressed(pad::X)) {
-        pending_grab_ = true; // hitch / unhitch the nearest wagon, interact
+        if (!errand_talk()) {
+            pending_grab_ = true; // hitch / unhitch the nearest wagon, interact
+        }
     }
     if (pressed(pad::B)) {
         pending_dodge_ = true; // dodge roll
